@@ -33,10 +33,17 @@ fn security_page_never_exposes_admin_or_delete_actions() {
     // No self-service toggle for the flag that grants /_settings + /_users.
     assert!(!html.contains("toggle_admin"));
     assert!(!html.contains("delete_user"));
-    // Own identity is shown but not as an editable field.
+    // Own identity is shown but never editable here: the address moved to
+    // `/_account/profile` entirely, and the only `username` control left is
+    // the hidden one a password manager reads to know which account the
+    // new password belongs to.
     assert!(html.contains("alice@example.com"));
     assert!(!html.contains(r#"name="email""#));
-    assert!(!html.contains(r#"name="username""#));
+    assert!(!html.contains(r#"<input name="username""#));
+    assert!(
+        html.contains(r#"input type="hidden" name="username" value="alice""#),
+        "{html}"
+    );
 }
 
 fn base_user() -> User {
@@ -126,27 +133,4 @@ fn recovery_codes_are_shown_once_then_never_again() {
 fn recovery_codes_section_is_absent_before_2fa_is_enabled() {
     let html = render_security_page(&base_user(), "tok", None, None, None, gitquarry_i18n::Locale::En).into_string();
     assert!(!html.contains(r#"value="regenerate_recovery_codes""#));
-}
-
-#[test]
-fn gpg_keys_section_shows_hint_when_empty() {
-    let html = render_security_page(&base_user(), "tok", None, None, None, gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("no keys yet"), "{html}");
-    assert!(html.contains(r#"value="add_gpg_key""#));
-}
-
-#[test]
-fn gpg_keys_section_lists_each_stored_key_by_fingerprint() {
-    let mut user = base_user();
-    user.gpg_keys = vec![gitquarry_core::auth::entities::GpgKeyEntry {
-        armored: "totally-fake-armored-key-body-xyz".to_string(),
-        fingerprint: "ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234".to_string(),
-    }];
-    let html = render_security_page(&user, "tok", None, None, None, gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234"), "{html}");
-    assert!(html.contains(r#"value="remove_gpg_key""#));
-    // The raw armored block itself never gets re-rendered — only the
-    // already-computed fingerprint, same as `render_ssh_keys_table` never
-    // echoes the raw pubkey line back either.
-    assert!(!html.contains("totally-fake-armored-key-body-xyz"), "{html}");
 }

@@ -31,10 +31,11 @@
 //! - Every private self-service account page lives under `/_account/*`, one
 //!   URL per sidebar section (`crate::webui::account_settings_page`) — no
 //!   username in any of them, always the logged-in session's own account:
-//!   [`crate::auth::web::security`][] (`/_account/security` — pubkeys/GPG
-//!   keys/secondary emails/password/TOTP, the one place that changes how
-//!   someone can authenticate as this user; [`crate::auth::web::users`]
-//!   below is the admin-only equivalent that can edit anyone's),
+//!   [`crate::auth::web::security`][] (`/_account/security` — password and
+//!   2FA, the one place that changes how someone signs in;
+//!   [`crate::auth::web::users`] below is the admin-only equivalent that
+//!   can edit anyone's), [`crate::auth::web::keys`][] (`/_account/keys` —
+//!   SSH keys for pushing, GPG keys for verifying what was pushed),
 //!   [`crate::auth::web::appearance`][] (`/_account/appearance` —
 //!   text-size/theme/density), [`crate::auth::web::avatar`][]
 //!   (`/_account/profile` — avatar upload/remove; also owns the public
@@ -184,8 +185,8 @@ pub(crate) use locale_pref::effective_locale;
 pub(crate) use density_pref::{effective_density, handler_toggle_density};
 pub use page_chrome::layout;
 pub(crate) use page_chrome::{
-    HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, header_bar, permission_badge_class,
-    tab_links, topic_badges,
+    HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
+    permission_badge_class, settings_section, tab_links, topic_badges,
 };
 pub(crate) use raw_link::{github_raw_link, raw_link};
 pub(crate) use repo_link::{github_blob_link, repo_link};
@@ -272,6 +273,10 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
                 .post(crate::auth::web::security::handler_security_post),
         )
         .route(
+            "/_account/keys",
+            get(crate::auth::web::keys::handler_keys_get).post(crate::auth::web::keys::handler_keys_post),
+        )
+        .route(
             "/_account/pat",
             get(crate::auth::web::pat::handler_pat_get).post(crate::auth::web::pat::handler_pat_post),
         )
@@ -289,6 +294,10 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             "/_account/profile",
             get(crate::auth::web::avatar::handler_account_profile_get)
                 .post(crate::auth::web::avatar::handler_avatar_upload_post),
+        )
+        .route(
+            "/_account/profile/emails",
+            axum::routing::post(crate::auth::web::avatar::handler_emails_post),
         )
         .route(
             "/_account/profile/delete",
