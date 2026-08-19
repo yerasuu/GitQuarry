@@ -6,6 +6,6 @@ mod pull_request;
 mod uid;
 
 pub use pull_request::{
-    CommentAnchor, DiffSide, MergeStrategy, PrComment, PrDetail, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
+    CommentAnchor, DiffSide, MergeStrategy, PrComment, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
 };
 pub use uid::Uid;

@@ -156,16 +156,3 @@ pub struct PrReview {
     #[serde(default)]
     pub created_at: String,
 }
-
-/// One PR plus its comments, bundled.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PrDetail {
-    #[serde(default)]
-    pub pr: PullRequestMeta,
-    #[serde(default)]
-    pub comments: Vec<PrComment>,
-    /// `#[serde(default)]` so a peer running a build from before reviews
-    /// existed still deserializes — it just reports none.
-    #[serde(default)]
-    pub reviews: Vec<PrReview>,
-}
