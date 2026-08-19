@@ -600,6 +600,7 @@ pub fn review_summary(reviews: &[PrReview]) -> ReviewSummary {
     summary
 }
 
+#[derive(Default)]
 pub struct PrDiff {
     pub stat: String,
     pub diff: String,
@@ -657,13 +658,63 @@ pub async fn diff(
     git_dir: &std::path::Path,
     pr: &PullRequestMeta,
 ) -> Result<PrDiff> {
-    let base = pr.target_branch.as_str();
-    let head = fetch_source_ref(ctx, target, git_dir, pr).await?;
-    let stat = git::browse::diffstat_range(git_dir, base, &head).await?;
-    let diff = git::browse::diff_range(git_dir, base, &head).await?;
+    let Some((base, head)) = diff_endpoints(ctx, target, git_dir, pr).await? else {
+        return Ok(PrDiff::default());
+    };
+    let stat = git::browse::diffstat_range(git_dir, &base, &head).await?;
+    let diff = git::browse::diff_range(git_dir, &base, &head).await?;
     let range = format!("{base}..{head}");
     let commits = git::browse::log(git_dir, &range, usize::MAX, None).await?;
     Ok(PrDiff { stat, diff, commits })
+}
+
+/// The `(base, head)` pair [`diff`] compares, or `None` when there is
+/// nothing left to compare at all.
+///
+/// Normally that is simply `(target_branch, source_branch)`. The reason it
+/// needs resolving at all is that a *merged* pull request usually outlives
+/// its source branch — the merge form's own "delete branch" checkbox
+/// removes it — and every `git diff base...head` behind the pull-request
+/// page then failed on an unknown revision, so viewing a closed pull
+/// request returned a 500.
+///
+/// The fallback compares the merge commit against its own first parent,
+/// which for both a merge and a squash is exactly what the pull request
+/// landed on the target. A rebase-merged one is the imperfect case: its
+/// recorded sha is the last replayed commit, so only that commit shows —
+/// still an honest, readable page rather than an error, and the commit
+/// list beside it says the same.
+///
+/// `None` (an empty diff, no error) is the last resort: a pull request
+/// closed *without* merging whose branch was then deleted has no surviving
+/// endpoint to reconstruct anything from.
+async fn diff_endpoints(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    git_dir: &std::path::Path,
+    pr: &PullRequestMeta,
+) -> Result<Option<(String, String)>> {
+    // Tolerated, not propagated: for a cross-fork pull request this opens
+    // the source fork's mirror and fetches from it, and that fork may be
+    // gone by now — which is the same "nothing to compare" case as a
+    // deleted branch, not a server error.
+    let head = fetch_source_ref(ctx, target, git_dir, pr).await.ok();
+    if let Some(head) = head
+        && git::browse::resolve_commit(git_dir, &head).await?.is_some()
+        && git::browse::resolve_commit(git_dir, &pr.target_branch).await?.is_some()
+    {
+        return Ok(Some((pr.target_branch.clone(), head)));
+    }
+    if let Some(merge) = pr.merge_commit_sha.as_deref()
+        && git::browse::resolve_commit(git_dir, merge).await?.is_some()
+    {
+        // Three-dot against the merge's own first parent is the same set of
+        // changes two-dot would give (the first parent *is* the merge base
+        // of the pair), and keeps this on the identical code path the
+        // normal case uses.
+        return Ok(Some((format!("{merge}^"), merge.to_string())));
+    }
+    Ok(None)
 }
 
 /// Whether this PR would merge cleanly right now: `None` for a clean
