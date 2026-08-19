@@ -16,7 +16,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.constraint-label=expose-public
-      - traefik.http.routers.gitquarry.rule=Host(`git.tamdae.com`)
+      - traefik.http.routers.gitquarry.rule=Host(`git.yerasuu.com`)
       - traefik.http.routers.gitquarry.entrypoints=websecure
       - traefik.http.routers.gitquarry.tls=true
       - traefik.http.routers.gitquarry.service=gitquarry

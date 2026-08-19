@@ -5,7 +5,6 @@ FROM rust:1.97-bookworm AS builder
 WORKDIR /usr/src/gitquarry
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY gitquarry-ci-sdk-contract-tests ./gitquarry-ci-sdk-contract-tests
 
 # The shipped bin package is still named `gitquarry`, but it now lives in
 # `crates/gitquarry-server` — `gitquarry-core` went lib-only when the webui
