@@ -49,9 +49,10 @@ impl AppError {
         }
     }
 
-    /// `[tracker]` compiled in but not configured for
+    /// `[tracker]`/`[ci]` compiled in but not configured for
     /// this deploy — an operator condition, not a client mistake, so 503
-    /// rather than 400/404. An `AppError` so tracker's render functions
+    /// rather than 400/404. Same status `webui::ci`'s own `ci_unavailable`
+    /// already uses, just as an `AppError` so tracker's render functions
     /// (which return `Result<String, AppError>`, not a full `Response`) can
     /// surface it the same way every other failure there does.
     #[cfg(any(test, feature = "test-util"))]

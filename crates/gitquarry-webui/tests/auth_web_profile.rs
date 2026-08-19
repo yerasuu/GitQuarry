@@ -11,6 +11,7 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
             owner: None,
             visibility,
             archived: false,
+            ci_deploy_gate_disabled: false,
             deleted_at: None,
             pack_bytes: 0,
             lfs_bytes: 0,

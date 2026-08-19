@@ -273,6 +273,15 @@ pub struct RepoConfig {
     /// its own small struct rather than reusing that shape.
     #[serde(default)]
     pub labels: Vec<Label>,
+    /// Opts this repo out of the deploy-approval gate: normally every
+    /// `gitquarry-ci` job with `kind: deploy` lands `pending_approval`
+    /// instead of queuing directly, on any push (not just fork-PRs) — see
+    /// `docs/gitquarry-ci-sdk-design.md`. `false` by default (gate on);
+    /// never inherited by a fork or template copy, same reasoning as
+    /// `archived`/`is_template` above — a fork of a gate-disabled repo
+    /// isn't itself exempt, that's the new owner's own call to make.
+    #[serde(default)]
+    pub ci_deploy_gate_disabled: bool,
 }
 
 /// One entry in a repo's issue-label vocabulary. `color` is always

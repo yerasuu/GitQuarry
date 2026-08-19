@@ -1,0 +1,21 @@
+{
+  "jobs": [
+    {
+      "commands": [
+        "cargo test -p crates"
+      ],
+      "id": "test-crates",
+      "image": "rust:1.80",
+      "kind": "build"
+    },
+    {
+      "commands": [
+        "cargo test -p docs"
+      ],
+      "id": "test-docs",
+      "image": "rust:1.80",
+      "kind": "build"
+    }
+  ],
+  "schema_version": 1
+}

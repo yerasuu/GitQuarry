@@ -329,6 +329,7 @@ pub async fn fork(
         owner: Some(dest_owner),
         visibility: source_config.visibility,
         archived: false,
+        ci_deploy_gate_disabled: false,
         deleted_at: None,
         // A real byte-for-byte copy (`copy_all_to` just above), unlike
         // `domain::remote_fork`'s peer-sync case — the new owner's quota
@@ -444,6 +445,7 @@ pub async fn create_from_template(
         owner: Some(dest_owner),
         visibility: source_config.visibility,
         archived: false,
+        ci_deploy_gate_disabled: false,
         deleted_at: None,
         // Same reasoning as `fork`'s own doc comment on this field: a real
         // byte-for-byte copy, so the new owner's quota should reflect it
@@ -879,6 +881,23 @@ pub async fn set_lfs_max_blob_size(
     )
     .await?;
     Ok((cas, value))
+}
+
+/// Toggles the `gitquarry-ci` deploy-approval gate opt-out for this repo —
+/// see `RepoConfig::ci_deploy_gate_disabled`'s own doc comment. Read by
+/// `gitquarry-ci` over its loopback `/_internal/*` leg into core, never by
+/// core itself (core has no CI execution concept of its own).
+pub async fn set_ci_deploy_gate_disabled(ctx: &AppContext, resolved: &ResolvedRepo, disabled: bool) -> Result<Cas> {
+    let (mut config, etag) = resolved.remote.get_repo_config().await?;
+    config.ci_deploy_gate_disabled = disabled;
+    storage::settings::put_repo_config(
+        ctx.backend().as_ref(),
+        resolved.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &ctx.cipher,
+    )
+    .await
 }
 
 /// Sets (or, `perm: None`, clears) one user's explicit `Permission` for

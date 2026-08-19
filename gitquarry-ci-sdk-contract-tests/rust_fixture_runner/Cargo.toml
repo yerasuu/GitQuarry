@@ -1,0 +1,16 @@
+[package]
+name = "gitquarry-ci-sdk-contract-fixtures"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Rust-side fixtures for the gitquarry-ci-sdk contract test (docs/gitquarry-ci-sdk-design.md, Fase 5)"
+publish = false
+
+[dependencies]
+gitquarry-ci-sdk = { path = "../../crates/gitquarry-ci-sdk" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

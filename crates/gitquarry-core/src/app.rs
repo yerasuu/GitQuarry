@@ -76,6 +76,13 @@ pub struct AppContext {
     /// Failed-password-login tracker for `auth::web::login`'s local password
     /// form — see [`LoginAttempts`].
     pub login_attempts: LoginAttempts,
+    /// this before forwarding anything; absent, those routes simply don't
+    /// "`None` = feature fully off" pattern).
+    /// `None` unless `[ci]` is configured — see [`CiLink`]. Mirrors
+    /// (`config::CiSection`'s own doc comment):
+    /// `docs/ci-cd-concept.md`.
+    pub ci: Option<CiLink>,
+    /// anything, same "`None` = feature fully off" pattern
     /// `config::Config::allow_push_create` — gates the ssh:// receive-pack
     /// handler's implicit "first push creates the repo" branch. `false` by
     /// default (see that field's doc comment for why).
@@ -86,6 +93,23 @@ pub struct AppContext {
     /// Fan-out point for domain state changes (push, PR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,
+}
+
+/// What core needs to reach `gitquarry-ci`'s own loopback API — the
+/// one-directional-per-call-site pattern, CI both calls into core's
+/// `/_internal/*` — via its own `core_client.rs` — and gets called by core
+/// through this link to push trigger events; see `docs/ci-cd-concept.md`'s
+/// IPC design decision). Not used yet: no trigger-push call site exists
+/// until the pipeline-trigger phase lands.
+#[derive(Debug, Clone)]
+pub struct CiLink {
+    /// `gitquarry-ci.toml`'s `listen` address, as a full `http://host:port`
+    /// base URL — `config::CiSection::ci_url`.
+    pub base_url: String,
+    /// Shared secret sent as `X-Internal-Token` — must equal `gitquarry-ci`'s
+    /// own `internal_token`.
+    pub internal_token: String,
+    pub http: reqwest::Client,
 }
 
 /// Local mirror ready to use, with the repo's lock held. While this exists,

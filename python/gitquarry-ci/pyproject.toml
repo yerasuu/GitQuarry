@@ -1,0 +1,32 @@
+[project]
+name = "gitquarry-ci"
+version = "0.1.0"
+description = "Pipeline-definition SDK for gitquarry-ci. Builds a JobGraph, never executes anything."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "ruff",
+    "pytest",
+    "datamodel-code-generator",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["gitquarry_ci*"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

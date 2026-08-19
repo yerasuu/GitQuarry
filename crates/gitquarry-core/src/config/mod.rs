@@ -36,10 +36,31 @@ pub struct BucketConfig {
     pub passphrase: String,
 }
 
+/// `[ci]` in `gitquarry.toml` — optional, same "`None` = feature fully off"
+/// internal-API endpoints are reachable and core never tries to reach a
+/// `gitquarry-ci` process. See `docs/ci-cd-concept.md`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CiSection {
+    /// Loopback address a separate `/_internal/*` server (dedicated to CI,
+    /// `docs/ci-cd-concept.md`'s IPC design decision) binds to.
+    pub internal_bind: String,
+    /// Shared secret gating that server, manually kept identical to
+    /// `gitquarry-ci.toml`'s own `internal_token`.
+    pub internal_token: String,
+    /// `gitquarry-ci`'s own loopback address (its `listen`) — where core
+    /// would forward a pipeline-trigger push, once that call site exists.
+    pub ci_url: String,
+}
+
+// pub (and `buckets` pub too) isn't just for tests/config.rs: RawConfig is
+// also used unconditionally by `Config::load_from` below, so it can't be
+// cfg-gated to test builds only.
 #[derive(Debug, Deserialize)]
 pub struct RawConfig {
     #[serde(default)]
     pub buckets: BTreeMap<String, BucketConfig>,
+    #[serde(default)]
+    ci: Option<CiSection>,
     /// Whether `git push` to a repo name that doesn't exist yet creates it
     /// (same as `webui::repo_new`, just reached via `git push` instead of
     /// `/_new`). Defaults to off: a typo'd repo name in the push URL should
@@ -61,6 +82,7 @@ struct RawConfigOut<'a> {
 #[derive(Debug)]
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
+    ci: Option<CiSection>,
     allow_push_create: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
     /// without guessing which candidate won.
@@ -93,9 +115,16 @@ impl Config {
         }
         Ok(Config {
             buckets: raw.buckets,
+            ci: raw.ci,
             allow_push_create: raw.allow_push_create,
             path: path.to_path_buf(),
         })
+    }
+
+    /// `None` unless `[ci]` is present in `gitquarry.toml` — see
+    /// [`CiSection`]'s own doc comment.
+    pub fn ci(&self) -> Option<&CiSection> {
+        self.ci.as_ref()
     }
 
     /// See [`RawConfig::allow_push_create`]'s doc comment.

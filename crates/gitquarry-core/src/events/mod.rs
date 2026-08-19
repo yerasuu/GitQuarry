@@ -1,10 +1,11 @@
 //! Single internal emission point for domain state changes — `RepoEvent`s
-//! fanned out to whatever's registered as a consumer. Exists so every
-//! would-be consumer shares one definition of "what counts as a push"
-//! instead of each reimplementing it (`docs/webhooks-concept.md`'s Phase
-//! 1). No consumers are registered yet — `emit` fans out to an empty list
-//! until webhooks' delivery engine (`docs/webhooks-concept.md` Phase 3)
-//! registers itself.
+//! fanned out to whatever's registered as a consumer. Exists so webhooks and
+//! `gitquarry-ci`'s push trigger share one definition of "what counts as a
+//! push" instead of each reimplementing it (`docs/webhooks-concept.md`'s
+//! Phase 1, `docs/ci-cd-concept.md`'s Phase 0). No consumers are registered
+//! yet — `emit` fans out to an empty list until webhooks' delivery engine
+//! (`docs/webhooks-concept.md` Phase 3) and `gitquarry-ci`'s trigger
+//! register themselves.
 
 use crate::app::AppContext;
 use crate::storage::uid::Uid;

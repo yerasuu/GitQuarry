@@ -1,0 +1,19 @@
+{
+  "jobs": [
+    {
+      "commands": [
+        "ansible-playbook --inventory inventory/prod --vault-password-file $VAULT_PASS_FIFO site.yml"
+      ],
+      "id": "deploy",
+      "image": "gitquarry-ci-ansible:latest",
+      "kind": "deploy",
+      "secrets": [
+        {
+          "env_key": "GITQUARRY_VAULT_PASS",
+          "secret_name": "ansible-vault-pass"
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}

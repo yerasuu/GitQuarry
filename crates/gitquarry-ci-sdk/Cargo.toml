@@ -1,0 +1,23 @@
+[package]
+name = "gitquarry-ci-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Rust SDK for gitquarry-ci pipeline definitions — builds and dumps a JobGraph, never executes anything (docs/gitquarry-ci-sdk-design.md)"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+gitquarry-graph-validate = { path = "../gitquarry-graph-validate" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[build-dependencies]
+typify = "0.7.0"
+schemars = "0.8.22"
+serde_json = "1.0.151"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

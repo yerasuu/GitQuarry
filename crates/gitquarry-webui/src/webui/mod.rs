@@ -94,6 +94,7 @@
 //!   fly — no upload, no third-party fetch (see its own doc for why).
 
 pub mod audit;
+pub mod ci;
 pub mod export;
 pub mod fork;
 pub mod health;
@@ -254,6 +255,8 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             get(crate::auth::web::groups::handler_groups_get).post(crate::auth::web::groups::handler_groups_post),
         )
         .route("/_audit", get(audit::handler_audit_get))
+        .route("/_ci/approve", axum::routing::post(ci::handler_ci_approve_post))
+        .route("/_ci/{*repo}", get(ci::handler_ci_pending_get))
         .route("/_search", get(crate::search::web::handler_search_get))
         .route("/_fork", axum::routing::post(fork::handler_fork_post))
         .route("/_watch", axum::routing::post(watch::handler_watch_post))

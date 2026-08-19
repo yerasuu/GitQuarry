@@ -9,7 +9,10 @@
 //!   both, since neither of those two can depend on the other (see
 //!   `docs/webui-crate-split-concept.md`).
 //! - `pre-receive-hook`: internal use, invoked by the hook installed on each
-//!   mirror (not run by a human).
+//!   mirror (not run by a human). Spawns `gitquarry-mirror-external sync`
+//!   detached right after a push is accepted, to sync that repo's external
+//!   mirrors without making the push itself wait on it — see
+//!   `docs/mirror-external-extraction-concept.md`.
 //! - `fsck`: human-run, checks for stray objects — see [`gitquarry_domain::commands::fsck`].
 //! - `repack`: human-run, consolidates a repo's packs — see [`gitquarry_domain::commands::repack`].
 //! - `backfill-repo-index`: human-run, one-time backfill for repos/grants

@@ -1,0 +1,15 @@
+[package]
+name = "gitquarry-graph-validate"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Job-graph structural validation (cycles, duplicate ids, dangling needs) shared by gitquarry-ci-sdk and the gitquarry-ci server — Rust-to-Rust only, never crosses to the Python SDK"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

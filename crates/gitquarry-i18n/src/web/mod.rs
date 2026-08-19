@@ -12,6 +12,7 @@
 
 pub mod audit;
 pub mod chrome;
+pub mod ci;
 pub mod repo_activity;
 pub mod repo_compare;
 pub mod repo_components;

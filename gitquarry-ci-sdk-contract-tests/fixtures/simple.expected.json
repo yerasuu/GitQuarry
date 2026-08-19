@@ -1,0 +1,24 @@
+{
+  "jobs": [
+    {
+      "commands": [
+        "cargo test"
+      ],
+      "id": "test",
+      "image": "rust:1.80",
+      "kind": "build"
+    },
+    {
+      "commands": [
+        "cargo build"
+      ],
+      "id": "build",
+      "image": "rust:1.80",
+      "kind": "build",
+      "needs": [
+        "test"
+      ]
+    }
+  ],
+  "schema_version": 1
+}
