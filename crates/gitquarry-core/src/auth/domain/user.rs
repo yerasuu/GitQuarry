@@ -106,6 +106,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         avatar_content_type: None,
         secondary_emails: Default::default(),
     };
+    reject_if_claimed_as_secondary(ctx, user.email.as_deref(), locale).await?;
     if let Some(op) = user.email_claim_op()? {
         ops.push(op);
     }
@@ -157,6 +158,37 @@ async fn invalidate_cached_signatures(ctx: &AppContext) {
     crate::storage::commit_sig::bump_signing_epoch(ctx.backend().as_ref(), &ctx.cipher).await;
 }
 
+/// `Err` if `email` is already claimed as somebody's *secondary* address.
+///
+/// The primary claim itself goes through `#[entity(index)]`'s generated
+/// `email_claim_op`, which only knows `EMAIL_INDEX` — nothing in it looks
+/// at `SECONDARY_EMAIL_INDEX`. Without this check the two indexes can each
+/// hand the same address to a different account, and
+/// [`access::resolve_by_any_email`] tries the primary one first, so the
+/// account that claimed it *second* would silently take over
+/// commit-author matching (avatars, GPG-verified-signer attribution) for
+/// the account that had it all along.
+///
+/// Rejected even when it is the caller's own secondary: promoting one
+/// would have to release the secondary claim in the same breath, and a
+/// half-done promotion leaves exactly the split-brain this guards against.
+/// Removing it from the additional addresses first is one extra step and
+/// leaves nothing to get wrong.
+async fn reject_if_claimed_as_secondary(
+    ctx: &AppContext,
+    email: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<()> {
+    let Some(email) = email else { return Ok(()) };
+    if access::resolve_by_secondary_email(ctx.backend().as_ref(), &ctx.cipher, email)
+        .await?
+        .is_some()
+    {
+        bail!("{}", gitquarry_i18n::shared::email_claimed_as_secondary(locale));
+    }
+    Ok(())
+}
+
 /// Sets (or, with `None`, clears) `username`'s primary `email`.
 ///
 /// `User::email` was immutable in practice until this existed — only
@@ -188,6 +220,7 @@ pub async fn set_email(
     if user.email == email {
         return Ok(Cas::Ok);
     }
+    reject_if_claimed_as_secondary(ctx, email.as_deref(), locale).await?;
 
     let previous = user.clone();
     let mut user = user;
