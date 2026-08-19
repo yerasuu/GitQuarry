@@ -162,12 +162,11 @@ async fn invalidate_cached_signatures(ctx: &AppContext) {
 /// `User::email` was immutable in practice until this existed — only
 /// [`create`] ever claimed `EMAIL_INDEX`, so an account created without one
 /// could never acquire one, which `setup.rs`'s bootstrap admin always is.
-/// That was never a deliberate rule, just a missing operation: the reason
-/// the field is off-limits to *self*-service is that OIDC resolves a login
-/// to a `User` by it, so letting someone assign their own would let them
-/// claim another account's identity. An admin action carries no such
-/// problem — it is the same authority that picks the address at `add_user`
-/// time.
+/// That was never a deliberate rule, just a missing operation. This is the
+/// admin-authority version, allowed unconditionally — it is the same
+/// authority that picks the address at `add_user` time. The self-service
+/// route ([`set_own_email`]) exists too, but only where the address isn't
+/// also a login identity; see that function for why.
 ///
 /// The new address is claimed *before* the old one is released, and only
 /// released once the user record actually points somewhere else: the
@@ -210,6 +209,38 @@ pub async fn set_email(
         Cas::Conflict => user.release_email(ctx.backend().as_ref()).await,
     }
     Ok(cas)
+}
+
+/// [`set_email`] for the account's own owner rather than an admin.
+///
+/// Refused outright while OIDC is configured, and deliberately checked here
+/// rather than at the call site: OIDC resolves a login to a `User` by its
+/// primary address, so a self-assignable one lets anybody claim an address
+/// a colleague hasn't logged in with *yet* and receive their session when
+/// they do. The email index only rejects addresses already claimed, which
+/// is exactly the case that attack avoids. Nothing about re-authentication
+/// helps — the attacker is the legitimate owner of their own account.
+///
+/// With no OIDC client wired, the address is not an identity key at all:
+/// it feeds commit-author matching and nothing that grants access, so
+/// there's no identity to steal and an account may set its own. If an
+/// operator later turns OIDC on, addresses set this way become
+/// login-relevant — which is the same trust decision they make for every
+/// address an admin assigned by hand, and theirs to make knowingly.
+///
+/// Verifying ownership by mailing a confirmation link would lift the
+/// restriction, and is the reason this is a hard refusal rather than a
+/// warning: there is no mail transport in this codebase to send one with.
+pub async fn set_own_email(
+    ctx: &AppContext,
+    username: &str,
+    email: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Cas> {
+    if ctx.oidc.is_some() {
+        bail!("{}", gitquarry_i18n::shared::primary_email_is_admin_managed(locale));
+    }
+    set_email(ctx, username, email, locale).await
 }
 
 /// `password_plain: None` clears the password (SSH/OIDC-only afterward).

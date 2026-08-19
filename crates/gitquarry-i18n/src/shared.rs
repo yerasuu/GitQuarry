@@ -499,6 +499,16 @@ msg!(
 );
 
 msg!(
+    /// `auth::domain::user::set_own_email` refusing while OIDC is
+    /// configured — the address is a login identity there, so only an admin
+    /// assigns it.
+    primary_email_is_admin_managed() {
+        Locale::Es => "con OIDC configurado, el correo principal solo lo puede cambiar un admin",
+        Locale::En => "with OIDC configured, only an admin can change the primary email",
+    }
+);
+
+msg!(
     /// `settings::web::handler_settings_post`'s OIDC "all 4 fields or none"
     /// validation.
     oidc_fields_go_together() {
