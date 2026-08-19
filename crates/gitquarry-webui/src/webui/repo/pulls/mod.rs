@@ -374,7 +374,10 @@ async fn render_pulls_list_impl(
             }
             }
         }
-        // `.btn` on a plain `<a>`: a GET navigation, not a mutation.
+        // See `issues::render_issues_list`'s matching comment: `.btn` on a
+        // plain `<a>` (a GET navigation, not a mutation). No `milestones`
+        // cross-link here anymore -- `page_chrome::project_subnav` (this
+        // tab's own sub-nav, rendered above) already covers that.
         @if logged_in {
             p { a class="btn" href=(format!("/{}?view=new_pull", url_encode(repo_name))) { (t::new_pull_button(locale)) } }
         }
@@ -608,6 +611,41 @@ async fn render_pull_detail_impl(
         format!("{repo_label}:{}", pr.source_branch)
     };
     let description_html = super::components::link_number_mentions(ctx, target, repo_name, &pr.description).await;
+    // Milestones are owned by the optional `gitquarry-tracker` crate
+    // (`docs/tracker-extension-concept.md`) — computed as a cfg'd binding
+    // before the `html!` macro below (maud can't take `#[cfg]` inside a
+    // fragment), empty/no-op when tracker is off. This also means a
+    // tracker-off build skips an otherwise-unconditional `list` round-trip
+    // on every PR render.
+    #[cfg(feature = "tracker")]
+    let (milestone_title, milestone_field): (Option<String>, Markup) = match &ctx.tracker {
+        Some(tracker) => {
+            let milestones = crate::webui::tracker_client::list_milestones(tracker, &target.uid).await?;
+            let title = pr
+                .milestone
+                .and_then(|number| milestones.iter().find(|m| m.number == number))
+                .map(|m| format!("#{} {}", m.number, m.title));
+            let open_milestones: Vec<_> = milestones
+                .into_iter()
+                .filter(|m| m.status == gitquarry_wire::tracker::MilestoneStatus::Open)
+                .collect();
+            (
+                title,
+                html! {
+                    div class="field" {
+                        label { (t::milestone_label(locale)) }
+                        (super::milestones::render_milestone_select(&open_milestones, pr.milestone, locale))
+                    }
+                },
+            )
+        }
+        // `[tracker]` compiled in but not configured for this deploy —
+        // same "skip the cross-read entirely" tolerance the compiled-out
+        // branch below already has.
+        None => (None, html! {}),
+    };
+    #[cfg(not(feature = "tracker"))]
+    let (milestone_title, milestone_field): (Option<String>, Markup) = (None, html! {});
     let mut thread_htmls = Vec::with_capacity(thread.len());
     for (_id, comment) in &thread {
         thread_htmls.push(super::components::link_number_mentions(ctx, target, repo_name, &comment.body).await);
@@ -632,6 +670,9 @@ async fn render_pull_detail_impl(
         }
         @if !pr.requested_reviewers.is_empty() {
             p class="muted" { (t::reviewers_label(locale)) ": " (pr.requested_reviewers.join(", ")) }
+        }
+        @if let Some(title) = &milestone_title {
+            p class="muted" { (t::milestone_label(locale)) ": " (title) }
         }
         @if !pr.description.is_empty() {
             p { (PreEscaped(&description_html)) }
@@ -672,6 +713,7 @@ async fn render_pull_detail_impl(
                     label { (t::reviewers_label(locale)) }
                     input name="reviewers" size="40" value=(pr.requested_reviewers.join(", ")) placeholder=(t::reviewers_placeholder(locale));
                 }
+                (milestone_field)
                 p { button type="submit" { (t::save_button(locale)) } }
             }
         }

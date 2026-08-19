@@ -75,11 +75,20 @@ tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [features]
+default = ["tracker"]
 # Un-gates anything normally #[cfg(test)] (which only applies to this
 # crate's own unit-test build, not the separate lib build that external
 # `tests/*.rs` integration tests link against) for gitquarry-webui's tests
 # and for this crate's own tests/, which now hold every unit test.
 test-util = []
+# Dependency-free behavior flag (docs/tracker-extension-concept.md) — this
+# crate never links `gitquarry-tracker` (tracker depends on core, not the
+# reverse, so core can't call into it even behind a cfg without a cycle).
+# Gates only core's own code that would otherwise assume issues/milestones
+# are always present, e.g. whether a PR's `milestone` field gets validated
+# and written through on edit. Off in a minimal build that compiles out
+# gitquarry-tracker entirely.
+tracker = []
 
 [dev-dependencies]
 # Self-dependency so `cargo test` enables `test-util` automatically for

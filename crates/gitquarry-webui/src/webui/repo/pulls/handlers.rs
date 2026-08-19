@@ -703,6 +703,12 @@ pub(crate) struct EditPrMetadataForm {
     assignees: String,
     #[serde(default)]
     reviewers: String,
+    /// Blank means "no milestone" — same "empty clears it" convention
+    /// `issues::handlers::EditIssueForm::milestone`'s own doc comment
+    /// describes, including tolerating an unparseable value as blank
+    /// rather than 400ing.
+    #[serde(default)]
+    milestone: String,
     #[serde(default)]
     csrf: String,
 }
@@ -725,6 +731,36 @@ pub(crate) async fn handler_edit_metadata_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
+    // Existence validation lives here, not in `domain::pull_request::edit_metadata`
+    // itself — milestones are owned by the optional `gitquarry-tracker` crate
+    // (`docs/tracker-extension-concept.md`), and only this edge can reach it
+    // conditionally. A blank/unparseable field means "no milestone", same
+    // "empty clears it" tolerance `EditPrMetadataForm::milestone`'s own doc
+    // comment describes. Tracker off: `domain::pull_request::edit_metadata`
+    // discards this value regardless (its own cfg'd write-through), so no
+    // validation is needed here either.
+    #[cfg(feature = "tracker")]
+    let milestone = match form.milestone.trim().parse::<u64>() {
+        Ok(n) => {
+            let found = match &ctx.tracker {
+                Some(tracker) => crate::webui::tracker_client::get_milestone(tracker, &resolved.uid, n)
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            if found.is_none() {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::milestone_not_found(locale, n)
+                )));
+            }
+            Some(n)
+        }
+        Err(_) => None,
+    };
+    #[cfg(not(feature = "tracker"))]
+    let milestone = form.milestone.trim().parse::<u64>().ok();
     let cas = domain::pull_request::edit_metadata(
         &ctx,
         &resolved,
@@ -735,6 +771,7 @@ pub(crate) async fn handler_edit_metadata_post(
             labels_csv: &form.labels,
             assignees_csv: &form.assignees,
             reviewers_csv: &form.reviewers,
+            milestone,
         },
         locale,
     )

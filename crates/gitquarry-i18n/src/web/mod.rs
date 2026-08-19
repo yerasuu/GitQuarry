@@ -13,9 +13,12 @@
 pub mod audit;
 pub mod chrome;
 pub mod repo_activity;
+pub mod repo_board;
 pub mod repo_compare;
 pub mod repo_components;
+pub mod repo_issues;
 pub mod repo_log;
+pub mod repo_milestones;
 pub mod repo_new;
 pub mod repo_pulls;
 pub mod repo_refs;

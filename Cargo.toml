@@ -8,6 +8,7 @@ members = [
     "crates/gitquarry-domain",
     "crates/gitquarry-webui",
     "crates/gitquarry-server",
+    "crates/gitquarry-tracker",
 ]
 # No root [package]: this manifest is workspace-only. `cargo build` from
 # here builds every member; `cargo build -p gitquarry` builds just the

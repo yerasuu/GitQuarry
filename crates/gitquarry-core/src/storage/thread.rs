@@ -1,7 +1,11 @@
-//! Append-only, chronologically-keyed thread storage, used by
-//! `pull_requests` for comments and reviews. Extracted from
-//! `pull_requests` once a second real consumer needed the exact same
-//! pattern; not a speculative abstraction, a hoist.
+//! Append-only, chronologically-keyed thread storage — shared by
+//! `pull_requests` (comments, reviews) and the `gitquarry-tracker` crate's
+//! own issue-comment storage. Extracted from `pull_requests` once a second
+//! real consumer (issues) needed the exact same pattern; not a speculative
+//! abstraction, a hoist. `pub`, not `pub(super)`: issues moved into
+//! `gitquarry-tracker` (`docs/tracker-extension-concept.md`), a separate
+//! crate, so `pub(super)` visibility (module-local to this crate) is no
+//! longer enough for that consumer to reach these.
 
 use super::{Backend, Cas};
 use crate::crypto::Cipher;

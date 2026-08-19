@@ -12,7 +12,7 @@ use crate::auth::web::login;
 use crate::webui::page_chrome::{HeaderExtras, header_bar};
 use crate::webui::{
     AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout, markdown, non_empty,
-    raw_link, repo_link, require_csrf, require_login, url_encode,
+    raw_link, repo_link, require_csrf, require_login, tracker_ui_active, url_encode,
 };
 use axum::extract::{Form, Multipart, State};
 use axum::http::HeaderMap;
@@ -416,6 +416,7 @@ pub(crate) async fn handler_create_post(
                     menu_extra: "",
                     below_header: "",
                     sub_tabs: "",
+                    tracker_active: tracker_ui_active(&ctx),
                     locale,
                 },
             );
@@ -544,6 +545,7 @@ pub(crate) async fn handler_generate_notes_post(
             menu_extra: "",
             below_header: "",
             sub_tabs: "",
+            tracker_active: tracker_ui_active(&ctx),
             locale,
         },
     );

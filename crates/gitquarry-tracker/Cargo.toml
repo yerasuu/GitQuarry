@@ -1,0 +1,48 @@
+[package]
+name = "gitquarry-tracker"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Issue tracker + kanban board + milestones for gitquarry — its own optional binary, talks to gitquarry-core only over loopback HTTP (docs/tracker-binary-split-concept.md)"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+gitquarry-wire = { path = "../gitquarry-wire" }
+gitquarry-i18n = { path = "../gitquarry-i18n" }
+
+# Same s3db pin as gitquarry-core — must stay in lockstep, never a floating
+# branch (see gitquarry-core/Cargo.toml's own comment).
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "time", "fs"] }
+axum = "0.8.9"
+# Outbound calls to gitquarry-core's own loopback `/_internal/*` API —
+# rustls-only, same pin reasoning as gitquarry-core's own `reqwest`
+# dependency.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
+anyhow = "1.0.104"
+dirs = "6.0.0"
+rand = "0.10.2"
+
+[features]
+# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
+# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
+# across the crate boundary that external integration tests are.
+test-util = []
+
+[dev-dependencies]
+tempfile = "3.27.0"
+# Self-dependency so `cargo test` enables this crate's own `test-util`
+# automatically for its tests/*.rs.
+gitquarry-tracker = { path = ".", features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1093,6 +1093,26 @@ msg!(
 );
 
 msg!(
+    /// No `MilestoneMeta` exists for `number` in this repo — same shape as
+    /// `issue_not_found`, confirmed duplicated across
+    /// `domain::milestone::{get, transition}` and `domain::issue::edit`'s
+    /// own milestone-number check.
+    milestone_not_found(number: u64) {
+        Locale::Es => "no existe el milestone #{number}",
+        Locale::En => "no milestone #{number} exists",
+    }
+);
+
+msg!(
+    /// `domain::milestone::transition`: the milestone's current status
+    /// doesn't allow the requested move.
+    milestone_wrong_status() {
+        Locale::Es => "este milestone no esta en un estado valido para esa accion",
+        Locale::En => "this milestone isn't in a valid status for that action",
+    }
+);
+
+msg!(
     /// `domain::board::{rename_column, remove_column, add_card, move_card}`:
     /// the column index doesn't name an existing column — most likely a
     /// stale form submitted after someone else already removed it.
@@ -1144,6 +1164,16 @@ msg!(
     not_comment_author() {
         Locale::Es => "solo quien escribio el comentario puede editarlo o borrarlo",
         Locale::En => "only the comment's own author can edit or delete it",
+    }
+);
+
+msg!(
+    /// `[tracker]` compiled in (`feature = "tracker"`) but not configured
+    /// for this deploy — `ctx.tracker` is `None`. Shared across the
+    /// issues/board/milestones views rather than tripled per-view.
+    tracker_not_configured() {
+        Locale::Es => "el tracker no esta configurado en este servidor",
+        Locale::En => "tracker isn't configured on this server",
     }
 );
 

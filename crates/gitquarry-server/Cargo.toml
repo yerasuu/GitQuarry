@@ -7,11 +7,15 @@ description = "Git remote backed by S3: ssh:// and git-smart-HTTP servers plus a
 license = "AGPL-3.0-or-later"
 
 [dependencies]
-gitquarry-core = { path = "../gitquarry-core" }
+# `default-features = false` on both: this crate's own `tracker` feature is
+# what turns their `tracker` features back on (see [features] below) —
+# without this, their default features would always enable tracker
+# regardless of whether this crate's own `tracker` feature is on.
+gitquarry-core = { path = "../gitquarry-core", default-features = false }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 gitquarry-domain = { path = "../gitquarry-domain" }
-gitquarry-webui = { path = "../gitquarry-webui" }
+gitquarry-webui = { path = "../gitquarry-webui", default-features = false }
 
 # dyn-dispatch for gitquarry_core::mirror::MirrorSyncHook (mirror_sync.rs)
 async-trait = "0.1.91"
@@ -45,15 +49,26 @@ serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
 
 [features]
+default = ["tracker"]
 # Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
 # gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
 # across the crate boundary that external integration tests are.
 test-util = []
+# Issue tracker/board/milestones tabs — see
+# docs/tracker-binary-split-concept.md. `gitquarry-tracker` is its own
+# binary now, never a dependency of this one; this only toggles whether
+# `webui`'s issues/board/milestones pages (and `AppContext.tracker` itself)
+# compile in at all. Off in a minimal build that never wants those tabs
+# even if `[tracker]` were configured.
+tracker = ["gitquarry-webui/tracker", "gitquarry-core/tracker"]
 
 [dev-dependencies]
 # Self-dependency so `cargo test` enables this crate's own `test-util`
-# automatically for its tests/*.rs.
-gitquarry = { path = ".", features = ["test-util"] }
+# automatically for its tests/*.rs. `default-features = false` so
+# `cargo test --no-default-features --features test-util` can actually
+# turn `tracker` off for a test run, same reasoning as the `[dependencies]`
+# edges above.
+gitquarry = { path = ".", default-features = false, features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

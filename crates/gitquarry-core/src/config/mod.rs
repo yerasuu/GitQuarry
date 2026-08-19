@@ -36,10 +36,34 @@ pub struct BucketConfig {
     pub passphrase: String,
 }
 
+/// `[tracker]` in `gitquarry.toml` — optional, same "`None` = feature fully
+/// off, never a half-wired no-op" pattern `oidc: Option<OidcClient>`
+/// already establishes. Absent means core has no way to reach `gitquarry-tracker`'s
+/// loopback API and the issues/board/milestones tabs disappear entirely
+/// from the web UI. See `docs/tracker-binary-split-concept.md`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackerSection {
+    /// Loopback address the `/_internal/*` server binds to — see
+    /// `docs/tracker-binary-split-concept.md`.
+    pub internal_bind: String,
+    /// Shared secret gating that server, manually kept identical to
+    /// `gitquarry-tracker.toml`'s own `internal_token`.
+    pub internal_token: String,
+    /// `gitquarry-tracker`'s own loopback address (its `listen`) — where
+    /// `webui` forwards issue/board/milestone CRUD, and where core pushes a
+    /// PR-merge notification for issue auto-close.
+    pub tracker_url: String,
+}
+
+// pub (and `buckets` pub too) isn't just for tests/config.rs: RawConfig is
+// also used unconditionally by `Config::load_from` below, so it can't be
+// cfg-gated to test builds only.
 #[derive(Debug, Deserialize)]
 pub struct RawConfig {
     #[serde(default)]
     pub buckets: BTreeMap<String, BucketConfig>,
+    #[serde(default)]
+    tracker: Option<TrackerSection>,
     /// Whether `git push` to a repo name that doesn't exist yet creates it
     /// (same as `webui::repo_new`, just reached via `git push` instead of
     /// `/_new`). Defaults to off: a typo'd repo name in the push URL should
@@ -61,6 +85,7 @@ struct RawConfigOut<'a> {
 #[derive(Debug)]
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
+    tracker: Option<TrackerSection>,
     allow_push_create: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
     /// without guessing which candidate won.
@@ -93,9 +118,16 @@ impl Config {
         }
         Ok(Config {
             buckets: raw.buckets,
+            tracker: raw.tracker,
             allow_push_create: raw.allow_push_create,
             path: path.to_path_buf(),
         })
+    }
+
+    /// `None` unless `[tracker]` is present in `gitquarry.toml` — see
+    /// [`TrackerSection`]'s own doc comment.
+    pub fn tracker(&self) -> Option<&TrackerSection> {
+        self.tracker.as_ref()
     }
 
     /// See [`RawConfig::allow_push_create`]'s doc comment.

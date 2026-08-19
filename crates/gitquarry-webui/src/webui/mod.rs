@@ -165,6 +165,8 @@ mod text_size;
 pub mod theme_pref;
 #[cfg(not(any(test, feature = "test-util")))]
 mod theme_pref;
+#[cfg(feature = "tracker")]
+pub(crate) mod tracker_client;
 
 pub(crate) use actions::{render_repo_action_buttons, star_button_html, watch_button_html};
 pub(crate) use cookies::{get_cookie, set_cookie};
@@ -183,9 +185,11 @@ pub(crate) use locale_pref::effective_locale;
 // `esc`/`non_empty` above.
 pub(crate) use density_pref::{effective_density, handler_toggle_density};
 pub use page_chrome::layout;
+#[cfg(feature = "tracker")]
+pub(crate) use page_chrome::project_subnav;
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, header_bar, permission_badge_class,
-    tab_links, topic_badges,
+    tab_links, topic_badges, tracker_ui_active,
 };
 pub(crate) use raw_link::{github_raw_link, raw_link};
 pub(crate) use repo_link::{github_blob_link, repo_link};
@@ -232,6 +236,88 @@ async fn handler_styler_js() -> impl axum::response::IntoResponse {
         [(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         include_str!("style/vendor/styler.js"),
     )
+}
+
+/// The issues/milestones/board mutation routes, extracted so the whole
+/// group can become a no-op together once the `tracker` feature
+/// (`docs/tracker-extension-concept.md`) is off, instead of 20 individual
+/// `#[cfg]` attributes threaded through `run_server`'s route chain.
+#[cfg(not(feature = "tracker"))]
+fn tracker_routes(router: Router<Arc<AppContext>>) -> Router<Arc<AppContext>> {
+    router
+}
+
+#[cfg(feature = "tracker")]
+fn tracker_routes(router: Router<Arc<AppContext>>) -> Router<Arc<AppContext>> {
+    router
+        .route("/_issues", axum::routing::post(repo::issues::handler_create_post))
+        .route("/_issues/edit", axum::routing::post(repo::issues::handler_edit_post))
+        .route("/_issues/close", axum::routing::post(repo::issues::handler_close_post))
+        .route(
+            "/_issues/reopen",
+            axum::routing::post(repo::issues::handler_reopen_post),
+        )
+        .route("/_issues/bulk", axum::routing::post(repo::issues::handler_bulk_post))
+        .route(
+            "/_issues/comment",
+            axum::routing::post(repo::issues::handler_comment_post),
+        )
+        .route(
+            "/_issues/comment/edit",
+            axum::routing::post(repo::issues::handler_comment_edit_post),
+        )
+        .route(
+            "/_issues/comment/delete",
+            axum::routing::post(repo::issues::handler_comment_delete_post),
+        )
+        .route(
+            "/_milestones",
+            axum::routing::post(repo::milestones::handler_create_post),
+        )
+        .route(
+            "/_milestones/edit",
+            axum::routing::post(repo::milestones::handler_edit_post),
+        )
+        .route(
+            "/_milestones/close",
+            axum::routing::post(repo::milestones::handler_close_post),
+        )
+        .route(
+            "/_milestones/reopen",
+            axum::routing::post(repo::milestones::handler_reopen_post),
+        )
+        .route(
+            "/_milestones/bulk",
+            axum::routing::post(repo::milestones::handler_bulk_post),
+        )
+        .route(
+            "/_board/add_column",
+            axum::routing::post(repo::board::handler_add_column_post),
+        )
+        .route(
+            "/_board/remove_column",
+            axum::routing::post(repo::board::handler_remove_column_post),
+        )
+        .route(
+            "/_board/add_card",
+            axum::routing::post(repo::board::handler_add_card_post),
+        )
+        .route(
+            "/_board/remove_card",
+            axum::routing::post(repo::board::handler_remove_card_post),
+        )
+        .route(
+            "/_board/move_up",
+            axum::routing::post(repo::board::handler_move_card_up_post),
+        )
+        .route(
+            "/_board/move_down",
+            axum::routing::post(repo::board::handler_move_card_down_post),
+        )
+        .route(
+            "/_board/move_to_column",
+            axum::routing::post(repo::board::handler_move_card_to_column_post),
+        )
 }
 
 pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
@@ -334,6 +420,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             "/_branches/delete",
             axum::routing::post(repo::branches::handler_delete_post),
         );
+    let app = tracker_routes(app);
     let app = app
         .route("/_pulls", axum::routing::post(repo::pulls::handler_create_post))
         .route("/_pulls/bulk", axum::routing::post(repo::pulls::handler_bulk_post))

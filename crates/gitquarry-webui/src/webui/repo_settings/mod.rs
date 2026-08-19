@@ -74,7 +74,7 @@ mod topics;
 
 use super::{
     AppError, Flash, State_, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    render_repo_action_buttons, require_csrf, url_encode,
+    render_repo_action_buttons, require_csrf, tracker_ui_active, url_encode,
 };
 use crate::auth::web::login;
 use crate::webui::repo_link;
@@ -308,6 +308,7 @@ pub(crate) async fn handler_repo_conf_post(
             menu_extra: &actions,
             below_header: "",
             sub_tabs: "",
+            tracker_active: tracker_ui_active(&ctx),
             locale,
         },
     );

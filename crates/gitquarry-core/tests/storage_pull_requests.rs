@@ -34,6 +34,7 @@ fn sample(number: u64) -> PullRequestMeta {
         labels: Vec::new(),
         assignees: Vec::new(),
         requested_reviewers: Vec::new(),
+        milestone: None,
     }
 }
 

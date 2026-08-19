@@ -582,12 +582,20 @@ fn scan_number_mentions(text: &str) -> Vec<(std::ops::Range<usize>, u64)> {
 }
 
 /// Renders `text` HTML-escaped, with every `#123` mention that resolves to
-/// a real PR on `target` turned into a link. A number that resolves to
-/// nothing is left as plain escaped text, not a dead link.
+/// a real issue or PR on `target` turned into a link — issue takes
+/// priority over PR on a number that happens to exist as both, since
+/// issue/PR numbers are independent sequences (unlike GitHub's shared
+/// one) and this codebase has no way to tell which the author meant
+/// beyond that tie-break. A number that resolves to neither is left as
+/// plain escaped text, not a dead link. Without the `tracker` feature
+/// (`docs/tracker-extension-concept.md`) there are no issues to check
+/// against, so `#N` is still tried as a PR — a working link beats a
+/// deliberately broken one, and PRs exist in every build.
 ///
-/// Used for a PR's own description and flat-thread comments — not the
-/// annotated inline diff comments, which go through a different render
-/// path ([`super::pulls::annotated_diff`]) this doesn't touch.
+/// Used for an issue's own body/comments and a PR's own description/flat-
+/// thread comments — not the annotated inline diff comments, which go
+/// through a different render path ([`super::pulls::annotated_diff`]) this
+/// doesn't touch.
 pub(crate) async fn link_number_mentions(
     ctx: &AppContext,
     target: &ResolvedRepo,
@@ -604,6 +612,17 @@ pub(crate) async fn link_number_mentions(
     numbers.dedup();
     let mut resolved: std::collections::HashMap<u64, &'static str> = std::collections::HashMap::new();
     for number in numbers {
+        #[cfg(feature = "tracker")]
+        if let Some(tracker) = &ctx.tracker
+            && crate::webui::tracker_client::get_issue(tracker, &target.uid, number)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            resolved.insert(number, "issue");
+            continue;
+        }
         if domain::pull_request::get(ctx, target, number)
             .await
             .ok()

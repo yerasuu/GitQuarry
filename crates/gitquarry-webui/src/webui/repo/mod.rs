@@ -15,6 +15,10 @@ pub mod activity;
 mod activity;
 pub(crate) mod blame;
 pub(crate) mod blob;
+#[cfg(all(feature = "tracker", any(test, feature = "test-util")))]
+pub mod board;
+#[cfg(all(feature = "tracker", not(any(test, feature = "test-util"))))]
+pub(crate) mod board;
 pub(crate) mod branches;
 #[cfg(any(test, feature = "test-util"))]
 pub mod commit;
@@ -25,7 +29,15 @@ mod compare;
 pub mod components;
 #[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod components;
+#[cfg(all(feature = "tracker", any(test, feature = "test-util")))]
+pub mod issues;
+#[cfg(all(feature = "tracker", not(any(test, feature = "test-util"))))]
+pub(crate) mod issues;
 pub(crate) mod log;
+#[cfg(all(feature = "tracker", any(test, feature = "test-util")))]
+pub mod milestones;
+#[cfg(all(feature = "tracker", not(any(test, feature = "test-util"))))]
+pub(crate) mod milestones;
 #[cfg(any(test, feature = "test-util"))]
 pub mod pulls;
 #[cfg(not(any(test, feature = "test-util")))]
@@ -59,15 +71,21 @@ use blame::render_blame;
 pub use blob::render_blob;
 #[cfg(not(any(test, feature = "test-util")))]
 use blob::render_blob;
+#[cfg(feature = "tracker")]
+use board::render_board;
 #[cfg(any(test, feature = "test-util"))]
 pub use commit::render_commit;
 #[cfg(not(any(test, feature = "test-util")))]
 use commit::render_commit;
 use compare::render_compare;
+#[cfg(feature = "tracker")]
+use issues::{render_issue_detail, render_issues_list, render_new_issue_form};
 #[cfg(any(test, feature = "test-util"))]
 pub use log::render_log;
 #[cfg(not(any(test, feature = "test-util")))]
 use log::render_log;
+#[cfg(feature = "tracker")]
+use milestones::render_milestones_list;
 use pulls::{NewPullFormValues, render_new_pull_form, render_pull_detail, render_pulls_list};
 #[cfg(any(test, feature = "test-util"))]
 pub use refs::render_refs;
@@ -84,9 +102,12 @@ pub use tree::render_tree;
 #[cfg(not(any(test, feature = "test-util")))]
 use tree::render_tree;
 
+#[cfg(feature = "tracker")]
+use super::project_subnav;
 use super::{
     AppError, HeaderExtras, Page, State_, compound_path, effective_density, effective_locale, effective_theme,
-    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_link, repo_settings, url_encode,
+    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_link, repo_settings,
+    tracker_ui_active, url_encode,
 };
 use crate::auth::web::login;
 use crate::settings::web::require_admin;
@@ -441,6 +462,7 @@ pub(crate) async fn handler_repo(
                 menu_extra: &actions,
                 below_header: "",
                 sub_tabs: "",
+                tracker_active: tracker_ui_active(&ctx),
                 locale,
             },
         );
@@ -512,6 +534,7 @@ pub(crate) async fn handler_repo(
                 menu_extra: &menu_extra,
                 below_header: "",
                 sub_tabs: "",
+                tracker_active: tracker_ui_active(&ctx),
                 locale,
             },
         );
@@ -569,6 +592,66 @@ async fn read_repo_template(
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// Bundled args for [`render_tracker_view`] — one struct instead of the same
+/// seven positional args threaded through five near-identical arms. Fields
+/// only read by the `#[cfg(feature = "tracker")]` inner implementation —
+/// the tracker-off build's stub never touches them, hence the `allow`.
+#[cfg_attr(not(feature = "tracker"), allow(dead_code))]
+struct RepoViewArgs<'a> {
+    ctx: &'a AppContext,
+    resolved: &'a gitquarry_core::app::ResolvedRepo,
+    name: &'a str,
+    mirror_path: &'a std::path::Path,
+    params: &'a HashMap<String, String>,
+    headers: &'a HeaderMap,
+    locale: gitquarry_i18n::Locale,
+}
+
+#[cfg(feature = "tracker")]
+const TRACKER_VIEWS: &[&str] = &["issues", "issue", "new_issue", "milestones", "board"];
+
+/// The issues/board/milestones views, split out of `render_repo_view`'s
+/// `match view` so this whole group can become a no-op together once the
+/// `tracker` feature (`docs/tracker-extension-concept.md`) is off — `None`
+/// means `view` isn't one of these, and the caller falls through to the
+/// existing `unknown_view` error exactly as it did before this split.
+#[cfg(feature = "tracker")]
+async fn render_tracker_view(view: &str, args: RepoViewArgs<'_>) -> Option<Result<String, AppError>> {
+    if !TRACKER_VIEWS.contains(&view) {
+        return None;
+    }
+    Some(render_tracker_view_inner(view, args).await)
+}
+#[cfg(not(feature = "tracker"))]
+async fn render_tracker_view(_view: &str, _args: RepoViewArgs<'_>) -> Option<Result<String, AppError>> {
+    None
+}
+
+#[cfg(feature = "tracker")]
+async fn render_tracker_view_inner(view: &str, a: RepoViewArgs<'_>) -> Result<String, AppError> {
+    match view {
+        "issues" => {
+            let status = a.params.get("status").map(String::as_str).unwrap_or("open");
+            let q = a.params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
+            if let Some(q) = q {
+                validate::validate_query(q).map_err(AppError::bad_request)?;
+            }
+            render_issues_list(a.ctx, a.resolved, a.name, status, q, a.headers, a.locale).await
+        }
+        "issue" => {
+            let number = require_number(a.params, a.locale)?;
+            render_issue_detail(a.ctx, a.resolved, a.name, number, a.headers, a.locale).await
+        }
+        "new_issue" => {
+            let template = read_repo_template(a.resolved, a.mirror_path, "ISSUE_TEMPLATE.md").await;
+            Ok(render_new_issue_form(a.name, template.as_deref(), "", "", None, a.headers, a.locale).into_string())
+        }
+        "milestones" => render_milestones_list(a.ctx, a.resolved, a.name, a.headers, a.locale).await,
+        "board" => render_board(a.ctx, a.resolved, a.name, a.headers, a.locale).await,
+        _ => unreachable!("checked by TRACKER_VIEWS above"),
+    }
+}
+
 /// The shared HTML-rendering tail once a repo, its config, an open mirror,
 /// and a view/rev/path are all known — reached either the normal way
 /// (`handler_repo`'s `?view=`/`?ref=`/`?path=` dispatch) or via a
@@ -590,6 +673,10 @@ async fn render_repo_view(
     params: &HashMap<String, String>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Response, AppError> {
+    // See `page_chrome::tracker_ui_active`'s own doc comment: `true` only
+    // when both `feature = "tracker"` is compiled in *and* `[tracker]` is
+    // actually configured for this deploy — either alone isn't enough.
+    let tracker_active = tracker_ui_active(ctx);
     let active_tab = match view {
         "log" | "commit" => "log",
         "refs" | "compare" => "refs",
@@ -597,8 +684,24 @@ async fn render_repo_view(
         "about" | "activity" => "about",
         "summary" => "summary",
         "releases" | "release" => "releases",
+        "issues" | "issue" | "new_issue" | "milestones" | "pulls" | "pull" | "new_pull" | "board" if tracker_active => {
+            "issues"
+        }
         "pulls" | "pull" | "new_pull" => "pulls",
         _ => "tree", // tree, blob, blame
+    };
+    // Which of the "issues" tab's own sub-nav entries to highlight — see
+    // `page_chrome::project_subnav`'s own doc comment on why issues/pulls/
+    // board/milestones share one top-level tab now. Only meaningful when
+    // `active_tab == "issues"`, which — per the match above — only happens
+    // when `tracker_active`; the sole reader (`sub_tabs` below) is itself
+    // `#[cfg(feature = "tracker")]`-gated, same as `project_subnav` it calls.
+    #[cfg(feature = "tracker")]
+    let active_sub = match view {
+        "pulls" | "pull" | "new_pull" => "pulls",
+        "board" => "board",
+        "milestones" => "milestones",
+        _ => "issues",
     };
     let density = effective_density(ctx, headers).await;
     let menu_extra = if active_tab == "about" {
@@ -627,6 +730,13 @@ async fn render_repo_view(
     } else {
         String::new()
     };
+    #[cfg(feature = "tracker")]
+    let sub_tabs = if active_tab == "issues" {
+        project_subnav(&name, active_sub, locale).into_string()
+    } else {
+        String::new()
+    };
+    #[cfg(not(feature = "tracker"))]
     let sub_tabs = String::new();
     // Cheap (`for-each-ref`, no history walk) compared to `language_stats`
     // above, so unlike that one this runs on every tab, not just summary —
@@ -645,6 +755,7 @@ async fn render_repo_view(
             menu_extra: &menu_extra,
             below_header: &below_header,
             sub_tabs: &sub_tabs,
+            tracker_active,
             locale,
         },
     );
@@ -731,12 +842,28 @@ async fn render_repo_view(
             }
             render_blame(&mirror.path, &name, rev, path, locale).await?
         }
-        other => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "{}",
-                gitquarry_i18n::shared::unknown_view(locale, other)
-            )));
-        }
+        other => match render_tracker_view(
+            other,
+            RepoViewArgs {
+                ctx,
+                resolved: &resolved,
+                name: &name,
+                mirror_path: &mirror.path,
+                params,
+                headers,
+                locale,
+            },
+        )
+        .await
+        {
+            Some(body) => body?,
+            None => {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::unknown_view(locale, other)
+                )));
+            }
+        },
     };
     Ok(Html(layout(&name, &header, &body, topnav, theme, density, locale)).into_response())
 }

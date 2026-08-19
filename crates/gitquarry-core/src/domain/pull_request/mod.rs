@@ -206,6 +206,7 @@ pub async fn create(
         labels: Vec::new(),
         assignees: Vec::new(),
         requested_reviewers: Vec::new(),
+        milestone: None,
     };
     let cas = pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, None).await?;
     if cas != Cas::Ok {
@@ -345,11 +346,21 @@ pub struct PrMetadataEdit<'a> {
     pub labels_csv: &'a str,
     pub assignees_csv: &'a str,
     pub reviewers_csv: &'a str,
+    /// `None` clears the milestone. Unlike `domain::issue::IssueEdit::milestone`,
+    /// this crate no longer checks the number resolves to a real milestone —
+    /// milestones are owned by the optional `gitquarry-tracker` crate
+    /// (`docs/tracker-extension-concept.md`), so the caller
+    /// (`webui::repo::pulls::handlers`) validates this at the edge, where it
+    /// can reach that crate behind `#[cfg(feature = "tracker")]`.
+    pub milestone: Option<u64>,
 }
 
 /// Title, description, labels, assignees, and requested reviewers all
-/// change together in a single get-etag/mutate/CAS-put. Every label in
-/// `edit.labels_csv` must already exist in `target`'s
+/// change together in a single get-etag/mutate/CAS-put — same shape as
+/// `gitquarry_tracker::domain::issue::edit` (when that crate is compiled
+/// in), including reusing its title validation (length cap + control-char
+/// rejection isn't an issue-specific concern, both titles render the same
+/// way). Every label in `edit.labels_csv` must already exist in `target`'s
 /// `RepoConfig.labels`, every name in `assignees_csv`/`reviewers_csv` must
 /// resolve to a real user — the first one that doesn't bails with a clear
 /// error naming it, before anything is written.
@@ -398,6 +409,20 @@ pub async fn edit_metadata(
     pr.labels = labels;
     pr.assignees = assignees;
     pr.requested_reviewers = reviewers;
+    // Tracker off: this deploy has no milestone vocabulary to validate
+    // against and no UI to re-set the field, so an edit passes the existing
+    // value through untouched rather than silently clearing a milestone
+    // that was assigned while tracker was compiled in. The wire DTO field
+    // (`PullRequestMeta.milestone`) itself stays unconditional — only this
+    // write is gated (docs/tracker-extension-concept.md).
+    #[cfg(feature = "tracker")]
+    {
+        pr.milestone = edit.milestone;
+    }
+    #[cfg(not(feature = "tracker"))]
+    {
+        let _ = edit.milestone;
+    }
     pr.updated_at = now_stamp();
     let cas = pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, etag.as_deref()).await?;
     if cas == Cas::Ok {
@@ -766,6 +791,61 @@ async fn merge_commit(
     }
 }
 
+/// GitHub/Forgejo/GitLab's own closing-keyword convention: "close(s|d)",
+/// "fix(es|ed)", or "resolve(s|d)", followed by optional `:`/spaces, then
+/// `#<number>`. Case-insensitive, manual scan rather than pulling in
+/// `regex` for one pattern — same reasoning
+/// `webui::repo::components::scan_number_mentions` gives for its own
+/// `#123` scan (this one just also requires a keyword right before it).
+/// Deliberately doesn't support GitHub's comma-continuation
+/// ("closes #1, #2") — one keyword, one number, scope kept to the common
+/// case. [`merge`] scans a merged PR's title+description for this and
+/// closes whatever issue numbers it finds, best-effort.
+const CLOSING_KEYWORDS: &[&str] = &[
+    "closes", "closed", "close", "fixes", "fixed", "fix", "resolves", "resolved", "resolve",
+];
+
+/// `pub`, not private: `gitquarry_tracker::domain::issue::close_referenced_by_pull_request`
+/// (the `RepoEvent::PullRequest{action: Merged}` consumer that replaced this
+/// module's own direct closing-loop, see [`merge`]'s doc comment) re-parses a
+/// merged PR's title+description with the exact same "closes #N" grammar,
+/// rather than duplicating it.
+pub fn closing_issue_numbers(text: &str) -> Vec<u64> {
+    let lower = text.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut numbers = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts_word = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if starts_word && let Some(keyword) = CLOSING_KEYWORDS.iter().find(|k| lower[i..].starts_with(**k)) {
+            let after_keyword = i + keyword.len();
+            if bytes.get(after_keyword).is_none_or(|b| !b.is_ascii_alphanumeric()) {
+                let mut j = after_keyword;
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b':') {
+                    j += 1;
+                }
+                if bytes.get(j) == Some(&b'#') {
+                    let mut k = j + 1;
+                    while k < bytes.len() && bytes[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    if k > j + 1 {
+                        if let Ok(number) = lower[j + 1..k].parse::<u64>() {
+                            numbers.push(number);
+                        }
+                        i = k;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
+}
+
 /// Merges `number` into its target branch per `strategy` (or `Conflict`
 /// with the conflicting paths, nothing written), then uploaded and
 /// CAS-linked into the target's own manifest exactly the way a real push
@@ -784,7 +864,11 @@ async fn merge_commit(
 /// [`gitquarry_i18n::shared::cas_conflict`] — same "reload and retry" contract
 /// every other CAS writer in this codebase already gives. The review-state
 /// gate only checks for a pending *rejection* — it doesn't require any
-/// approvals to exist, unlike a GitHub branch-protection rule.
+/// approvals to exist, unlike a GitHub branch-protection rule. Closing any
+/// issue named by a closing keyword in the PR's title/description is not
+/// done here directly — it reacts to the `Merged` event this function emits
+/// (see `gitquarry_tracker::domain::issue::close_referenced_by_pull_request`),
+/// which decouples issue-closing from this module.
 /// The `CODEOWNERS` file location this codebase checks — repo root only,
 /// unlike GitHub's own fallback chain (`.github/CODEOWNERS`,
 /// `docs/CODEOWNERS`) — one location is enough for what this feature needs
@@ -922,6 +1006,41 @@ pub async fn merge(
             action: crate::events::PullRequestAction::Merged,
         },
     );
+    // `gitquarry-tracker`'s own issue-auto-close logic — an in-process
+    // `ctx.events` consumer before the tracker binary split
+    // (`docs/tracker-binary-split-concept.md`), now a pushed notification
+    // instead, since tracker is no longer in this process to register one.
+    // Best-effort, same tolerance every other cross-process notification in
+    // this codebase has (e.g. `mirror::gc::touch_last_access`): a merge that
+    // already landed on the target branch must never fail because tracker
+    // happened to be unreachable.
+    if let Some(tracker) = &ctx.tracker {
+        let notification = gitquarry_wire::tracker::PullRequestMergedNotification {
+            repo_uid: target.uid.clone(),
+            pr_number: number,
+            title: pr.title.clone(),
+            description: pr.description.clone(),
+        };
+        let url = format!(
+            "{}/_internal/tracker/pull-request-merged",
+            tracker.base_url.trim_end_matches('/')
+        );
+        let req = tracker
+            .http
+            .post(&url)
+            .header("x-internal-token", &tracker.internal_token)
+            .header(
+                gitquarry_wire::WIRE_VERSION_HEADER,
+                gitquarry_wire::WIRE_PROTOCOL_VERSION,
+            )
+            .json(&notification);
+        tokio::spawn(async move {
+            if let Err(e) = req.send().await {
+                eprintln!("gitquarry: warning: couldn't notify gitquarry-tracker of merged PR: {e:#}");
+            }
+        });
+    }
+
     let stamp = now_stamp();
     pr.status = PrStatus::Merged;
     pr.merge_commit_sha = Some(merge_sha.clone());
@@ -939,6 +1058,12 @@ pub async fn merge(
             "gitquarry: warning: pull request #{number} merged but its metadata CAS conflicted (concurrent edit) — status may not show as merged"
         );
     }
+
+    // Closing whatever issue a "closes #N" keyword in the title/description
+    // names happens out-of-band, reacting to the `Merged` event emitted
+    // above (`crate::domain::issue::close_referenced_by_pull_request`) — not
+    // here directly. That keeps this function decoupled from issue code
+    // (`docs/tracker-extension-concept.md`'s auto-close-on-merge design).
 
     Ok(MergeOutcome::Merged(merge_sha))
 }

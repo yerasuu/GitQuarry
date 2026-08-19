@@ -7,7 +7,11 @@ description = "Read-only web UI (plus settings/search/auth pages) for gitquarry-
 license = "AGPL-3.0-or-later"
 
 [dependencies]
-gitquarry-core = { path = "../gitquarry-core" }
+# `default-features = false`: this crate's own `tracker` feature is what
+# turns `gitquarry-core/tracker` back on (see [features] below) — without
+# this, gitquarry-core's default features would always enable it
+# regardless of whether this crate's own `tracker` feature is on.
+gitquarry-core = { path = "../gitquarry-core", default-features = false }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 gitquarry-domain = { path = "../gitquarry-domain" }
@@ -49,20 +53,37 @@ sha2 = "0.11.0"
 tempfile = "3.27.0"
 
 [features]
+default = ["tracker"]
 # Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
 # gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
 # across the crate boundary that external integration tests are.
 test-util = []
+# Issue tracker/board/milestones views — see
+# docs/tracker-binary-split-concept.md. `gitquarry-tracker` is its own
+# binary now, never a dependency of this one — every read/write here goes
+# through `ctx.tracker` (`webui::tracker_client`). Off in a minimal build
+# that never wants these tabs even if `[tracker]` were configured.
+tracker = ["gitquarry-core/tracker"]
 
 [dev-dependencies]
 # `test-util` un-gates gitquarry-core's storage::local/crypto::SALT_LEN
 # test-fixture helpers for this crate's own tests — see that crate's
 # Cargo.toml for why plain `#[cfg(test)]` isn't enough across a crate
-# boundary.
-gitquarry-core = { path = "../gitquarry-core", features = ["test-util"] }
+# boundary. `default-features = false` here too, same reasoning as the
+# `[dependencies]` edge above — otherwise `cargo test --no-default-features
+# --features test-util` couldn't actually turn `tracker` off.
+gitquarry-core = { path = "../gitquarry-core", default-features = false, features = [
+    "test-util",
+] }
 # Self-dependency so `cargo test` enables this crate's own `test-util`
 # automatically for its tests/*.rs.
-gitquarry-webui = { path = ".", features = ["test-util"] }
+gitquarry-webui = { path = ".", default-features = false, features = ["test-util"] }
+# Only for the issues/board/milestones tests: a real `gitquarry-tracker`
+# server (its own `web::router` + `TrackerState`) bound to 127.0.0.1:0,
+# exercised over the loopback exactly like a real deploy would — not a
+# hand-rolled fake, since tracker's own web layer is cheap to stand up
+# directly. Never a production dependency (see [dependencies] above).
+gitquarry-tracker = { path = "../gitquarry-tracker" }
 tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]

@@ -1870,6 +1870,27 @@ name = "gitquarry-i18n"
 version = "0.1.0"
 
 [[package]]
+name = "gitquarry-tracker"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dirs",
+ "gitquarry-i18n",
+ "gitquarry-tracker",
+ "gitquarry-wire",
+ "rand 0.10.2",
+ "reqwest 0.13.4",
+ "s3db",
+ "s3db-crypto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "gitquarry-webui"
 version = "0.1.0"
 dependencies = [
@@ -1883,6 +1904,7 @@ dependencies = [
  "gitquarry-core",
  "gitquarry-domain",
  "gitquarry-i18n",
+ "gitquarry-tracker",
  "gitquarry-webui",
  "gitquarry-wire",
  "maud",

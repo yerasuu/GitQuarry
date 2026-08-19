@@ -9,7 +9,7 @@ use crate::auth::web::login;
 use crate::webui::page_chrome::{HeaderExtras, header_bar};
 use crate::webui::{
     AppError, State_, effective_density, effective_locale, effective_theme, layout, repo_link, require_csrf,
-    require_login, url_encode,
+    require_login, tracker_ui_active, url_encode,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -109,6 +109,7 @@ pub(crate) async fn handler_create_post(
                     menu_extra: "",
                     below_header: "",
                     sub_tabs: "",
+                    tracker_active: tracker_ui_active(&ctx),
                     locale,
                 },
             );

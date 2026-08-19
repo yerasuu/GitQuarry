@@ -1,3 +1,5 @@
+mod common;
+
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
@@ -51,6 +53,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        tracker: None,
         allow_push_create: false,
         events: Default::default(),
     }
@@ -180,6 +183,54 @@ async fn pull_detail_404s_for_a_nonexistent_number() {
         )
         .await
         .is_err()
+    );
+}
+
+// Needs `gitquarry_tracker::domain::issue` to create the issue `#1` in the
+// PR description resolves to — only exercised when `tracker` is on, same as
+// `link_number_mentions`'s issue-lookup half itself.
+#[cfg(feature = "tracker")]
+#[tokio::test]
+async fn pull_detail_links_a_hash_mention_that_resolves_to_an_issue() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = test_target(dir.path());
+    let mut ctx = test_ctx(dir.path());
+    let (tracker_state, link) = common::tracker::spawn_tracker(ctx.backend.clone(), ctx.cipher.clone()).await;
+    ctx.tracker = Some(link);
+    let ttarget = gitquarry_tracker::state::TrackerTarget {
+        uid: target.uid.clone(),
+    };
+    let git_dir = init_repo_with_branches(dir.path());
+    put_branch(&target, "main", &"a".repeat(40)).await;
+    put_branch(&target, "feature", &"b".repeat(40)).await;
+    gitquarry_tracker::domain::issue::create(&tracker_state, &ttarget, "The bug", "b", "alice")
+        .await
+        .unwrap();
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "Add widget",
+        description: "fixes #1",
+        author: "alice",
+    };
+    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+
+    let html = render_pull_detail(
+        &ctx,
+        &target,
+        "team/proj",
+        &git_dir,
+        1,
+        &no_params(),
+        &HeaderMap::new(),
+        Locale::En,
+    )
+    .await
+    .unwrap();
+    assert!(
+        html.contains(r#"<a href="/team/proj?view=issue&amp;number=1">#1</a>"#),
+        "{html}"
     );
 }
 
@@ -574,6 +625,7 @@ async fn pull_detail_shows_labels_assignees_and_requested_reviewers() {
             labels_csv: "bug",
             assignees_csv: "bob",
             reviewers_csv: "carol",
+            milestone: None,
         },
         Locale::En,
     )

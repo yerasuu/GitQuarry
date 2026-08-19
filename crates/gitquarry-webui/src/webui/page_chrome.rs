@@ -7,22 +7,22 @@ use super::repo_link::repo_link;
 /// The tab links themselves — the familiar ` | `-separated inline row above
 /// `mobile.css`'s breakpoint, a plain stacked vertical list below it
 /// (`.tabs-list a` forces `display: block`) either way. Shared by
-/// [`tabs_bar`] and `pulls`'s own status filter — duplicating this
-/// list/separator markup risked one copy drifting (a missing
-/// `aria-hidden`) in a way a shared helper can't.
+/// [`tabs_bar`], [`project_subnav`], and `issues`/`pulls`'s own status
+/// filter — duplicating this list/separator markup risked one copy
+/// drifting (a missing `aria-hidden`) in a way a shared helper can't.
 ///
 /// `toggle`, when `Some((id, label))`, additionally wraps a hamburger
 /// checkbox/label around the list so it starts *collapsed* on mobile,
 /// `:checked` revealing it — worth the extra tap only for a row with
 /// enough entries that showing them all plainly would otherwise eat a lot
-/// of vertical space (the main tabs bar's 9). The status filter's 3
-/// already read fine as a short always-visible stack, so it passes `None`:
-/// a toggle there would hide content that "collapsing" was never actually
-/// saving room on.
+/// of vertical space (the main tabs bar's 9). [`project_subnav`]'s 4 and
+/// the status filter's 3 already read fine as a short always-visible
+/// stack, so both pass `None`: a toggle there would hide content that
+/// "collapsing" was never actually saving room on.
 ///
 /// `id` must be unique *on the page* when given: more than one of these
-/// can render together (the pull-request list shows the main tabs bar and
-/// its own status filter at once), and `:checked ~` needs each row's own
+/// can render together (the issues list shows the main tabs bar and its
+/// own status filter at once), and `:checked ~` needs each row's own
 /// checkbox/list pair matched unambiguously — not shared with a sibling
 /// row's.
 pub(crate) fn tab_links(toggle: Option<(&str, &str)>, tabs: &[(&str, String, String)], active: &str) -> maud::Markup {
@@ -91,6 +91,39 @@ fn tabs_bar(
                 @if !right.0.is_empty() {
                     td class="tabs-right" { (right) }
                 }
+            }
+        }
+    }
+}
+
+/// The "issues" top-level tab's own sub-nav — issues/pull requests/board/
+/// milestones live one level down from the tab bar now (see `tab_defs`'s
+/// own comment on why those collapsed into one tab), rendered via
+/// `header_bar`'s `sub_tabs` slot. None of the four are `rev`-scoped (same
+/// reasoning `tab_defs` already applies to `issues`/`releases`/`settings`),
+/// so unlike the primary tabs bar this one never threads `rev` through at
+/// all. Not a [`tabs_bar`] call: that always emits a bare `table.tabs`, and
+/// this needs the extra `.subnav` modifier (see its own CSS doc comment).
+/// No hamburger toggle (`tab_links`'s own `toggle: None`) — only 4 entries,
+/// already reads fine as a short always-visible stack on mobile. Only
+/// called when `tracker` is on (`docs/tracker-extension-concept.md`) — its
+/// sole caller in `repo/mod.rs` is gated the same way.
+#[cfg(feature = "tracker")]
+pub(crate) fn project_subnav(repo_name: &str, active_sub: &str, locale: gitquarry_i18n::Locale) -> maud::Markup {
+    use gitquarry_i18n::web::chrome;
+    let tabs: Vec<(&str, String, String)> = [
+        ("issues", chrome::issues_tab(locale)),
+        ("pulls", chrome::pulls_tab(locale)),
+        ("board", chrome::board_tab(locale)),
+        ("milestones", chrome::milestones_tab(locale)),
+    ]
+    .into_iter()
+    .map(|(view, label)| (view, repo_link(repo_name, view, "").to_string(), label))
+    .collect();
+    maud::html! {
+        table class="tabs subnav" role="navigation" aria-label=(chrome::project_subnav_label(locale)) {
+            tr {
+                td { (tab_links(None, &tabs, active_sub)) }
             }
         }
     }
@@ -266,7 +299,30 @@ pub(crate) struct HeaderExtras<'a> {
     /// tab it belongs to). Same "empty for every view but the ones that
     /// need it" opt-in as `below_header`.
     pub(crate) sub_tabs: &'a str,
+    /// [`tracker_ui_active`]'s own result — whether the tabs bar gets a
+    /// single "issues" tab-group slot (issues/pulls/board/milestones behind
+    /// [`project_subnav`]) or pull requests get the top-level slot back to
+    /// themselves. Passed in rather than computed here: this module has no
+    /// `AppContext` of its own, and every caller already has one.
+    pub(crate) tracker_active: bool,
     pub(crate) locale: gitquarry_i18n::Locale,
+}
+
+/// `true` only when both the `tracker` cargo feature is compiled in *and*
+/// `[tracker]` is actually configured for this deploy (`ctx.tracker` is
+/// `Some`) — either alone isn't enough: a `tracker`-feature build with no
+/// `[tracker]` section has none of the rendering code's dependencies
+/// missing, but every issues/board/milestones call would just 503
+/// (`tracker_unavailable`); a non-`tracker` build has no rendering code for
+/// those views at all regardless of what `ctx.tracker` says. Drives whether
+/// the tabs bar and its sub-nav offer the full issues/board/milestones
+/// group or fall back to a standalone "pull requests" tab (pull requests
+/// themselves need no tracker at all — `gitquarry-core`'s own
+/// `domain::pull_request`) — same degrade `feature = "tracker"` being off
+/// entirely already caused before this, now also triggered by the tracker
+/// process simply being unconfigured or unreachable at runtime.
+pub(crate) fn tracker_ui_active(ctx: &gitquarry_core::app::AppContext) -> bool {
+    cfg!(feature = "tracker") && ctx.tracker.is_some()
 }
 
 /// Title bar + tabs, cgit-style: repo name on top, tabs below (active tab
@@ -285,6 +341,7 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
         menu_extra,
         below_header,
         sub_tabs,
+        tracker_active,
         locale,
     } = extras;
     use gitquarry_core::storage::entities::Visibility;
@@ -298,12 +355,24 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
         ("stats", chrome::stats_tab(locale)),
         ("releases", chrome::releases_tab(locale)),
     ];
-    tab_defs.push(("pulls", chrome::pulls_tab(locale)));
+    // One tab, not three ("issues"/"pulls"/"board" used to each get their
+    // own): all three (plus milestones, which never had one) are the same
+    // "project management" concern wearing different views, not distinct
+    // top-level sections -- `project_subnav` below is where the actual
+    // issues/pulls/board/milestones choice lives now. Only when
+    // `tracker_active` (`tracker_ui_active`'s own doc comment) — inactive,
+    // pull requests get this slot back to themselves instead of
+    // disappearing behind a group whose other three entries would all 503.
+    if tracker_active {
+        tab_defs.push(("issues", chrome::tracker_tab(locale)));
+    } else {
+        tab_defs.push(("pulls", chrome::pulls_tab(locale)));
+    }
     tab_defs.push(("settings", chrome::settings_tab(locale)));
     let tabs: Vec<(&str, String, String)> = tab_defs
         .iter()
         .map(|(view, label)| {
-            let rev_for_link = if matches!(*view, "settings" | "releases" | "pulls") {
+            let rev_for_link = if matches!(*view, "settings" | "releases" | "issues" | "pulls") {
                 ""
             } else {
                 rev

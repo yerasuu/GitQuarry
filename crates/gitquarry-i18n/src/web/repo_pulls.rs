@@ -61,6 +61,7 @@ msg!(assignees_label() { Locale::Es => "asignados", Locale::En => "assignees" })
 msg!(assignees_placeholder() { Locale::Es => "usuarios separados por comas", Locale::En => "comma-separated usernames" });
 msg!(reviewers_label() { Locale::Es => "revisores solicitados", Locale::En => "requested reviewers" });
 msg!(reviewers_placeholder() { Locale::Es => "usuarios separados por comas", Locale::En => "comma-separated usernames" });
+msg!(milestone_label() { Locale::Es => "milestone", Locale::En => "milestone" });
 msg!(save_button() { Locale::Es => "guardar", Locale::En => "save" });
 
 msg!(comments_heading() { Locale::Es => "comentarios", Locale::En => "comments" });

@@ -101,8 +101,9 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // verifies everything against S3 for real, writes the config, and
     // returns exactly what the branch below would've loaded from it — same
     // process, no restart needed to pick up what it just wrote.
-    let (bucket, _bucket_cfg, backend, cipher, allow_push_create) = if config_path.is_file() {
+    let (bucket, _bucket_cfg, backend, cipher, tracker_cfg, allow_push_create) = if config_path.is_file() {
         let conf = config::Config::load_from(&config_path)?;
+        let tracker_cfg = conf.tracker().cloned();
         let allow_push_create = conf.allow_push_create();
         config::warn_if_world_readable(&config_path);
         // Without --bucket: if the config only has one configured, there's no
@@ -145,15 +146,17 @@ pub async fn run(rest: &[String]) -> Result<()> {
                 outcome.bucket_cfg,
                 outcome.backend,
                 outcome.cipher,
+                tracker_cfg,
                 allow_push_create,
             )
         } else {
-            (bucket, bucket_cfg, backend, cipher, allow_push_create)
+            (bucket, bucket_cfg, backend, cipher, tracker_cfg, allow_push_create)
         }
     } else {
-        // First run, no `gitquarry.toml` at all yet — the setup wizard
-        // writes a bucket-only config, so `allow_push_create` is off too
-        // until an operator opts in by hand.
+        // First run, no `gitquarry.toml` at all yet — `[tracker]` can't
+        // exist either, the setup wizard writes a
+        // bucket-only config, so `allow_push_create` is off too until an
+        // operator opts in by hand.
         let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
         let outcome = setup::run(&config_path, &web_bind, None).await?;
         (
@@ -161,6 +164,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             outcome.bucket_cfg,
             outcome.backend,
             outcome.cipher,
+            None,
             false,
         )
     };
@@ -248,6 +252,16 @@ pub async fn run(rest: &[String]) -> Result<()> {
         Err(e) => eprintln!("gitquarry: warning: stale-transaction recovery sweep failed, continuing: {e:#}"),
     }
 
+    // Built before `ctx` (its `tracker` field isn't behind interior
+    // mutability) but from the same `tracker_cfg` the internal API server
+    // spawns below also consumes — `.as_ref()` here so that move stays
+    // available.
+    let tracker_link = tracker_cfg.as_ref().map(|t| gitquarry_core::app::TrackerLink {
+        base_url: t.tracker_url.clone(),
+        internal_token: t.internal_token.clone(),
+        http: reqwest::Client::new(),
+    });
+
     let ctx = Arc::new(AppContext {
         bucket,
         ssh_bind: ssh_bind.clone(),
@@ -262,6 +276,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         oidc,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        tracker: tracker_link,
         allow_push_create,
         events: Default::default(),
     });
@@ -270,6 +285,25 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // retries next tick, it must never take ssh:///web down with it.
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
+    // `[tracker]` absent (the common case today) means no
+    // `gitquarry-tracker` process will ever call in — don't bind a second
+    // port nobody's using. A bind failure here is fatal (unlike the sweeps
+    // above): an operator who configured `[tracker]` expecting it to work
+    // should learn immediately, not have the tracker silently never come
+    // up.
+    if let Some(tracker) = tracker_cfg {
+        let internal_ctx = Arc::clone(&ctx);
+        let internal_bind = tracker.internal_bind.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                gitquarry_core::internal_api::run_server(&internal_bind, internal_ctx, tracker.internal_token).await
+            {
+                eprintln!("gitquarry: fatal: internal API server (tracker) failed: {e:#}");
+                std::process::exit(1);
+            }
+        });
+    }
+
     // The two servers are infinite loops: if either returns, it's an error
     // and there's no point serving just the other. `shutdown_signal`
     // resolving is not an error: it's how `docker stop`/`podman stop` (SIGTERM)
