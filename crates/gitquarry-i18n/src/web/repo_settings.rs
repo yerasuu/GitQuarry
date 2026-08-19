@@ -164,3 +164,4 @@ msg!(radio_owner_label() { Locale::Es => "propietario", Locale::En => "owner" })
 msg!(add_access_heading() { Locale::Es => "agregar acceso", Locale::En => "add access" });
 msg!(username_placeholder() { Locale::Es => "usuario", Locale::En => "username" });
 msg!(add_button() { Locale::Es => "agregar", Locale::En => "add" });
+msg!(permissions_heading() { Locale::Es => "permisos por usuario", Locale::En => "per-user permissions" });

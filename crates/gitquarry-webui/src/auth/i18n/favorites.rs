@@ -66,3 +66,4 @@ msg!(
         Locale::En => "(none visible)",
     }
 );
+msg!(starred_heading() { Locale::Es => "repos marcados", Locale::En => "starred repos" });

@@ -6,7 +6,7 @@
 use crate::auth::web::login;
 use crate::webui::{
     AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    non_empty, render_flash, require_csrf,
+    non_empty, render_flash, require_csrf, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -213,56 +213,59 @@ fn render_settings_form(
         (PreEscaped(render_flash(message, locale)))
         form method="post" action="/_settings" {
             (PreEscaped(csrf))
-            h4 { (t::settings_network_heading(locale)) }
-            div class="field" {
-                label { (t::settings_web_bind_label(locale)) }
-                input name="web_bind" value=(field(&settings.web_bind)) placeholder="127.0.0.1:8080";
-            }
-            div class="field" {
-                label { (t::settings_ssh_bind_label(locale)) }
-                input name="ssh_bind" value=(field(&settings.ssh_bind)) placeholder="127.0.0.1:2222";
-            }
-            h4 { (t::settings_mirrors_cache_heading(locale)) }
-            div class="field" {
-                label { (t::settings_mirrors_dir_label(locale)) }
-                input name="mirrors_dir" value=(field(&settings.mirrors_dir))
-                    placeholder=(t::settings_mirrors_dir_placeholder(locale)) size="50";
-            }
-            div class="field" {
-                label { (t::settings_mirrors_max_age_label(locale)) }
-                input name="mirrors_max_age" value=(field(&settings.mirrors_max_age)) placeholder=(t::settings_mirrors_max_age_placeholder(locale));
-            }
-            div class="field" {
-                label { (t::settings_mirrors_max_size_label(locale)) }
-                input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
-            }
-            h4 { (t::settings_oidc_heading(locale)) }
-            p class="muted" {
-                (t::settings_oidc_intro_gates(locale)) code { "/_settings" } ", " code { "/_users" } ", "
-                (t::settings_oidc_intro_tab(locale))
-                a href="/_users" { "/_users" } (t::settings_oidc_intro_see(locale)) code { "private" } (t::settings_oidc_intro_private(locale))
-                a href="/_users" { "/_users" } (t::settings_oidc_intro_see_there(locale))
-            }
-            div class="field" {
-                label { (t::settings_issuer_url_label(locale)) }
-                input name="oidc_issuer_url" value=(field(&settings.oidc_issuer_url)) placeholder="https://idp.example.com" size="50";
-            }
-            div class="field" {
-                label { (t::settings_client_id_label(locale)) }
-                input name="oidc_client_id" value=(field(&settings.oidc_client_id)) size="50";
-            }
-            div class="field" {
-                label { (t::settings_client_secret_label(locale)) }
-                // No `value`: see `handler_settings_post` on why this one
-                // field is write-only. Blank means "unchanged".
-                input type="password" name="oidc_client_secret" size="50"
-                    placeholder=(if settings.oidc_client_secret.is_some() { t::settings_client_secret_placeholder_unchanged(locale) } else { t::settings_client_secret_placeholder_unset(locale) });
-            }
-            div class="field" {
-                label { (t::settings_redirect_base_url_label(locale)) }
-                input name="oidc_redirect_base_url" value=(field(&settings.oidc_redirect_base_url))
-                    placeholder=(t::settings_redirect_base_url_placeholder(locale)) size="50";
-            }
+            (settings_section(&t::settings_network_heading(locale), None, html! {
+                div class="field" {
+                    label { (t::settings_web_bind_label(locale)) }
+                    input name="web_bind" value=(field(&settings.web_bind)) placeholder="127.0.0.1:8080";
+                }
+                div class="field" {
+                    label { (t::settings_ssh_bind_label(locale)) }
+                    input name="ssh_bind" value=(field(&settings.ssh_bind)) placeholder="127.0.0.1:2222";
+                }
+            }))
+            (settings_section(&t::settings_mirrors_cache_heading(locale), None, html! {
+                div class="field" {
+                    label { (t::settings_mirrors_dir_label(locale)) }
+                    input name="mirrors_dir" value=(field(&settings.mirrors_dir))
+                        placeholder=(t::settings_mirrors_dir_placeholder(locale)) size="50";
+                }
+                div class="field" {
+                    label { (t::settings_mirrors_max_age_label(locale)) }
+                    input name="mirrors_max_age" value=(field(&settings.mirrors_max_age)) placeholder=(t::settings_mirrors_max_age_placeholder(locale));
+                }
+                div class="field" {
+                    label { (t::settings_mirrors_max_size_label(locale)) }
+                    input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
+                }
+            }))
+            (settings_section(&t::settings_oidc_heading(locale), None, html! {
+                p class="muted" {
+                    (t::settings_oidc_intro_gates(locale)) code { "/_settings" } ", " code { "/_users" } ", "
+                    (t::settings_oidc_intro_tab(locale))
+                    a href="/_users" { "/_users" } (t::settings_oidc_intro_see(locale)) code { "private" } (t::settings_oidc_intro_private(locale))
+                    a href="/_users" { "/_users" } (t::settings_oidc_intro_see_there(locale))
+                }
+                div class="field" {
+                    label { (t::settings_issuer_url_label(locale)) }
+                    input name="oidc_issuer_url" value=(field(&settings.oidc_issuer_url)) placeholder="https://idp.example.com" size="50";
+                }
+                div class="field" {
+                    label { (t::settings_client_id_label(locale)) }
+                    input name="oidc_client_id" value=(field(&settings.oidc_client_id)) size="50";
+                }
+                div class="field" {
+                    label { (t::settings_client_secret_label(locale)) }
+                    // No `value`: see `handler_settings_post` on why this one
+                    // field is write-only. Blank means "unchanged".
+                    input type="password" name="oidc_client_secret" size="50"
+                        placeholder=(if settings.oidc_client_secret.is_some() { t::settings_client_secret_placeholder_unchanged(locale) } else { t::settings_client_secret_placeholder_unset(locale) });
+                }
+                div class="field" {
+                    label { (t::settings_redirect_base_url_label(locale)) }
+                    input name="oidc_redirect_base_url" value=(field(&settings.oidc_redirect_base_url))
+                        placeholder=(t::settings_redirect_base_url_placeholder(locale)) size="50";
+                }
+            }))
             p { button type="submit" { (t::settings_save_button(locale)) } }
         }
     }
