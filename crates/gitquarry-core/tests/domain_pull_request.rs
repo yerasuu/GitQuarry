@@ -1196,6 +1196,55 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
     ));
 }
 
+/// The read-only probe the pull-request page renders its conflict notice
+/// from: same verdict `merge` reaches, without writing anything or needing
+/// merge permission — the reader seeing "this won't merge" is usually not
+/// the person who can merge it.
+#[tokio::test]
+async fn conflicts_reports_the_same_paths_a_merge_attempt_would() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, true).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let mirror = ctx.open_mirror(&target).await.unwrap();
+
+    let paths = conflicts(&ctx, &target, &mirror.path, &pr).await.unwrap();
+    assert_eq!(paths, Some(vec!["f.txt".to_string()]));
+}
+
+/// A pull request that merges cleanly reports no conflicts at all, so the
+/// notice never shows on a healthy PR.
+#[tokio::test]
+async fn conflicts_is_none_when_the_branches_merge_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let mirror = ctx.open_mirror(&target).await.unwrap();
+
+    assert_eq!(conflicts(&ctx, &target, &mirror.path, &pr).await.unwrap(), None);
+}
+
 #[tokio::test]
 async fn merge_reports_conflicts_without_mutating_anything() {
     let dir = tempfile::tempdir().unwrap();
