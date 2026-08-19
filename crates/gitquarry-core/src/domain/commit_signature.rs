@@ -1,8 +1,8 @@
 //! Commit GPG-signature verification against registered
-//! [`crate::auth::entities::User::gpg_keys`], cached by sha
-//! ([`crate::storage::commit_sig::CommitSigCache`] — see its own doc
+//! [`crate::auth::entities::User::gpg_keys`], cached by sha *and* signing
+//! epoch ([`crate::storage::commit_sig::CommitSigCache`] — see its own doc
 //! comment for why a global cache is both simpler and more correct than a
-//! per-repo one). Split out of `webui::repo::commit`, which used to run
+//! per-repo one, and why the sha alone can't key the answer). Split out of `webui::repo::commit`, which used to run
 //! this same check inline with no caching at all — fine for the one-commit
 //! detail view, too expensive to repeat per row on a commit list.
 //!
@@ -15,7 +15,7 @@ use crate::auth::access;
 use crate::crypto::Cipher;
 use crate::git;
 use crate::storage::Backend;
-use crate::storage::commit_sig::CommitSigCache;
+use crate::storage::commit_sig::{CommitSigCache, signing_epoch};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -45,8 +45,15 @@ pub async fn verified_signer(
     if signature_status == 'N' {
         return Ok(None);
     }
+    // Read before the cache lookup, not after: a verdict stamped with an
+    // older epoch was computed against key/email state that has since
+    // changed, so it's a miss no matter what it says (see
+    // `storage::commit_sig`'s own doc comment).
+    let epoch = signing_epoch(backend.as_ref(), cipher).await?;
     let (cached, etag) = CommitSigCache::get(backend.as_ref(), cipher, sha).await?;
-    if let Some(cached) = cached {
+    if let Some(cached) = cached
+        && cached.epoch == epoch
+    {
         return Ok(cached.verified_username);
     }
 
@@ -54,10 +61,11 @@ pub async fn verified_signer(
     let entry = CommitSigCache {
         sha: sha.to_string(),
         verified_username: verified_username.clone(),
+        epoch,
     };
     // Best-effort: a lost CAS race here just means another concurrent
     // request computed and stored the identical answer first (same sha,
-    // same deterministic result) — nothing to reconcile.
+    // same epoch, same deterministic result) — nothing to reconcile.
     let _ = entry.put(backend.as_ref(), cipher, etag.as_deref()).await;
     Ok(verified_username)
 }
