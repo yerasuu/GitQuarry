@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gitquarry/schema/pipeline/v1/job-spec.schema.json",
+  "title": "JobSpec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "image",
+    "commands"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "image": {
+      "type": "string"
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "needs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "$ref": "secret-ref.schema.json"
+      },
+      "default": []
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "kind": {
+      "$ref": "job-kind.schema.json",
+      "default": "build"
+    }
+  }
+}

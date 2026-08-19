@@ -1,0 +1,21 @@
+[package]
+name = "gitquarry-gpg"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "OpenPGP key validation and detached-signature verification by shelling out to the system gpg binary"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1.0.104"
+tokio = { version = "1.53.1", features = ["process", "fs"] }
+tempfile = "3.27.0"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,34 @@
+## Throwaway config for the local MinIO test bucket started by
+## docker-compose.minio.yml. Copy to gitquarry.minio-test.toml (gitignored,
+## same as gitquarry.toml itself) and point GITQUARRY_CONFIG at it. Run
+## these from the repo root:
+##
+##   cp deploy/gitquarry.minio-test.toml.example deploy/gitquarry.minio-test.toml
+##   docker compose -f deploy/docker-compose.minio.yml up -d
+##   GITQUARRY_CONFIG=./deploy/gitquarry.minio-test.toml cargo run -- fsck --bucket gitquarry-test
+##
+## The credentials/passphrase below are fixed, throwaway, and match the
+## fixed test credentials in docker-compose.minio.yml -- fine for a local
+## bucket nobody else can reach, never use these for anything real.
+
+[buckets.gitquarry-test]
+driver = "s3"
+bucket = "gitquarry-test"
+endpoint_url = "http://localhost:9090"
+region = "us-east-1"
+access_key_id = "gitquarry"
+secret_access_key = "gitquarry-test-only"
+path_style = true
+passphrase = "local-test-passphrase-not-secret"
+
+## Optional: only needed to run a `gitquarry-federation` process alongside
+## this one (peer discovery, remote browse/fork, PR-proxy, fine-grained
+## tokens). Absent entirely = core runs standalone, no federation routes
+## registered at all. `internal_token` here must match the same key in
+## deploy/gitquarry-federation.minio-test.toml.example exactly -- it's the
+## shared secret both sides use to authenticate loopback calls to each
+## other, never auto-generated or synced between the two config files.
+# [federation]
+# internal_bind = "127.0.0.1:8091"
+# internal_token = "local-test-internal-token-not-secret"
+# federation_url = "http://127.0.0.1:8181"

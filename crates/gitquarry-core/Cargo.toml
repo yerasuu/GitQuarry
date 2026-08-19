@@ -1,0 +1,100 @@
+[package]
+name = "gitquarry-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Git remote backed by S3: domain/storage/auth/git/ssh/git-smart-HTTP core, consumed by the gitquarry binary"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+# Async runtime
+futures = "0.3.33"
+tokio = { version = "1.53.1", features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "io-util",
+    "process",
+    "fs",
+    "net",
+    "signal",
+    "sync",
+    "time",
+] }
+
+# Database over S3-compatible storage (backends, encryption at rest, CAS).
+# Its own project now -- pinned by tag, never a floating branch, so
+# a rebuild always resolves the exact same engine. Public repo, fetched
+# over plain https, no credentials needed.
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+
+# Plain DTOs shared with the gitquarry-federation binary
+gitquarry-wire = { path = "../gitquarry-wire" }
+
+# git-smart-HTTP
+axum = { version = "0.8.9", features = ["multipart"] }
+# Outbound HTTP for federation's peer round-trip (src/federation.rs) --
+# pinned to the version google-cloud-auth/typespec_client_core already
+# resolve (see Cargo.lock), rustls-only so this never pulls in openssl.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+
+# git/ssh
+russh = "0.62.5"
+
+# Crypto (encryption-at-rest lives in s3db; password/TOTP/OIDC live in
+# gitquarry-auth-crypto)
+rand = "0.10.2"
+sha2 = "0.11.0"
+
+# dyn-dispatch for MirrorSyncHook (mirror/mod.rs) -- gitquarry-server wires
+# gitquarry-mirror-external's real implementation in at startup, since core
+# can't depend on that crate directly without a cycle.
+async-trait = "0.1.91"
+
+# Serialization / config
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
+
+# General utilities
+anyhow = "1.0.104"
+base64 = "0.23.1"
+bytes = "1.12.1"
+dirs = "6.0.0"
+tempfile = "3.27.0"
+gitquarry-gpg = { path = "../gitquarry-gpg" }
+gitquarry-i18n = { path = "../gitquarry-i18n" }
+gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
+
+# Release source-archive generation: one `git archive --format=tar` decode,
+# re-emitted as both .tar.gz and .zip in-process (see git::browse::archive_pair)
+# instead of decoding the tree from git twice.
+flate2 = "1.1.5"
+tar = { version = "0.4.46", default-features = false }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[features]
+# Un-gates anything normally #[cfg(test)] (which only applies to this
+# crate's own unit-test build, not the separate lib build that external
+# `tests/*.rs` integration tests link against) for gitquarry-webui's tests
+# and for this crate's own tests/, which now hold every unit test.
+test-util = []
+
+[dev-dependencies]
+# Self-dependency so `cargo test` enables `test-util` automatically for
+# this crate's own tests/*.rs — see the [features] comment above.
+gitquarry-core = { path = ".", features = ["test-util"] }
+# tests/auth_domain_user_totp.rs needs `totp::STEP_SECS`/`totp::hotp`
+# (test-util-gated there too) to derive a code independently of the
+# production `verify_code` path it's testing against.
+gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto", features = ["test-util"] }
+# Only for tests/auth_domain_user_totp.rs's own TOTP-code derivation helper —
+# gitquarry-auth-crypto (a real dependency) owns this for production code.
+data-encoding = "2.11.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

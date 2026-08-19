@@ -1,0 +1,121 @@
+# Changelog
+
+This changelog covers user-facing features added since the project's first
+commit. It does not attempt to enumerate every internal engineering step
+(refactors, renames, bug fixes, performance work, or test changes) — only
+functionality a repo admin or end user would notice. Entries are grouped by
+area rather than by date or version, since the project has not yet settled
+on a per-release versioning scheme.
+
+## Git hosting & transport
+
+- Serve git repositories directly from S3-compatible object storage, with no
+  separate git server process required.
+- Embedded SSH server with public-key authentication, later reworked around
+  named user accounts with per-repo permissions.
+- Added git smart-HTTP as a supported transport. The earlier plaintext
+  `git://` daemon and the direct S3 remote-helper were both removed, leaving
+  `ssh://` and smart-HTTP as the only supported transports.
+- Git LFS support: batch API plus large-object storage and transfer.
+
+## Web UI & browsing
+
+- cgit-inspired browsing UI covering summary, refs, tree, blob, log, commit
+  diff, blame, and stats views.
+- Compare view between two arbitrary refs.
+- Commit signature verification badge.
+- Create-tag form on the refs tab.
+- Markdown rendering gained syntax-highlighted fenced code blocks and
+  GitHub-style alert blockquotes (note/tip/important/warning/caution) in
+  READMEs and release notes.
+- Light/dark theme with a session toggle and a per-account default.
+- GitHub-style right sidebar on the repo summary page (about, community,
+  releases).
+- Local identicon avatars, an inline icon set, and a collapsible mobile
+  navigation.
+- Per-language byte-size bar on the repo summary page.
+- HTML rendering migrated from ad hoc string templates to a typed templating
+  engine (maud) across the entire UI.
+
+## Internationalization
+
+- Full English/Spanish bilingual UI, driven by a locale-aware message and
+  template catalog threaded through every page.
+
+## Auth & permissions
+
+- OIDC login alongside local admin and local user accounts, with a unified
+  admin page design.
+- Self-service account page where users manage their own SSH keys and
+  password.
+- Per-repo SSH permission grid in repo settings, with per-user add/remove.
+- Five-tier permission ladder (guest/reporter/developer/maintainer/owner),
+  gating repo settings management to maintainers and owners.
+- Two-factor authentication (TOTP): enrollment/disable UI, login
+  enforcement, and an admin-initiated disable path for account recovery.
+- Security hardening: CSRF double-submit tokens on authenticated forms,
+  standard security response headers (CSP, X-Frame-Options, etc.), and
+  per-username login rate limiting.
+
+## Repos & organizations
+
+- Create empty repositories from the web UI.
+- Per-repo public/private/limited visibility.
+- Groups: shared namespaces with inherited permissions, Forgejo-style group
+  owners/teams, and repo transfer between namespaces.
+- Editable group description page.
+- Default branch selector, backed by the repo's real HEAD.
+- Delete a repo from its settings tab, confirmed by typing its name.
+- Move a repo to a new namespace or name.
+- Archive a repo: archived repos reject pushes and are badged throughout the
+  UI.
+- Protected branches and protected tags.
+- Starred repos, with a dedicated favorites page and an opt-in public
+  favorites list.
+- Repo forking, an activity feed, and star/fork counts.
+- Repo topics for discoverability.
+- Watched repos alongside starred repos, with a watch button.
+- Public user profile page listing a user's repos.
+
+## Releases & assets
+
+- Releases: create, edit, and delete releases with notes; list/detail views;
+  and attach or download binary assets.
+
+## Storage & encryption
+
+- Everything stored in the bucket is encrypted at rest
+  (Argon2id-derived XChaCha20Poly1305) under a mandatory per-bucket
+  passphrase — there is no way to disable it.
+- Pluggable storage backends: S3, Cloudflare R2, a local filesystem driver,
+  Azure Blob Storage, and Google Cloud Storage.
+- First-run setup wizard, including storage-driver selection and a
+  double-entry admin password confirmation.
+
+## Search
+
+- Instance-wide search across filenames and commit messages.
+
+## Storage engine (s3db)
+
+- Typed `Collection`, `SecondaryIndex`, and `Singleton` primitives for
+  structured, queryable object storage.
+- Versioning and multi-key create-only transactions, backed by a
+  write-ahead log with crash recovery.
+- Caching, a resilience/retry decorator stack, and sharded indexes for
+  scale.
+- Logical backup/restore, background garbage collection, and point-in-time
+  reads.
+- `derive(Entity)` macro that generates Collection/index boilerplate from
+  struct definitions.
+
+## Ops & admin tooling
+
+- `gitquarry fsck` to detect stray objects in a repo.
+- `gitquarry repack` to consolidate a repo's packs.
+- Audit log of admin and repo actions.
+- Idle- and size-based eviction of local repo mirrors.
+- Graceful shutdown.
+- Server settings editable from the web UI and stored in the bucket, with
+  conflict detection to prevent concurrent overwrites.
+- Name filter on the admin users/groups pages.

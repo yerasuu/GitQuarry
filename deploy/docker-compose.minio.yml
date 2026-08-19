@@ -1,0 +1,51 @@
+## Local-only MinIO for manual testing against a real S3-compatible bucket,
+## without touching production infra (see docker-compose.yml for that).
+## Never used by `cargo test` itself (no tests depend on this) -- this is
+## for manual verification against a real bucket: running gitquarry itself,
+## `fsck`/`repack`, exercising SSH auth, checking pubkey-revocation takes
+## effect immediately, etc.
+##
+## Usage (from the repo root):
+##   docker compose -f deploy/docker-compose.minio.yml up -d
+##   # console at http://localhost:9091 (user: gitquarry / pass: gitquarry-test-only)
+##   # S3 endpoint at http://localhost:9090, bucket "gitquarry-test" already created
+##
+## Point a throwaway gitquarry.toml at it (see gitquarry.minio-test.toml.example
+## in this same folder) and run gitquarry/its subcommands against
+## GITQUARRY_CONFIG=./deploy/gitquarry.minio-test.toml.
+##
+## Tear down (destroys all test data in the named volume):
+##   docker compose -f deploy/docker-compose.minio.yml down -v
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: gitquarry-test-minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=gitquarry
+      - MINIO_ROOT_PASSWORD=gitquarry-test-only
+    ports:
+      - "9090:9000"
+      - "9091:9001"
+    volumes:
+      - gitquarry-minio-test-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 gitquarry gitquarry-test-only &&
+      mc mb --ignore-existing local/gitquarry-test
+      "
+
+volumes:
+  gitquarry-minio-test-data:

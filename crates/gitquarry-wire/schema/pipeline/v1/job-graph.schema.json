@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gitquarry/schema/pipeline/v1/job-graph.schema.json",
+  "title": "JobGraph",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "jobs"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "$ref": "job-spec.schema.json"
+      }
+    }
+  }
+}

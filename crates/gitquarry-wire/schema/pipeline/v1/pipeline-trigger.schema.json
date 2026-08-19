@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gitquarry/schema/pipeline/v1/pipeline-trigger.schema.json",
+  "title": "PipelineTrigger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo_uid",
+    "sha",
+    "refname",
+    "pusher",
+    "changed_paths",
+    "is_fork_pr"
+  ],
+  "properties": {
+    "repo_uid": {
+      "type": "string"
+    },
+    "sha": {
+      "type": "string"
+    },
+    "refname": {
+      "type": "string"
+    },
+    "pusher": {
+      "type": "string"
+    },
+    "changed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "is_fork_pr": {
+      "type": "boolean"
+    }
+  }
+}

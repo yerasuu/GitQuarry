@@ -1,0 +1,16 @@
+  /* Based on the "denso + pulido" (var-a) token set in the gitquarry-webui
+     visual-direction mockup — `--pad-y-sm`/`--pad-x-sm`/`--radius-sm` don't
+     exist there (that mockup never needed a second tier), so they're
+     derived here at this file's own prior full/-sm ratio (pad-y ~0.58x,
+     pad-x 0.75x, radius 0.75x) to stay internally consistent rather than
+     inventing an unrelated ratio. `--fs`/`--fs-sm` bumped up from the
+     mockup's own 12.5px/11px — legible on paper isn't the same as legible
+     on a repo tree with 200 rows; `--pad-y`/`--pad-x` scale with them
+     automatically (both are `em`, relative to this same `--fs`). */
+  --fs: 13.5px; --fs-sm: 12px;
+  --lh: 1.4;
+  --pad-y: 0.32em; --pad-x: 0.72em;
+  --pad-y-sm: 0.19em; --pad-x-sm: 0.54em;
+  --radius: 2px; --radius-sm: 1.5px;
+  --gap: 0.48em;
+  --letter: 0;

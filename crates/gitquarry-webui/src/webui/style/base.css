@@ -1,0 +1,523 @@
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: var(--fs);
+       line-height: var(--lh); margin: 0; padding: 0; color: var(--fg); background: var(--bg); }
+#content { max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; }
+.skip-link { position: absolute; left: -999px; top: 0; background: var(--bg); color: var(--fg);
+             padding: var(--pad-y) var(--pad-x); border: 1px solid var(--accent); border-radius: 0 0 var(--radius-sm) 0; z-index: 10; }
+.skip-link:focus { left: 0; }
+p { line-height: var(--lh); }
+/* Topbar shares the same palette/weight conventions as table.header/table.tabs
+   below instead of its own look, so the chrome reads as one page, not two. */
+#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: relative; z-index: 5; }
+#topbar .inner { max-width: 70rem; margin: 0 auto; padding: var(--pad-y) var(--pad-x);
+                 display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+                 row-gap: var(--gap); column-gap: var(--gap); }
+#topbar .brand { font-weight: bold; letter-spacing: var(--letter); font-size: 1.05em; display: inline-flex; align-items: center; gap: var(--gap); }
+#topbar .brand a { color: var(--fg); display: inline-flex; align-items: center; gap: var(--gap); }
+#topbar a { color: var(--fg2); transition: color .15s ease; }
+#topbar a:hover { color: var(--accent); }
+#topbar nav { font-size: 0.9em; color: var(--muted); display: inline-flex; align-items: center; gap: 0; }
+/* Pure-CSS hamburger collapse (no JS anywhere in this codebase) — see
+   `layout()`'s own doc comment. Both stay invisible/inert above the 640px
+   breakpoint below, where `nav` is just always shown as it always has been. */
+.nav-toggle-input { display: none; }
+.nav-toggle-btn { display: none; cursor: pointer; padding: var(--pad-y-sm) var(--pad-x-sm); }
+/* Density-scaled, not fixed px: this is still chrome, but the density
+   toggle wouldn't be very convincing if it didn't apply to itself.
+   `.size-btn`/`.action-btn` (text-size and star/watch, both in the tabs-bar
+   right side) join this same family instead of styler's own `.btn` pill:
+   one consistent small-button look for every toggle/action crammed into
+   that one row, not two different button languages sitting side by side
+   (`.action-btn` used to be `.btn.secondary` — its own pill shape/size read
+   as a mismatch next to the compact theme/density/size buttons). */
+.theme-btn, .density-btn, .size-btn, .action-btn {
+  font-size: var(--fs-sm); line-height: 1; padding: var(--pad-y-sm) var(--pad-x-sm); margin-left: 0.2em;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface);
+  color: var(--fg2); cursor: pointer; transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.theme-btn:hover, .density-btn:hover, .size-btn:hover, .action-btn:hover { background: var(--surface-3); border-color: var(--border-strongest); }
+/* `font-weight: bold` was already the documented intent (see
+   `theme_pref::render_theme_toggle`'s own doc comment, "same active-
+   highlight convention as `render_text_size_buttons`") but the rule itself
+   never actually set it — left `border-color`/`color` as the only signal,
+   which a colorblind viewer can't reliably tell apart from the unselected
+   button (WCAG 1.4.1, use of color). */
+.theme-btn.active, .density-btn.active { border-color: var(--accent); color: var(--accent); font-weight: bold; }
+/* `overflow-x: auto`, same reasoning `table.tabs`'s own doc comment
+   already gives: `td.ref-switch-cell`/`td.atom` are both `white-space:
+   nowrap` and can't shrink, so a long branch name on a narrow phone could
+   otherwise push this table wider than the viewport and drag the *whole
+   page* into horizontal scroll instead of just this bar. */
+table.header { width: 100%; border-bottom: 2px solid var(--accent); border-collapse: collapse; margin-top: 0.6rem; overflow-x: auto; }
+/* `width: 100%`: without an explicit width on the one flexible column,
+   auto table layout free to divide the row's leftover space among all
+   three `<td>`s however it likes -- on a short title that handed the
+   content-sized `td.atom`/`td.ref-switch-cell` far more box than their own
+   "atom"/branch-name text needed, reading as an oversized empty margin
+   around the atom link. Forcing `td.main` to claim the full row instead
+   leaves the other two exactly their natural content width. */
+table.header td.main { width: 100%; font-size: 1.4em; font-weight: bold; padding-bottom: 0.2rem; }
+/* A real `h1` for screen-reader heading navigation, but styled inline and
+   inheriting `td.main`'s own size/weight instead of the browser's h1
+   default — it needs to look exactly like the plain text it replaces. */
+table.header td.main h1 { display: inline; font-size: inherit; font-weight: inherit; margin: 0; }
+table.header td.main a { color: var(--fg); }
+table.header td.atom { text-align: right; font-size: 0.85em; font-weight: normal; vertical-align: bottom; padding-bottom: 0.4rem; }
+table.header td.sub { color: var(--muted); font-size: 0.9em; padding-bottom: 0.4rem; }
+/* `overflow-x: auto`, not just `width: 100%`: the right-hand cell's
+   buttons (star/watch/text-size, all forced `nowrap`) can't shrink, so on
+   a narrow phone the table's natural width exceeds the viewport — without
+   this it drags the whole page into horizontal overflow instead of
+   scrolling just this bar. */
+/* `header_bar`'s `below_header` slot (summary view's language bar) — same
+   background as `table.tabs` right below it, no border/margin between the
+   two, so they read as one continuous header panel instead of the bar
+   floating on the page background with the tabs' own panel starting only
+   at their shared edge. */
+/* Both copies render server-side unconditionally now (`render_repo_view`/
+   `render_sidebar`'s own doc comments) — which one's actually visible is
+   this pair of rules alone, so a density flip repaints instantly with no
+   reload, unlike when this used to be decided server-side per request. */
+.header-lang { display: none; background: var(--surface-3); padding: var(--pad-y) var(--pad-x) var(--pad-y-sm); }
+.header-lang .lang-bar { margin-top: 0; }
+.header-lang p { margin: 0.3em 0 0; }
+:root[data-density='airy'] .header-lang { display: block; }
+:root[data-density='airy'] .sidebar-lang { display: none; }
+table.tabs { width: 100%; background: var(--surface-3); border-bottom: 1px solid var(--border-strong); border-collapse: collapse;
+             margin-bottom: 0.5rem; overflow-x: auto; }
+/* A second (or third) `.tabs`-styled row stacked directly under another one
+   -- `page_chrome::project_subnav` under the main tabs bar, and the
+   open/closed/all status filter (`issues`/`pulls`) under that -- reads as
+   one continuous nav block instead of several separately-floating bars:
+   pulls the seam in against the row above's own `margin-bottom` rather
+   than letting both add up. */
+table.tabs.subnav { margin-top: -0.25rem; }
+/* `white-space: nowrap`: without it, a narrow viewport wraps the tab links
+   onto several stacked lines instead of triggering `table.tabs`'s own
+   `overflow-x: auto` -- wrapping never lets the row's content exceed its
+   box width, so the scroll that comment promises never actually kicks in.
+   Forcing one line is what makes it a horizontal-scroll strip instead. */
+table.tabs td { padding: 0; white-space: nowrap; }
+/* Desktop default: the hamburger toggle stays hidden, `.tabs-list` flows
+   inline exactly like the plain text it replaced — `mobile.css` is what
+   turns this into a collapsible vertical drawer below its breakpoint. */
+.tabs-toggle-input, .tabs-toggle-btn { display: none; }
+/* `--fs-sm`, not `em`: this bar (summary/refs/log/tree/stats/settings)
+   scales with the density pick, not with `body`'s own font-size, which
+   the text-size toggle and the rest of the page scale with independently. */
+/* `border-bottom`, reserved transparent on every tab and colored only on
+   `.active` (mockup's `.tab`/`.tab.active`): every tab keeps the same
+   height either way, and the active one reads as a GitHub/Codeberg-style
+   underlined tab instead of bold-and-a-different-color being the only
+   signal. */
+table.tabs a { display: inline-block; padding: var(--pad-y-sm) var(--pad-x-sm); color: var(--fg2); font-size: var(--fs-sm);
+               border-bottom: 2px solid transparent;
+               transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
+table.tabs a:hover { background: var(--surface-4); color: var(--fg); text-decoration: none; }
+table.tabs a.active { font-weight: bold; color: var(--accent); border-bottom-color: var(--accent); }
+table.tabs td.tabs-right { text-align: right; white-space: nowrap; padding-right: var(--pad-x-sm); }
+/* No `margin-left` here: every button this row ever holds (star/watch,
+   text-size) already carries its own small `margin-left: 0.2em` via
+   `.action-btn`/`.size-btn` — a second, much larger margin stacked on top
+   of that (this used to set `var(--gap)`, a layout-scale spacing token) is
+   what made the whole row read as widely-spaced instead of one compact
+   button cluster. */
+/* `vertical-align: middle`, not the `inline-block` default of `baseline`:
+   the star/watch label ("star"/"unstar") and the text-size glyphs
+   ("A−"/"A"/"A+") don't share a baseline, so left at the default these
+   forms drifted up/down relative to each other instead of sitting on one
+   visual row. */
+table.tabs td.tabs-right form { display: inline-block; vertical-align: middle; }
+table.tabs td.tabs-right button { font-size: var(--fs-sm); padding: var(--pad-y-sm) var(--pad-x-sm); vertical-align: middle; }
+/* The three text-size picks, same active-highlight convention `table.tabs
+   a.active` already uses — the one in effect stands out from the other
+   two, all at the tabs bar's own fixed size (a size button growing/shrinking
+   with what it picks would be a gimmick, not a signal). */
+table.tabs td.tabs-right button.size-btn.active { font-weight: bold; color: var(--accent); border-color: var(--accent); }
+/* Every `table.list` render site wraps itself in this — no border/radius
+   of its own (unlike `.scroll-x`, styled for the code/diff blocks it
+   wraps) since a plain data table already has its own borders per row. On
+   a narrow viewport this is the only thing standing between "scrolls
+   sideways" and "columns crush/overlap unreadably". */
+.table-scroll { overflow-x: auto; margin-bottom: 1rem; }
+.table-scroll table.list { margin-bottom: 0; }
+table.list { width: 100%; border-collapse: collapse; font-size: 0.95em; margin-bottom: 1rem; }
+table.list th { text-align: left; border-bottom: 1px solid var(--border-strongest); padding: var(--pad-y-sm) var(--pad-x-sm);
+                color: var(--muted); font-weight: normal; }
+table.list td { padding: var(--pad-y-sm) var(--pad-x-sm); border-bottom: 1px solid var(--border); vertical-align: top; }
+table.list tr { transition: background-color .1s ease; }
+table.list tr:hover { background: var(--surface-2); }
+table.list tr.section-header td { background: var(--surface-3); font-weight: bold; color: var(--muted); }
+table.commit-meta { font-size: 0.9em; color: var(--fg2); margin: 0.5em 0; }
+table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad-x-sm); }
+/* GitHub-style two-column repo page: main content left, a narrow fixed-width
+   sidebar (About/community/releases boxes) right. Collapses to a single
+   stacked column at the same breakpoint everything else does. */
+.repo-layout { display: flex; gap: 2rem; align-items: flex-start; }
+.repo-main { flex: 1; min-width: 0; }
+.repo-sidebar { width: 260px; flex-shrink: 0; }
+/* GitHub-style account settings: a narrow fixed-width left nav, content
+   right — the mirror image of `.repo-layout` (sidebar on the *other* side),
+   same flex shape and same single-column collapse on mobile. */
+.settings-layout { display: flex; gap: 2rem; align-items: flex-start; }
+.settings-sidebar { width: 220px; flex-shrink: 0; }
+.settings-sidebar ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15em; }
+.settings-sidebar a { display: block; padding: var(--pad-y-sm) var(--pad-x-sm); border-radius: var(--radius-sm); color: var(--fg2); }
+.settings-sidebar a:hover { background: var(--surface-3); color: var(--fg); }
+.settings-sidebar a.active { background: var(--surface-3); color: var(--accent); font-weight: bold; }
+.settings-content { flex: 1; min-width: 0; }
+/* Shell (border/radius/padding/background/shadow) comes from `styler`'s
+   own `.card`/`.card-pad` now (markup: `class="card card-pad sidebar-box"`)
+   — `.sidebar-box` itself only keeps the spacing/layout `.card` doesn't
+   own: stacked boxes have no flex/gap wrapper around them, so the
+   between-box gap still has to be a margin here. */
+.sidebar-box { margin-bottom: 1rem; }
+.sidebar-box h4 { margin-top: 0; }
+.sidebar-box table.commit-meta { margin: 0; }
+.sidebar-box p:last-child { margin-bottom: 0; }
+/* GitHub-style "About"/community box: a compact wrapping row of icon+count
+   stats, then a plain vertical list of icon+link facts — no table, no
+   "not found" placeholders (`render_sidebar`'s own doc comment on why the
+   list only ever shows what actually exists). */
+/* `font-size` dropped from a shrinking `0.9em`: at dense's already-small
+   `--fs` this read too small to scan at a glance, in both densities (an
+   `em` shrink compounds on top of whatever `--fs` already is) — full size,
+   same as the rest of the sidebar (the "about" box's own paragraph text
+   never had a shrink either). */
+.community-stats { display: flex; gap: 0.9em; flex-wrap: wrap; color: var(--fg2); margin-bottom: 0.6em; }
+.community-stat { display: inline-flex; align-items: center; gap: 0.3em; }
+.community-list { list-style: none; margin: 0 0 0.6em; padding: 0; display: flex; flex-direction: column; gap: 0.4em; }
+.community-list li { display: flex; align-items: center; gap: 0.4em; color: var(--fg2); }
+.community-list .icon { color: var(--muted); flex-shrink: 0; }
+/* Stacked, full-width fields — the sidebar is only ~220px of usable width
+   (260px minus its own padding), nowhere near enough for a select + a
+   20-char input + a button all inline on one row. */
+.fork-form { display: flex; flex-direction: column; gap: var(--gap); margin-top: 0.6em; }
+.fork-form select, .fork-form input, .fork-form button { width: 100%; }
+/* Index page repo listing, card-per-repo instead of a plain table row —
+   name/description/meta (stars, primary language dot, topics) stacked the
+   way Codeberg/Forgejo's dashboard lists repos, reusing `.decoration`
+   (topics) and `.lang-swatch` (language dot) unmodified. */
+.repo-cards { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+/* Shell comes from `styler`'s `.card`/`.card-pad` now (markup:
+   `class="card card-pad repo-card"`) — `.repo-cards`'s own `gap` above
+   already spaces the cards, so `.repo-card` itself only keeps the hover
+   feedback `.card` doesn't provide on its own. */
+.repo-card { transition: box-shadow .15s ease, border-color .15s ease; }
+.repo-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); }
+.repo-card-title { font-size: 1.05em; font-weight: bold; }
+.repo-card-title a { color: var(--fg); }
+.repo-card-desc { color: var(--fg2); margin: 0.3em 0; }
+.repo-card-meta { display: flex; align-items: center; gap: var(--gap); font-size: 0.85em; color: var(--muted); margin-top: 0.4em; }
+.repo-card-meta .lang-swatch { margin-right: 0.15em; }
+/* Section header row above a namespace's repos — same weight as
+   `table.list tr.section-header` used, just as a plain block since cards
+   aren't inside a table anymore. */
+.repo-cards-ns { font-weight: bold; color: var(--muted); font-size: 0.85em; text-transform: uppercase;
+                 letter-spacing: 0.03em; margin: 1rem 0 0.3rem; }
+.repo-cards-ns:first-child { margin-top: 0; }
+/* `<details><summary>` action-menu — free click-to-toggle/keyboard support
+   from the browser, no JS. Was `#topbar`-scoped ("the only one in this
+   pass") until the repo header's ref switcher became a second consumer;
+   generalized rather than duplicated near-identically under a new prefix.
+   `position: relative` on `#topbar details.dropdown` specifically (not
+   every `.dropdown`) since `table.header`'s own `td.ref-switch-cell`
+   already is the positioning context its own `.dropdown-menu` needs. */
+#topbar details.dropdown { position: relative; }
+details.dropdown summary { cursor: pointer; list-style: none; color: var(--fg2); }
+details.dropdown summary::-webkit-details-marker { display: none; }
+/* Both native markers above are suppressed (Firefox's own `list-style`
+   triangle, Safari/Chrome's `::-webkit-details-marker`) so every dropdown
+   looks the same across browsers -- but that leaves nothing at all telling
+   a viewer this is expandable, especially the ref switcher (branch icon +
+   plain-looking text, nothing button-shaped about it). A small caret
+   replaces what got suppressed, rotating open the same way a native one
+   would. */
+details.dropdown summary::after { content: "▾"; margin-left: 0.35em; font-size: 0.75em; display: inline-block; transition: transform .15s ease; }
+details.dropdown[open] summary::after { transform: rotate(-180deg); }
+details.dropdown summary:hover { color: var(--accent); }
+details.dropdown[open] summary { color: var(--accent); }
+/* `vendor/styler.css`'s own `.dropdown-menu` (its JS-driven dropdown
+   component, `styler.js`'s `initDropdown`) hides itself by default with
+   `opacity: 0; pointer-events: none;`, only clearing that under
+   `.dropdown.open .dropdown-menu` — a `.open` *class* that `styler.js`
+   toggles on click of a `[data-dropdown-trigger]`, which nothing here
+   uses. Reusing its `.dropdown-menu` box styling (border/shadow/radius)
+   without also reusing that trigger left the native `[open]` attribute
+   toggling the element (confirmed: DOM inspection shows it flipping) while
+   staying invisible and unclickable regardless — `opacity: 0` never
+   lifts, `pointer-events: none` never clears. Overriding both for the
+   native-`[open]` case is the fix, not adopting `styler`'s own class/JS
+   trigger — the whole point of `<details>` here was needing none. */
+details.dropdown .dropdown-menu { position: absolute; right: 0; top: 100%; margin-top: 0.5em;
+             background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+             box-shadow: var(--shadow); padding: var(--pad-y-sm); min-width: 10rem; z-index: 10; text-align: left; }
+details.dropdown[open] .dropdown-menu { opacity: 1; pointer-events: auto; transform: none; }
+details.dropdown .dropdown-menu a { display: block; padding: var(--pad-y-sm) var(--pad-x-sm); border-radius: var(--radius-sm); color: var(--fg2); }
+details.dropdown .dropdown-menu a:hover { background: var(--surface-3); color: var(--fg); text-decoration: none; }
+details.dropdown .dropdown-menu a.active { color: var(--accent); font-weight: bold; }
+/* Logout is a form, not a link (it POSTs with a CSRF token -- see
+   `auth::web::login::handler_logout`); its button is styled to sit in the
+   menu exactly like the anchors above it, so the change is invisible. */
+details.dropdown .dropdown-menu form.dropdown-form { margin: 0; }
+details.dropdown .dropdown-menu form.dropdown-form button { display: block; width: 100%; text-align: left;
+  padding: var(--pad-y-sm) var(--pad-x-sm); border-radius: var(--radius-sm); color: var(--fg2);
+  background: none; border: 0; font: inherit; cursor: pointer; }
+details.dropdown .dropdown-menu form.dropdown-form button:hover { background: var(--surface-3); color: var(--fg); }
+table.header td.ref-switch-cell { position: relative; text-align: right; font-size: 0.85em; font-weight: normal;
+                                   vertical-align: bottom; padding-bottom: 0.4rem; white-space: nowrap; }
+/* A bordered chip, same button language `.action-btn`/`.size-btn` already
+   use elsewhere -- the caret alone (see `details.dropdown summary::after`'s
+   own doc comment) still read as plain text with a stray triangle next to
+   it, nothing shaped like a clickable control. */
+details.ref-switch summary { display: inline-block; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+                              padding: 0.1em 0.35em; background: transparent; }
+details.ref-switch summary:hover { background: var(--surface-3); border-color: var(--border-strongest); }
+details.ref-switch[open] summary { border-color: var(--accent); }
+details.ref-switch .dropdown-menu { max-height: 16rem; overflow-y: auto; }
+details.ref-switch .dropdown-menu a { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+/* `line-height: 1.4` stays a literal regardless of density: code needs a
+   tight, non-scaling line-height for scanability, not the prose `--lh`. */
+pre.blob, pre.diff { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius-sm); padding: var(--pad-y) var(--pad-x);
+                     overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+                     font-size: var(--fs-sm); line-height: 1.4; }
+.scroll-x { overflow-x: auto; border: 1px solid var(--code-border); border-radius: var(--radius-sm); margin-bottom: 1rem; }
+.scroll-x table.blob, .scroll-x table.diff-split, .scroll-x table.diff-annotated { border: none; margin-bottom: 0; }
+/* Breaks a block out of `#content`'s centered `max-width: 70rem` column to
+   the full viewport width, regardless of nesting depth — the classic
+   "negative margin to the viewport edge" trick, not a change to `#content`
+   itself (which stays put for everything else on the page). Only applied
+   to the side-by-side diff's own `.scroll-x` (two code columns are the one
+   view on this project that actually benefits from more room before its
+   own `overflow-x: auto` fallback has to kick in) — `.scroll-x` alone
+   (blob view, unified diff, stat charts) stays within the normal column. */
+.full-bleed { width: 100vw; max-width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);
+              padding-left: 1rem; padding-right: 1rem; box-sizing: border-box; }
+table.blob { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
+             border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: var(--fs-sm); }
+table.blob td { padding: 0 var(--pad-x-sm); white-space: pre; }
+/* `--muted`, not `--border-strongest`: these numbers are text (and, in the
+   `a` case, a real permalink), not a border — `--border-strongest` is
+   tuned for a hairline's 3:1 minimum, not text's 4.5:1, and fell short of
+   even the lower bar in both themes. */
+table.blob td.lineno { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--code-border); }
+table.blob td.lineno a { color: var(--muted); }
+table.blob img { display: block; max-width: 100%; }
+.diff-add { color: var(--diff-add); }
+.diff-del { color: var(--diff-del); }
+.diff-hunk { color: var(--diff-hunk); }
+.diff-meta { color: var(--muted); font-weight: bold; }
+/* Syntax-highlight token classes (`highlight.rs`'s own doc comment) — an
+   unmatched token has no class at all and just inherits this same plain
+   code color, so no `.tok-default`/`.tok-plain` rule exists to fall back
+   to; there's nothing for one to override. */
+.tok-kw { color: var(--syn-kw); }
+.tok-str { color: var(--syn-str); }
+.tok-com { color: var(--syn-com); font-style: italic; }
+.tok-num { color: var(--syn-num); }
+.tok-const { color: var(--syn-const); }
+.tok-fn { color: var(--syn-fn); }
+.tok-type { color: var(--syn-type); }
+.tok-tag { color: var(--syn-tag); }
+.tok-attr { color: var(--syn-attr); }
+table.diff-split { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
+                   border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+                   font-size: var(--fs-sm); }
+table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre; vertical-align: top; width: 50%; }
+table.diff-split td:first-child:not([colspan]) { border-right: 1px solid var(--code-border); }
+/* The PR view's unified diff: same monospace slab as `.diff-split`, but with
+   old/new line-number gutters and comment rows spliced between the lines. */
+table.diff-annotated { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
+                       border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+                       font-size: var(--fs-sm); }
+table.diff-annotated td { padding: 0 var(--pad-x-sm); white-space: pre; vertical-align: top; }
+table.diff-annotated td.lineno { text-align: right; color: var(--muted); user-select: none;
+                                 border-right: 1px solid var(--code-border); width: 1%; }
+/* Only visible on hover so it doesn't compete with the diff text itself. */
+table.diff-annotated a.line-comment-link { color: transparent; text-decoration: none; }
+table.diff-annotated tr:hover a.line-comment-link { color: var(--muted); }
+/* A keyboard user tabbing through the diff never hovers — without this,
+   the global `a:focus-visible` outline lands around text that's still
+   `color: transparent`, an outlined box with nothing legible inside. */
+table.diff-annotated a.line-comment-link:focus-visible { color: var(--muted); }
+table.diff-annotated tr.diff-comment td { white-space: normal; padding: var(--pad-y) var(--pad-x); background: var(--bg);
+                                          border-top: 1px solid var(--code-border); border-bottom: 1px solid var(--code-border); }
+/* Per-hunk collapse toggle (`annotated_diff.rs`, `app.js`'s
+   `[data-toggle-rows]` handler) — plain button, no border/background of
+   its own so it still reads as part of the `.diff-hunk` row; the arrow is
+   generated content keyed off `aria-expanded` so the JS side never has to
+   touch the hunk-header text itself. */
+.hunk-toggle { background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; }
+.hunk-toggle::before { content: "\25BE\0020"; }
+.hunk-toggle[aria-expanded='false']::before { content: "\25B8\0020"; }
+.breadcrumb { padding: var(--pad-y-sm) 0; margin: 0; list-style: none; }
+.breadcrumb-item.current { color: var(--fg); font-weight: bold; }
+/* Breadcrumb on the left, "ver crudo · blame" flush right on the same row —
+   same left/right split as the tabs bar's own star/text-size buttons. Wraps
+   to its own line under a long breadcrumb instead of overlapping it. */
+.crumbs-row { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.5em; }
+.blob-actions { margin: 0; white-space: nowrap; }
+.muted { color: var(--muted); }
+/* Per-viewer (see `effective_text_size`): the summary tab's own
+   README/tables can get dense fast, unlike the tabs bar above which never
+   should. `.text-sm` is the original pre-ergonomics-pass size, scaled by
+   density like the tabs bar rather than `body`'s own text-size pick, so it
+   stays put regardless of that — the default here, not `body`'s inherited
+   (medium) one. `Md` itself needs no class, see `TextSize::div_class`. */
+.text-sm { font-size: var(--fs-sm); }
+.text-lg { font-size: 1.25em; }
+/* `.decoration` stays scoped to the permission-tier pills below now —
+   every status/visibility pill (topics, open/closed/merged, private/
+   archived, signature verification) moved to `styler`'s own `.badge`
+   component (`page_chrome::permission_badge_class`'s own doc comment
+   explains why permission tiers didn't: no styler equivalent for a
+   graduated-grayscale severity scale). */
+.decoration { color: var(--accent); font-size: 0.9em; border: 1px solid var(--accent); border-radius: 999px; padding: 0 0.5em; margin-left: 0.3em; }
+/* Permission-tier pills: same shape as `.decoration`, escalating grayscale
+   weight low tier to high (guest faintest, maintainer boldest gray) rather
+   than a rainbow of hues — `owner` uses `styler`'s `.badge.accent` instead
+   (highest tier, same visual weight as the old accent-colored `.decoration`
+   it replaced). No new colors. */
+.decoration-guest { color: var(--muted); border-color: var(--border); }
+.decoration-reporter { color: var(--muted); border-color: var(--border-strong); }
+.decoration-developer { color: var(--fg2); border-color: var(--border-strong); }
+.decoration-maintainer { color: var(--fg2); border-color: var(--border-strongest); }
+/* Kanban board: columns laid out side by side, each scrolling its own
+   overflow independently rather than the whole page growing to fit the
+   tallest column. */
+.board-columns { display: flex; gap: var(--gap); overflow-x: auto; align-items: flex-start; }
+.board-column { flex: 0 0 16em; }
+.board-column .commit-meta { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--pad-y-sm); }
+/* Cross-column drag (`app.js`'s dragstart/dragover/drop) — only rendered
+   `draggable` at all when the viewer can manage the board. */
+[draggable='true'] { cursor: grab; }
+[draggable='true'].dragging { opacity: 0.5; }
+/* `web::icons`' inline SVGs: sized off the surrounding text (so the
+   text-size toggle scales them too) instead of their own fixed pixel
+   attrs, colored by whatever text color they're dropped into. */
+.icon { width: 1em; height: 1em; vertical-align: -0.15em; flex-shrink: 0; }
+/* `web::identicon`'s per-user SVGs — square with soft corners (not a full
+   circle, stays closer to this project's flat/square aesthetic than a
+   photo-style avatar would), sized per call site via the `width`/`height`
+   attrs already on the element rather than a fixed class size. */
+.avatar { border-radius: 3px; vertical-align: middle; margin-right: 0.4em; flex-shrink: 0; }
+.bar-row td { padding: 0.15em 0.5em; }
+/* Repo summary's language bar: one stacked row of same-line segments
+   (unlike `.bar-row`'s independent bar-per-row), each segment's width/hue
+   set inline (per-language, can't be precomputed into a class) — same
+   "dynamic value stays inline, shape stays in CSS" split `.bar` already
+   uses for its own width. */
+.lang-bar { display: flex; height: 0.9em; border-radius: 999px; overflow: hidden; margin: 0.3em 0; }
+.lang-swatch { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 50%; vertical-align: -0.05em; margin-right: 0.3em; }
+/* Wraps each legend entry's dot+name+percentage as one unit so a narrow
+   viewport wraps *between* languages, never between a dot and its own
+   label — `render_language_bar`'s own doc comment. */
+.lang-key-item { white-space: nowrap; }
+.bar { display: inline-block; height: 0.9em; background: var(--accent); border-radius: 2px; vertical-align: middle; }
+/* `overflow-wrap: break-word` — inherited by every descendant (paragraphs,
+   list items, inline `code` spans, ...): a long unbroken token (a URL, a
+   long identifier in backticks) has nothing to wrap on by default, so
+   without this it just overflows its container instead of breaking,
+   dragging the whole page into horizontal scroll on a narrow phone —
+   `.readme pre`'s own `overflow-x: auto` already contains a genuine code
+   *block* the same way, but plain paragraph text has no such box to
+   scroll inside, it needs to actually wrap instead. */
+.readme { border-top: 1px solid var(--border); padding-top: var(--pad-y); margin-top: 0.8em; overflow-wrap: break-word; }
+/* No `max-width` anywhere before this: an image renders at its native
+   pixel size regardless of viewport, so a README screenshot/badge wider
+   than the current viewport stayed fixed at that width and dragged the
+   page into horizontal scroll -- exactly once the viewport dropped below
+   the image's own width, not before, since down to that point the image
+   was narrower than the column already. */
+.readme img { max-width: 100%; height: auto; }
+.readme h1, .readme h2, .readme h3 { font-size: 1.1em; color: var(--fg2); }
+.readme h4 { font-size: 1.05em; color: var(--fg2); border-bottom: none; margin: 0.8em 0 0.3em; }
+.readme pre { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius-sm); padding: var(--pad-y-sm); overflow-x: auto; }
+/* Same reasoning as `.readme`'s own `overflow-wrap` doc comment, and same
+   direct `overflow-x: auto` on the `<table>` itself `table.tabs`/
+   `table.header` already rely on — a wide markdown table (common for
+   comparison tables) otherwise has no wrapper of its own the way
+   `table.list` gets from every render site's `.table-scroll`. */
+.readme table { overflow-x: auto; }
+/* GitHub-style alert blockquotes (`> [!NOTE]` etc, see markdown.rs's own
+   doc comment — pulldown-cmark's `ENABLE_GFM` parses the marker, this is
+   just the box/label around what it already emits). Colors reuse existing
+   vars rather than introducing a new palette: `--flash-ok-bg`/`--sig-good`
+   for tip (same as a success flash), `--flash-err-bg`/`--accent` for
+   warning/caution (same as an error flash), plain `--surface` for note/
+   important (no dedicated tint exists for those, so a neutral background
+   plus a colored border is the whole signal). */
+.readme blockquote { border-left: 3px solid var(--border-strong); padding: 0.4em 1em; margin: 0.8em 0; color: var(--muted); }
+.readme .markdown-alert-note,
+.readme .markdown-alert-important { border-left-color: var(--diff-hunk); background: var(--surface); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: var(--pad-y) var(--pad-x); }
+.readme .markdown-alert-tip { border-left-color: var(--sig-good); background: var(--flash-ok-bg); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: var(--pad-y) var(--pad-x); }
+.readme .markdown-alert-warning,
+.readme .markdown-alert-caution { border-left-color: var(--danger); background: var(--flash-err-bg); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: var(--pad-y) var(--pad-x); }
+.readme [class^="markdown-alert-"] { color: var(--fg); }
+.readme [class^="markdown-alert-"]::before { display: block; font-weight: bold; margin-bottom: 0.3em; }
+.readme .markdown-alert-note::before { content: "\2139 Note"; color: var(--diff-hunk); }
+.readme .markdown-alert-tip::before { content: "\2713 Tip"; color: var(--sig-good); }
+.readme .markdown-alert-important::before { content: "\203C Important"; color: var(--diff-hunk); }
+.readme .markdown-alert-warning::before { content: "\26A0 Warning"; color: var(--danger); }
+.readme .markdown-alert-caution::before { content: "\26D4 Caution"; color: var(--danger); }
+/* Shell comes from `styler`'s `.card`/`.card-pad` now (markup:
+   `class="card card-pad user-card"`) — `.user-card` itself only keeps the
+   between-card spacing (no flex/gap wrapper around these either). */
+.user-card { margin-bottom: 1rem; }
+.user-card h4 { margin: 0 0 0.5em; border-bottom: none; }
+.user-card form { display: inline-block; margin: 0.3em 0.5em 0.3em 0; }
+.flash { padding: var(--pad-y-sm) var(--pad-x-sm); margin: 0.6em 0; border-left: 3px solid; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-weight: bold; }
+.flash-ok { background: var(--flash-ok-bg); border-color: var(--sig-good); color: var(--flash-ok-fg); }
+.flash-err { background: var(--flash-err-bg); border-color: var(--danger); color: var(--flash-err-fg); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+a { text-decoration: none; color: var(--link); }
+a:hover { text-decoration: underline; }
+/* `.page-item` (styler) reads as a button/pill, not a hyperlink — an `<a>`
+   inside one (the real link `webui/repo/log.rs`'s pagination wraps) would
+   otherwise pick up the blue link color above by its own specificity, not
+   `.page-item`'s muted one, even though it's nested inside it. */
+.page-item a { color: inherit; text-decoration: none; }
+.page-item a:hover { text-decoration: none; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+h3 { font-size: 1em; color: var(--fg2); margin: 1.2em 0 0.4em; }
+h4 { font-size: 0.95em; color: var(--accent); margin: 1em 0 0.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+/* 16px flat (not `--fs`/em-relative): under 16px, mobile Safari auto-zooms
+   the whole page on focus, which then doesn't zoom back out on blur — this
+   one has to stay put across every density pick too. */
+form input, form select, form textarea { font-family: inherit; font-size: 16px; padding: var(--pad-y-sm) var(--pad-x-sm);
+                                          border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+                                          background: var(--bg); color: var(--fg); transition: border-color .15s ease; }
+form input:focus, form select:focus, form textarea:focus { border-color: var(--accent); }
+/* Same vertical padding as inputs/selects/textareas above (`--pad-y-sm`),
+   only wider horizontally — so a button sitting inline next to an input
+   (the index search box, the fork form, ...) lines up edge-to-edge instead
+   of standing a few px taller. */
+form button { font-family: inherit; font-size: 16px; padding: var(--pad-y-sm) var(--pad-x-sm); border: 1px solid var(--border-strong);
+              border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); cursor: pointer;
+              box-shadow: 0 1px 0 rgba(0, 0, 0, 0.05); transition: background-color .15s ease, border-color .15s ease; }
+form button:hover { background: var(--surface-3); border-color: var(--border-strongest); }
+form button:active { background: var(--surface-4); box-shadow: none; }
+/* `.btn` itself is no longer defined here — `vendor/styler.css`'s own
+   `button, .btn` rule (solid accent fill, shadow, `.secondary`/`.danger`
+   variants) applies directly now, already keyed to this project's own
+   density tokens (`--comp-pad-sm-*`, phase-1/2a). `.btn-group` stays
+   gitquarry's own: it connects adjacent `.btn`s each wrapped in their own
+   `<form>` (star+watch, in `header_bar`) — styler's own `.btn-group` uses
+   a direct-child combinator (`.btn-group > .btn`) that only matches a
+   button as an immediate child, not one nested inside a form, so it never
+   actually applies to this DOM shape; this hand-rolled version does. */
+.btn-group { display: inline-flex; }
+.btn-group form { margin-left: -1px; }
+.btn-group form:first-child { margin-left: 0; }
+.btn-group .btn { border-radius: 0; }
+.btn-group form:first-child .btn { border-radius: 4px 0 0 4px; }
+.btn-group form:last-child .btn { border-radius: 0 4px 4px 0; }
+/* Native checkbox/radio controls otherwise ignore the theme entirely (browser
+   default blue, or an unstyled gray outline that clashes with a dark
+   background) — this is the one cross-browser-safe way to tint them without
+   rebuilding the control from scratch. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+/* Narrow-viewport overrides live in their own `mobile.css` now — see that
+   file's own doc comment for why. */

@@ -1,0 +1,28 @@
+  --bg: #15171a; --fg: #e8e8e8; --fg2: #ccc; --muted: #999;
+  --border: #2a2d31; --border-strong: #444; --border-strongest: #555;
+  --surface: #1e2124; --surface-2: #1c1f22; --surface-3: #23262a; --surface-4: #2c2f33;
+  --code-bg: #1a1c1f; --code-border: #34373b;
+  /* See light.css's matching comment. One-dark-ish, tuned for this
+     background instead of light.css's. */
+  --syn-kw: #c678dd; --syn-str: #98c379; --syn-com: #7f848e; --syn-num: #d19a66;
+  --syn-const: #d19a66; --syn-fn: #61afef; --syn-type: #e5c07b; --syn-tag: #e06c75;
+  --syn-attr: #d19a66;
+  /* `#e0574f`, the mockup's brand red — see light.css's matching comment
+     on why this is back from teal, and why `--danger` still isn't
+     re-aliased to it. */
+  --accent: #e0574f; --link: #6ea8fe;
+  --diff-add: #4caf50; --diff-del: #ff6b6b; --diff-hunk: #6ea8fe;
+  --sig-good: #4caf50;
+  --flash-ok-bg: #16261a; --flash-ok-fg: #7cd68a;
+  /* A dedicated tint, not `var(--danger)` directly: `styler`'s own
+     `--danger-500` (#e5484d) sits right at ~4.5:1 on this background — too
+     close to the AA line for regular-weight flash text. Lighter, same as
+     `--flash-ok-fg` already gets its own tint instead of reusing `--sig-good`. */
+  --flash-err-bg: #2a1a1a; --flash-err-fg: #f28b82;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 1px 6px rgba(0, 0, 0, 0.35);
+  /* See light.css's matching comment. */
+  --surface-sunken: var(--surface-2);
+  --text: var(--fg); --text-muted: var(--fg2); --text-faint: var(--muted);
+  /* No `--danger` alias here either — see light.css's matching comment. */
+  --ok: var(--sig-good); --info: var(--link);
+  --warn: #d9a441;

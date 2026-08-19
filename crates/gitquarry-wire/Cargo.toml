@@ -1,0 +1,20 @@
+[package]
+name = "gitquarry-wire"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Plain serde DTOs shared across gitquarry-core/gitquarry-federation process and peer-to-peer boundaries"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+rand = "0.10.2"
+axum = "0.8.9"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

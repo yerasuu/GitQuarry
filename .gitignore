@@ -1,0 +1,9 @@
+/target
+/gitquarry.toml
+/gitquarry-tracker.toml
+/gitquarry-ci.toml
+/gitquarry-federation.toml
+/gitquarry-artifacts.toml
+/deploy/gitquarry.minio-test.toml
+__pycache__/
+*.pyc

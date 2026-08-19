@@ -1,0 +1,27 @@
+  /* Exact numbers from the "cgit-lite, más aire" (var-b) token set in the
+     gitquarry-webui visual-direction mockup — `--pad-y-sm`/`--pad-x-sm`/
+     `--radius-sm` don't exist there (that mockup never needed a second
+     tier), so they're derived here at this file's own prior full/-sm
+     ratio (pad-y ~0.61x, pad-x ~0.77x, radius 0.75x) to stay internally
+     consistent rather than inventing an unrelated ratio. */
+  --fs: 14px; --fs-sm: 12.5px;
+  --lh: 1.65;
+  --pad-y: 0.79em; --pad-x: 1.14em;
+  --pad-y-sm: 0.48em; --pad-x-sm: 0.88em;
+  --radius: 6px; --radius-sm: 4.5px;
+  --gap: 1em;
+  --letter: .005em;
+  /* Echoes styler's own `[data-density='comfortable']` numbers
+     (vendor/styler.css) under gitquarry's own attribute value instead —
+     gitquarry's density tokens above (`--pad-*`/`--fs*`) and styler's
+     (`--comp-*`) are entirely separate names with no collision, but
+     nothing links them without this: one user-facing toggle
+     (`dense`/`airy`, unchanged) should still move both systems together. */
+  --comp-pad-xs-y: 3px;   --comp-pad-xs-x: 10px;  --comp-fs-xs: 12px;
+  --comp-pad-sm-y: 10px;  --comp-pad-sm-x: 16px;  --comp-fs-sm: 14px;
+  --comp-pad-table-y: 14px; --comp-pad-table-x: 20px;
+  --comp-pad-nav-x: 13px;
+  --comp-pad-md-y: 20px;  --comp-pad-md-x: 24px;  --comp-fs-md: 15px;
+  --comp-pad-lg: 28px;
+  --comp-radius-sm: 9px;
+  --comp-radius-md: 16px;

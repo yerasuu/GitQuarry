@@ -1,0 +1,31 @@
+[package]
+name = "gitquarry-domain"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Product-facing functionality (release CRUD, operator maintenance commands) that needs gitquarry-core's kernel but that the kernel never needs back"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+gitquarry-core = { path = "../gitquarry-core" }
+gitquarry-i18n = { path = "../gitquarry-i18n" }
+gitquarry-gpg = { path = "../gitquarry-gpg" }
+anyhow = "1.0.104"
+sha2 = "0.11.0"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["fs"] }
+
+[features]
+# Un-gates otherwise-private items for this crate's own tests/*.rs — same
+# reasoning gitquarry-core's own `test-util` feature has.
+test-util = ["gitquarry-core/test-util"]
+
+[dev-dependencies]
+gitquarry-domain = { path = ".", features = ["test-util"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

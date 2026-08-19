@@ -1,0 +1,29 @@
+services:
+  gitquarry:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: gitquarry:latest
+    container_name: gitquarry
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "2222:2222"
+    environment:
+      - GITQUARRY_CONFIG=/app/gitquarry.toml
+    volumes:
+      - ../gitquarry.toml:/app/gitquarry.toml
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=expose-public
+      - traefik.http.routers.gitquarry.rule=Host(`git.tamdae.com`)
+      - traefik.http.routers.gitquarry.entrypoints=websecure
+      - traefik.http.routers.gitquarry.tls=true
+      - traefik.http.routers.gitquarry.service=gitquarry
+      - traefik.http.services.gitquarry.loadbalancer.server.port=8080
+    networks:
+      - expose-public
+
+networks:
+  expose-public:
+    external: true

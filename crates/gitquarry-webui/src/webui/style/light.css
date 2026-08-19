@@ -1,0 +1,39 @@
+  --bg: #fff; --fg: #111; --fg2: #333; --muted: #666;
+  --border: #eee; --border-strong: #ccc; --border-strongest: #999;
+  --surface: #f5f5f5; --surface-2: #f7f7f7; --surface-3: #eee; --surface-4: #e2e2e2;
+  --code-bg: #f8f8f8; --code-border: #ddd;
+  /* Syntax-highlight token colors (`highlight.rs`'s `class="tok-*"` spans,
+     `base.css`'s matching rules) — a dedicated family, not a reuse of
+     `--accent`/`--good`/etc: a keyword or a type isn't semantically an
+     "ok"/"danger"/brand signal, it just needs to read as its own token
+     kind against `--code-bg`. One-light-ish, tuned for that background. */
+  --syn-kw: #a626a4; --syn-str: #50a14f; --syn-com: #a0a1a7; --syn-num: #986801;
+  --syn-const: #986801; --syn-fn: #4078f2; --syn-type: #c18401; --syn-tag: #e45649;
+  --syn-attr: #986801;
+  /* `#8b0000`, the mockup's brand red — restored after briefly living as
+     teal (see `ff247da`'s own message on the collision that caused that:
+     the crimson `data-accent` preset's `--accent-500` sat right next to
+     `vendor/styler.css`'s own `--danger-500`). `--danger` below stays
+     un-aliased to this (falls through to styler's own red instead), so
+     the active nav tab and a form error are still two distinct shades of
+     red, not literally the same color again. */
+  --accent: #8b0000; --link: #00e;
+  --diff-add: #070; --diff-del: #a00; --diff-hunk: #06a;
+  --sig-good: #2e7d32;
+  --flash-ok-bg: #f0f7ee; --flash-ok-fg: #1b5e20;
+  --flash-err-bg: #fdf0ef; --flash-err-fg: var(--danger);
+  --shadow: 0 1px 2px rgba(17, 17, 17, 0.06), 0 1px 6px rgba(17, 17, 17, 0.05);
+  /* Aliases for styler's own token names (vendor/styler.css) so its
+     components (toast/modal/accordion/...) render in this exact palette
+     instead of styler's own off-white/gray-50 default — see the plan doc
+     for the full reconciliation table. --bg/--border/--border-strong/
+     --surface/--accent already share a name with styler, no alias needed. */
+  --surface-sunken: var(--surface-2);
+  --text: var(--fg); --text-muted: var(--fg2); --text-faint: var(--muted);
+  /* No `--danger` alias here on purpose: `--accent` is this project's own
+     brand color (independent of the semantic tiers below it), and aliasing
+     danger to it made a form-validation error and the active nav tab look
+     like the same color. Leaving `--danger` unset falls through to
+     `vendor/styler.css`'s own `--danger: var(--danger-500)`. */
+  --ok: var(--sig-good); --info: var(--link);
+  --warn: #8a5a00;

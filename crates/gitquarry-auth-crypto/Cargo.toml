@@ -1,0 +1,32 @@
+[package]
+name = "gitquarry-auth-crypto"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Self-contained auth primitives (password hashing, TOTP, OIDC client discovery) with no dependency on gitquarry-core"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1.0.104"
+argon2 = { version = "0.5.3", features = ["std"] }
+data-encoding = "2.11.1"
+hmac = "0.13.0"
+rand = "0.10.2"
+sha1 = "0.11.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+openidconnect = { version = "4.0.1", features = ["reqwest"] }
+
+[features]
+# Un-gates otherwise-private items for this crate's own tests/*.rs — same
+# reasoning gitquarry-core's own `test-util` feature has.
+test-util = []
+
+[dev-dependencies]
+gitquarry-auth-crypto = { path = ".", features = ["test-util"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

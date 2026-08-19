@@ -1,0 +1,87 @@
+/* Narrow-viewport overrides, own file rather than a tail block inside
+   base.css: same "each concern gets its own concatenated file" shape
+   light.css/dark.css/dense.css/airy.css already use for theme/density,
+   applied to the third axis this project's chrome varies along (screen
+   size) — not a user-facing toggle like those two, always active below
+   the breakpoint, on top of whichever theme/density is already in effect.
+   Below this, chrome that scales with `body`'s font-size (everything not
+   pinned to a fixed px size in base.css) shrinks a step and #content gives
+   back its side padding, so narrow phones get full width instead of a
+   squeezed column. */
+@media (max-width: 640px) {
+  body { font-size: 14px; }
+  #content { padding: 0 0.6rem 1.5rem; }
+  #topbar .inner { padding: 0.5em 0.7rem; }
+  table.header td.main { font-size: 1.2em; }
+  .repo-layout { flex-direction: column; gap: 0; }
+  .repo-sidebar { width: 100%; }
+  .settings-layout { flex-direction: column; gap: 0.5rem; }
+  .settings-sidebar { width: 100%; }
+  .settings-sidebar ul { flex-direction: row; flex-wrap: wrap; }
+  /* Hamburger collapse only kicks in down here — above this breakpoint
+     `nav` stays exactly as it's always been (just wrapping, not hiding). */
+  /* `min-width`/`min-height`, not just centering: at this breakpoint's
+     14px body font and dense-density padding, the rendered button was
+     ~23x30px — under the 24px touch-target minimum, on the one control
+     that opens the mobile nav at all. */
+  .nav-toggle-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
+  #topbar nav { display: none; flex-basis: 100%; width: 100%; }
+  /* `#topbar` prefixed here too: an ID selector always outranks any number
+     of classes, so `.nav-toggle-input:checked ~ nav` alone (0 IDs) could
+     never actually beat `#topbar nav` { display: none } above (1 ID) --
+     checking the box changed nothing, the menu just never opened. */
+  #topbar .nav-toggle-input:checked ~ nav { display: flex; flex-wrap: wrap; }
+  /* Visually hidden but still in the tab order and toggleable with Space —
+     `display: none` (the desktop default above) removes an element from
+     the tab order entirely, so a keyboard-only user could never reach this
+     checkbox to open `nav` once it collapses down here. The label itself
+     can't take focus (labels aren't keyboard-activatable), so the focus
+     ring has to land on it via the sibling selector below instead. */
+  .nav-toggle-input {
+    display: block; position: absolute; width: 1px; height: 1px; margin: -1px;
+    padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  .nav-toggle-input:focus-visible + .nav-toggle-btn {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .repo-card-meta { flex-wrap: wrap; gap: 0.5em; }
+  /* Same touch-target floor as `.nav-toggle-btn` above — the star/watch/
+     text-size buttons packed into this cell inherit dense-density padding
+     otherwise, well under 24px tall at this breakpoint. */
+  table.tabs td.tabs-right button { min-height: 36px; padding: var(--pad-y) var(--pad-x-sm); }
+  /* Every tab row (`page_chrome::tab_links`: the main tabs bar, the project
+     sub-nav, the issues/pulls status filter) turns into a plain stacked
+     vertical list down here instead of a horizontal-scroll strip — no
+     separate gesture (scroll sideways) just for these. `.tabs-list a`'s
+     `display: block` alone gets the short rows (sub-nav's 4, the status
+     filter's 3) there; only the main tabs bar (9 entries) additionally
+     starts *collapsed* behind a hamburger (`tab_links`'s own `toggle`
+     param, `#topbar`'s own nav toggle above uses the same pattern) — for
+     the two short ones a toggle would hide content "collapsing" was never
+     actually saving meaningful room on. */
+  .tabs-toggle-btn {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px;
+    cursor: pointer; padding: var(--pad-y-sm) var(--pad-x-sm); vertical-align: middle;
+  }
+  /* Scoped to rows that actually have a toggle sibling — `.tabs-list` alone
+     would hide the two toggle-less short rows with no `:checked` state
+     that could ever reveal them again. */
+  .tabs-toggle-input ~ .tabs-list { display: none; width: 100%; }
+  .tabs-toggle-input:checked ~ .tabs-list { display: flex; flex-direction: column; }
+  .tabs-list a { display: block; padding: var(--pad-y) var(--pad-x-sm); }
+  /* The ` | ` separators only make sense in the desktop inline row — a
+     vertical list already separates entries by being on their own line,
+     toggled or not. */
+  .tab-sep { display: none; }
+  /* Same visually-hidden-but-focusable/keyboard-toggleable shape
+     `.nav-toggle-input` above uses, same reasoning: `display: none` (the
+     desktop default) would drop this checkbox from the tab order entirely,
+     so a keyboard-only user could never reach it to open the drawer. */
+  .tabs-toggle-input {
+    display: block; position: absolute; width: 1px; height: 1px; margin: -1px;
+    padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  .tabs-toggle-input:focus-visible + .tabs-toggle-btn {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+}
