@@ -26,3 +26,4 @@ msg!(scopes_placeholder() {
 });
 msg!(expires_days_placeholder() { Locale::Es => "expira en (días, opcional)", Locale::En => "expires in (days, optional)" });
 msg!(create_button() { Locale::Es => "crear token", Locale::En => "create token" });
+msg!(tokens_heading() { Locale::Es => "tus tokens", Locale::En => "your tokens" });

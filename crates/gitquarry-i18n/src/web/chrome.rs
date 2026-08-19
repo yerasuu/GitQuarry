@@ -15,6 +15,7 @@ msg!(audit_tab() { Locale::Es => "auditoria", Locale::En => "audit" });
 
 msg!(profile_tab() { Locale::Es => "perfil", Locale::En => "profile" });
 msg!(favorites_tab() { Locale::Es => "favoritos", Locale::En => "favorites" });
+msg!(keys_tab() { Locale::Es => "claves", Locale::En => "keys" });
 msg!(security_tab() { Locale::Es => "seguridad", Locale::En => "security" });
 msg!(pat_tab() { Locale::Es => "tokens personales", Locale::En => "personal tokens" });
 msg!(account_settings_tab() { Locale::Es => "ajustes", Locale::En => "settings" });

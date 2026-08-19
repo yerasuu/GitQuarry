@@ -492,7 +492,11 @@ pub(crate) fn render_settings_page(
         (required_reviewers::render_required_reviewers_form(repo_name, config, csrf, retry_for("set_required_reviewers"), locale))
         (labels::render_labels_form(repo_name, config, csrf, retry_for("set_labels"), locale))
         (lfs_limit::render_lfs_limit_form(repo_name, config, csrf, retry_for("set_lfs_max_blob_size"), locale))
-        (permissions::render_perm_grid(repo_name, granted, csrf, locale))
+        (crate::webui::settings_section(
+            &gitquarry_i18n::web::repo_settings::permissions_heading(locale),
+            None,
+            permissions::render_perm_grid(repo_name, granted, csrf, locale),
+        ))
         (move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale))
         (danger_zone::render_delete_repo_form(repo_name, config.deleted_at, csrf, retry_for("delete_repo"), retry_for("purge_repo"), locale))
     }

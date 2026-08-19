@@ -24,7 +24,7 @@ use super::login;
 use crate::webui::repo::can_view_repo;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    is_local_redirect, layout, render_flash, require_csrf, require_login, url_encode,
+    is_local_redirect, layout, render_flash, require_csrf, require_login, settings_section, url_encode,
 };
 use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
@@ -376,53 +376,54 @@ pub fn render_favorites_page(
 ) -> Markup {
     let action_url = "/_account/favorites";
     html! {
-        p class="muted" { (crate::auth::i18n::favorites::starred_intro(locale)) }
         (PreEscaped(render_flash(message, locale)))
 
-        h4 { (crate::auth::i18n::favorites::visibility_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::favorites::visibility_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="favorites_action" value="set_visibility";
-            label {
-                input type="checkbox" name="favorites_public" value="1" checked[user.favorites_public];
-                (crate::auth::i18n::favorites::public_checkbox_label(locale))
+        (settings_section(&crate::auth::i18n::favorites::visibility_heading(locale), Some(&crate::auth::i18n::favorites::visibility_description(locale)), html! {
+            form method="post" action=(action_url) {
+                (PreEscaped(csrf))
+                input type="hidden" name="favorites_action" value="set_visibility";
+                label {
+                    input type="checkbox" name="favorites_public" value="1" checked[user.favorites_public];
+                    (crate::auth::i18n::favorites::public_checkbox_label(locale))
+                }
+                button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
 
-        @if starred.is_empty() {
-            div class="empty-state" {
-                span class="empty-state-icon" { (crate::webui::icons::star()) }
-                div class="empty-state-title" { (crate::auth::i18n::favorites::no_starred_repos_hint(locale)) }
-            }
-        } @else {
-            table class="list" {
-                tr { th { (crate::auth::i18n::favorites::repo_column_header(locale)) } th {} }
-                @for (repo, stars) in starred {
-                    tr {
-                        td {
-                            a href=(format!("/{}", url_encode(repo))) { (repo) }
-                            @if *stars > 0 {
-                                " " span class="muted" { (stars) " \u{2605}" }
+        (settings_section(&crate::auth::i18n::favorites::starred_heading(locale), Some(&crate::auth::i18n::favorites::starred_intro(locale)), html! {
+            @if starred.is_empty() {
+                div class="empty-state" {
+                    span class="empty-state-icon" { (crate::webui::icons::star()) }
+                    div class="empty-state-title" { (crate::auth::i18n::favorites::no_starred_repos_hint(locale)) }
+                }
+            } @else {
+                table class="list" {
+                    tr { th { (crate::auth::i18n::favorites::repo_column_header(locale)) } th {} }
+                    @for (repo, stars) in starred {
+                        tr {
+                            td {
+                                a href=(format!("/{}", url_encode(repo))) { (repo) }
+                                @if *stars > 0 {
+                                    " " span class="muted" { (stars) " \u{2605}" }
+                                }
                             }
-                        }
-                        td {
-                            form method="post" action=(action_url) style="display:inline" {
-                                (PreEscaped(csrf))
-                                // `star_action`, matching `actions.rs`'s
-                                // `star_button_html` -- both forms feed the
-                                // same `FavoritesForm`, whose `star_action`
-                                // field now deserializes from that wire name.
-                                input type="hidden" name="star_action" value="toggle_star";
-                                input type="hidden" name="repo" value=(repo);
-                                button type="submit" { (crate::auth::i18n::favorites::remove_button_label(locale)) }
+                            td {
+                                form method="post" action=(action_url) style="display:inline" {
+                                    (PreEscaped(csrf))
+                                    // `star_action`, matching `actions.rs`'s
+                                    // `star_button_html` -- both forms feed the
+                                    // same `FavoritesForm`, whose `star_action`
+                                    // field now deserializes from that wire name.
+                                    input type="hidden" name="star_action" value="toggle_star";
+                                    input type="hidden" name="repo" value=(repo);
+                                    button type="submit" { (crate::auth::i18n::favorites::remove_button_label(locale)) }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
+        }))
     }
 }
 

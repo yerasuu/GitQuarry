@@ -2,8 +2,8 @@
 //! all live under `/_account/*`, one section per sidebar entry
 //! (`crate::webui::account_settings_page`): [`avatar`] (`/_account/profile`,
 //! self-service avatar), [`appearance`] (`/_account/appearance`, text-size/
-//! theme/density), [`security`] (`/_account/security`, self-service
-//! pubkeys/GPG keys/secondary emails/password/TOTP), [`favorites`]
+//! theme/density), [`security`] (`/_account/security`, password and 2FA),
+//! [`keys`] (`/_account/keys`, SSH and GPG keys), [`favorites`]
 //! (`/_account/favorites`, self-service starred repos + visibility toggle),
 //! [`pat`] (`/_account/pat`, self-service local personal access tokens —
 //! separate from federation's own fine-grained tokens at `/_account/tokens`).
@@ -20,8 +20,10 @@ pub mod appearance;
 pub mod avatar;
 pub mod favorites;
 pub mod groups;
+pub mod keys;
 pub mod login;
 pub mod pat;
 pub mod profile;
+mod reauth;
 pub mod security;
 pub mod users;

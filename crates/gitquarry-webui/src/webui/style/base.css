@@ -166,6 +166,30 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .settings-sidebar a:hover { background: var(--surface-3); color: var(--fg); }
 .settings-sidebar a.active { background: var(--surface-3); color: var(--accent); font-weight: bold; }
 .settings-content { flex: 1; min-width: 0; }
+/* The page's own title, above its stack of `.settings-section` cards —
+   `account_settings_page` renders it from the same tuple the sidebar entry
+   comes from, so it is never a second, drift-prone copy of the name. */
+.settings-title { margin-top: 0; }
+/* One card per concern. `.card`/`.card-pad` (from `styler`) already own the
+   border/radius/padding/background; this only adds what stacking needs,
+   same division of labour `.sidebar-box`/`.repo-card` above already follow. */
+.settings-section { margin-bottom: 1rem; }
+.settings-section > h3 { margin-top: 0; }
+.settings-section > :last-child { margin-bottom: 0; }
+/* Labelled control: label above, optional hint below. The `div.field`
+   markup existed in `/_settings` and the pull-request forms long before
+   this rule did — with no CSS at all it was an unstyled block, which is why
+   every other form reached for placeholder-only inputs instead. Capped
+   width because a full-bleed text input on a wide screen is harder to scan,
+   not easier: the eye loses which label a control belongs to. */
+.field { display: flex; flex-direction: column; gap: 0.25em; margin-bottom: var(--gap); max-width: 34rem; }
+.field > label { color: var(--fg2); }
+.field > .hint { color: var(--muted); font-size: 0.85em; }
+/* A row of controls that belong to one action (a value plus its
+   confirmation, or a value plus the re-auth it needs) — stacked on mobile
+   by `mobile.css`, side by side when there is room. */
+.field-row { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: flex-end; }
+.field-row .field { margin-bottom: 0; }
 /* Shell (border/radius/padding/background/shadow) comes from `styler`'s
    own `.card`/`.card-pad` now (markup: `class="card card-pad sidebar-box"`)
    — `.sidebar-box` itself only keeps the spacing/layout `.card` doesn't
