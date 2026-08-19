@@ -132,6 +132,16 @@ pub struct PrComment {
     pub body: String,
     #[serde(default)]
     pub created_at: String,
+    /// `None` for a genuinely local comment; `Some(mirror_id)` for one
+    /// pulled in from that external mirror — `docs/external-mirror-concept.md`
+    /// Track B's anti-loop bookkeeping: the export filter ("which local
+    /// comments are mine to push out") is exactly `origin.is_none()`, so an
+    /// imported comment never gets echoed back to where it came from.
+    /// `#[serde(default)]` so every pre-existing stored comment
+    /// deserializes as `None`, same "genuinely local" meaning it always
+    /// had.
+    #[serde(default)]
+    pub origin: Option<String>,
     /// `None` for a plain thread comment; `Some(_)` for one left on a
     /// specific diff line. `#[serde(default)]` so every comment stored
     /// before line comments existed reads back as a plain thread comment.

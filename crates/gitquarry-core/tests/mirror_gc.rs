@@ -67,6 +67,7 @@ fn dummy_ctx(
         git_rate_limiter: Default::default(),
         allow_push_create: false,
         events: Default::default(),
+        mirror_sync: None,
     }
 }
 

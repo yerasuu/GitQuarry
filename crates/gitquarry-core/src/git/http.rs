@@ -222,6 +222,7 @@ async fn handle(
                     return Ok(too_many_requests());
                 }
             }
+            crate::mirror::sync_external_before_serving(ctx, &resolved).await;
             let mirror = ctx.open_mirror(&resolved).await?;
             match kind {
                 Kind::InfoRefs => {

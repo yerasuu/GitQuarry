@@ -449,6 +449,8 @@ pub(crate) async fn handler_repo(
         let granted =
             gitquarry_core::auth::access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
         let (manifest, _etag) = resolved.remote.get_manifest().await?;
+        let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
+        let pr_links_by_mirror = repo_settings::fetch_pr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
         let body = repo_settings::render_settings_page(
             &name,
             &config,
@@ -460,10 +462,13 @@ pub(crate) async fn handler_repo(
             repo_settings::RepoState {
                 manifest: &manifest,
                 granted: &granted,
+                mirrors: &mirrors_list,
+                pr_links: &pr_links_by_mirror,
             },
             repo_settings::PageChrome {
                 csrf: &crate::webui::csrf_field(&headers),
                 message: None,
+                pending_mirror_token: None,
                 retry: None,
                 locale,
             },

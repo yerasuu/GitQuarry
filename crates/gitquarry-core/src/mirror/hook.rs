@@ -513,6 +513,17 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
                 )
                 .await;
             }
+            // The push itself never triggers an external-mirror sync
+            // directly — this hook process is short-lived (git kills it as
+            // soon as it exits), so it can't hold a long-running task past
+            // its own return the way an in-process `tokio::spawn` inside
+            // the main server can. Whatever's wired into `ctx.mirror_sync`
+            // instead picks this repo up the next time anyone reads or
+            // writes it (`mirror::sync_external_before_serving`, called
+            // from `git::ssh`/`git::http` before every upload-pack/
+            // receive-pack) or on the periodic sweep `gitquarry-server`
+            // spawns in-process at startup — see
+            // `docs/mirror-external-extraction-concept.md`.
             Ok(true)
         }
         Cas::Conflict => {

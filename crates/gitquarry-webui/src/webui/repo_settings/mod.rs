@@ -47,6 +47,10 @@ pub mod lfs_limit;
 #[cfg(not(any(test, feature = "test-util")))]
 mod lfs_limit;
 #[cfg(any(test, feature = "test-util"))]
+pub mod mirrors;
+#[cfg(not(any(test, feature = "test-util")))]
+mod mirrors;
+#[cfg(any(test, feature = "test-util"))]
 pub mod move_repo;
 #[cfg(not(any(test, feature = "test-util")))]
 mod move_repo;
@@ -184,10 +188,11 @@ pub(crate) async fn handler_repo_conf_post(
         .map(|u| u.username)
         .unwrap_or_default();
 
-    let outcome = match form.action.as_str() {
-        "delete_repo" if form.confirm_name.trim() != name => {
-            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name))
-        }
+    let (outcome, pending_mirror_token) = match form.action.as_str() {
+        "delete_repo" if form.confirm_name.trim() != name => (
+            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name)),
+            None,
+        ),
         "delete_repo" => {
             gitquarry_core::domain::repo::delete(&ctx, &resolved, &name).await?;
             gitquarry_core::storage::audit::record(
@@ -201,9 +206,10 @@ pub(crate) async fn handler_repo_conf_post(
             .await;
             return Ok(Redirect::to("/").into_response());
         }
-        "purge_repo" if form.confirm_name.trim() != name => {
-            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name))
-        }
+        "purge_repo" if form.confirm_name.trim() != name => (
+            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name)),
+            None,
+        ),
         "purge_repo" => {
             gitquarry_core::domain::repo::purge(&ctx, &resolved, &name).await?;
             gitquarry_core::storage::audit::record(
@@ -231,7 +237,7 @@ pub(crate) async fn handler_repo_conf_post(
             return Ok(Redirect::to(&repo_link(&name, "settings", "").to_string()).into_response());
         }
         "move_repo" => match move_repo::move_repo(&ctx, &resolved, &name, &form, locale).await? {
-            Err(msg) => FlashOutcome::Invalid(msg),
+            Err(msg) => (FlashOutcome::Invalid(msg), None),
             Ok(new_name) => {
                 gitquarry_core::storage::audit::record(
                     ctx.backend().as_ref(),
@@ -245,26 +251,40 @@ pub(crate) async fn handler_repo_conf_post(
                 return Ok(Redirect::to(&format!("/{}", url_encode(&new_name))).into_response());
             }
         },
-        "set_perm" => permissions::save_perm(&ctx, &resolved, &name, &form, &actor, locale).await?,
-        "set_default_branch" => {
-            default_branch::save_default_branch(&ctx, &resolved, &name, &form, &actor, locale).await?
+        "set_perm" => (
+            permissions::save_perm(&ctx, &resolved, &name, &form, &actor, locale).await?,
+            None,
+        ),
+        "set_default_branch" => (
+            default_branch::save_default_branch(&ctx, &resolved, &name, &form, &actor, locale).await?,
+            None,
+        ),
+        "set_protected_branches" => (
+            protected_branches::save_protected_branches(&ctx, &resolved, &name, &form, &actor, locale).await?,
+            None,
+        ),
+        "set_protected_tags" => (
+            protected_tags::save_protected_tags(&ctx, &resolved, &name, &form, &actor, locale).await?,
+            None,
+        ),
+        "set_require_signed_commits" => (
+            require_signed_commits::save_require_signed_commits(&ctx, &resolved, &name, &form, &actor, locale).await?,
+            None,
+        ),
+        "set_topics" => (topics::save_topics(&ctx, &resolved, &name, &form, &actor).await?, None),
+        "set_required_reviewers" => (
+            required_reviewers::save_required_reviewers(&ctx, &resolved, &name, &form, &actor, locale).await?,
+            None,
+        ),
+        "set_labels" => (labels::save_labels(&ctx, &resolved, &name, &form, &actor).await?, None),
+        "set_lfs_max_blob_size" => (
+            lfs_limit::save_lfs_max_blob_size(&ctx, &resolved, &name, &form, &actor).await?,
+            None,
+        ),
+        "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => {
+            mirrors::save_mirror(&ctx, &resolved, &name, &form, &actor, locale).await?
         }
-        "set_protected_branches" => {
-            protected_branches::save_protected_branches(&ctx, &resolved, &name, &form, &actor, locale).await?
-        }
-        "set_protected_tags" => {
-            protected_tags::save_protected_tags(&ctx, &resolved, &name, &form, &actor, locale).await?
-        }
-        "set_require_signed_commits" => {
-            require_signed_commits::save_require_signed_commits(&ctx, &resolved, &name, &form, &actor, locale).await?
-        }
-        "set_topics" => topics::save_topics(&ctx, &resolved, &name, &form, &actor).await?,
-        "set_required_reviewers" => {
-            required_reviewers::save_required_reviewers(&ctx, &resolved, &name, &form, &actor, locale).await?
-        }
-        "set_labels" => labels::save_labels(&ctx, &resolved, &name, &form, &actor).await?,
-        "set_lfs_max_blob_size" => lfs_limit::save_lfs_max_blob_size(&ctx, &resolved, &name, &form, &actor).await?,
-        _ => general::save_conf(&ctx, &resolved, &name, &form, &actor).await?,
+        _ => (general::save_conf(&ctx, &resolved, &name, &form, &actor).await?, None),
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
     let flash = match &outcome {
@@ -285,6 +305,28 @@ pub(crate) async fn handler_repo_conf_post(
     let owner_display =
         access::resolve_owner_display(ctx.backend().as_ref(), &ctx.cipher, config.owner.as_ref()).await?;
     let granted = access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
+    let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
+    let pr_links_by_mirror = mirrors::fetch_pr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
+    // Async (`data-async-target="#mirrors-section"`, see `super::ASYNC_HEADER`'s
+    // own doc comment): `sync_mirror_now`/`delete_mirror` only ever change
+    // this one section, and everything `render_mirrors_section` needs is
+    // already fetched above regardless of which action fired -- no extra
+    // query for this path.
+    if headers.contains_key(super::ASYNC_HEADER) && matches!(form.action.as_str(), "sync_mirror_now" | "delete_mirror")
+    {
+        return Ok(axum::response::Html(
+            mirrors::render_mirrors_section(
+                &name,
+                &mirrors_list,
+                &pr_links_by_mirror,
+                &csrf_field(&headers),
+                pending_mirror_token.as_ref(),
+                locale,
+            )
+            .into_string(),
+        )
+        .into_response());
+    }
     // Async (`data-async-target="#perm-grid"`, see `super::ASYNC_HEADER`'s
     // own doc comment): `set_perm` (row save or the add-access form) only
     // ever changes this one grid, and `granted` is already fetched above
@@ -323,10 +365,13 @@ pub(crate) async fn handler_repo_conf_post(
         RepoState {
             manifest: &manifest,
             granted: &granted,
+            mirrors: &mirrors_list,
+            pr_links: &pr_links_by_mirror,
         },
         PageChrome {
             csrf: &csrf_field(&headers),
             message: Some(flash),
+            pending_mirror_token: pending_mirror_token.as_ref(),
             retry: retry_form,
             locale,
         },
@@ -358,7 +403,8 @@ pub struct RepoConfForm {
     /// single route, same convention `/_users` uses for its own actions.
     ///
     /// Wire name `conf_action`, not `action`: `permissions.rs`'s `set_perm`
-    /// forms are `data-async` -- `HTMLFormElement` is `[OverrideBuiltins]`, so a
+    /// forms and `mirrors.rs`'s `sync_mirror_now`/`delete_mirror` forms are
+    /// `data-async` -- `HTMLFormElement` is `[OverrideBuiltins]`, so a
     /// control literally named `action` shadows the form's own `.action`
     /// IDL property, and `style/app.js`'s `fetchFragment(form.action, ...)`
     /// got the `<input>` element instead of the URL, 404-ing. Every sub-form
@@ -425,6 +471,35 @@ pub struct RepoConfForm {
     new_namespace: String,
     #[serde(default)]
     new_local_name: String,
+    /// Only read by `edit_mirror`/`delete_mirror`/`sync_mirror_now`.
+    #[serde(default)]
+    mirror_id: String,
+    /// Only read by `edit_mirror` — CAS guard, same role `confirm_name`
+    /// plays for delete/move but for concurrency instead of confirmation.
+    #[serde(default)]
+    mirror_etag: String,
+    /// Only read by `add_mirror`/`edit_mirror`.
+    #[serde(default)]
+    remote_url: String,
+    /// Only read by `add_mirror`/`edit_mirror` — empty on an edit means
+    /// "keep the currently stored token", never "clear it" (there's no way
+    /// to have an enabled mirror with no token at all).
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    direction: String,
+    #[serde(default)]
+    label: String,
+    /// Only read by `add_mirror`/`edit_mirror` — checkbox, present ("1")
+    /// only if checked.
+    #[serde(default)]
+    mirror_enabled: String,
+    /// Only read by `add_mirror`/`edit_mirror` — checkbox, present ("1")
+    /// only if checked. Track B opt-in, see `ExternalMirror::sync_pull_requests`.
+    #[serde(default)]
+    sync_pull_requests: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every
@@ -436,6 +511,14 @@ pub(crate) struct Namespaces<'a> {
     pub group_names: &'a [String],
 }
 
+/// Re-exported so `webui::repo`'s own GET handler (a sibling module, not a
+/// descendant of this one) can fetch the same data
+/// [`handler_repo_conf_post`] does without `mirrors` itself needing to be
+/// anything but private — same "cross into a submodule only through a
+/// `pub(crate)` item right here" convention every other name reaching
+/// outside this module already follows.
+pub(crate) use mirrors::fetch_pr_links_by_mirror;
+
 /// `manifest`/`granted` always travel together into [`render_settings_page`]
 /// too — this repo's own live branch list and its own permission grants —
 /// bundled for the same reason [`Namespaces`] is: one struct slot instead of
@@ -443,6 +526,12 @@ pub(crate) struct Namespaces<'a> {
 pub(crate) struct RepoState<'a> {
     pub manifest: &'a Manifest,
     pub granted: &'a [(User, Permission)],
+    /// Each mirror with its current etag — the edit form's CAS guard, see
+    /// `mirrors::render_mirror_form`.
+    pub mirrors: &'a [(gitquarry_mirror_external::access::ExternalMirror, String)],
+    /// Track B: every mirror's linked PRs, keyed by mirror id — see
+    /// `mirrors::fetch_pr_links_by_mirror`.
+    pub pr_links: &'a std::collections::HashMap<String, Vec<gitquarry_mirror_external::access::ExternalPrLink>>,
 }
 
 /// `csrf`/`message`/`locale` bundled so [`render_settings_page`] doesn't
@@ -452,6 +541,12 @@ pub(crate) struct RepoState<'a> {
 pub(crate) struct PageChrome<'a> {
     pub csrf: &'a str,
     pub message: Option<Flash<'a>>,
+    /// `Some((mirror_id, token))` for exactly one response: right after
+    /// `add_mirror`/`edit_mirror` sets a token, never on a later page load
+    /// (that would mean fetching a real, live, reversible secret back out
+    /// of storage just to redisplay it) — same "shown once" discipline
+    /// `auth::web::security`'s `pending_totp_secret` already established.
+    pub pending_mirror_token: Option<&'a (String, String)>,
     /// `Some(&form)` only when the just-submitted action was rejected or
     /// hit a CAS conflict — lets whichever single sub-form actually failed
     /// re-render the user's own typed values instead of the stale stored
@@ -470,10 +565,16 @@ pub(crate) fn render_settings_page(
     chrome: PageChrome<'_>,
 ) -> Markup {
     let Namespaces { users, group_names } = namespaces;
-    let RepoState { manifest, granted } = state;
+    let RepoState {
+        manifest,
+        granted,
+        mirrors,
+        pr_links,
+    } = state;
     let PageChrome {
         csrf,
         message,
+        pending_mirror_token,
         retry,
         locale,
     } = chrome;
@@ -497,6 +598,7 @@ pub(crate) fn render_settings_page(
             None,
             permissions::render_perm_grid(repo_name, granted, csrf, locale),
         ))
+        (mirrors::render_mirrors_section(repo_name, mirrors, pr_links, csrf, pending_mirror_token, locale))
         (move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale))
         (danger_zone::render_delete_repo_form(repo_name, config.deleted_at, csrf, retry_for("delete_repo"), retry_for("purge_repo"), locale))
     }

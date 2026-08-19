@@ -1,0 +1,36 @@
+[package]
+name = "gitquarry-mirror-external"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "External-forge ref/PR mirror sync (GitHub/GitLab/Codeberg) -- a library, not its own process; gitquarry-server wires it into AppContext::mirror_sync at startup, since gitquarry-core can't depend on it directly (this crate depends on core)"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+gitquarry-core = { path = "../gitquarry-core" }
+gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
+gitquarry-i18n = { path = "../gitquarry-i18n" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+anyhow = "1.0.104"
+futures = "0.3.33"
+rand = "0.10.2"
+serde = { version = "1.0.229", features = ["derive"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
+
+[features]
+# Un-gates otherwise-private items for this crate's own tests/*.rs — same
+# reasoning gitquarry-core's own `test-util` feature has.
+test-util = ["gitquarry-core/test-util"]
+
+[dev-dependencies]
+gitquarry-mirror-external = { path = ".", features = ["test-util"] }
+async-trait = "0.1.91"
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

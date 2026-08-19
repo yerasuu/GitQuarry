@@ -312,6 +312,7 @@ impl ConnHandler {
             None
         };
 
+        crate::mirror::sync_external_before_serving(&self.ctx, &resolved).await;
         let mirror = self.ctx.open_mirror(&resolved).await?;
         let mut child = spawn_git_subcommand(
             &self.ctx,

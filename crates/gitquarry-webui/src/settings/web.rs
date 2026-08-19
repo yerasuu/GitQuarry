@@ -118,7 +118,8 @@ pub(crate) async fn handler_settings_post(
     // secret back, since `type="password"` hides it from the screen but not
     // from the page source, where it would sit in plain text for anything
     // that reads the DOM or caches the response. So a blank submission
-    // means "leave it as it is". The one exception is blanking it alongside the
+    // means "leave it as it is" — the same shape the external-mirror token
+    // field already uses. The one exception is blanking it alongside the
     // rest of the OIDC block, which reads as "turn OIDC off" and clears the
     // secret too rather than stranding it against the all-4-or-none rule
     // below.

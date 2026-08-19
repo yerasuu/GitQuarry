@@ -269,6 +269,41 @@ async fn reviews_and_comments_are_separate_threads() {
     assert_eq!(list_pr_comments(&backend, &cipher, &uid, 1).await.unwrap().len(), 1);
     assert_eq!(list_pr_reviews(&backend, &cipher, &uid, 1).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn origin_field_roundtrips_and_defaults_to_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let cipher = Arc::new(cipher);
+    let uid = Uid::from("team/proj".to_string());
+
+    let local = PrComment {
+        author: "alice".to_string(),
+        body: "local".to_string(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+        origin: None,
+        ..Default::default()
+    };
+    let imported = PrComment {
+        author: "bob".to_string(),
+        body: "from github".to_string(),
+        created_at: "2024-01-01T00:00:01Z".to_string(),
+        origin: Some("m1".to_string()),
+        ..Default::default()
+    };
+    add_pr_comment(backend.as_ref(), &cipher, &uid, 1, &local)
+        .await
+        .unwrap();
+    add_pr_comment(backend.as_ref(), &cipher, &uid, 1, &imported)
+        .await
+        .unwrap();
+
+    let comments = list_pr_comments(&backend, &cipher, &uid, 1).await.unwrap();
+    assert_eq!(comments.iter().filter(|c| c.origin.is_none()).count(), 1);
+    assert_eq!(comments.iter().filter(|c| c.origin.as_deref() == Some("m1")).count(), 1);
+}
+
 #[tokio::test]
 async fn an_anchor_roundtrips_alongside_plain_thread_comments() {
     let dir = tempfile::tempdir().unwrap();

@@ -50,6 +50,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         allow_push_create: false,
         events: Default::default(),
+        mirror_sync: None,
     }
 }
 

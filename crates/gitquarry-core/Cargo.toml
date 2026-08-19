@@ -65,6 +65,7 @@ dirs = "6.0.0"
 tempfile = "3.27.0"
 gitquarry-gpg = { path = "../gitquarry-gpg" }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
+gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 
 # Release source-archive generation: one `git archive --format=tar` decode,

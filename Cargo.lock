@@ -1786,6 +1786,7 @@ dependencies = [
  "gitquarry-core",
  "gitquarry-domain",
  "gitquarry-i18n",
+ "gitquarry-mirror-external",
  "gitquarry-webui",
  "reqwest 0.13.4",
  "s3db",
@@ -1824,6 +1825,7 @@ dependencies = [
  "futures",
  "gitquarry-auth-crypto",
  "gitquarry-core",
+ "gitquarry-forge-clients",
  "gitquarry-gpg",
  "gitquarry-i18n",
  "gitquarry-wire",
@@ -1857,6 +1859,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitquarry-forge-clients"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "gitquarry-forge-clients",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gitquarry-gpg"
 version = "0.2.0"
 dependencies = [
@@ -1868,6 +1882,25 @@ dependencies = [
 [[package]]
 name = "gitquarry-i18n"
 version = "0.2.0"
+
+[[package]]
+name = "gitquarry-mirror-external"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "gitquarry-core",
+ "gitquarry-forge-clients",
+ "gitquarry-i18n",
+ "gitquarry-mirror-external",
+ "rand 0.10.2",
+ "s3db",
+ "s3db-crypto",
+ "serde",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "gitquarry-webui"
@@ -1883,6 +1916,7 @@ dependencies = [
  "gitquarry-core",
  "gitquarry-domain",
  "gitquarry-i18n",
+ "gitquarry-mirror-external",
  "gitquarry-webui",
  "gitquarry-wire",
  "maud",
