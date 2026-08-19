@@ -125,3 +125,84 @@ fn render_user_offers_admin_totp_disable_only_when_enabled() {
             .contains(r#"value="disable_totp""#)
     );
 }
+
+fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
+    let backend: std::sync::Arc<dyn gitquarry_core::storage::Backend> = std::sync::Arc::new(
+        gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
+            bucket: root.to_string_lossy().to_string(),
+            engine: gitquarry_core::config::LocalEngine::Files,
+        }),
+    );
+    let cipher = std::sync::Arc::new(
+        gitquarry_core::crypto::Cipher::derive("test passphrase", &[6u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
+    );
+    gitquarry_core::app::AppContext {
+        bucket: "test".to_string(),
+        ssh_bind: "127.0.0.1:2222".to_string(),
+        mirrors_root: root.to_path_buf(),
+        config_path: root.join("gitquarry.toml"),
+        exe_path: root.join("gitquarry"),
+        backend,
+        locks: Default::default(),
+        cipher,
+        mirror_max_age: std::time::Duration::from_secs(60),
+        mirror_max_size_bytes: 0,
+        oidc: None,
+        login_attempts: Default::default(),
+        git_rate_limiter: Default::default(),
+        ci: None,
+        artifacts: None,
+        tracker: None,
+        allow_push_create: false,
+        events: Default::default(),
+        mirror_sync: None,
+    }
+}
+
+#[tokio::test]
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    domain::user::create(
+        &ctx,
+        domain::user::NewUser {
+            username: "alice",
+            email: None,
+            pubkey: None,
+            password_plain: None,
+            is_admin: false,
+            repos_field: "",
+            locale: gitquarry_i18n::Locale::En,
+        },
+    )
+    .await
+    .unwrap();
+
+    let form = UsersForm {
+        csrf: String::new(),
+        username: "alice".to_string(),
+        email: String::new(),
+        pubkey: String::new(),
+        password: String::new(),
+        is_admin: String::new(),
+        repos: String::new(),
+        fingerprint: String::new(),
+        repo: String::new(),
+        perm: String::new(),
+        storage_quota: String::new(),
+    };
+    let _ = apply_users_action(&ctx, &form, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap();
+    let (user, _) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap();
+    let user = user.unwrap();
+    assert!(!user.is_admin);
+
+    let _ = apply_users_action(&ctx, &form, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap();
+    let (user, _) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap();
+}

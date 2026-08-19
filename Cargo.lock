@@ -1794,6 +1794,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitquarry-artifacts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dirs",
+ "gitquarry-artifacts",
+ "gitquarry-wire",
+ "reqwest 0.13.4",
+ "s3db",
+ "s3db-crypto",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower",
+]
+
+[[package]]
 name = "gitquarry-auth-crypto"
 version = "0.1.0"
 dependencies = [

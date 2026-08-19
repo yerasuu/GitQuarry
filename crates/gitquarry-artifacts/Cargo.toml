@@ -1,0 +1,45 @@
+[package]
+name = "gitquarry-artifacts"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Package registry (npm/raw) + CI build-artifact storage for gitquarry, one content-addressed blob service — talks to gitquarry-core only over loopback HTTP (docs/artifacts-concept.md)"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+gitquarry-wire = { path = "../gitquarry-wire" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "io-util"] }
+axum = { version = "0.8.9", features = ["multipart"] }
+# Outbound calls to gitquarry-core's own loopback `/_internal/*` API —
+# rustls-only, same pin reasoning as gitquarry-core's own `reqwest`
+# dependency.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
+anyhow = "1.0.104"
+dirs = "6.0.0"
+sha2 = "0.11.0"
+tempfile = "3.27.0"
+
+[features]
+# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
+# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
+# across the crate boundary that external integration tests are.
+test-util = []
+
+[dev-dependencies]
+# Self-dependency so `cargo test` enables this crate's own `test-util`
+# automatically for its tests/*.rs.
+gitquarry-artifacts = { path = ".", features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

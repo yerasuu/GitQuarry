@@ -76,6 +76,13 @@ pub struct AppContext {
     /// Failed-password-login tracker for `auth::web::login`'s local password
     /// form — see [`LoginAttempts`].
     pub login_attempts: LoginAttempts,
+    /// this before forwarding anything; absent, those routes simply don't
+    /// "`None` = feature fully off" pattern).
+    /// `docs/ci-cd-concept.md`.
+    /// `None` unless `[artifacts]` is configured — see [`ArtifactsLink`].
+    /// Every `/_packages/*` proxy route in `webui` checks this before
+    /// forwarding anything, same "`None` = feature fully off" pattern
+    pub artifacts: Option<ArtifactsLink>,
     /// `config::Config::allow_push_create` — gates the ssh:// receive-pack
     /// handler's implicit "first push creates the repo" branch. `false` by
     /// default (see that field's doc comment for why).
@@ -86,6 +93,19 @@ pub struct AppContext {
     /// Fan-out point for domain state changes (push, PR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,
+}
+
+/// What core needs to reach `gitquarry-artifacts`'s own loopback API — the
+/// *outbound* half of the IPC boundary. `docs/artifacts-concept.md`.
+#[derive(Debug, Clone)]
+pub struct ArtifactsLink {
+    /// `gitquarry-artifacts.toml`'s `listen` address, as a full
+    /// `http://host:port` base URL — `config::ArtifactsSection::artifacts_url`.
+    pub base_url: String,
+    /// Shared secret sent as `X-Internal-Token` — must equal
+    /// `gitquarry-artifacts`'s own `internal_token`.
+    pub internal_token: String,
+    pub http: reqwest::Client,
 }
 
 /// Local mirror ready to use, with the repo's lock held. While this exists,

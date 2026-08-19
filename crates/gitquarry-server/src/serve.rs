@@ -101,69 +101,87 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // verifies everything against S3 for real, writes the config, and
     // returns exactly what the branch below would've loaded from it — same
     // process, no restart needed to pick up what it just wrote.
-    let (bucket, _bucket_cfg, backend, cipher, allow_push_create) = if config_path.is_file() {
-        let conf = config::Config::load_from(&config_path)?;
-        let allow_push_create = conf.allow_push_create();
-        config::warn_if_world_readable(&config_path);
-        // Without --bucket: if the config only has one configured, there's no
-        // ambiguity.
-        let bucket = match args.bucket {
-            Some(b) => b,
-            None => conf
-                .only_bucket_name()
-                .map(str::to_string)
-                .context("--bucket NAME required (config has more than one bucket)")?,
-        };
-        // Validates early, with a good error message, before binding ports.
-        let bucket_cfg = conf.bucket(&bucket)?.clone();
-        let backend = storage::build_backend(&bucket_cfg);
-        // Derives (or creates, if the bucket is new) this bucket's cipher.
-        // Fails hard if the passphrase doesn't match: starting with the
-        // wrong key would leave every operation failing to decrypt, better
-        // to cut it off here with a clear message than after binding any
-        // port.
-        let cipher =
-            gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?;
-        // Config exists and connects fine, but the bucket itself has never
-        // had an admin user created (infra-as-code wrote `gitquarry.toml`
-        // ahead of the first real deploy, or it points at a brand-new
-        // bucket) — same first-run wizard as a missing config, just
-        // pre-filled with what's already known instead of starting blank.
-        if access::list_usernames(backend.as_ref()).await?.is_empty() {
-            let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
-            let outcome = setup::run(
-                &config_path,
-                &web_bind,
-                Some(setup::Prefill {
-                    name: bucket,
+        if config_path.is_file() {
+            let conf = config::Config::load_from(&config_path)?;
+            let artifacts_cfg = conf.artifacts().cloned();
+            let allow_push_create = conf.allow_push_create();
+            config::warn_if_world_readable(&config_path);
+            // Without --bucket: if the config only has one configured, there's no
+            // ambiguity.
+            let bucket = match args.bucket {
+                Some(b) => b,
+                None => conf
+                    .only_bucket_name()
+                    .map(str::to_string)
+                    .context("--bucket NAME required (config has more than one bucket)")?,
+            };
+            // Validates early, with a good error message, before binding ports.
+            let bucket_cfg = conf.bucket(&bucket)?.clone();
+            let backend = storage::build_backend(&bucket_cfg);
+            // Derives (or creates, if the bucket is new) this bucket's cipher.
+            // Fails hard if the passphrase doesn't match: starting with the
+            // wrong key would leave every operation failing to decrypt, better
+            // to cut it off here with a clear message than after binding any
+            // port.
+            let cipher =
+                gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase)
+                    .await?;
+            // Config exists and connects fine, but the bucket itself has never
+            // had an admin user created (infra-as-code wrote `gitquarry.toml`
+            // ahead of the first real deploy, or it points at a brand-new
+            // bucket) — same first-run wizard as a missing config, just
+            // pre-filled with what's already known instead of starting blank.
+            if access::list_usernames(backend.as_ref()).await?.is_empty() {
+                let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
+                let outcome = setup::run(
+                    &config_path,
+                    &web_bind,
+                    Some(setup::Prefill {
+                        name: bucket,
+                        bucket_cfg,
+                    }),
+                )
+                .await?;
+                (
+                    outcome.bucket,
+                    outcome.bucket_cfg,
+                    outcome.backend,
+                    outcome.cipher,
+                    artifacts_cfg,
+                    allow_push_create,
+                )
+            } else {
+                (
+                    bucket,
                     bucket_cfg,
-                }),
-            )
-            .await?;
+                    backend,
+                    cipher,
+                    federation_cfg,
+                    ci_cfg,
+                    artifacts_cfg,
+                    tracker_cfg,
+                    allow_push_create,
+                )
+            }
+        } else {
+            // First run, no `gitquarry.toml` at all yet — `[federation]`/`[ci]`/
+            // `[tracker]` can't exist either, the setup wizard writes a
+            // bucket-only config, so `allow_push_create` is off too until an
+            // operator opts in by hand.
+            let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
+            let outcome = setup::run(&config_path, &web_bind, None).await?;
             (
                 outcome.bucket,
                 outcome.bucket_cfg,
                 outcome.backend,
                 outcome.cipher,
-                allow_push_create,
+                None,
+                None,
+                None,
+                None,
+                false,
             )
-        } else {
-            (bucket, bucket_cfg, backend, cipher, allow_push_create)
-        }
-    } else {
-        // First run, no `gitquarry.toml` at all yet — the setup wizard
-        // writes a bucket-only config, so `allow_push_create` is off too
-        // until an operator opts in by hand.
-        let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
-        let outcome = setup::run(&config_path, &web_bind, None).await?;
-        (
-            outcome.bucket,
-            outcome.bucket_cfg,
-            outcome.backend,
-            outcome.cipher,
-            false,
-        )
-    };
+        };
     let cipher = Arc::new(cipher);
 
     // Remote config (.conf/global.json in the bucket itself, editable from
@@ -248,6 +266,24 @@ pub async fn run(rest: &[String]) -> Result<()> {
         Err(e) => eprintln!("gitquarry: warning: stale-transaction recovery sweep failed, continuing: {e:#}"),
     }
 
+    // behind interior mutability) but from the same
+    // spawns below also consume — `.as_ref()` here so those moves stay
+    // available.
+        internal_token: f.internal_token.clone(),
+        http: reqwest::Client::new(),
+    });
+        internal_token: c.internal_token.clone(),
+        http: reqwest::Client::new(),
+    });
+    let artifacts_link = artifacts_cfg.as_ref().map(|a| gitquarry_core::app::ArtifactsLink {
+        base_url: a.artifacts_url.clone(),
+        internal_token: a.internal_token.clone(),
+        http: reqwest::Client::new(),
+    });
+        internal_token: t.internal_token.clone(),
+        http: reqwest::Client::new(),
+    });
+
     let ctx = Arc::new(AppContext {
         bucket,
         ssh_bind: ssh_bind.clone(),
@@ -262,6 +298,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         oidc,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        artifacts: artifacts_link,
         allow_push_create,
         events: Default::default(),
     });
@@ -270,6 +307,52 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // retries next tick, it must never take ssh:///web down with it.
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
+    // second port nobody's using. A bind failure here is fatal (unlike the
+    // come up.
+        let internal_ctx = Arc::clone(&ctx);
+        tokio::spawn(async move {
+            if let Err(e) =
+            {
+                eprintln!("gitquarry: fatal: internal API server failed: {e:#}");
+                std::process::exit(1);
+            }
+        });
+    }
+    // IPC design decision), so both can be configured independently without
+    // coordinating a single shared token between three files.
+        let internal_ctx = Arc::clone(&ctx);
+        let internal_bind = ci.internal_bind.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                gitquarry_core::internal_api::run_server(&internal_bind, internal_ctx, ci.internal_token).await
+            {
+                eprintln!("gitquarry: fatal: internal API server (ci) failed: {e:#}");
+                std::process::exit(1);
+            }
+        });
+    }
+    if let Some(artifacts) = artifacts_cfg {
+        let internal_ctx = Arc::clone(&ctx);
+        let internal_bind = artifacts.internal_bind.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                gitquarry_core::internal_api::run_server(&internal_bind, internal_ctx, artifacts.internal_token).await
+            {
+                eprintln!("gitquarry: fatal: internal API server (artifacts) failed: {e:#}");
+                std::process::exit(1);
+            }
+        });
+    }
+    // bind/token.
+        let internal_ctx = Arc::clone(&ctx);
+        tokio::spawn(async move {
+            if let Err(e) =
+            {
+                std::process::exit(1);
+            }
+        });
+    }
+
     // The two servers are infinite loops: if either returns, it's an error
     // and there's no point serving just the other. `shutdown_signal`
     // resolving is not an error: it's how `docker stop`/`podman stop` (SIGTERM)

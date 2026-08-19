@@ -49,7 +49,7 @@ impl AppError {
         }
     }
 
-    /// `[tracker]` compiled in but not configured for
+    /// `[tracker]`/`[ci]`/`[artifacts]` compiled in but not configured for
     /// this deploy — an operator condition, not a client mistake, so 503
     /// rather than 400/404. An `AppError` so tracker's render functions
     /// (which return `Result<String, AppError>`, not a full `Response`) can

@@ -164,6 +164,44 @@ pub async fn effective_permission_for(
     effective_permission_for_user(backend, cipher, &user, repo).await
 }
 
+/// `user`'s effective permission over a whole namespace (`owner`: a user's
+/// own namespace or a group they belong to) rather than one specific repo —
+/// what `gitquarry-artifacts` needs to authorize a package publish, since a
+/// package belongs to a namespace, not any one repo
+/// (`docs/artifacts-concept.md`). `Owner` if `owner` is the user themself or
+/// a group they own; else the highest [`Permission`] among the group's
+/// *org-wide* teams (`Team::repos: None` — a team scoped to specific repos
+/// doesn't grant namespace-wide publish rights) `user` belongs to.
+/// Deliberately **no** `user.default_permission` fallback, unlike
+/// [`effective_permission`]'s per-repo resolution: that would let any user
+/// publish under any namespace by default, which a per-repo default
+/// permission was never meant to authorize.
+pub async fn effective_namespace_permission_for_user(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    user: &User,
+    owner: &crate::storage::entities::OwnerRef,
+) -> Result<Option<Permission>> {
+    match owner {
+        crate::storage::entities::OwnerRef::User(uid) => Ok((*uid == user.uid).then_some(Permission::Owner)),
+        crate::storage::entities::OwnerRef::Group(uid) => {
+            let Some(group) = super::groups::resolve_group_uid(backend, cipher, uid).await? else {
+                return Ok(None);
+            };
+            if group.owners.contains(&user.uid) {
+                return Ok(Some(Permission::Owner));
+            }
+            Ok(group
+                .teams
+                .iter()
+                .filter(|t| t.members.contains(&user.uid))
+                .filter(|t| t.repos.is_none())
+                .map(|t| t.permission)
+                .max())
+        }
+    }
+}
+
 /// Whether `username` can manage `group_name` itself — fetches just the
 /// acting user's own record plus the one named group's. See
 /// [`can_manage_group`] for the actual decision logic.

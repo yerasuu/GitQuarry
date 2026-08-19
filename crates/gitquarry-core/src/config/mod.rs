@@ -36,10 +36,34 @@ pub struct BucketConfig {
     pub passphrase: String,
 }
 
+/// `[artifacts]` in `gitquarry.toml` — optional, same "`None` = feature
+/// fully off" pattern `oidc: Option<OidcClient>` establishes. Absent
+/// means core has no way to reach `gitquarry-artifacts`'s permission-lookup
+/// endpoint and its own `/_packages/*` proxy routes just 503. See
+/// `docs/artifacts-concept.md`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtifactsSection {
+    /// Loopback address a separate `/_internal/*` server (its own instance)
+    /// binds to.
+    pub internal_bind: String,
+    /// Shared secret gating that server, manually kept identical to
+    /// `gitquarry-artifacts.toml`'s own `internal_token`.
+    pub internal_token: String,
+    /// `gitquarry-artifacts`'s own loopback address (its `listen`) — where
+    /// core forwards the `/_packages/*` proxy routes it registers on its
+    /// public router, once that phase lands.
+    pub artifacts_url: String,
+}
+
+// pub (and `buckets` pub too) isn't just for tests/config.rs: RawConfig is
+// also used unconditionally by `Config::load_from` below, so it can't be
+// cfg-gated to test builds only.
 #[derive(Debug, Deserialize)]
 pub struct RawConfig {
     #[serde(default)]
     pub buckets: BTreeMap<String, BucketConfig>,
+    #[serde(default)]
+    artifacts: Option<ArtifactsSection>,
     /// Whether `git push` to a repo name that doesn't exist yet creates it
     /// (same as `webui::repo_new`, just reached via `git push` instead of
     /// `/_new`). Defaults to off: a typo'd repo name in the push URL should
@@ -61,6 +85,7 @@ struct RawConfigOut<'a> {
 #[derive(Debug)]
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
+    artifacts: Option<ArtifactsSection>,
     allow_push_create: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
     /// without guessing which candidate won.
@@ -93,9 +118,16 @@ impl Config {
         }
         Ok(Config {
             buckets: raw.buckets,
+            artifacts: raw.artifacts,
             allow_push_create: raw.allow_push_create,
             path: path.to_path_buf(),
         })
+    }
+
+    /// `None` unless `[artifacts]` is present in `gitquarry.toml` — see
+    /// [`ArtifactsSection`]'s own doc comment.
+    pub fn artifacts(&self) -> Option<&ArtifactsSection> {
+        self.artifacts.as_ref()
     }
 
     /// See [`RawConfig::allow_push_create`]'s doc comment.

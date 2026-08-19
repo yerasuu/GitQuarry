@@ -29,6 +29,8 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        ci: None,
+        artifacts: None,
         allow_push_create: false,
         events: Default::default(),
     }
