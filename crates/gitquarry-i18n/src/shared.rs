@@ -1006,15 +1006,6 @@ msg!(
 );
 
 msg!(
-    /// `domain::pull_request::merge`'s `MergeTreeOutcome::Conflicted` case:
-    /// `paths` is the conflicting files, already comma-joined by the caller.
-    pull_request_merge_conflict(paths: &str) {
-        Locale::Es => "no se puede fusionar automaticamente, conflictos en: {paths}",
-        Locale::En => "can't auto-merge, conflicts in: {paths}",
-    }
-);
-
-msg!(
     /// `domain::pull_request::merge`: the PR is still a draft — flip it
     /// with `domain::pull_request::mark_ready` before merging.
     pull_request_is_draft() {

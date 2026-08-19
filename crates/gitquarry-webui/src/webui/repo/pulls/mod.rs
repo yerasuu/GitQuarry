@@ -49,6 +49,63 @@ fn status_badge_class(status: PrStatus) -> &'static str {
 /// at once (status text, which button shows next, whether the merged-by
 /// line appears), not just one button's own label the way star/watch/theme
 /// do, so the whole block has to refresh together.
+/// What to show when the PR can't fast-forward cleanly: which files
+/// collide, and the exact commands to resolve it locally.
+///
+/// Everything here used to be a `400` page thrown by the merge handler,
+/// which meant the one moment a reader most needs the file list is the one
+/// moment they get taken off the page — and a reload lost it entirely.
+/// It's part of the PR now, visible before anyone presses merge.
+///
+/// The instructions are deliberately the plain git ones rather than a
+/// button: this web UI never writes repository content (see
+/// `webui`'s own module doc), so resolving a conflict is a local
+/// operation, and pretending otherwise would be the one place the UI
+/// promised an edit it can't perform.
+fn render_conflict_notice(
+    repo_name: &str,
+    pr: &gitquarry_core::storage::pull_requests::PullRequestMeta,
+    paths: &[String],
+    locale: Locale,
+) -> Markup {
+    html! {
+        div class="alert alert-warn" {
+            span class="alert-body" {
+                strong { (t::conflicts_heading(locale)) }
+                " " (t::conflicts_intro(locale, pr.target_branch.as_str()))
+            }
+        }
+        ul class="conflict-paths" {
+            @for path in paths {
+                li { code { (path) } }
+            }
+        }
+        details class="conflict-help" {
+            summary { (t::conflicts_howto_summary(locale)) }
+            pre { (conflict_commands(repo_name, pr)) }
+        }
+    }
+}
+
+/// The copy-pasteable resolution sequence. `repo_name` only appears in a
+/// comment line, never interpolated into a shell word that could run —
+/// nothing here is executed by the server, but a repo name reaching a
+/// `pre` block is still untrusted text, and `maud` escapes it on the way
+/// out.
+fn conflict_commands(repo_name: &str, pr: &gitquarry_core::storage::pull_requests::PullRequestMeta) -> String {
+    format!(
+        "# {repo_name}\n\
+         git fetch origin\n\
+         git switch {source}\n\
+         git merge origin/{target}\n\
+         # resolve the files listed above, then:\n\
+         git add -A && git commit\n\
+         git push origin {source}\n",
+        source = pr.source_branch,
+        target = pr.target_branch,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_pr_actions(
     pr: &gitquarry_core::storage::pull_requests::PullRequestMeta,
@@ -553,6 +610,14 @@ async fn render_pull_detail_impl(
         .map(|l| (l.name.as_str(), l.color.as_str()))
         .collect();
     let d = domain::pull_request::diff(ctx, target, git_dir, &pr).await?;
+    // Only for an open PR: a merged or closed one has nothing left to
+    // merge, so the probe would be a `git merge-tree` spawn per render for
+    // an answer nobody can act on.
+    let conflicts = if pr.status == PrStatus::Open {
+        domain::pull_request::conflicts(ctx, target, git_dir, &pr).await?
+    } else {
+        None
+    };
     let commit_avatars = super::components::commit_avatars(ctx, git_dir, &d.commits).await;
     let comments = domain::pull_request::list_comments(ctx, target, number).await?;
     let reviews = domain::pull_request::list_reviews(ctx, target, number).await?;
@@ -635,6 +700,9 @@ async fn render_pull_detail_impl(
         }
         @if !pr.description.is_empty() {
             p { (PreEscaped(&description_html)) }
+        }
+        @if let Some(paths) = &conflicts {
+            (render_conflict_notice(repo_name, &pr, paths, locale))
         }
         (render_pr_actions(
             &pr,

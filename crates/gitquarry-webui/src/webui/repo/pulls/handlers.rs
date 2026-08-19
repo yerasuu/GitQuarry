@@ -676,11 +676,12 @@ pub(crate) async fn handler_merge_post(
                 let _ = domain::repo::delete_branch(&resolved, &branch, locale).await;
             }
         }
-        domain::pull_request::MergeOutcome::Conflict(paths) => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "{}",
-                gitquarry_i18n::shared::pull_request_merge_conflict(locale, &paths.join(", "))
-            )));
+        domain::pull_request::MergeOutcome::Conflict(_) => {
+            // Back to the PR, which now renders the conflicting files and
+            // how to resolve them (`pulls::render_conflict_notice`) — the
+            // `400` this used to return put that same list on a page the
+            // reader had to leave, and losing it on reload.
+            return Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response());
         }
     }
     if headers.contains_key(ASYNC_HEADER) {

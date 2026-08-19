@@ -666,6 +666,43 @@ pub async fn diff(
     Ok(PrDiff { stat, diff, commits })
 }
 
+/// Whether this PR would merge cleanly right now: `None` for a clean
+/// merge, `Some(paths)` for the files that conflict. Dry-run only —
+/// `git merge-tree` writes nothing beyond git's own scratch objects, so
+/// unlike [`merge`] this can be called on a plain page render.
+///
+/// Deliberately probes the `Merge` strategy alone even though a PR can be
+/// merged three ways: `Squash` computes the identical tree (it differs
+/// only in how many parents the commit gets), and `Rebase` replays commit
+/// by commit, so a conflict there depends on which commit you stop at.
+/// Reporting "merge and squash would conflict here" is honest for two of
+/// the three and never a false *clean* for the third — a rebase that
+/// conflicts always has at least one conflicting path in this set too.
+///
+/// Errors like a deleted target branch surface as `Ok(None)`, not `Err`:
+/// this only ever decorates a page, and a merge attempt reports the real
+/// reason properly. A view must not 500 because a probe couldn't run.
+pub async fn conflicts(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    git_dir: &std::path::Path,
+    pr: &PullRequestMeta,
+) -> Result<Option<Vec<String>>> {
+    let head_ref = fetch_source_ref(ctx, target, git_dir, pr).await?;
+    let (manifest, _etag) = target.remote.get_manifest().await?;
+    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", pr.target_branch)).cloned() else {
+        return Ok(None);
+    };
+    let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
+        return Ok(None);
+    };
+    match git::merge_tree(git_dir, &target_sha, &head_sha, None).await {
+        Ok(git::MergeTreeOutcome::Conflicted(paths)) => Ok(Some(paths)),
+        Ok(git::MergeTreeOutcome::Clean(_)) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
 pub enum MergeOutcome {
     Merged(String),
     Conflict(Vec<String>),

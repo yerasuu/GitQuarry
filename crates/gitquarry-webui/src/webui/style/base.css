@@ -222,6 +222,15 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    name/description/meta (stars, primary language dot, topics) stacked the
    way Codeberg/Forgejo's dashboard lists repos, reusing `.decoration`
    (topics) and `.lang-swatch` (language dot) unmodified. */
+/* Conflicting-file list on a pull request that can't fast-forward, plus
+   the collapsed how-to under it. A plain list, not a table: it is one
+   column of paths and nothing else, and it sits directly under the warning
+   alert that introduces it. */
+.conflict-paths { margin: 0.4rem 0 0.6rem; padding-left: 1.4em; }
+.conflict-paths li { margin: 0.15em 0; }
+.conflict-help { margin-bottom: 1rem; }
+.conflict-help summary { cursor: pointer; color: var(--fg2); }
+.conflict-help pre { margin-top: 0.5em; }
 .repo-cards { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
 /* Shell comes from `styler`'s `.card`/`.card-pad` now (markup:
    `class="card card-pad repo-card"`) — `.repo-cards`'s own `gap` above
