@@ -122,7 +122,8 @@ pub struct PrComment {
     pub created_at: String,
     /// `None` for a plain thread comment; `Some(_)` for one left on a
     /// specific diff line. `#[serde(default)]` so every comment stored
-    /// before line comments existed reads back as a plain thread comment.
+    /// before line comments existed (and every federation peer, which may
+    /// not send this) reads back as a plain thread comment.
     #[serde(default)]
     pub anchor: Option<CommentAnchor>,
 }
@@ -157,7 +158,10 @@ pub struct PrReview {
     pub created_at: String,
 }
 
-/// One PR plus its comments, bundled.
+/// One PR plus its comments, bundled — the wire shape both core's own
+/// `/_api/pulls/detail` and (after the binary split) federation's
+/// `/_internal/pull-requests` proxy serialize, since both sides of the
+/// same cross-instance call need the identical shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrDetail {
     #[serde(default)]

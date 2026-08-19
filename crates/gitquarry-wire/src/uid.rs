@@ -11,8 +11,8 @@
 //! call site threading it through.
 //!
 //! Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/PR
-//! reference crosses the core/tracker IPC boundary and needs to be the
-//! identical type on both
+//! reference crosses the core/federation IPC boundary (fork-from-remote,
+//! pull-request wire types) and needs to be the identical type on both
 //! sides rather than a lookalike newtype per crate.
 
 use serde::{Deserialize, Serialize};

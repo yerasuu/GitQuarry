@@ -35,6 +35,11 @@
 //! (per-repo permission-grant index), [`login_throttle`] (password-login
 //! counter). Every `pub` item each one declares is re-exported here so
 //! every existing `access::xxx` call site keeps working unchanged.
+//!
+//! Linked-peer CRUD, fine-grained personal access tokens, and peer
+//! credentials (federation layers 1/4) live in the separate
+//! `gitquarry-federation` process now, not this crate at all — see
+//! `docs/federation-binary-split-concept.md`.
 
 mod email;
 mod groups;

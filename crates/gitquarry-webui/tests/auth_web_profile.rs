@@ -22,6 +22,7 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
             lfs_max_blob_size: Default::default(),
             topics: Default::default(),
             forked_from: None,
+            forked_from_peer: None,
             fork_count: 0,
             star_count: 0,
             watcher_count: 0,

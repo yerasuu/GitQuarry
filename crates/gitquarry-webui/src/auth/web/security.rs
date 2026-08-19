@@ -20,7 +20,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    layout, non_empty, render_flash, require_csrf, require_login,
+    federation_ui_active, layout, non_empty, render_flash, require_csrf, require_login,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -40,7 +40,7 @@ pub(crate) async fn handler_security_get(State(ctx): State_, headers: HeaderMap)
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_security_page(&user, &csrf_field(&headers), None, None, None, locale);
-    let body = account_settings_page("security", content, locale).into_string();
+    let body = account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
         "",
@@ -192,6 +192,7 @@ pub(crate) async fn handler_security_post(
                 &account_settings_page(
                     "security",
                     render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, locale),
+                    federation_ui_active(&ctx),
                     locale,
                 )
                 .into_string(),
@@ -328,7 +329,7 @@ pub(crate) async fn handler_security_post(
         revealed_recovery_codes.as_deref(),
         locale,
     );
-    let body = account_settings_page("security", content, locale).into_string();
+    let body = account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
         "",

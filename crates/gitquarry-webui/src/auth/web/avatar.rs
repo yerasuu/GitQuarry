@@ -6,8 +6,8 @@
 //! on the site, not just here.
 
 use crate::webui::{
-    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    require_csrf, require_login,
+    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, layout, require_csrf, require_login,
 };
 use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -31,7 +31,7 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
     let topnav = super::login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_avatar_section(&user, &csrf_field(&headers), locale);
-    let body = account_settings_page("profile", content, locale).into_string();
+    let body = account_settings_page("profile", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "profile",
         "",

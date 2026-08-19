@@ -20,6 +20,7 @@ fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
         password_hash: None,
         is_admin: false,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),

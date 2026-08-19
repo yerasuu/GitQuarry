@@ -67,7 +67,7 @@ fn git_date_now() -> String {
 /// identity in a commit object is forever.
 async fn merger_identity(ctx: &AppContext, username: &str) -> Result<(String, String)> {
     // No local account is a legitimate case, not an error: a merge proxied
-    // in over the loopback API names whoever
+    // in over federation (`internal_api::handler_pr_merge`) names whoever
     // merged it on *their* instance, who by definition has no `User` here.
     // Same noreply treatment as a local account without an email — both are
     // "there is no address to use", which is exactly what that synthetic

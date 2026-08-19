@@ -16,8 +16,8 @@
 
 use super::login;
 use crate::webui::{
-    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    non_empty, render_flash, require_csrf, url_encode,
+    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, layout, non_empty, render_flash, require_csrf, url_encode,
 };
 use axum::extract::{Form, Query, State};
 use axum::http::HeaderMap;
@@ -66,7 +66,7 @@ pub(crate) async fn handler_groups_get(
     .into_string();
     Ok(axum::response::Html(layout(
         "groups",
-        &admin_header("groups", locale),
+        &admin_header("groups", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,
@@ -251,7 +251,7 @@ pub(crate) async fn handler_groups_post(
     .into_string();
     Ok(axum::response::Html(layout(
         "groups",
-        &admin_header("groups", locale),
+        &admin_header("groups", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,

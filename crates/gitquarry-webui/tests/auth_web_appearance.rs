@@ -14,6 +14,7 @@ fn user_with_prefs(text_size_default: &str, theme_default: &str) -> User {
         password_hash: None,
         is_admin: false,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: text_size_default.to_string(),

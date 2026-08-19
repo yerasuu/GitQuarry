@@ -31,3 +31,15 @@ msg!(
         Locale::En => "showing the first {limit} matches, refine your search",
     }
 );
+
+msg!(remote_repos_heading() { Locale::Es => "repos de instancias enlazadas", Locale::En => "remote repos" });
+msg!(
+    /// Clarifies that this section is metadata-only (name/description/
+    /// topics), unlike the filenames/commits sections above it which are
+    /// real content matches — federation layer 3: a peer repo nobody has
+    /// browsed yet only ever shows up here, never in the content sections.
+    remote_repos_hint() {
+        Locale::Es => "coincidencia por nombre/descripcion/topics -- el contenido de un repo remoto aparece arriba solo despues de haberlo navegado o forkeado una vez",
+        Locale::En => "matched by name/description/topics -- a remote repo's content shows up above only after it's been browsed or forked once",
+    }
+);

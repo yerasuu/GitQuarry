@@ -96,6 +96,14 @@ msg!(storage_quota_current_prefix() { Locale::Es => "limite actual: ", Locale::E
 msg!(set_storage_quota_button() { Locale::Es => "guardar limite", Locale::En => "save limit" });
 msg!(remove_admin_button() { Locale::Es => "quitar admin", Locale::En => "remove admin" });
 msg!(make_admin_button() { Locale::Es => "hacer admin", Locale::En => "make admin" });
+msg!(remove_federation_moderator_button() {
+    Locale::Es => "quitar moderador de federacion",
+    Locale::En => "remove federation moderator",
+});
+msg!(make_federation_moderator_button() {
+    Locale::Es => "hacer moderador de federacion",
+    Locale::En => "make federation moderator",
+});
 msg!(disable_totp_button() {
     Locale::Es => "deshabilitar 2FA (perdi el dispositivo)",
     Locale::En => "disable 2FA (lost the device)",

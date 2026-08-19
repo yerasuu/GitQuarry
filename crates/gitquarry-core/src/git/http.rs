@@ -489,8 +489,15 @@ impl Denial {
 /// (matching the web UI's anonymous browsing); everything else — any write
 /// (a push, or an LFS upload), or reading a `Limited`/`Private` repo — needs
 /// either a valid `username`/`password_hash` pair (the same credential the
-/// web login form uses) or a personal access token naming this exact repo —
-/// and at least `required` either way.
+/// web login form uses) or a fine-grained token (federation layer 4,
+/// `docs/federation-concept.md`'s "Capa 4") naming this exact repo — and at
+/// least `required` either way.
+///
+/// The token path needs `ctx.federation` configured (`AccessToken` storage
+/// moved to `gitquarry-federation` — `docs/federation-binary-split-concept.md`
+/// section 2): without it, a token-shaped `username` just falls through to
+/// the password path and fails there, same as before federation existed at
+/// all.
 #[cfg(any(test, feature = "test-util"))]
 pub async fn authorize(
     ctx: &AppContext,
@@ -533,6 +540,24 @@ async fn authorize_impl(
             let perm = access::effective_permission_for_user(ctx.backend().as_ref(), &ctx.cipher, &user, name).await?;
             (user.username, perm)
         }
+        Credential::Token { username, write } => {
+            let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
+                .await?
+                .0
+            else {
+                return Ok(Authz::Denied(Denial::Forbidden));
+            };
+            let mut perm =
+                access::effective_permission_for_user(ctx.backend().as_ref(), &ctx.cipher, &user, name).await?;
+            // `write: false` caps at read-only regardless of the owner's
+            // real tier — never higher just because the token happens to
+            // belong to an admin. `write: true` is capped only at the
+            // owner's own real permission, never artificially raised.
+            if !write {
+                perm = perm.map(|p| p.min(Permission::Reporter));
+            }
+            (username, perm)
+        }
         Credential::Pat { username, ceiling } => {
             let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
                 .await?
@@ -557,6 +582,7 @@ async fn authorize_impl(
 
 enum Credential {
     Password(Box<User>),
+    Token { username: String, write: bool },
     Pat { username: String, ceiling: Permission },
 }
 
@@ -582,16 +608,18 @@ fn basic_credentials_impl(headers: &HeaderMap) -> Option<(String, String)> {
 /// The username field is tried as a token secret first (GitHub's own
 /// `https://<token>@host/...` convention — the password field is unused
 /// for that shape, often empty or a placeholder): a local personal access
-/// token (`gqpat_...`) is tried first; falling through to the plain
-/// username/password path covers every existing local-password client
-/// unchanged. That fallback is
+/// token (`gqpat_...`, resolved entirely within core, no federation
+/// dependency) is tried first, then a federation-issued fine-grained token
+/// via `POST /_internal-out/tokens/resolve` on `ctx.federation` if
+/// configured; falling through to the plain username/password path covers
+/// every existing local-password client unchanged. That fallback is
 /// rate-limited per submitted username via [`gitquarry_core::app::LoginAttempts`]
 /// — same gate `auth::web::login::handler_login_local` already applies to
 /// the web login form, just unapplied here until now: this endpoint let a
 /// `git clone`/`push` guess a password with no throttling at all. Checked
 /// before Argon2 even runs, same "a lockout costs nothing extra" reasoning.
-/// The token path never touches `login_attempts`: a wrong/expired/out-of-
-/// scope token is never a guessed password, so there's nothing to throttle.
+/// Neither token path touches `login_attempts`: a wrong/expired/out-of-scope
+/// token is never a guessed password, so there's nothing to throttle.
 async fn authenticate(
     ctx: &AppContext,
     headers: &HeaderMap,
@@ -602,6 +630,17 @@ async fn authenticate(
     };
     if let Some(cred) = resolve_local_pat(ctx, &username, repo_uid).await? {
         return Ok(Some(cred));
+    }
+    if let Some(federation) = &ctx.federation {
+        let outcome = crate::auth::federation_token::resolve_token(federation, &username, repo_uid).await;
+        if outcome.ok
+            && let Some(resolved_username) = outcome.username
+        {
+            return Ok(Some(Credential::Token {
+                username: resolved_username,
+                write: outcome.write.unwrap_or(false),
+            }));
+        }
     }
     if ctx.login_attempts.is_locked(&username) {
         return Ok(None);
@@ -624,8 +663,8 @@ async fn authenticate(
 }
 
 /// Tries the Basic-Auth username as a local personal access token secret —
-/// recognizable by its `gqpat_` prefix, so a real password never even
-/// reaches the hash lookup below. `None` on any
+/// recognizable by its `gqpat_` prefix, so a real password or a real
+/// federation token never even reaches the hash lookup below. `None` on any
 /// mismatch (wrong prefix, unknown/expired secret, or `repo_uid` outside
 /// the token's `scopes`) — deliberately not distinguished from "not a PAT
 /// at all", so a malformed token attempt just falls through to the next

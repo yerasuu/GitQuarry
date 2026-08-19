@@ -499,6 +499,16 @@ msg!(
 );
 
 msg!(
+    /// `settings::web::require_admin_or_federation_moderator`: a logged-in
+    /// user with neither `is_admin` nor `is_federation_moderator` hit
+    /// `/_peers` (`docs/federation-binary-split-concept.md` section 6).
+    account_is_not_admin_or_moderator() {
+        Locale::Es => "tu usuario no es admin ni moderador de federacion",
+        Locale::En => "your account is neither an admin nor a federation moderator",
+    }
+);
+
+msg!(
     /// `settings::web::handler_settings_post`'s OIDC "all 4 fields or none"
     /// validation.
     oidc_fields_go_together() {

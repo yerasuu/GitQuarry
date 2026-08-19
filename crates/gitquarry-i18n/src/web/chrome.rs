@@ -11,12 +11,14 @@ use super::super::{Locale, msg};
 msg!(settings_tab() { Locale::Es => "ajustes", Locale::En => "settings" });
 msg!(users_tab() { Locale::Es => "usuarios", Locale::En => "users" });
 msg!(groups_tab() { Locale::Es => "grupos", Locale::En => "groups" });
+msg!(peers_tab() { Locale::Es => "instancias", Locale::En => "peers" });
 msg!(audit_tab() { Locale::Es => "auditoria", Locale::En => "audit" });
 
 msg!(profile_tab() { Locale::Es => "perfil", Locale::En => "profile" });
 msg!(favorites_tab() { Locale::Es => "favoritos", Locale::En => "favorites" });
 msg!(security_tab() { Locale::Es => "seguridad", Locale::En => "security" });
 msg!(pat_tab() { Locale::Es => "tokens personales", Locale::En => "personal tokens" });
+msg!(tokens_tab() { Locale::Es => "tokens", Locale::En => "tokens" });
 msg!(account_settings_tab() { Locale::Es => "ajustes", Locale::En => "settings" });
 msg!(
     /// `/_account/profile` sidebar entry — avatar/public-profile-facing

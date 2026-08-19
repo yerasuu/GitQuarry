@@ -13,6 +13,7 @@ fn user_with_starred(starred: &[&str]) -> User {
         password_hash: None,
         is_admin: false,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: starred
             .iter()
             .map(|s| gitquarry_core::storage::uid::Uid::from(s.to_string()))

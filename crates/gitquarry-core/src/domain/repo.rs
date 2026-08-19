@@ -301,7 +301,10 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
 /// a fork of an archived repo isn't itself read-only, and branch/tag
 /// protection is the new owner's own call to make). Bumps the source's own
 /// `fork_count`. `None` if `dest_full_name` is already claimed by a live
-/// repo. Same-bucket only.
+/// repo. Same-bucket only — federation layer 2's cross-instance equivalent
+/// is [`crate::domain::remote_fork::seed_from_remote`], kept in its own
+/// module rather than here since it seeds from a peer-synced mirror instead
+/// of this bucket's own `Remote::copy_all_to`.
 pub async fn fork(
     ctx: &AppContext,
     source: &ResolvedRepo,
@@ -344,6 +347,7 @@ pub async fn fork(
         lfs_max_blob_size: Default::default(),
         topics: source_config.topics.clone(),
         forked_from: Some(source.uid.clone()),
+        forked_from_peer: None,
         fork_count: 0,
         star_count: 0,
         watcher_count: 0,
@@ -458,6 +462,7 @@ pub async fn create_from_template(
         lfs_max_blob_size: Default::default(),
         topics: source_config.topics.clone(),
         forked_from: None,
+        forked_from_peer: None,
         fork_count: 0,
         star_count: 0,
         watcher_count: 0,

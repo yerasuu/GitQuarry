@@ -8,12 +8,22 @@
 //! to any logged-in user — that's the point of a fork, and the destination
 //! is always a namespace the caller already controls, never an arbitrary
 //! one.
+//!
+//! Also handles federation layer 2's fork-from-peer (`form.peer` non-empty):
+//! same destination-namespace rules, but the source is a linked peer's repo.
+//! Core resolves the destination owner itself (it owns `User`/`Group`,
+//! federation doesn't), then hands off to `gitquarry-federation` via
+//! `POST /_internal-out/fork` (`webui::federation_client::request_fork`),
+//! which re-validates the peer link (not banned, at least `BrowseAndFork`)
+//! before forwarding back to core's own
+//! `POST /_internal/repos/fork-from-remote` for the actual git mechanic.
 
 use super::{
     AppError, State_, effective_density, effective_locale, effective_theme, layout, require_csrf, require_login,
     url_encode,
 };
 use crate::auth::web::login;
+use crate::webui::federation_client;
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -27,8 +37,14 @@ use maud::html;
 pub(crate) struct ForkForm {
     /// Full name (`owner/name`) of the repo being forked — a hidden field
     /// on the fork form, not user-typed, but still re-validated/re-checked
-    /// (existence + visibility) here rather than trusted from the form.
+    /// (existence + visibility) here rather than trusted from the form. If
+    /// `peer` is set, this is the repo's full name *on that peer* instead
+    /// of a local one.
     source: String,
+    /// Linked peer's `Peer::name`, or empty for a same-bucket fork — the
+    /// only thing that decides which branch below runs.
+    #[serde(default)]
+    peer: String,
     /// The caller's own username, or a group they can manage — checked
     /// against `access.json`, never trusted as free text (same reasoning
     /// as `repo_new::NewRepoForm::namespace`).
@@ -39,7 +55,9 @@ pub(crate) struct ForkForm {
 }
 
 /// Resolves `namespace` (the caller's own username, or a group they can
-/// manage) to the `OwnerRef` a new repo's `RepoConfig::owner` gets.
+/// manage) to the `OwnerRef` a new repo's `RepoConfig::owner` gets — shared
+/// by both the same-bucket and fork-from-peer branches below, since neither
+/// cares where the *source* came from.
 async fn resolve_dest_owner(
     ctx: &gitquarry_core::app::AppContext,
     me: &gitquarry_core::auth::entities::User,
@@ -78,7 +96,9 @@ async fn resolve_dest_owner(
 /// of losing it to the generic error page. Duplicates (rather than reuses)
 /// `webui::repo::summary::render_fork_form`'s markup: that helper is
 /// private to `webui::repo`, and this is the one place outside it that
-/// needs the same small form.
+/// needs the same small form. The federation fork-from-peer path (`form.peer`
+/// non-empty) doesn't go through this — a separate, more involved UI
+/// surface left for its own pass.
 async fn fork_error_page(
     ctx: &gitquarry_core::app::AppContext,
     headers: &HeaderMap,
@@ -131,6 +151,64 @@ pub(crate) async fn handler_fork_post(
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let namespace = form.namespace.trim();
+
+    let peer_name = form.peer.trim();
+    if !peer_name.is_empty() {
+        let source_repo = validate::sanitize_path(&form.source).map_err(AppError::bad_request)?;
+        let Some(federation) = &ctx.federation else {
+            return Err(AppError::not_found(anyhow::anyhow!(
+                "{}",
+                gitquarry_i18n::shared::repo_not_found(locale, peer_name)
+            )));
+        };
+        let dest_owner = resolve_dest_owner(&ctx, &me, namespace, locale).await?;
+        let dest = validate::sanitize_path(&format!("{namespace}/{}", form.name)).map_err(AppError::bad_request)?;
+        let (dest_owner_kind, dest_owner_uid) = match &dest_owner {
+            OwnerRef::User(uid) => ("user", uid),
+            OwnerRef::Group(uid) => ("group", uid),
+        };
+        // Best-effort, never re-fetched after this — same tolerance the
+        // pre-split `fork_from_peer` already had for a stale/missing cache
+        // entry: worst case the new repo just starts with no description.
+        let description = federation_client::peer_repos(federation)
+            .await
+            .into_iter()
+            .find(|(name, _)| name == peer_name)
+            .and_then(|(_, repos)| repos.into_iter().find(|r| r.name == source_repo))
+            .and_then(|r| r.description);
+
+        let outcome = federation_client::request_fork(
+            federation,
+            &federation_client::ForkRequest {
+                peer_name,
+                source_repo_name: &source_repo,
+                dest_full_name: &dest,
+                dest_owner_kind,
+                dest_owner_uid,
+                description,
+                acting_username: &me.username,
+            },
+        )
+        .await;
+        if !outcome.ok {
+            return Err(AppError::bad_request(anyhow::anyhow!(
+                "{}",
+                outcome.reason.unwrap_or_else(|| "fork failed".to_string())
+            )));
+        }
+
+        gitquarry_core::storage::audit::record(
+            ctx.backend().as_ref(),
+            &ctx.cipher,
+            &me.username,
+            "repo.fork",
+            &dest,
+            Some(format!("{peer_name}:{source_repo}")),
+        )
+        .await;
+
+        return Ok(Redirect::to(&format!("/{}", url_encode(&dest))).into_response());
+    }
 
     let source = validate::sanitize_path(&form.source).map_err(AppError::bad_request)?;
     let Some(source_resolved) = ctx.resolve_repo(&source).await? else {

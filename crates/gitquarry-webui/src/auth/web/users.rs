@@ -9,8 +9,8 @@
 use super::login;
 use crate::settings::web::require_admin;
 use crate::webui::{
-    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    non_empty, render_flash, require_csrf,
+    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, layout, non_empty, render_flash, require_csrf,
 };
 use anyhow::Result;
 use axum::extract::{Form, Query, State};
@@ -44,7 +44,7 @@ pub(crate) async fn handler_users_get(
     let body = render_users_page(&users, &repo_names, &csrf_field(&headers), None, &q, locale).into_string();
     Ok(axum::response::Html(layout(
         "users",
-        &admin_header("users", locale),
+        &admin_header("users", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,
@@ -182,14 +182,14 @@ pub(crate) async fn handler_users_post(
     };
     // Async (`data-async-target="#user-card-{username}"`, see `ASYNC_HEADER`'s
     // own doc comment): for the actions whose whole effect stays contained
-    // inside one user's own card (`is_admin` badge, pubkey/repo-perm
-    // tables, TOTP button) -- every other action
+    // inside one user's own card (`is_admin`/`is_federation_moderator`
+    // badge, pubkey/repo-perm tables, TOTP button) -- every other action
     // here still re-renders the whole page, same as before.
     if action_result.is_ok()
         && headers.contains_key(crate::webui::ASYNC_HEADER)
         && matches!(
             form.action.as_str(),
-            "toggle_admin" | "remove_pubkey" | "remove_repo_perm" | "disable_totp"
+            "toggle_admin" | "toggle_federation_moderator" | "remove_pubkey" | "remove_repo_perm" | "disable_totp"
         )
     {
         let (Some(user), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &form.username).await? else {
@@ -219,7 +219,7 @@ pub(crate) async fn handler_users_post(
     let body = render_users_page(&users, &repo_names, &csrf_field(&headers), Some(flash), "", locale).into_string();
     Ok(axum::response::Html(layout(
         "users",
-        &admin_header("users", locale),
+        &admin_header("users", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,
@@ -298,6 +298,9 @@ pub async fn apply_users_action(
                 .map_err(|e| e.to_string())
         }
         "toggle_admin" => domain::user::toggle_admin(ctx, &form.username, locale)
+            .await
+            .map_err(|e| e.to_string()),
+        "toggle_federation_moderator" => domain::user::toggle_federation_moderator(ctx, &form.username, locale)
             .await
             .map_err(|e| e.to_string()),
         // No re-auth check here (unlike the self-service action in
@@ -540,6 +543,14 @@ pub fn render_user(
                 input type="hidden" name="user_action" value="toggle_admin";
                 input type="hidden" name="username" value=(user.username);
                 button type="submit" { (if user.is_admin { t::remove_admin_button(locale) } else { t::make_admin_button(locale) }) }
+            }
+            form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {
+                (PreEscaped(csrf))
+                input type="hidden" name="user_action" value="toggle_federation_moderator";
+                input type="hidden" name="username" value=(user.username);
+                button type="submit" {
+                    (if user.is_federation_moderator { t::remove_federation_moderator_button(locale) } else { t::make_federation_moderator_button(locale) })
+                }
             }
             @if user.totp_enabled {
                 form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {

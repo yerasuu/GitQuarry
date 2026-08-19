@@ -1,0 +1,50 @@
+[package]
+name = "gitquarry-federation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Cross-instance federation for gitquarry: peer discovery (gossip), remote browse/fork, PR-proxy, fine-grained tokens — talks to gitquarry-core only over loopback HTTP"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+gitquarry-wire = { path = "../gitquarry-wire" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "time"] }
+axum = "0.8.9"
+# Outbound calls to a candidate peer's `/_api/instance` (link verification)
+# and to gitquarry-core's own loopback `/_internal/*` API — rustls-only,
+# same pin reasoning as gitquarry-core's own `reqwest` dependency.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
+anyhow = "1.0.104"
+rand = "0.10.2"
+sha2 = "0.11.0"
+dirs = "6.0.0"
+
+[features]
+# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
+# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
+# across the crate boundary that external integration tests are.
+test-util = []
+
+[dev-dependencies]
+tempfile = "3.27.0"
+# Only for driving a full `Router` (middleware included) with `.oneshot()`
+# in tests — everywhere else in this tree calls handler functions
+# directly, but `rate_limit_middleware`'s test needs the actual layered
+# `Service`, not a bare handler, to prove the middleware itself applies.
+tower = { version = "0.5", features = ["util"] }
+# Self-dependency so `cargo test` enables this crate's own `test-util`
+# automatically for its tests/*.rs.
+gitquarry-federation = { path = ".", features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -44,11 +44,21 @@
 //!   section reachable by someone other than the account owner),
 //!   [`crate::auth::web::pat`][] (`/_account/pat` — local personal access
 //!   tokens for git-smart-HTTP clone/push, scoped by explicit repo +
-//!   [`gitquarry_core::auth::entities::Permission`] ceiling; lives entirely
-//!   in [`gitquarry_core::auth::domain::pat`]). All of these (plus their
+//!   [`gitquarry_core::auth::entities::Permission`] ceiling; separate from
+//!   federation's own fine-grained tokens at `/_account/tokens` below, this
+//!   one lives entirely in [`gitquarry_core::auth::domain::pat`], no
+//!   `[federation]` config needed). All of these (plus their
 //!   [`gitquarry_core::auth::domain`] CRUD and [`crate::auth::i18n`] copy)
 //!   live under [`crate::auth`], not here, but are routed from this same
 //!   table.
+//! - `/_peers`, `/_account/tokens`, `/_remote_pulls/comment`, `/_api/*`,
+//!   `/_federation/gossip/*`: federation layers 1/4 (linked-instance
+//!   management, fine-grained tokens, PR-proxy, discovery) — all proxied to
+//!   the separate `gitquarry-federation` process via [`federation_proxy`]
+//!   (`docs/federation-binary-split-concept.md`), never handled in-process
+//!   here. Federation is an optional, separately deployed component;
+//!   without `[federation]` configured, every one of these routes just
+//!   answers 503.
 //! - [`fork`]: `POST /_fork`, copies a whole repo to a new one under the
 //!   caller's own namespace or a group they own — open to any logged-in
 //!   user, unlike [`repo_new`] which is admin-only.
@@ -101,6 +111,8 @@ pub mod highlight;
 pub mod icons;
 pub mod identicon;
 pub mod markdown;
+pub mod remote_pulls;
+pub mod remote_repo;
 pub mod repo;
 pub mod repo_new;
 pub mod repo_settings;
@@ -132,6 +144,11 @@ pub mod error;
 #[cfg(not(any(test, feature = "test-util")))]
 mod error;
 pub mod escaping;
+pub(crate) mod federation_client;
+#[cfg(any(test, feature = "test-util"))]
+pub mod federation_proxy;
+#[cfg(not(any(test, feature = "test-util")))]
+mod federation_proxy;
 #[cfg(any(test, feature = "test-util"))]
 pub mod flash;
 #[cfg(not(any(test, feature = "test-util")))]
@@ -184,8 +201,7 @@ pub(crate) use locale_pref::effective_locale;
 pub(crate) use density_pref::{effective_density, handler_toggle_density};
 pub use page_chrome::layout;
 pub(crate) use page_chrome::{
-    HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, header_bar, permission_badge_class,
-    tab_links, topic_badges,
+    HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, federation_ui_active, header_bar,
 };
 pub(crate) use raw_link::{github_raw_link, raw_link};
 pub(crate) use repo_link::{github_blob_link, repo_link};
@@ -368,6 +384,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_login_oidc", get(crate::auth::web::login::handler_login_oidc))
         .route("/_callback", get(crate::auth::web::login::handler_callback))
         .route("/_logout", axum::routing::post(crate::auth::web::login::handler_logout))
+        .route("/_remote/{peer}/{*repo}", get(remote_repo::handler_remote_repo))
         // Raw-export views: their own route tree, deliberately not a
         // `?view=` query param on `/{*repo}` below — see `raw`'s module doc.
         .route("/_raw/plain/{*repo}", get(raw::handler_raw_plain))
@@ -379,7 +396,45 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route(
             "/{*repo}",
             get(repo::handler_repo).post(repo_settings::handler_repo_conf_post),
-        );
+        )
+        // Every route below only ever does anything if `[federation]` is
+        // configured (`ctx.federation.is_some()`) — each handler checks
+        // that itself and answers 503 otherwise (`federation_proxy`'s own
+        // `federation_unavailable()`). Federation is an optional, separately
+        // deployed component (`docs/federation-binary-split-concept.md`):
+        // without it, these routes simply don't do anything, same as any
+        // other feature this instance hasn't turned on.
+        .route(
+            "/_peers",
+            get(federation_proxy::proxy_peers).post(federation_proxy::proxy_peers),
+        )
+        .route(
+            "/_account/tokens",
+            get(federation_proxy::proxy_tokens).post(federation_proxy::proxy_tokens),
+        )
+        .route(
+            "/_remote_pulls/comment",
+            axum::routing::post(federation_proxy::proxy_remote_comment),
+        )
+        .route("/_api/instance", get(federation_proxy::proxy_public))
+        .route("/_api/repos", get(federation_proxy::proxy_public))
+        .route("/_api/repos/{*name}", get(federation_proxy::proxy_public))
+        .route(
+            "/_api/pulls",
+            get(federation_proxy::proxy_public).post(federation_proxy::proxy_public),
+        )
+        .route("/_api/pulls/detail", get(federation_proxy::proxy_public))
+        .route(
+            "/_api/pulls/comment",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route("/_api/pulls/merge", axum::routing::post(federation_proxy::proxy_public))
+        .route("/_api/banned-peers", get(federation_proxy::proxy_public))
+        .route(
+            "/_federation/gossip/announce",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route("/_federation/gossip/peers", get(federation_proxy::proxy_public));
 
     let app = app
         // Runs before the routes above ever see the request: short-circuits
@@ -405,8 +460,12 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         ctx.bucket,
         ctx.mirrors_root.display()
     );
-    // `with_connect_info` so `gitquarry_core::git::http`'s rate limiter can
-    // extract the real client `SocketAddr` (via `ConnectInfo`).
+    // `with_connect_info` so `federation_proxy`'s handlers can extract the
+    // real client `SocketAddr` (via `ConnectInfo`) and forward it to
+    // federation as `X-Forwarded-For` — federation's own loopback bind
+    // otherwise only ever sees *this* process's address, never the actual
+    // caller's, since it's never reachable except through this proxy (see
+    // `federation_proxy`'s own module doc comment).
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

@@ -36,10 +36,41 @@ pub struct BucketConfig {
     pub passphrase: String,
 }
 
+/// `[federation]` in `gitquarry.toml` — optional. Absent means core runs
+/// standalone: no `/_internal/*` loopback server, no outbound proxy routes,
+/// no `/_remote/*` lookups registered. Same "`None` = feature fully off,
+/// never a half-wired no-op" pattern `oidc: Option<OidcClient>` already
+/// establishes (`docs/federation-binary-split-concept.md` section 4).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FederationSection {
+    /// Loopback address the `/_internal/*` API binds to — a
+    /// `gitquarry-federation` process calls in on this, never a public
+    /// listener of its own.
+    pub internal_bind: String,
+    /// Shared secret gating every `/_internal/*` request, manually kept
+    /// identical to `gitquarry-federation.toml`'s own `internal_token` — no
+    /// auto-generation, no filesystem coupling between the two configs.
+    pub internal_token: String,
+    /// `gitquarry-federation`'s own loopback address (its `listen`) —
+    /// where core forwards the outbound proxy routes (`/_peers`,
+    /// `/_profile/*/tokens`, `/_api/*`, ...) it registers on its public
+    /// router. Same shared secret (`internal_token`) authenticates this
+    /// direction too — federation's whole router requires it, not just its
+    /// own `/_internal-out/*` subset (see `gitquarry-federation`'s
+    /// `web` module doc comment for why).
+    pub federation_url: String,
+}
+
+// pub (and `buckets` pub too) isn't just for tests/config.rs: RawConfig is
+// also used unconditionally by `Config::load_from` below, so it can't be
+// cfg-gated to test builds only.
 #[derive(Debug, Deserialize)]
 pub struct RawConfig {
     #[serde(default)]
     pub buckets: BTreeMap<String, BucketConfig>,
+    #[serde(default)]
+    federation: Option<FederationSection>,
+    #[serde(default)]
     /// Whether `git push` to a repo name that doesn't exist yet creates it
     /// (same as `webui::repo_new`, just reached via `git push` instead of
     /// `/_new`). Defaults to off: a typo'd repo name in the push URL should
@@ -61,6 +92,7 @@ struct RawConfigOut<'a> {
 #[derive(Debug)]
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
+    federation: Option<FederationSection>,
     allow_push_create: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
     /// without guessing which candidate won.
@@ -93,9 +125,16 @@ impl Config {
         }
         Ok(Config {
             buckets: raw.buckets,
+            federation: raw.federation,
             allow_push_create: raw.allow_push_create,
             path: path.to_path_buf(),
         })
+    }
+
+    /// `None` unless `[federation]` is present in `gitquarry.toml` — see
+    /// [`FederationSection`]'s own doc comment.
+    pub fn federation(&self) -> Option<&FederationSection> {
+        self.federation.as_ref()
     }
 
     /// See [`RawConfig::allow_push_create`]'s doc comment.

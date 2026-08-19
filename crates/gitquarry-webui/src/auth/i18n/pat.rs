@@ -3,8 +3,8 @@
 use gitquarry_i18n::{Locale, msg};
 
 msg!(page_intro() {
-    Locale::Es => "Tokens de larga duración para clonar/hacer push por HTTPS con scopes explícitos por repositorio.",
-    Locale::En => "Long-lived tokens for HTTPS clone/push with explicit per-repo scopes.",
+    Locale::Es => "Tokens de larga duración para clonar/hacer push por HTTPS con scopes explícitos por repositorio — distintos de los tokens de federación.",
+    Locale::En => "Long-lived tokens for HTTPS clone/push with explicit per-repo scopes — separate from federation's own tokens.",
 });
 msg!(secret_reveal_warning() {
     Locale::Es => "Copia este token ahora: no se puede volver a ver.",

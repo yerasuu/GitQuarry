@@ -24,7 +24,7 @@ use super::login;
 use crate::webui::repo::can_view_repo;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    is_local_redirect, layout, render_flash, require_csrf, require_login, url_encode,
+    federation_ui_active, is_local_redirect, layout, render_flash, require_csrf, require_login, url_encode,
 };
 use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
@@ -166,7 +166,7 @@ pub(crate) async fn handler_account_favorites_get(
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_favorites_page(&me, &csrf_field(&headers), None, &starred, locale);
-    let body = account_settings_page("favorites", content, locale).into_string();
+    let body = account_settings_page("favorites", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "favorites",
         "",
@@ -239,7 +239,7 @@ pub(crate) async fn handler_account_favorites_post(
         let starred = own_starred_with_counts(&ctx, &fresh.starred).await;
         let topnav = login::topnav(&ctx, &headers).await;
         let content = render_favorites_page(&fresh, &csrf_field(&headers), Some(flash), &starred, locale);
-        let body = account_settings_page("favorites", content, locale).into_string();
+        let body = account_settings_page("favorites", content, federation_ui_active(&ctx), locale).into_string();
         return Ok(Html(layout(
             "favorites",
             "",
@@ -350,7 +350,7 @@ pub(crate) async fn handler_account_favorites_post(
     let starred = own_starred_with_counts(&ctx, &me.starred).await;
     let topnav = login::topnav(&ctx, &headers).await;
     let content = render_favorites_page(&me, &csrf_field(&headers), Some(flash), &starred, locale);
-    let body = account_settings_page("favorites", content, locale).into_string();
+    let body = account_settings_page("favorites", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "favorites",
         "",

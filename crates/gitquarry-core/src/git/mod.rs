@@ -208,6 +208,67 @@ pub async fn fetch_local(dest_git_dir: &Path, src_git_dir: &Path, src_rev: &str,
     Ok(())
 }
 
+/// Mirrors a linked peer's entire ref set into `bare_repo` via a real `git
+/// fetch` against its own `git://`/`ssh://` URL — federation layer 2's
+/// remote-content sync (`docs/federation-concept.md`), model on
+/// [`fetch_local`] above but against an actual network URL instead of
+/// another local mirror path. `--prune --prune-tags` makes local refs match
+/// the peer's exactly (added, moved, or removed), same "sync = full
+/// reconciliation, not just fast-forward" semantics
+/// `mirror::sync_bare_repo_from_s3` gets for free from its own
+/// manifest-diff loop.
+///
+/// `url` is peer-controlled (an admin-entered `Peer::git_base_url` plus a
+/// repo name, reachability verified at add time — see
+/// `federation::verify_instance` — but still external input reaching a git
+/// subprocess), so it goes after `--end-of-options` like every other
+/// untrusted arg this module passes to git.
+pub async fn fetch_remote_url(bare_repo: &Path, url: &str) -> Result<()> {
+    run(
+        Some(bare_repo),
+        &[
+            OsStr::new("fetch"),
+            OsStr::new("--prune"),
+            OsStr::new("--prune-tags"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(url),
+            OsStr::new("+refs/*:refs/*"),
+        ],
+    )
+    .await?;
+
+    if let Some(target) = remote_head_symref(url).await?
+        && list_refs(bare_repo).await?.iter().any(|r| r == &target)
+    {
+        set_head(bare_repo, &target).await?;
+    }
+    Ok(())
+}
+
+/// `git ls-remote --symref <url> HEAD`'s target ref, if the peer advertises
+/// one — `None` if it doesn't (a missing/unreadable HEAD symref just leaves
+/// `bare_repo`'s existing HEAD, whatever it already was, untouched), never
+/// an error over this alone: a peer not advertising a symref is a shrug, not
+/// a failed sync.
+async fn remote_head_symref(url: &str) -> Result<Option<String>> {
+    let out = run_text(
+        None,
+        &[
+            OsStr::new("ls-remote"),
+            OsStr::new("--symref"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(url),
+            OsStr::new("HEAD"),
+        ],
+    )
+    .await?;
+    Ok(out.lines().find_map(|line| {
+        line.strip_prefix("ref: ")
+            .and_then(|rest| rest.split('\t').next())
+            .map(str::to_string)
+    }))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeTreeOutcome {
     /// A clean 3-way merge — the resulting tree's sha, ready for
@@ -453,6 +514,17 @@ pub async fn pack_objects_for_push(
         OsStr::new(new_sha),
     ];
     rev_list_args.extend(exclusions.iter().map(OsStr::new));
+    pack_objects_from_rev_list(git_dir, &rev_list_args, out_dir).await
+}
+
+/// Packs every object reachable from any ref (`git rev-list --all
+/// --objects`) — federation layer 2's fork-from-peer seed
+/// (`domain::repo::fork_from_peer`): unlike [`pack_objects_for_push`]
+/// (one new tip, excluding what the other side already has), a freshly
+/// forked destination bucket has nothing yet, so this needs everything the
+/// synced peer mirror has, not just one branch's history.
+pub async fn pack_all_objects(git_dir: &Path, out_dir: &Path) -> Result<Option<PackFiles>> {
+    let rev_list_args: Vec<&OsStr> = vec![OsStr::new("rev-list"), OsStr::new("--all"), OsStr::new("--objects")];
     pack_objects_from_rev_list(git_dir, &rev_list_args, out_dir).await
 }
 
