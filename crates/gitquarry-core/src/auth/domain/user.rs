@@ -142,7 +142,19 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
     if user.password_hash.is_some() {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, -1).await;
     }
+    // Every verdict this account's keys ever produced now names a user
+    // that no longer exists, and its emails are free for someone else to
+    // claim — both change what a cached verdict should say.
+    invalidate_cached_signatures(ctx).await;
     Ok(())
+}
+
+/// Marks every cached commit-signature verdict stale, so the next render
+/// recomputes instead of trusting an answer derived from key/email state
+/// that just changed — see `storage::commit_sig`'s own doc comment for why
+/// this is one global stamp rather than a per-user one.
+async fn invalidate_cached_signatures(ctx: &AppContext) {
+    crate::storage::commit_sig::bump_signing_epoch(ctx.backend().as_ref(), &ctx.cipher).await;
 }
 
 /// Sets (or, with `None`, clears) `username`'s primary `email`.
@@ -190,7 +202,10 @@ pub async fn set_email(
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     match cas {
         // Nothing points at the old address any more.
-        Cas::Ok => previous.release_email(ctx.backend().as_ref()).await,
+        Cas::Ok => {
+            previous.release_email(ctx.backend().as_ref()).await;
+            invalidate_cached_signatures(ctx).await;
+        }
         // A concurrent edit won; the claim we just took belongs to nobody.
         Cas::Conflict => user.release_email(ctx.backend().as_ref()).await,
     }
@@ -289,7 +304,11 @@ pub async fn add_gpg_key(
         armored: armored_key.to_string(),
         fingerprint,
     });
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+    let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
+    if cas == Cas::Ok {
+        invalidate_cached_signatures(ctx).await;
+    }
+    Ok(cas)
 }
 
 pub async fn remove_gpg_key(
@@ -300,7 +319,11 @@ pub async fn remove_gpg_key(
 ) -> Result<Cas> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.gpg_keys.retain(|k| k.fingerprint != fingerprint);
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+    let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
+    if cas == Cas::Ok {
+        invalidate_cached_signatures(ctx).await;
+    }
+    Ok(cas)
 }
 
 /// Sets (or, `perm: None`, clears) `username`'s per-repo grant for `repo` —
@@ -482,7 +505,11 @@ pub async fn add_secondary_email(
     }
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.secondary_emails.insert(email);
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+    let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
+    if cas == Cas::Ok {
+        invalidate_cached_signatures(ctx).await;
+    }
+    Ok(cas)
 }
 
 pub async fn remove_secondary_email(
@@ -496,6 +523,7 @@ pub async fn remove_secondary_email(
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     if cas == Cas::Ok {
         access::release_secondary_email(ctx.backend().as_ref(), email).await;
+        invalidate_cached_signatures(ctx).await;
     }
     Ok(cas)
 }
