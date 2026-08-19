@@ -117,6 +117,16 @@ msg!(
 );
 
 msg!(
+    /// `auth::domain::user::reject_if_claimed_as_secondary`: the address is
+    /// already somebody's additional email, so claiming it as a primary
+    /// would put the same address in two indexes at once.
+    email_claimed_as_secondary() {
+        Locale::Es => "esa direccion ya figura como correo adicional de una cuenta; quitala de alli primero",
+        Locale::En => "that address is already an account's additional email; remove it there first",
+    }
+);
+
+msg!(
     /// `auth::domain::user::add_secondary_email`: the email is already
     /// claimed by a different user, either as their primary `email` or one
     /// of their own `secondary_emails`.
