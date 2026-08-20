@@ -10,6 +10,7 @@
 
 use crate::access::{self, RefSyncStatus};
 use anyhow::{Result, bail};
+use futures::stream::{self, TryStreamExt};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::uid::Uid;
@@ -44,24 +45,35 @@ pub async fn run_periodic_sync(ctx: Arc<AppContext>) {
     }
 }
 
+/// How many *different* repos sync at once. Bounded rather than sequential:
+/// different repos share nothing — separate locks, separate mirrors,
+/// usually separate forges — so one repo whose forge is slow (a git call
+/// here can legitimately take minutes) must not push everybody else's
+/// sweep behind it. Bounded rather than unbounded because the far side is
+/// somebody's rate limit.
+const REPO_SYNC_CONCURRENCY: usize = 4;
+
 /// One sweep: every repo indexed as having an enabled mirror (see
 /// `gitquarry_core::storage::settings::list_repos_with_enabled_mirrors`'s
-/// "hint, not a fact" doctrine), synced in turn. A repo failing (its
-/// mirrors collection itself unreadable, say) only logs and moves to the
-/// next — [`sync_repo_mirrors`] already applies the same per-mirror
-/// tolerance one level down, so this is the outermost layer of the same
-/// discipline, not a new one.
+/// "hint, not a fact" doctrine). A repo failing (its mirrors collection
+/// itself unreadable, say) only logs and doesn't affect the others —
+/// [`sync_repo_mirrors`] already applies the same per-mirror tolerance one
+/// level down, so this is the outermost layer of the same discipline, not a
+/// new one.
 async fn sync_all_repos_once(ctx: &AppContext) -> Result<()> {
-    for uid in gitquarry_core::storage::settings::list_repos_with_enabled_mirrors(ctx.backend().as_ref()).await? {
-        let resolved = ResolvedRepo {
-            remote: ctx.remote_for_uid(&uid),
-            uid: uid.clone(),
-        };
-        if let Err(e) = sync_repo_mirrors(ctx, &resolved).await {
-            eprintln!("gitquarry-mirror-external: warning: sync failed for repo {uid}: {e:#}");
-        }
-    }
-    Ok(())
+    let uids = gitquarry_core::storage::settings::list_repos_with_enabled_mirrors(ctx.backend().as_ref()).await?;
+    stream::iter(uids.into_iter().map(Ok::<_, anyhow::Error>))
+        .try_for_each_concurrent(Some(REPO_SYNC_CONCURRENCY), |uid| async move {
+            let resolved = ResolvedRepo {
+                remote: ctx.remote_for_uid(&uid),
+                uid: uid.clone(),
+            };
+            if let Err(e) = sync_repo_mirrors(ctx, &resolved).await {
+                eprintln!("gitquarry-mirror-external: warning: sync failed for repo {uid}: {e:#}");
+            }
+            Ok(())
+        })
+        .await
 }
 
 /// Builds the credentialed URL the sync path actually pushes/fetches

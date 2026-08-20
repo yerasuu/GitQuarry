@@ -1889,6 +1889,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures",
  "gitquarry-core",
  "gitquarry-forge-clients",
  "gitquarry-i18n",
