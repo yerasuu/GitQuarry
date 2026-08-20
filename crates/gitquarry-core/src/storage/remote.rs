@@ -266,7 +266,7 @@ impl Remote {
             let plaintext = self.cipher.open(src_key, &sealed)?;
             let resealed = dest
                 .cipher
-                .seal(dest_key, &plaintext, crate::crypto::CompressionStrategy::None);
+                .seal(dest_key, &plaintext, crate::crypto::CompressionStrategy::None)?;
             dest.backend.put_cas(dest_key, resealed, None).await?;
         }
         Ok(())

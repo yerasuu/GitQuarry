@@ -95,7 +95,7 @@ struct HookCtx {
 async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> Result<HookCtx> {
     let cfg = config::Config::load_from(config_path)?;
     let bucket_cfg = cfg.bucket(bucket)?;
-    let backend = crate::storage::build_backend(bucket_cfg);
+    let backend = crate::storage::build_backend(bucket_cfg)?;
     let cipher =
         Arc::new(crate::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?);
     let remote = Remote::new(Arc::clone(&backend), repo_prefix, Arc::clone(&cipher));

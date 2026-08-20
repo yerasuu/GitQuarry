@@ -117,7 +117,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         };
         // Validates early, with a good error message, before binding ports.
         let bucket_cfg = conf.bucket(&bucket)?.clone();
-        let backend = storage::build_backend(&bucket_cfg);
+        let backend = storage::build_backend(&bucket_cfg)?;
         // Derives (or creates, if the bucket is new) this bucket's cipher.
         // Fails hard if the passphrase doesn't match: starting with the
         // wrong key would leave every operation failing to decrypt, better

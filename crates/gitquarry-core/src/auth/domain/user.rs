@@ -59,7 +59,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
     };
 
     let mut ops = vec![TxnOp::create(
-        access::NAMESPACE_INDEX.key(username),
+        access::NAMESPACE_INDEX.key(username)?,
         &access::NamespaceReservation {
             kind: "user".to_string(),
         },
@@ -70,7 +70,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         Some(pk) => {
             let fingerprint = access::key_fingerprint(pk)?;
             ops.push(TxnOp::create(
-                access::PUBKEY_INDEX.key(&fingerprint),
+                access::PUBKEY_INDEX.key(&fingerprint)?,
                 &access::UsernamePointer {
                     username: username.to_string(),
                 },
@@ -133,13 +133,13 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
         return Ok(());
     };
     access::delete_user_object(ctx.backend().as_ref(), &ctx.cipher, username).await;
-    user.release_uid(ctx.backend().as_ref()).await;
+    let _ = user.release_uid(ctx.backend().as_ref()).await;
     for pubkey in &user.pubkeys {
         if let Ok(fp) = access::key_fingerprint(pubkey) {
             access::release_pubkey(ctx.backend().as_ref(), &fp).await;
         }
     }
-    user.release_email(ctx.backend().as_ref()).await;
+    let _ = user.release_email(ctx.backend().as_ref()).await;
     access::release_namespace(ctx.backend().as_ref(), username).await;
     if user.password_hash.is_some() {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, -1).await;
@@ -236,11 +236,17 @@ pub async fn set_email(
     match cas {
         // Nothing points at the old address any more.
         Cas::Ok => {
-            previous.release_email(ctx.backend().as_ref()).await;
+            // Best-effort, as it always was: a failed release leaves a
+            // claim pointing at an address nobody uses, which the next
+            // claim self-heals — never a reason to fail the edit that
+            // already committed.
+            let _ = previous.release_email(ctx.backend().as_ref()).await;
             invalidate_cached_signatures(ctx).await;
         }
         // A concurrent edit won; the claim we just took belongs to nobody.
-        Cas::Conflict => user.release_email(ctx.backend().as_ref()).await,
+        Cas::Conflict => {
+            let _ = user.release_email(ctx.backend().as_ref()).await;
+        }
     }
     Ok(cas)
 }

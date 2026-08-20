@@ -207,7 +207,7 @@ fn build_session_cookie(
         SESSION_COOKIE,
         &serde_json::to_vec(&session)?,
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     Ok(set_cookie(
         headers,
         SESSION_COOKIE,
@@ -224,15 +224,15 @@ fn build_session_cookie(
 fn new_login_csrf(
     headers: &HeaderMap,
     cipher: &gitquarry_core::crypto::Cipher,
-) -> (String, (axum::http::HeaderName, String)) {
+) -> Result<(String, (axum::http::HeaderName, String))> {
     let sealed = cipher.seal(
         LOGIN_CSRF_COOKIE,
         &deadline(LOGIN_CSRF_TTL_SECS).to_le_bytes(),
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     let value = B64.encode(sealed);
     let cookie = set_cookie(headers, LOGIN_CSRF_COOKIE, &value, LOGIN_CSRF_TTL_SECS);
-    (value, cookie)
+    Ok((value, cookie))
 }
 
 /// `true` if at least one user has a password set — what [`handler_login`]
@@ -299,7 +299,7 @@ pub(crate) async fn handler_login(
     // A fresh anchor per visit rather than reusing whatever the request
     // already carried: this page is where the token is handed out, so
     // rotating it here keeps a stale one from staying valid indefinitely.
-    let (anchor, (cookie_header, cookie_value)) = new_login_csrf(&headers, &ctx.cipher);
+    let (anchor, (cookie_header, cookie_value)) = new_login_csrf(&headers, &ctx.cipher)?;
     let body = html! {
         (login_form(locale, &return_to, "", None, &crate::webui::csrf_token(&anchor)))
         @if ctx.oidc.is_some() {
@@ -452,7 +452,7 @@ pub(crate) async fn handler_login_local(
             PENDING_TOTP_COOKIE,
             &serde_json::to_vec(&pending)?,
             gitquarry_core::crypto::CompressionStrategy::None,
-        );
+        )?;
         let (header, value) = set_cookie(
             &headers,
             PENDING_TOTP_COOKIE,
@@ -670,7 +670,7 @@ pub(crate) async fn handler_login_oidc(
         FLOW_COOKIE,
         &serde_json::to_vec(&flow)?,
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     let (header, value) = set_cookie(&headers, FLOW_COOKIE, &B64.encode(sealed), FLOW_TTL_SECS);
 
     let mut resp = Redirect::to(auth_url.as_str()).into_response();
@@ -806,7 +806,7 @@ pub(crate) async fn handler_callback(
             PENDING_TOTP_COOKIE,
             &serde_json::to_vec(&pending)?,
             gitquarry_core::crypto::CompressionStrategy::None,
-        );
+        )?;
         let (pending_header, pending_value) = set_cookie(
             &headers,
             PENDING_TOTP_COOKIE,

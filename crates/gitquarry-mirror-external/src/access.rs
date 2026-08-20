@@ -230,7 +230,7 @@ pub async fn list_external_mirrors_with_etags(
 }
 
 pub async fn delete_external_mirror(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, mirror_id: &str) {
-    mirrors_collection(uid).delete(backend, cipher, mirror_id).await;
+    let _ = mirrors_collection(uid).delete(backend, cipher, mirror_id).await;
 }
 
 /// Links one local `gitquarry_core::storage::merge_requests::MergeRequestMeta`

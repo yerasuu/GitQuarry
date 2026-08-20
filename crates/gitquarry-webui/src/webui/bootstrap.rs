@@ -129,7 +129,7 @@ pub(crate) async fn handler_bootstrap_get(
         BOOTSTRAP_COOKIE,
         &serde_json::to_vec(&grant)?,
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     let (header, value) = set_cookie(&headers, BOOTSTRAP_COOKIE, &B64.encode(sealed), GRANT_TTL_SECS);
     let mut resp = Redirect::to("/_users").into_response();
     resp.headers_mut().insert(

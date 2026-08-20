@@ -96,7 +96,7 @@ pub async fn put_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, lock: &
 }
 
 pub async fn delete_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, id: u64) {
-    lfs_locks_collection(uid).delete(backend, cipher, &id.to_string()).await;
+    let _ = lfs_locks_collection(uid).delete(backend, cipher, &id.to_string()).await;
 }
 
 /// Every lock currently held on this repo. Skips [`COUNTER_KEY`], same

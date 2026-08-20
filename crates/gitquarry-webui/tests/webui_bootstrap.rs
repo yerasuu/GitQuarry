@@ -68,11 +68,14 @@ fn a_cookie_sealed_under_another_name_is_no_grant() {
     let ctx = test_ctx(dir.path());
     // Right cipher, wrong AAD — a session cookie can't be replayed as a
     // bootstrap grant.
-    let sealed = ctx.cipher.seal(
-        "web-session",
-        br#"{"exp":9999999999}"#,
-        gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    let sealed = ctx
+        .cipher
+        .seal(
+            "web-session",
+            br#"{"exp":9999999999}"#,
+            gitquarry_core::crypto::CompressionStrategy::None,
+        )
+        .unwrap();
     use base64::Engine;
     let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sealed);
     assert!(!holds_grant(&ctx, &with_cookie(&value)));
@@ -82,11 +85,14 @@ fn a_cookie_sealed_under_another_name_is_no_grant() {
 fn an_expired_grant_is_no_grant() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let sealed = ctx.cipher.seal(
-        BOOTSTRAP_COOKIE,
-        br#"{"exp":1}"#,
-        gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    let sealed = ctx
+        .cipher
+        .seal(
+            BOOTSTRAP_COOKIE,
+            br#"{"exp":1}"#,
+            gitquarry_core::crypto::CompressionStrategy::None,
+        )
+        .unwrap();
     use base64::Engine;
     let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sealed);
     assert!(!holds_grant(&ctx, &with_cookie(&value)));
@@ -96,11 +102,14 @@ fn an_expired_grant_is_no_grant() {
 fn a_live_sealed_grant_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let sealed = ctx.cipher.seal(
-        BOOTSTRAP_COOKIE,
-        br#"{"exp":9999999999}"#,
-        gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    let sealed = ctx
+        .cipher
+        .seal(
+            BOOTSTRAP_COOKIE,
+            br#"{"exp":9999999999}"#,
+            gitquarry_core::crypto::CompressionStrategy::None,
+        )
+        .unwrap();
     use base64::Engine;
     let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sealed);
     assert!(holds_grant(&ctx, &with_cookie(&value)));

@@ -68,5 +68,5 @@ pub async fn reserve_namespace(backend: &dyn Backend, cipher: &Cipher, name: &st
 /// `add_user`/`add_group` after the reservation succeeded) to release a
 /// reservation nothing ended up using.
 pub async fn release_namespace(backend: &dyn Backend, name: &str) {
-    NAMESPACE_INDEX.release(backend, name).await;
+    let _ = NAMESPACE_INDEX.release(backend, name).await;
 }
