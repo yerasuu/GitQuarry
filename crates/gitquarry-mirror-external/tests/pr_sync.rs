@@ -664,3 +664,42 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
         "the comment was exported twice"
     );
 }
+
+/// A PR opened from a fork carries a head branch that lives in that fork,
+/// which Track A never mirrors — so it can never be imported, and must be
+/// skipped instead of failing `create` again on every tick.
+#[tokio::test]
+async fn an_external_pr_whose_branches_arent_mirrored_is_skipped_not_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    put_branch(&target, "main", &"a".repeat(40)).await;
+    let mirror = test_mirror();
+
+    let forge = FakeForge::default().with_pr(RemotePr {
+        number: 11,
+        title: "from a fork".to_string(),
+        body: String::new(),
+        // Never mirrored here: it only exists in the contributor's fork.
+        source_branch: "contributor-patch".to_string(),
+        target_branch: "main".to_string(),
+        state: RemotePrState::Open,
+        author: "carol".to_string(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+        updated_at: "2024-01-01T00:00:00Z".to_string(),
+        ..Default::default()
+    });
+
+    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+        .await
+        .unwrap();
+
+    let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, &target.uid)
+        .await
+        .unwrap();
+    assert!(local_prs.is_empty());
+    let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
+        .await
+        .unwrap();
+    assert!(links.is_empty(), "a PR that can't be imported shouldn't get a link");
+}

@@ -24,7 +24,7 @@ use gitquarry_core::domain::pull_request::{self, NewPullRequest};
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::pull_requests::{self, PrComment, PrStatus};
 use gitquarry_forge_clients::{self as forge, ForgeApi, NewRemotePr, PrPatch, RemotePr, RemotePrState};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 /// What a local comment's body looks like on the external side. A plain
 /// thread comment goes out verbatim; a line comment gets its `path:line`
@@ -105,11 +105,27 @@ pub async fn sync_pull_requests_once_with(
         .map(str::to_string);
 
     let mut linked_by_external: HashMap<u64, u64> = links.iter().map(|l| (l.external_number, l.local_number)).collect();
-    let mut linked_locals: HashSet<u64> = links.iter().map(|l| l.local_number).collect();
+    // `BTreeSet`, not `HashSet`: the per-PR pass below walks this, and a
+    // sync whose order changes run to run is that much harder to read a
+    // log of.
+    let mut linked_locals: BTreeSet<u64> = links.iter().map(|l| l.local_number).collect();
 
     let remote_prs = forge.list_pull_requests(cursor.as_deref()).await?;
+    // A PR's head/base have to exist here before a local one can be
+    // created for it (`domain::pull_request::create` refuses otherwise) —
+    // and for a PR opened from a *fork* on the external side, the head
+    // branch lives in that fork and Track A never mirrors it, so it can
+    // never exist. Checked up front so those PRs are skipped once with a
+    // count, instead of each failing `create` again on every single tick.
+    let (manifest, _etag) = resolved.remote.get_manifest().await?;
+    let mirrored_branch = |branch: &str| manifest.refs.contains_key(&format!("refs/heads/{branch}"));
+    let mut unmirrored_branches = 0usize;
     for remote_pr in &remote_prs {
         if linked_by_external.contains_key(&remote_pr.number) || !mirror.direction.allows_pull() {
+            continue;
+        }
+        if !mirrored_branch(&remote_pr.source_branch) || !mirrored_branch(&remote_pr.target_branch) {
+            unmirrored_branches += 1;
             continue;
         }
         match create_local_pr_from_remote(ctx, resolved, &mirror.id, remote_pr).await {
@@ -122,6 +138,13 @@ pub async fn sync_pull_requests_once_with(
                 remote_pr.number, mirror.label
             ),
         }
+    }
+
+    if unmirrored_branches > 0 {
+        eprintln!(
+            "gitquarry: {unmirrored_branches} pull request(s) on mirror '{}' aren't importable: their branches aren't mirrored here (a PR opened from a fork can't be)",
+            mirror.label
+        );
     }
 
     let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, uid).await?;
