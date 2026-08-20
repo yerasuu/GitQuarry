@@ -436,17 +436,15 @@ pub async fn sync_mirror_once(
         let remote_sha = remote_refs.get(&ref_name).map(String::as_str);
         let last_synced = mirror.last_synced.get(&ref_name).map(String::as_str);
 
-        // `plan_ref_sync` needs the *remote* sha's objects already present
-        // in `bare_repo` for two of its branches: a straight pull (local
-        // missing the ref entirely), and the "both moved" ancestor check
-        // (whichever direction wins, `is_ancestor` still has to resolve
-        // both shas). The plain "only local moved" push case doesn't touch
-        // remote objects at all, so it's deliberately excluded here rather
-        // than always prefetching — this can run on every synced ref, and a
-        // push-only mirror should never need a network round trip just to
-        // push.
-        let remote_moved = remote_sha.is_some() && remote_sha != last_synced;
-        let needs_remote_objects = remote_moved && local_sha != remote_sha;
+        // `plan_ref_sync` resolves the remote sha locally in every branch
+        // where the two sides differ — `is_ancestor` has to walk both, in
+        // either direction, so even a push-only mirror needs the remote's
+        // objects to tell "local is ahead" from "the two diverged". Only
+        // two cases skip the round trip: the remote doesn't have this ref
+        // at all (nothing to fetch), or both sides already agree (nothing
+        // to resolve). This is also the *only* fetch on the pull path —
+        // `RefAction::Pull` below deliberately doesn't repeat it.
+        let needs_remote_objects = remote_sha.is_some() && local_sha != remote_sha;
         if needs_remote_objects
             && let Err(e) = crate::git_remote::fetch_ref_from_remote_url(bare_repo, &url, &ref_name).await
         {
@@ -475,7 +473,9 @@ pub async fn sync_mirror_once(
             }
             Some(RefAction::Pull(sha)) => {
                 async {
-                    crate::git_remote::fetch_ref_from_remote_url(bare_repo, &url, &ref_name).await?;
+                    // No fetch here: every path that reaches a `Pull` has
+                    // already gone through the prefetch above (a pull means
+                    // the two sides differ, which is exactly its trigger).
                     gitquarry_core::git::update_ref(bare_repo, &ref_name, &sha).await?;
                     persist_pulled_ref_to_s3(resolved, bare_repo, &ref_name, &sha).await?;
                     report.pulled += 1;
