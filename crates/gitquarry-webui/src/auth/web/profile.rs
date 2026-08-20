@@ -167,7 +167,7 @@ pub fn render_profile(
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
     html! {
-        h3 { (identicon::account_avatar(username, avatar_content_type, 28)) (username) }
+        h3 { (identicon::account_avatar(username, avatar_content_type, 20)) (username) }
         @if is_own_profile {
             p class="muted" { a href="/_account/profile" { (crate::auth::i18n::profile::account_settings_link(locale)) } }
         }

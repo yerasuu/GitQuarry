@@ -407,7 +407,7 @@ async fn render_pulls_list_impl(
                             td { (pr.number) }
                             td { a href=(repo_link(repo_name, "pull", "").number(pr.number).to_string()) { (pr.title) } }
                             td { span class=(status_badge_class(pr.status)) { (status_label(pr.status, locale)) } }
-                            td { (crate::webui::identicon::account_avatar(&pr.author, avatars.get(&pr.author).map(String::as_str), 16)) " " (pr.author) }
+                            td { (crate::webui::identicon::account_avatar(&pr.author, avatars.get(&pr.author).map(String::as_str), 14)) " " (pr.author) }
                         }
                     }
                 }
@@ -434,7 +434,7 @@ async fn render_pulls_list_impl(
                         td { (pr.number) }
                         td { a href=(repo_link(repo_name, "pull", "").number(pr.number).to_string()) { (pr.title) } }
                         td { span class=(status_badge_class(pr.status)) { (status_label(pr.status, locale)) } }
-                        td { (crate::webui::identicon::account_avatar(&pr.author, avatars.get(&pr.author).map(String::as_str), 16)) " " (pr.author) }
+                        td { (crate::webui::identicon::account_avatar(&pr.author, avatars.get(&pr.author).map(String::as_str), 14)) " " (pr.author) }
                     }
                 }
             }

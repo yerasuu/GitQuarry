@@ -438,7 +438,7 @@ pub fn render_user(
         @let card_target = format!("#user-card-{}", user.username);
         div class="card card-pad user-card" id=(format!("user-card-{}", user.username)) {
             h4 {
-                (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 24))
+                (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 20))
                 (user.username)
                 @if let Some(email) = &user.email {
                     " " span class="muted" { (format!("<{email}>")) }
