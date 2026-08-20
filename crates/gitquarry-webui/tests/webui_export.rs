@@ -43,3 +43,16 @@ fn raw_pdf_is_handed_over_as_a_download() {
     assert!(disposition.starts_with("attachment;"), "{disposition}");
     assert!(disposition.contains("spec.pdf"), "{disposition}");
 }
+
+#[test]
+fn attachment_keeps_the_filename_inside_its_quoted_string() {
+    assert_eq!(attachment("notes.txt"), "attachment; filename=\"notes.txt\"");
+    // A repo or asset name carrying a quote used to close the string early
+    // and let the rest read as header parameters.
+    assert_eq!(attachment("a\"b.zip"), "attachment; filename=\"a'b.zip\"");
+    assert_eq!(attachment("back\\slash"), "attachment; filename=\"back'slash\"");
+    // Nothing a header value can't carry survives.
+    assert_eq!(attachment("bad\r\nname"), "attachment; filename=\"badname\"");
+    // And an empty result still names something.
+    assert_eq!(attachment("   "), "attachment; filename=\"file\"");
+}
