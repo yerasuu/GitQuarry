@@ -148,11 +148,42 @@ pub async fn verify_detached_signature(data: &[u8], signature: &str, armored_key
     let out = Command::new("gpg")
         .arg("--homedir")
         .arg(dir.path())
-        .args(["--batch", "--no-tty", "--verify"])
+        .args(["--batch", "--no-tty", "--status-fd=1", "--verify"])
         .arg(&sig_path)
         .arg(&data_path)
         .output()
         .await
         .map_err(|e| spawn_error("this signature", e))?;
-    Ok(out.status.success())
+    Ok(status_says_good(&String::from_utf8_lossy(&out.stdout)))
 }
+
+/// Reads `gpg`'s machine-readable status output and answers the one
+/// question this crate asks of it.
+///
+/// The exit status alone is not that answer: `gpg --verify` exits 0 for a
+/// signature made by an *expired* key (it prints `EXPKEYSIG` and calls it a
+/// day), so trusting the status code rendered a commit signed by a key that
+/// has since lapsed exactly as verified as one signed by a live key. A
+/// revoked key (`REVKEYSIG`) is the same shape of problem, and the one that
+/// actually matters: revocation is how someone says "this key is no longer
+/// mine".
+fn status_says_good(status: &str) -> bool {
+    let mut good = false;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("[GNUPG:] ") else {
+            continue;
+        };
+        let keyword = rest.split_whitespace().next().unwrap_or("");
+        match keyword {
+            "GOODSIG" => good = true,
+            // Any of these means gpg had something to say about the key
+            // beyond "it signed this", and none of them are a yes.
+            "EXPKEYSIG" | "REVKEYSIG" | "BADSIG" | "ERRSIG" | "EXPSIG" | "NO_PUBKEY" => return false,
+            _ => {}
+        }
+    }
+    good
+}
+
+#[cfg(test)]
+mod tests;
