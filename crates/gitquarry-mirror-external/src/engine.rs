@@ -10,7 +10,6 @@
 
 use crate::access::{self, RefSyncStatus};
 use anyhow::{Result, bail};
-use futures::stream::{self, TryStreamExt};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::uid::Uid;
@@ -18,10 +17,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// How many mirrors of one repo sync concurrently — same bound
-/// `gitquarry_core::mirror::DOWNLOAD_CONCURRENCY` uses for pack downloads.
-const MIRROR_SYNC_CONCURRENCY: usize = 8;
 
 /// How many CAS-conflict retries [`persist_pulled_ref_to_s3`] attempts
 /// before giving up — same bound `storage::pull_requests::next_pr_number`
@@ -96,48 +91,53 @@ fn credentialed_url_impl(remote_url: &str, token: &str) -> String {
     }
 }
 
-/// Syncs every enabled mirror of one repo, bounded concurrency — mirrors
-/// are independent of each other, so one failing must never block the
-/// others (log-and-continue, same resilience `mirror::gc::sweep_once` and
-/// the other periodic sweeps already establish for their own
-/// per-item sweeps).
+/// Syncs every enabled mirror of one repo, one at a time — mirrors are
+/// independent of each other, so one failing must never block the others
+/// (log-and-continue, same resilience `mirror::gc::sweep_once` and the
+/// other periodic sweeps already establish for their own per-item sweeps).
+///
+/// Sequential on purpose, not a bounded fan-out: every [`sync_mirror_once`]
+/// holds this repo's own lock (`AppContext::open_mirror`) for its whole
+/// git-side sweep, so concurrent mirrors of the *same* repo can only queue
+/// behind each other anyway — a concurrency bound here would buy nothing
+/// but the illusion of parallelism.
 pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Result<()> {
-    let mirrors = crate::domain::list(ctx, &resolved.uid).await?;
-    stream::iter(mirrors.into_iter().filter(|m| m.enabled).map(Ok::<_, anyhow::Error>))
-        .try_for_each_concurrent(Some(MIRROR_SYNC_CONCURRENCY), |mirror| async move {
-            let mut failure = match sync_mirror_once(ctx, resolved, &mirror).await {
-                // A per-ref failure never makes this an `Err` — see
-                // [`SyncReport`] — so the report is where "the sweep ran
-                // but nothing moved" has to be read off.
-                Ok(report) => report.failure_summary(),
-                Err(e) => {
-                    eprintln!(
-                        "gitquarry-mirror-external: warning: mirror '{}' ({}) sync failed: {e:#}",
-                        mirror.label, mirror.id
-                    );
-                    Some(format!("{e:#}"))
-                }
-            };
-            // Track B, opt-in: PR discovery assumes Track A's own ref sync
-            // right above already pulled every PR's head/base branch
-            // locally, so this always runs after, never in parallel with
-            // it.
-            if mirror.sync_pull_requests
-                && let Err(e) = crate::pr_sync::sync_pull_requests_once(ctx, resolved, &mirror).await
-            {
+    for mirror in crate::domain::list(ctx, &resolved.uid)
+        .await?
+        .into_iter()
+        .filter(|m| m.enabled)
+    {
+        let mut failure = match sync_mirror_once(ctx, resolved, &mirror).await {
+            // A per-ref failure never makes this an `Err` — see
+            // [`SyncReport`] — so the report is where "the sweep ran but
+            // nothing moved" has to be read off.
+            Ok(report) => report.failure_summary(),
+            Err(e) => {
                 eprintln!(
-                    "gitquarry-mirror-external: warning: PR sync for mirror '{}' ({}) failed: {e:#}",
+                    "gitquarry-mirror-external: warning: mirror '{}' ({}) sync failed: {e:#}",
                     mirror.label, mirror.id
                 );
-                // Only if the ref sync above didn't already fail: that one
-                // is the more fundamental failure, and it's usually the
-                // cause of this one rather than a second, separate problem.
-                failure.get_or_insert_with(|| format!("{e:#}"));
+                Some(format!("{e:#}"))
             }
-            record_sync_outcome(ctx, &resolved.uid, &mirror.id, failure).await;
-            Ok(())
-        })
-        .await
+        };
+        // Track B, opt-in: PR discovery assumes Track A's own ref sync
+        // right above already pulled every PR's head/base branch locally,
+        // so this always runs after, never in parallel with it.
+        if mirror.sync_pull_requests
+            && let Err(e) = crate::pr_sync::sync_pull_requests_once(ctx, resolved, &mirror).await
+        {
+            eprintln!(
+                "gitquarry-mirror-external: warning: PR sync for mirror '{}' ({}) failed: {e:#}",
+                mirror.label, mirror.id
+            );
+            // Only if the ref sync above didn't already fail: that one is
+            // the more fundamental failure, and it's usually the cause of
+            // this one rather than a second, separate problem.
+            failure.get_or_insert_with(|| format!("{e:#}"));
+        }
+        record_sync_outcome(ctx, &resolved.uid, &mirror.id, failure).await;
+    }
+    Ok(())
 }
 
 /// Persists a whole-mirror sync outcome to
@@ -417,12 +417,16 @@ pub async fn sync_mirror_once(
     mirror: &access::ExternalMirror,
 ) -> Result<SyncReport> {
     let mut report = SyncReport::default();
+    let url = credentialed_url(&mirror.remote_url, &mirror.token);
+    // Before `open_mirror`, deliberately: this is the one round trip that
+    // needs no local repo at all, and it's the one most likely to be slow
+    // (an unreachable or throttling forge). Taking the repo's lock first
+    // would make every clone and push of this repo wait behind it.
+    let remote_refs = crate::git_remote::ls_remote_refs(&url).await?;
+
     let local_mirror = ctx.open_mirror(resolved).await?;
     let bare_repo = &local_mirror.path;
-    let url = credentialed_url(&mirror.remote_url, &mirror.token);
-
     let local_refs = crate::git_remote::list_refs_with_sha(bare_repo).await?;
-    let remote_refs = crate::git_remote::ls_remote_refs(&url).await?;
     let is_branch_or_tag = |name: &&String| name.starts_with("refs/heads/") || name.starts_with("refs/tags/");
     let ref_names: BTreeSet<String> = local_refs
         .keys()

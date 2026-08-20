@@ -11,12 +11,9 @@ gitquarry-core = { path = "../gitquarry-core" }
 gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
 s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
-s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
 anyhow = "1.0.104"
-futures = "0.3.33"
 rand = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
-tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
 
 [features]
