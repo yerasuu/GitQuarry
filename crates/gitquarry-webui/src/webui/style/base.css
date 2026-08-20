@@ -442,7 +442,31 @@ table.diff-annotated tr.diff-comment td { white-space: normal; padding: var(--pa
    small one. `object-fit` matters only for the uploaded half — an identicon
    is always square — but costs nothing on an SVG and keeps one rule for
    both. */
-.avatar { border-radius: 22%; object-fit: cover; vertical-align: middle; margin-right: 0.4em; flex-shrink: 0; }
+.avatar {
+  /* Sized off the surrounding text, exactly like `.icon` above, instead of
+     the per-call-site pixel attrs this used to carry. A filled square reads
+     heavier than the letters beside it, so a fixed 14px next to a name sat
+     taller than the name itself — and the ratio then drifted again with the
+     density switch and the text-size toggle, which move the text but not a
+     pixel constant. Twice the text size: an avatar that only matched the
+     text read as a bullet point rather than a picture of someone, and at
+     `2em` it spans roughly two lines' worth of cap height — recognisable at
+     a glance, still clearly subordinate to the name it labels. */
+  width: 2em;
+  height: 2em;
+  border-radius: 22%;
+  object-fit: cover;
+  /* `middle`, not a small negative baseline nudge: at twice the text size
+     the box is taller than the line it sits on, so it has to be centred
+     against the text rather than dropped slightly below the baseline. */
+  vertical-align: middle;
+  margin-right: 0.4em;
+  flex-shrink: 0;
+}
+/* The one avatar that isn't beside a name: the account settings page shows
+   it on its own as the thing being edited, so it keeps the explicit size
+   its call site asks for. */
+.avatar-fixed { width: auto; height: auto; }
 .bar-row td { padding: 0.15em 0.5em; }
 /* Repo summary's language bar: one stacked row of same-line segments
    (unlike `.bar-row`'s independent bar-per-row), each segment's width/hue
