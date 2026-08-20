@@ -38,7 +38,7 @@ binario, un solo proceso — el boundary es de compilacion, no de deploy.
 
 ## Arquitectura final
 
-- **`gitquarry-core`** (lib, sin bin): dominio (`domain::{repo,pull_request,
+- **`gitquarry-core`** (lib, sin bin): dominio (`domain::{repo,merge_request,
   release,remote_fork}`), storage, auth de negocio (`auth::{access,domain,
   oidc,password,totp,entities,federation_token}` — no `web`/`i18n`, eso es
   presentacion), git (ssh + smart-HTTP + `git::browse`), mirror, crypto,
@@ -64,7 +64,7 @@ binario, un solo proceso — el boundary es de compilacion, no de deploy.
   fine-grained para el Basic-Auth de git-smart-HTTP) se movio a
   `auth::federation_token` en `gitquarry-core`: `git::http` lo llama
   directo y no puede depender de un crate que a su vez depende de core.
-  El resto de `federation_client` (lookups de browse/PR-proxy) se quedo en
+  El resto de `federation_client` (lookups de browse/MR-proxy) se quedo en
   `webui`, es presentacion genuina.
 - `i18n::msg!` (la macro que expande un catalogo a un `match Locale`) paso
   de `pub(crate) use` a `#[macro_export]` + `pub use` — cualquier catalogo

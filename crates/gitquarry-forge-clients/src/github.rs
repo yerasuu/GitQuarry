@@ -2,7 +2,7 @@
 //! real-account [`super::ForgeApi`] implementation. GitLab/Codeberg follow
 //! the same shape once this one's anti-loop bookkeeping is proven.
 
-use super::{ForgeApi, NewRemotePr, PrPatch, RemoteComment, RemotePr, RemotePrState};
+use super::{ForgeApi, MrPatch, NewRemoteMr, RemoteComment, RemoteMr, RemoteMrState};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -20,7 +20,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const USER_AGENT: &str = "gitquarry";
 /// One request's page size, and how many pages a list call will walk
 /// before giving up. Unpaginated single-page listings silently truncated
-/// every PR thread past the first page — a repo's comment history is
+/// every MR thread past the first page — a repo's comment history is
 /// exactly the kind of thing that outgrows one page and then quietly
 /// stops syncing. The page cap is the backstop against a pathological
 /// thread pinning a sync tick forever; hitting it logs rather than
@@ -147,28 +147,28 @@ pub struct GhPullRequest {
     pub merge_commit_sha: Option<String>,
 }
 
-impl From<GhPullRequest> for RemotePr {
-    fn from(pr: GhPullRequest) -> Self {
-        let state = if pr.merged {
-            RemotePrState::Merged
-        } else if pr.state == "closed" {
-            RemotePrState::Closed
+impl From<GhPullRequest> for RemoteMr {
+    fn from(mr: GhPullRequest) -> Self {
+        let state = if mr.merged {
+            RemoteMrState::Merged
+        } else if mr.state == "closed" {
+            RemoteMrState::Closed
         } else {
-            RemotePrState::Open
+            RemoteMrState::Open
         };
-        RemotePr {
-            number: pr.number,
-            title: pr.title,
-            body: pr.body.unwrap_or_default(),
-            source_branch: pr.head.branch,
-            target_branch: pr.base.branch,
+        RemoteMr {
+            number: mr.number,
+            title: mr.title,
+            body: mr.body.unwrap_or_default(),
+            source_branch: mr.head.branch,
+            target_branch: mr.base.branch,
             state,
-            author: pr.user.login,
-            created_at: pr.created_at,
-            updated_at: pr.updated_at,
-            merged_at: pr.merged_at,
-            merged_by: pr.merged_by.map(|u| u.login),
-            merge_commit_sha: pr.merge_commit_sha,
+            author: mr.user.login,
+            created_at: mr.created_at,
+            updated_at: mr.updated_at,
+            merged_at: mr.merged_at,
+            merged_by: mr.merged_by.map(|u| u.login),
+            merge_commit_sha: mr.merge_commit_sha,
         }
     }
 }
@@ -228,13 +228,13 @@ async fn ok_json<T: for<'de> Deserialize<'de>>(resp: reqwest::Response, url: &st
 
 #[async_trait::async_trait]
 impl ForgeApi for GitHubForge {
-    async fn list_pull_requests(&self, since: Option<&str>) -> Result<Vec<RemotePr>> {
+    async fn list_merge_requests(&self, since: Option<&str>) -> Result<Vec<RemoteMr>> {
         // GitHub's `/pulls` list has no `since` filter of its own (unlike
         // `/issues`, which does) — sorted newest-updated-first instead, so a
         // cursor'd caller stops consuming as soon as it crosses `since`
         // instead of paging through the whole history every tick. Without a
         // cursor (a mirror's first tick) it does page, or the repo's older
-        // PRs would never be discovered at all.
+        // MRs would never be discovered at all.
         let mut out = Vec::new();
         for page in 1..=MAX_PAGES {
             let url = self.pulls_url(&format!(
@@ -245,24 +245,24 @@ impl ForgeApi for GitHubForge {
                 .send()
                 .await
                 .with_context(|| format!("couldn't reach {url}"))?;
-            let prs: Vec<GhPullRequest> = ok_json(resp, &url).await?;
-            let last_page = prs.len() < PER_PAGE;
+            let mrs: Vec<GhPullRequest> = ok_json(resp, &url).await?;
+            let last_page = mrs.len() < PER_PAGE;
             let before = out.len();
             out.extend(
-                prs.into_iter()
-                    .map(RemotePr::from)
-                    .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since)),
+                mrs.into_iter()
+                    .map(RemoteMr::from)
+                    .take_while(|mr| since.is_none_or(|since| mr.updated_at.as_str() > since)),
             );
             let crossed_cursor = out.len() - before < PER_PAGE;
             if last_page || crossed_cursor {
                 return Ok(out);
             }
         }
-        eprintln!("gitquarry: warning: stopped listing GitHub PRs after {MAX_PAGES} pages, older ones not synced");
+        eprintln!("gitquarry: warning: stopped listing GitHub MRs after {MAX_PAGES} pages, older ones not synced");
         Ok(out)
     }
 
-    async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>> {
+    async fn get_merge_request(&self, number: u64) -> Result<Option<RemoteMr>> {
         let url = self.pulls_url(&format!("/{number}"));
         let resp = self
             .request(reqwest::Method::GET, &url)
@@ -275,7 +275,7 @@ impl ForgeApi for GitHubForge {
         Ok(Some(ok_json::<GhPullRequest>(resp, &url).await?.into()))
     }
 
-    async fn create_pull_request(&self, new: NewRemotePr) -> Result<RemotePr> {
+    async fn create_merge_request(&self, new: NewRemoteMr) -> Result<RemoteMr> {
         let url = self.pulls_url("");
         let resp = self
             .request(reqwest::Method::POST, &url)
@@ -291,17 +291,17 @@ impl ForgeApi for GitHubForge {
         Ok(ok_json::<GhPullRequest>(resp, &url).await?.into())
     }
 
-    async fn update_pull_request(&self, number: u64, patch: PrPatch) -> Result<()> {
+    async fn update_merge_request(&self, number: u64, patch: MrPatch) -> Result<()> {
         let url = self.pulls_url(&format!("/{number}"));
         // `Merged` isn't a settable `state` via this endpoint — GitHub only
-        // ever transitions a PR to merged through the dedicated merge
-        // endpoint (`merge_pull_request`); a caller asking to patch straight
+        // ever transitions an MR to merged through the dedicated merge
+        // endpoint (`accept_merge_request`); a caller asking to patch straight
         // to `Merged` is a caller bug, not something to silently reinterpret
         // here, so it's simply never sent.
         let state = match patch.state {
-            Some(RemotePrState::Open) => Some("open"),
-            Some(RemotePrState::Closed) => Some("closed"),
-            Some(RemotePrState::Merged) | None => None,
+            Some(RemoteMrState::Open) => Some("open"),
+            Some(RemoteMrState::Closed) => Some("closed"),
+            Some(RemoteMrState::Merged) | None => None,
         };
         let resp = self
             .request(reqwest::Method::PATCH, &url)
@@ -321,7 +321,7 @@ impl ForgeApi for GitHubForge {
         Ok(())
     }
 
-    async fn merge_pull_request(&self, number: u64) -> Result<RemotePr> {
+    async fn accept_merge_request(&self, number: u64) -> Result<RemoteMr> {
         let url = self.pulls_url(&format!("/{number}/merge"));
         let resp = self
             .request(reqwest::Method::PUT, &url)
@@ -336,15 +336,15 @@ impl ForgeApi for GitHubForge {
         }
         // The merge response itself only carries `{sha, merged, message}` —
         // not `merged_at`/`merged_by`, which `mark_merged_externally` also
-        // wants — so this re-fetches the now-merged PR instead of mapping
+        // wants — so this re-fetches the now-merged MR instead of mapping
         // the merge response directly.
-        self.get_pull_request(number)
+        self.get_merge_request(number)
             .await?
-            .with_context(|| format!("PR #{number} vanished right after merging"))
+            .with_context(|| format!("MR #{number} vanished right after merging"))
     }
 
     async fn list_comments(&self, number: u64) -> Result<Vec<RemoteComment>> {
-        // GitHub models PR comments as issue comments — a PR *is* an issue
+        // GitHub models MR comments as issue comments — an MR *is* an issue
         // under the hood, same numbering.
         let mut out = Vec::new();
         for page in 1..=MAX_PAGES {
@@ -362,7 +362,7 @@ impl ForgeApi for GitHubForge {
             }
         }
         eprintln!(
-            "gitquarry: warning: stopped listing comments on GitHub PR #{number} after {MAX_PAGES} pages, the rest wasn't imported"
+            "gitquarry: warning: stopped listing comments on GitHub MR #{number} after {MAX_PAGES} pages, the rest wasn't imported"
         );
         Ok(out)
     }

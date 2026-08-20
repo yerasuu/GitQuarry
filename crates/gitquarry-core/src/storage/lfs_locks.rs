@@ -52,7 +52,7 @@ pub fn lfs_locks_collection(uid: &Uid) -> Collection {
 
 /// Mints the next sequential lock id for this repo — same CAS get/
 /// increment/put retry loop as `issues::next_issue_number`, against its own
-/// counter (lock ids are their own sequence, unrelated to issue/PR/milestone
+/// counter (lock ids are their own sequence, unrelated to issue/MR/milestone
 /// numbers).
 pub async fn next_lock_id(backend: &dyn Backend, cipher: &Cipher, uid: &Uid) -> Result<u64> {
     let collection = lfs_locks_collection(uid);

@@ -243,7 +243,7 @@ fn signature_indicator(signature_status: char, verified_by: Option<&str>, instan
 /// just with a per-label color inlined instead of a fixed CSS var (the
 /// color is dynamic per-repo data, can't be precomputed into a class, same
 /// reasoning `page_chrome.rs`'s language bar documents for its own per-
-/// language hue). Shared by issue and PR label rendering — `RepoConfig.labels`
+/// language hue). Shared by issue and MR label rendering — `RepoConfig.labels`
 /// is one core-owned vocabulary, not owned by either view.
 #[cfg(any(test, feature = "test-util"))]
 pub fn label_pill(name: &str, color: &str) -> Markup {
@@ -341,7 +341,7 @@ pub(crate) fn commit_table(repo_name: &str, commits: &[CommitInfo], avatars: &Av
 /// `--shortstat` pass (see `git::browse::log_recent_with_stats`'s own doc
 /// comment), which only the summary tab's bounded "recent commits" list
 /// pays for. `commit_table`'s other five call sites (tree/log/activity/
-/// compare/pulls) keep using plain [`CommitInfo`], no `git log` shape
+/// compare/merges) keep using plain [`CommitInfo`], no `git log` shape
 /// change forced on them for a column they don't render.
 pub(crate) fn commit_table_with_stats(
     repo_name: &str,
@@ -601,7 +601,7 @@ pub(super) fn side_by_side_diff(diff: &str) -> Markup {
     }
 }
 
-/// Every `#123` in `text` that names a real pull request on `target`,
+/// Every `#123` in `text` that names a real merge request on `target`,
 /// mapped to its link. What isn't in the map isn't linked, which is how a
 /// mention of a number that doesn't exist stays plain text instead of
 /// becoming a dead link.
@@ -624,13 +624,13 @@ pub(crate) async fn resolve_number_mentions(
 
     let mut resolved = std::collections::HashMap::new();
     for number in numbers {
-        if domain::pull_request::get(ctx, target, number)
+        if domain::merge_request::get(ctx, target, number)
             .await
             .ok()
             .flatten()
             .is_some()
         {
-            resolved.insert(number, repo_link(repo_name, "pull", "").number(number).to_string());
+            resolved.insert(number, repo_link(repo_name, "merge", "").number(number).to_string());
         }
     }
     resolved
@@ -642,11 +642,11 @@ pub(crate) async fn resolve_number_mentions(
 /// `can_delete` (author-only too, but `Developer`+ on the repo also
 /// qualifies — moderating someone else's comment away is different from
 /// rewriting it) gate the edit/delete forms independently. `mutation_prefix`
-/// is `"/_issues"` or `"/_pulls"` — the two POST targets are
+/// is `"/_issues"` or `"/_merges"` — the two POST targets are
 /// `{mutation_prefix}/comment/edit` and `{mutation_prefix}/comment/delete`,
 /// same route-naming convention the existing `/_issues/comment` and
-/// `/_pulls/comment` (create) routes use. Used by a PR's own flat thread and
-/// its annotated inline diff comments ([`super::pulls::annotated_diff`]); an
+/// `/_merges/comment` (create) routes use. Used by an MR's own flat thread and
+/// its annotated inline diff comments ([`super::merges::annotated_diff`]); an
 /// issue's own comments render this inline instead, predating this shared
 /// extraction.
 #[allow(clippy::too_many_arguments)]

@@ -179,9 +179,9 @@ pub async fn is_ancestor(git_dir: &Path, ancestor: &str, descendant: &str) -> Re
 }
 
 /// Fetches `src_rev` from the local bare repo at `src_git_dir` into
-/// `dest_git_dir` under `local_ref` — a cross-fork pull request's target
+/// `dest_git_dir` under `local_ref` — a cross-fork merge request's target
 /// mirror pulling in the fork's objects, without the two repos sharing any
-/// storage (see `domain::pull_request`'s own doc comment: forks are fully
+/// storage (see `domain::merge_request`'s own doc comment: forks are fully
 /// independent S3 prefixes and bare mirrors, there's no other path for one
 /// mirror to see another's objects). `local_ref` is never written back to
 /// `dest_git_dir`'s own manifest/CAS state — it's scratch, fine that the
@@ -230,7 +230,7 @@ pub enum MergeTreeOutcome {
 /// (`--merge-base=<commit>`, added in git 2.40) instead of letting git find
 /// one itself. A real merge of two branches wants `None` (git's own
 /// merge-base search is exactly what a real `git merge` would do); replaying
-/// one commit onto a new parent — [`domain::pull_request::merge`]'s rebase
+/// one commit onto a new parent — [`domain::merge_request::merge`]'s rebase
 /// strategy — wants `Some(that commit's own first parent)`, which is what
 /// turns this 3-way merge into cherry-pick semantics (apply just that
 /// commit's own diff, not everything back to whatever git would've picked
@@ -297,7 +297,7 @@ pub async fn merge_tree(
 /// with, since there's no working tree/index to run a real `git
 /// merge`/`git commit` against a bare mirror. `tree`/`parents` are shas
 /// this code already computed/read (trusted); `message` reaches `-m` as a
-/// single argv value, so a leading `-` (from a PR title) can't be parsed as
+/// single argv value, so a leading `-` (from an MR title) can't be parsed as
 /// a flag — verified directly against git 2.55.
 ///
 /// `author`/`committer` are each `(name, email, date)`, set via
@@ -367,7 +367,7 @@ pub async fn commit_tree(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// One source-branch commit as [`domain::pull_request::merge`]'s rebase
+/// One source-branch commit as [`domain::merge_request::merge`]'s rebase
 /// strategy needs to replay it onto a new parent: enough to call
 /// [`merge_tree`] with `parent` as the explicit merge-base (cherry-pick
 /// semantics) and then [`commit_tree`] with the original author preserved.
@@ -375,7 +375,7 @@ pub async fn commit_tree(
 /// `parent` is `None` for a root commit (no parent to diff against) — the
 /// rebase strategy bails on that rather than guessing a merge base, same as
 /// it bails on an actual merge commit ([`parents`] holding more than one
-/// sha): both are edge cases a linear PR branch doesn't hit in practice, and
+/// sha): both are edge cases a linear MR branch doesn't hit in practice, and
 /// guessing wrong would silently replay the wrong diff.
 ///
 /// [`parents`]: RebaseCommit::parents
@@ -456,7 +456,7 @@ pub struct PackFiles {
 /// missing one just means "use the environment"): this function's original
 /// caller, the pre-receive hook (`mirror::hook`), only ever runs as a real
 /// git hook, which git itself invokes with `GIT_DIR` already set in the
-/// process environment — but `domain::pull_request::merge`'s server-side
+/// process environment — but `domain::merge_request::merge`'s server-side
 /// merge is a second caller that has no such ambient `GIT_DIR` (the main
 /// process juggles many repos, never sets one process-wide), so both the
 /// `rev-list` and `pack-objects` subprocesses below need it passed in

@@ -3,7 +3,7 @@ name = "gitquarry-forge-clients"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "ForgeApi trait plus thin REST adapters for GitHub/GitLab/Codeberg, used by gitquarry-core's external-mirror PR sync"
+description = "ForgeApi trait plus thin REST adapters for GitHub/GitLab/Codeberg, used by gitquarry-core's external-mirror MR sync"
 license.workspace = true
 
 [dependencies]

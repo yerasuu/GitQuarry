@@ -943,8 +943,8 @@ msg!(
 );
 
 msg!(
-    /// `webui::repo::require_number`: the `?number=` query param the `pull`
-    /// view needs wasn't present, or wasn't a valid PR number.
+    /// `webui::repo::require_number`: the `?number=` query param the `merge`
+    /// view needs wasn't present, or wasn't a valid MR number.
     missing_number_param() {
         Locale::Es => "falta o es invalido ?number=",
         Locale::En => "missing or invalid ?number=",
@@ -997,37 +997,37 @@ msg!(
 );
 
 msg!(
-    /// No `PullRequestMeta` exists for `number` in this repo — confirmed
-    /// duplicated across `domain::pull_request::{get, transition, add_comment}`.
-    pull_request_not_found(number: u64) {
-        Locale::Es => "no existe el pull request #{number}",
-        Locale::En => "no pull request #{number} exists",
+    /// No `MergeRequestMeta` exists for `number` in this repo — confirmed
+    /// duplicated across `domain::merge_request::{get, transition, add_comment}`.
+    merge_request_not_found(number: u64) {
+        Locale::Es => "no existe el merge request #{number}",
+        Locale::En => "no merge request #{number} exists",
     }
 );
 
 msg!(
-    /// `domain::pull_request::merge` refusing a fast-forward: the target
+    /// `domain::merge_request::merge` refusing a fast-forward: the target
     /// branch moved on, so no pointer move expresses the merge any more.
-    pull_request_not_fast_forwardable(branch: &str) {
+    merge_request_not_fast_forwardable(branch: &str) {
         Locale::Es => "no se puede avanzar {branch} sin crear un commit: la rama ha divergido, usa merge, squash o rebase",
         Locale::En => "can't fast-forward {branch} without creating a commit: the branch has diverged, use merge, squash or rebase",
     }
 );
 
 msg!(
-    /// `domain::pull_request::transition`: the PR's current status doesn't
-    /// allow the requested move (e.g. reopening a merged PR, closing an
+    /// `domain::merge_request::transition`: the MR's current status doesn't
+    /// allow the requested move (e.g. reopening a merged MR, closing an
     /// already-closed one).
-    pull_request_wrong_status() {
-        Locale::Es => "este pull request no esta en un estado valido para esa accion",
-        Locale::En => "this pull request isn't in a valid status for that action",
+    merge_request_wrong_status() {
+        Locale::Es => "este merge request no esta en un estado valido para esa accion",
+        Locale::En => "this merge request isn't in a valid status for that action",
     }
 );
 
 msg!(
-    /// `domain::pull_request::create`: a cross-repo PR's `source_repo` isn't
+    /// `domain::merge_request::create`: a cross-repo MR's `source_repo` isn't
     /// actually a fork of the target repo (`RepoConfig::forked_from` doesn't
-    /// point back at it) — cross-repo PRs are only allowed fork -> upstream,
+    /// point back at it) — cross-repo MRs are only allowed fork -> upstream,
     /// never between two unrelated repos.
     source_repo_not_a_fork() {
         Locale::Es => "el repo origen no es un fork de este repo",
@@ -1036,38 +1036,38 @@ msg!(
 );
 
 msg!(
-    /// `domain::pull_request::merge`: the PR is still a draft — flip it
-    /// with `domain::pull_request::mark_ready` before merging.
-    pull_request_is_draft() {
-        Locale::Es => "este pull request todavia es un borrador",
-        Locale::En => "this pull request is still a draft",
+    /// `domain::merge_request::merge`: the MR is still a draft — flip it
+    /// with `domain::merge_request::mark_ready` before merging.
+    merge_request_is_draft() {
+        Locale::Es => "este merge request todavia es un borrador",
+        Locale::En => "this merge request is still a draft",
     }
 );
 
 msg!(
-    /// `domain::pull_request::merge`: at least one reviewer's *latest*
-    /// verdict ([`crate::domain::pull_request::review_summary`]) is
+    /// `domain::merge_request::merge`: at least one reviewer's *latest*
+    /// verdict ([`crate::domain::merge_request::review_summary`]) is
     /// `ChangesRequested` — merging is blocked until they either submit a
     /// new verdict or the requested changes land.
-    pull_request_changes_requested_pending() {
-        Locale::Es => "hay cambios pedidos sin resolver en este pull request",
-        Locale::En => "this pull request has unresolved requested changes",
+    merge_request_changes_requested_pending() {
+        Locale::Es => "hay cambios pedidos sin resolver en este merge request",
+        Locale::En => "this merge request has unresolved requested changes",
     }
 );
 
 msg!(
-    /// `domain::pull_request::merge`, via `missing_required_reviewers`:
+    /// `domain::merge_request::merge`, via `missing_required_reviewers`:
     /// `names` is a comma-separated list of usernames who still haven't
     /// approved but are required to, either by `RepoConfig::required_reviewers`
-    /// or by `CODEOWNERS` for a path this PR touches.
-    pull_request_missing_required_reviewers(names: &str) {
+    /// or by `CODEOWNERS` for a path this MR touches.
+    merge_request_missing_required_reviewers(names: &str) {
         Locale::Es => "falta la aprobacion de: {names}",
         Locale::En => "still missing approval from: {names}",
     }
 );
 
 msg!(
-    /// `domain::pull_request::edit_metadata`: a submitted reviewer
+    /// `domain::merge_request::edit_metadata`: a submitted reviewer
     /// username doesn't resolve to a real user — same check as
     /// `unknown_assignee`, worded for the reviewers field instead.
     unknown_reviewer(username: &str) {
@@ -1077,7 +1077,7 @@ msg!(
 );
 
 msg!(
-    /// `domain::pull_request::add_line_comment`: the submitted anchor has no
+    /// `domain::merge_request::add_line_comment`: the submitted anchor has no
     /// path, or a line number of 0 (line numbers are 1-based) — a hand-rolled
     /// POST, since every form that offers a line comment fills both in.
     invalid_comment_anchor() {
@@ -1087,12 +1087,12 @@ msg!(
 );
 
 msg!(
-    /// `domain::pull_request::add_review`: a PR's own author submitting an
+    /// `domain::merge_request::add_review`: an MR's own author submitting an
     /// approval or a change request on it. Reviewing your own work isn't a
     /// signal, so only the neutral `Commented` verdict is allowed there.
-    cannot_review_own_pull_request() {
-        Locale::Es => "no podes aprobar ni pedir cambios en tu propio pull request",
-        Locale::En => "you can't approve or request changes on your own pull request",
+    cannot_review_own_merge_request() {
+        Locale::Es => "no podes aprobar ni pedir cambios en tu propio merge request",
+        Locale::En => "you can't approve or request changes on your own merge request",
     }
 );
 
@@ -1121,7 +1121,7 @@ msg!(
     /// param) — moderating someone else's abusive comment away is different
     /// from silently rewriting it. Shared between
     /// `domain::issue::{edit_comment, delete_comment}` and
-    /// `domain::pull_request`'s own equivalents.
+    /// `domain::merge_request`'s own equivalents.
     not_comment_author() {
         Locale::Es => "solo quien escribio el comentario puede editarlo o borrarlo",
         Locale::En => "only the comment's own author can edit or delete it",
@@ -1142,11 +1142,11 @@ msg!(
 );
 
 msg!(
-    /// A PR was submitted with no title and its source branch's tip commit
+    /// An MR was submitted with no title and its source branch's tip commit
     /// has no subject either, so there is nothing to name it with — see
-    /// `gitquarry_core::domain::pull_request::resolve_title_and_description`.
-    pull_request_needs_a_title() {
-        Locale::Es => "el pull request necesita un titulo, y el ultimo commit de la rama no tiene asunto",
-        Locale::En => "the pull request needs a title, and the branch's last commit has no subject",
+    /// `gitquarry_core::domain::merge_request::resolve_title_and_description`.
+    merge_request_needs_a_title() {
+        Locale::Es => "el merge request necesita un titulo, y el ultimo commit de la rama no tiene asunto",
+        Locale::En => "the merge request needs a title, and the branch's last commit has no subject",
     }
 );

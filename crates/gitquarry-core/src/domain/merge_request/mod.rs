@@ -1,13 +1,13 @@
-//! Every mutation of a [`crate::storage::pull_requests::PullRequestMeta`]
+//! Every mutation of a [`crate::storage::merge_requests::MergeRequestMeta`]
 //! goes through here — same `domain`/`web` boundary [`crate::domain::repo`]'s
 //! doc comment describes: transport-agnostic, `anyhow::Result`, no CSRF/
-//! session/audit concerns, those stay in `webui::repo::pulls`.
+//! session/audit concerns, those stay in `webui::repo::merges`.
 //!
-//! A PR can be same-repo (`source_repo == target.uid`) or cross-fork
+//! An MR can be same-repo (`source_repo == target.uid`) or cross-fork
 //! (`source_repo` is one of the target's forks — `RepoConfig::forked_from`
 //! must point back at the target, never an arbitrary unrelated repo). A
-//! cross-fork PR still lives entirely on the *target*'s own storage, same as
-//! a GitHub PR belongs to the upstream repo, not the fork.
+//! cross-fork MR still lives entirely on the *target*'s own storage, same as
+//! a GitHub MR belongs to the upstream repo, not the fork.
 //!
 //! Forks are fully independent S3 prefixes and bare mirrors (`domain::repo::fork`,
 //! `storage::remote::Remote::copy_all_to` — a one-time full re-encrypt copy,
@@ -21,8 +21,8 @@ use crate::auth::access;
 use crate::git;
 use crate::storage::Cas;
 use crate::storage::audit::format_unix_secs;
-use crate::storage::pull_requests::{
-    self, CommentAnchor, MergeStrategy, PrComment, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
+use crate::storage::merge_requests::{
+    self, CommentAnchor, MergeRequestMeta, MergeStrategy, MrComment, MrReview, MrStatus, ReviewVerdict,
 };
 use crate::storage::remote::Remote;
 use crate::storage::uid::Uid;
@@ -84,7 +84,7 @@ async fn branch_exists(remote: &Remote, branch: &str) -> Result<bool> {
     Ok(manifest.refs.contains_key(&format!("refs/heads/{branch}")))
 }
 
-pub struct NewPullRequest<'a> {
+pub struct NewMergeRequest<'a> {
     pub source_repo: &'a Uid,
     pub source_branch: &'a str,
     pub target_branch: &'a str,
@@ -96,11 +96,11 @@ pub struct NewPullRequest<'a> {
 /// The title and description to store, filling either in from the source
 /// branch's tip commit when the submitted one is blank: its subject becomes
 /// the title, its body the description — the same thing a `git request-pull`
-/// or a one-commit GitHub PR does, and the only description a PR
+/// or a one-commit GitHub MR does, and the only description an MR
 /// necessarily already has.
 ///
 /// The title is also *validated* here, which [`create`] never did before —
-/// only [`edit`] ran `validate_issue_title`, so a PR could be created with
+/// only [`edit`] ran `validate_issue_title`, so an MR could be created with
 /// an empty (or control-character-laden) title and only become
 /// unrepresentable once someone tried to edit it. Falling back to the
 /// commit subject means that no longer needs to be an error in the common
@@ -108,12 +108,12 @@ pub struct NewPullRequest<'a> {
 /// empty subject too.
 ///
 /// A blank description stays blank when the tip commit has no body — unlike
-/// the title, an empty description is a perfectly ordinary PR.
+/// the title, an empty description is a perfectly ordinary MR.
 async fn resolve_title_and_description(
     ctx: &AppContext,
     target: &ResolvedRepo,
     source_remote: &Remote,
-    new: &NewPullRequest<'_>,
+    new: &NewMergeRequest<'_>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<(String, String)> {
     let title = new.title.trim();
@@ -125,7 +125,7 @@ async fn resolve_title_and_description(
     // Only opened when something is actually missing — a fully filled-in
     // form shouldn't pay for syncing a mirror. Safe to open the target's
     // own here: unlike `diff`/`merge`, `create` is reached from the
-    // top-level `/_pulls` POST route, which holds no mirror lock (see
+    // top-level `/_merges` POST route, which holds no mirror lock (see
     // `diff`'s doc comment on why that distinction matters).
     let source = ResolvedRepo {
         uid: new.source_repo.clone(),
@@ -145,7 +145,7 @@ async fn resolve_title_and_description(
         description.to_string()
     };
     if title.is_empty() {
-        bail!("{}", gitquarry_i18n::shared::pull_request_needs_a_title(locale));
+        bail!("{}", gitquarry_i18n::shared::merge_request_needs_a_title(locale));
     }
     Ok((crate::validate::validate_issue_title(title)?, description))
 }
@@ -157,9 +157,9 @@ async fn resolve_title_and_description(
 pub async fn create(
     ctx: &AppContext,
     target: &ResolvedRepo,
-    new: NewPullRequest<'_>,
+    new: NewMergeRequest<'_>,
     locale: gitquarry_i18n::Locale,
-) -> Result<PullRequestMeta> {
+) -> Result<MergeRequestMeta> {
     let source_remote = if new.source_repo == &target.uid {
         target.remote.clone()
     } else {
@@ -186,16 +186,16 @@ pub async fn create(
     let (title, description) = resolve_title_and_description(ctx, target, &source_remote, &new, locale).await?;
 
     let backend = ctx.backend();
-    let number = pull_requests::next_pr_number(backend.as_ref(), &ctx.cipher, &target.uid).await?;
+    let number = merge_requests::next_mr_number(backend.as_ref(), &ctx.cipher, &target.uid).await?;
     let stamp = now_stamp();
-    let pr = PullRequestMeta {
+    let mr = MergeRequestMeta {
         number,
         title,
         description,
         source_repo: new.source_repo.clone(),
         source_branch: new.source_branch.to_string(),
         target_branch: new.target_branch.to_string(),
-        status: PrStatus::Open,
+        status: MrStatus::Open,
         author: new.author.to_string(),
         created_at: stamp.clone(),
         updated_at: stamp,
@@ -207,61 +207,62 @@ pub async fn create(
         assignees: Vec::new(),
         requested_reviewers: Vec::new(),
     };
-    let cas = pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, None).await?;
+    let cas = merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, None).await?;
     if cas != Cas::Ok {
-        bail!("PR number collision — the counter is supposed to guarantee this never happens");
+        bail!("MR number collision — the counter is supposed to guarantee this never happens");
     }
     crate::events::emit(
         ctx,
-        crate::events::RepoEvent::PullRequest {
+        crate::events::RepoEvent::MergeRequest {
             repo_uid: target.uid.clone(),
-            number: pr.number,
-            action: crate::events::PullRequestAction::Opened,
+            number: mr.number,
+            action: crate::events::MergeRequestAction::Opened,
         },
     );
-    Ok(pr)
+    Ok(mr)
 }
 
-pub async fn get(ctx: &AppContext, target: &ResolvedRepo, number: u64) -> Result<Option<PullRequestMeta>> {
-    let (pr, _etag) = pull_requests::get_pull_request(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number).await?;
-    Ok(pr)
+pub async fn get(ctx: &AppContext, target: &ResolvedRepo, number: u64) -> Result<Option<MergeRequestMeta>> {
+    let (mr, _etag) =
+        merge_requests::get_merge_request(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number).await?;
+    Ok(mr)
 }
 
-/// Every PR on `target`, newest-first, optionally narrowed to one status.
+/// Every MR on `target`, newest-first, optionally narrowed to one status.
 pub async fn list(
     ctx: &AppContext,
     target: &ResolvedRepo,
-    status_filter: Option<PrStatus>,
-) -> Result<Vec<PullRequestMeta>> {
+    status_filter: Option<MrStatus>,
+) -> Result<Vec<MergeRequestMeta>> {
     let backend = ctx.backend();
-    let mut prs = pull_requests::list_pull_requests(&backend, &ctx.cipher, &target.uid).await?;
+    let mut mrs = merge_requests::list_merge_requests(&backend, &ctx.cipher, &target.uid).await?;
     if let Some(status) = status_filter {
-        prs.retain(|pr| pr.status == status);
+        mrs.retain(|mr| mr.status == status);
     }
-    Ok(prs)
+    Ok(mrs)
 }
 
 /// `Err` if `number` doesn't exist or isn't currently in `expected` status —
-/// no reopening a merged PR, no closing an already-closed one.
+/// no reopening a merged MR, no closing an already-closed one.
 async fn transition(
     ctx: &AppContext,
     target: &ResolvedRepo,
     number: u64,
-    expected: PrStatus,
-    next: PrStatus,
+    expected: MrStatus,
+    next: MrStatus,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     let backend = ctx.backend();
-    let (pr, etag) = pull_requests::get_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
-    let Some(mut pr) = pr else {
-        bail!("{}", gitquarry_i18n::shared::pull_request_not_found(locale, number));
+    let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
+    let Some(mut mr) = mr else {
+        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
     };
-    if pr.status != expected {
-        bail!("{}", gitquarry_i18n::shared::pull_request_wrong_status(locale));
+    if mr.status != expected {
+        bail!("{}", gitquarry_i18n::shared::merge_request_wrong_status(locale));
     }
-    pr.status = next;
-    pr.updated_at = now_stamp();
-    pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, etag.as_deref()).await
+    mr.status = next;
+    mr.updated_at = now_stamp();
+    merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, etag.as_deref()).await
 }
 
 pub async fn close(
@@ -270,14 +271,14 @@ pub async fn close(
     number: u64,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
-    let cas = transition(ctx, target, number, PrStatus::Open, PrStatus::Closed, locale).await?;
+    let cas = transition(ctx, target, number, MrStatus::Open, MrStatus::Closed, locale).await?;
     if cas == Cas::Ok {
         crate::events::emit(
             ctx,
-            crate::events::RepoEvent::PullRequest {
+            crate::events::RepoEvent::MergeRequest {
                 repo_uid: target.uid.clone(),
                 number,
-                action: crate::events::PullRequestAction::Closed,
+                action: crate::events::MergeRequestAction::Closed,
             },
         );
     }
@@ -290,13 +291,13 @@ pub async fn reopen(
     number: u64,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
-    transition(ctx, target, number, PrStatus::Closed, PrStatus::Open, locale).await
+    transition(ctx, target, number, MrStatus::Closed, MrStatus::Open, locale).await
 }
 
 /// `Err` if `number` doesn't exist, isn't `Open`, or is already in the
 /// requested draft state — same "no-op transition rejected" shape
 /// [`transition`] gives `close`/`reopen`, just keyed on `is_draft` instead
-/// of `status` since a draft PR is still `Open`, not a third status.
+/// of `status` since a draft MR is still `Open`, not a third status.
 async fn set_draft(
     ctx: &AppContext,
     target: &ResolvedRepo,
@@ -305,16 +306,16 @@ async fn set_draft(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     let backend = ctx.backend();
-    let (pr, etag) = pull_requests::get_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
-    let Some(mut pr) = pr else {
-        bail!("{}", gitquarry_i18n::shared::pull_request_not_found(locale, number));
+    let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
+    let Some(mut mr) = mr else {
+        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
     };
-    if pr.status != PrStatus::Open || pr.is_draft == draft {
-        bail!("{}", gitquarry_i18n::shared::pull_request_wrong_status(locale));
+    if mr.status != MrStatus::Open || mr.is_draft == draft {
+        bail!("{}", gitquarry_i18n::shared::merge_request_wrong_status(locale));
     }
-    pr.is_draft = draft;
-    pr.updated_at = now_stamp();
-    pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, etag.as_deref()).await
+    mr.is_draft = draft;
+    mr.updated_at = now_stamp();
+    merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, etag.as_deref()).await
 }
 
 pub async fn mark_draft(
@@ -336,10 +337,10 @@ pub async fn mark_ready(
 }
 
 /// Bundled so [`edit_metadata`] doesn't cross clippy's `too_many_arguments`
-/// — same reasoning as [`NewPullRequest`]. All three are comma-separated
+/// — same reasoning as [`NewMergeRequest`]. All three are comma-separated
 /// free text, same shape every other CSV-ish field in this codebase
 /// (`domain::issue::IssueEdit`, `topics`, mirror scopes) takes at the edge.
-pub struct PrMetadataEdit<'a> {
+pub struct MrMetadataEdit<'a> {
     pub title: &'a str,
     pub description: &'a str,
     pub labels_csv: &'a str,
@@ -357,7 +358,7 @@ pub async fn edit_metadata(
     ctx: &AppContext,
     target: &ResolvedRepo,
     number: u64,
-    edit: PrMetadataEdit<'_>,
+    edit: MrMetadataEdit<'_>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     let title = crate::validate::validate_issue_title(edit.title)?;
@@ -389,31 +390,32 @@ pub async fn edit_metadata(
         reviewers.push(username.to_string());
     }
 
-    let (pr, etag) = pull_requests::get_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
-    let Some(mut pr) = pr else {
-        bail!("{}", gitquarry_i18n::shared::pull_request_not_found(locale, number));
+    let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
+    let Some(mut mr) = mr else {
+        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
     };
-    pr.title = title;
-    pr.description = edit.description.to_string();
-    pr.labels = labels;
-    pr.assignees = assignees;
-    pr.requested_reviewers = reviewers;
-    pr.updated_at = now_stamp();
-    let cas = pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, etag.as_deref()).await?;
+    mr.title = title;
+    mr.description = edit.description.to_string();
+    mr.labels = labels;
+    mr.assignees = assignees;
+    mr.requested_reviewers = reviewers;
+    mr.updated_at = now_stamp();
+    let cas =
+        merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, etag.as_deref()).await?;
     if cas == Cas::Ok {
         crate::events::emit(
             ctx,
-            crate::events::RepoEvent::PullRequest {
+            crate::events::RepoEvent::MergeRequest {
                 repo_uid: target.uid.clone(),
                 number,
-                action: crate::events::PullRequestAction::Updated,
+                action: crate::events::MergeRequestAction::Updated,
             },
         );
     }
     Ok(cas)
 }
 
-/// `Err` if `number` doesn't exist — a comment can't be left on a PR that
+/// `Err` if `number` doesn't exist — a comment can't be left on an MR that
 /// was never created (or was, somewhere else, but not on this repo).
 pub async fn add_comment(
     ctx: &AppContext,
@@ -428,7 +430,7 @@ pub async fn add_comment(
 
 /// [`add_comment`], but hung off one diff line instead of the flat thread.
 /// The anchor is only checked for being well-formed (a path, a 1-based
-/// line) — never for actually appearing in the PR's current diff: a diff is
+/// line) — never for actually appearing in the MR's current diff: a diff is
 /// recomputed per request against a moving head, so a "does this line
 /// exist" check would be a race, and the render side already falls back to
 /// the flat thread for an anchor it can't place.
@@ -457,24 +459,24 @@ async fn add_comment_anchored(
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
     if get(ctx, target, number).await?.is_none() {
-        bail!("{}", gitquarry_i18n::shared::pull_request_not_found(locale, number));
+        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
     }
-    let comment = PrComment {
+    let comment = MrComment {
         author: author.to_string(),
         body: body.to_string(),
         created_at: now_stamp(),
         anchor,
         ..Default::default()
     };
-    pull_requests::add_pr_comment(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number, &comment).await
+    merge_requests::add_mr_comment(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number, &comment).await
 }
 
 /// Oldest first, each paired with the storage key `edit_comment`/
 /// `delete_comment` need to target it — same shape
 /// `domain::issue::list_comments` already returns.
-pub async fn list_comments(ctx: &AppContext, target: &ResolvedRepo, number: u64) -> Result<Vec<(String, PrComment)>> {
+pub async fn list_comments(ctx: &AppContext, target: &ResolvedRepo, number: u64) -> Result<Vec<(String, MrComment)>> {
     let backend = ctx.backend();
-    pull_requests::list_pr_comments_with_keys(&backend, &ctx.cipher, &target.uid, number).await
+    merge_requests::list_mr_comments_with_keys(&backend, &ctx.cipher, &target.uid, number).await
 }
 
 /// `Err` if `comment_id` doesn't exist or `actor` isn't the comment's own
@@ -491,15 +493,15 @@ pub async fn edit_comment(
 ) -> Result<Cas> {
     let backend = ctx.backend();
     let (comment, etag) =
-        pull_requests::get_pr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await?;
+        merge_requests::get_mr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await?;
     let Some(mut comment) = comment else {
-        bail!("comment {comment_id} not found on PR #{number}");
+        bail!("comment {comment_id} not found on MR #{number}");
     };
     if comment.author != actor {
         bail!("{}", gitquarry_i18n::shared::not_comment_author(locale));
     }
     comment.body = body.to_string();
-    pull_requests::put_pr_comment(
+    merge_requests::put_mr_comment(
         backend.as_ref(),
         &ctx.cipher,
         &target.uid,
@@ -525,18 +527,18 @@ pub async fn delete_comment(
 ) -> Result<()> {
     let backend = ctx.backend();
     let (comment, _etag) =
-        pull_requests::get_pr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await?;
+        merge_requests::get_mr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await?;
     let Some(comment) = comment else {
-        bail!("comment {comment_id} not found on PR #{number}");
+        bail!("comment {comment_id} not found on MR #{number}");
     };
     if comment.author != actor && !is_moderator {
         bail!("{}", gitquarry_i18n::shared::not_comment_author(locale));
     }
-    pull_requests::delete_pr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await;
+    merge_requests::delete_mr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await;
     Ok(())
 }
 
-/// `Err` if `number` doesn't exist, or if `author` is the PR's own author
+/// `Err` if `number` doesn't exist, or if `author` is the MR's own author
 /// submitting anything but the neutral [`ReviewVerdict::Commented`] — you
 /// don't get to approve your own work.
 pub async fn add_review(
@@ -548,24 +550,24 @@ pub async fn add_review(
     body: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
-    let Some(pr) = get(ctx, target, number).await? else {
-        bail!("{}", gitquarry_i18n::shared::pull_request_not_found(locale, number));
+    let Some(mr) = get(ctx, target, number).await? else {
+        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
     };
-    if pr.author == author && verdict != ReviewVerdict::Commented {
-        bail!("{}", gitquarry_i18n::shared::cannot_review_own_pull_request(locale));
+    if mr.author == author && verdict != ReviewVerdict::Commented {
+        bail!("{}", gitquarry_i18n::shared::cannot_review_own_merge_request(locale));
     }
-    let review = PrReview {
+    let review = MrReview {
         author: author.to_string(),
         verdict,
         body: body.to_string(),
         created_at: now_stamp(),
     };
-    pull_requests::add_pr_review(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number, &review).await
+    merge_requests::add_mr_review(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number, &review).await
 }
 
-pub async fn list_reviews(ctx: &AppContext, target: &ResolvedRepo, number: u64) -> Result<Vec<PrReview>> {
+pub async fn list_reviews(ctx: &AppContext, target: &ResolvedRepo, number: u64) -> Result<Vec<MrReview>> {
     let backend = ctx.backend();
-    pull_requests::list_pr_reviews(&backend, &ctx.cipher, &target.uid, number).await
+    merge_requests::list_mr_reviews(&backend, &ctx.cipher, &target.uid, number).await
 }
 
 /// Who currently approves and who currently requests changes, both sorted
@@ -582,7 +584,7 @@ pub struct ReviewSummary {
 /// review state has. A [`ReviewVerdict::Commented`] review counts for
 /// neither side, but still supersedes that reviewer's earlier verdict:
 /// it's an explicit "I no longer hold a position", not a no-op.
-pub fn review_summary(reviews: &[PrReview]) -> ReviewSummary {
+pub fn review_summary(reviews: &[MrReview]) -> ReviewSummary {
     let mut latest: std::collections::HashMap<&str, ReviewVerdict> = std::collections::HashMap::new();
     for review in reviews {
         latest.insert(review.author.as_str(), review.verdict);
@@ -602,20 +604,20 @@ pub fn review_summary(reviews: &[PrReview]) -> ReviewSummary {
 }
 
 #[derive(Default)]
-pub struct PrDiff {
+pub struct MrDiff {
     pub stat: String,
     pub diff: String,
     pub commits: Vec<git::browse::CommitInfo>,
 }
 
-/// Scratch ref a cross-fork PR's source objects land under, in the
+/// Scratch ref a cross-fork MR's source objects land under, in the
 /// *target*'s mirror — namespaced under `refs/quarry/` so it can never
 /// collide with a real branch/tag the target repo's own manifest tracks.
 fn shadow_ref(number: u64) -> String {
-    format!("refs/quarry/pr/{number}")
+    format!("refs/quarry/mr/{number}")
 }
 
-/// For a same-repo PR, `pr.source_branch` is already a local ref in
+/// For a same-repo MR, `mr.source_branch` is already a local ref in
 /// `git_dir` — no fetch needed. For a cross-fork one, opens the fork's own
 /// mirror (a different repo uid, so this can't deadlock against the
 /// target's mirror lock the caller already holds — see [`diff`]'s own doc
@@ -628,28 +630,28 @@ async fn fetch_source_ref(
     ctx: &AppContext,
     target: &ResolvedRepo,
     git_dir: &std::path::Path,
-    pr: &PullRequestMeta,
+    mr: &MergeRequestMeta,
 ) -> Result<String> {
-    if pr.source_repo == target.uid {
-        return Ok(pr.source_branch.clone());
+    if mr.source_repo == target.uid {
+        return Ok(mr.source_branch.clone());
     }
     let source = ResolvedRepo {
-        uid: pr.source_repo.clone(),
-        remote: ctx.remote_for_uid(&pr.source_repo),
+        uid: mr.source_repo.clone(),
+        remote: ctx.remote_for_uid(&mr.source_repo),
     };
     let source_mirror = ctx.open_mirror(&source).await?;
-    let local_ref = shadow_ref(pr.number);
-    git::fetch_local(git_dir, &source_mirror.path, &pr.source_branch, &local_ref).await?;
+    let local_ref = shadow_ref(mr.number);
+    git::fetch_local(git_dir, &source_mirror.path, &mr.source_branch, &local_ref).await?;
     Ok(local_ref)
 }
 
-/// The diff/commit-list a PR proposes: `target_branch` (base) vs
+/// The diff/commit-list an MR proposes: `target_branch` (base) vs
 /// `source_branch` (head, fetched via [`fetch_source_ref`] if cross-fork),
 /// same three-dot/two-dot convention `webui::repo::compare::render_compare`
 /// uses for the standalone compare view. Takes the *target*'s already-open
 /// mirror's `git_dir` rather than opening one itself — `webui::repo::handler_repo`
 /// already holds the target repo's mirror lock for the whole request by the
-/// time it reaches a `"pull"` view, and `AppContext::open_mirror`'s lock
+/// time it reaches a `"merge"` view, and `AppContext::open_mirror`'s lock
 /// isn't reentrant: a second call on the *target* from in here would
 /// deadlock against the caller's own guard (opening the *source* fork's
 /// mirror is fine — different uid, different lock).
@@ -657,56 +659,56 @@ pub async fn diff(
     ctx: &AppContext,
     target: &ResolvedRepo,
     git_dir: &std::path::Path,
-    pr: &PullRequestMeta,
-) -> Result<PrDiff> {
-    let Some((base, head)) = diff_endpoints(ctx, target, git_dir, pr).await? else {
-        return Ok(PrDiff::default());
+    mr: &MergeRequestMeta,
+) -> Result<MrDiff> {
+    let Some((base, head)) = diff_endpoints(ctx, target, git_dir, mr).await? else {
+        return Ok(MrDiff::default());
     };
     let stat = git::browse::diffstat_range(git_dir, &base, &head).await?;
     let diff = git::browse::diff_range(git_dir, &base, &head).await?;
     let range = format!("{base}..{head}");
     let commits = git::browse::log(git_dir, &range, usize::MAX, None).await?;
-    Ok(PrDiff { stat, diff, commits })
+    Ok(MrDiff { stat, diff, commits })
 }
 
 /// The `(base, head)` pair [`diff`] compares, or `None` when there is
 /// nothing left to compare at all.
 ///
 /// Normally that is simply `(target_branch, source_branch)`. The reason it
-/// needs resolving at all is that a *merged* pull request usually outlives
+/// needs resolving at all is that a *merged* merge request usually outlives
 /// its source branch — the merge form's own "delete branch" checkbox
-/// removes it — and every `git diff base...head` behind the pull-request
-/// page then failed on an unknown revision, so viewing a closed pull
+/// removes it — and every `git diff base...head` behind the merge-request
+/// page then failed on an unknown revision, so viewing a closed merge
 /// request returned a 500.
 ///
 /// The fallback compares the merge commit against its own first parent,
-/// which for both a merge and a squash is exactly what the pull request
+/// which for both a merge and a squash is exactly what the merge request
 /// landed on the target. A rebase-merged one is the imperfect case: its
 /// recorded sha is the last replayed commit, so only that commit shows —
 /// still an honest, readable page rather than an error, and the commit
 /// list beside it says the same.
 ///
-/// `None` (an empty diff, no error) is the last resort: a pull request
+/// `None` (an empty diff, no error) is the last resort: a merge request
 /// closed *without* merging whose branch was then deleted has no surviving
 /// endpoint to reconstruct anything from.
 async fn diff_endpoints(
     ctx: &AppContext,
     target: &ResolvedRepo,
     git_dir: &std::path::Path,
-    pr: &PullRequestMeta,
+    mr: &MergeRequestMeta,
 ) -> Result<Option<(String, String)>> {
-    // Tolerated, not propagated: for a cross-fork pull request this opens
+    // Tolerated, not propagated: for a cross-fork merge request this opens
     // the source fork's mirror and fetches from it, and that fork may be
     // gone by now — which is the same "nothing to compare" case as a
     // deleted branch, not a server error.
-    let head = fetch_source_ref(ctx, target, git_dir, pr).await.ok();
+    let head = fetch_source_ref(ctx, target, git_dir, mr).await.ok();
     if let Some(head) = head
         && git::browse::resolve_commit(git_dir, &head).await?.is_some()
-        && git::browse::resolve_commit(git_dir, &pr.target_branch).await?.is_some()
+        && git::browse::resolve_commit(git_dir, &mr.target_branch).await?.is_some()
     {
-        return Ok(Some((pr.target_branch.clone(), head)));
+        return Ok(Some((mr.target_branch.clone(), head)));
     }
-    if let Some(merge) = pr.merge_commit_sha.as_deref()
+    if let Some(merge) = mr.merge_commit_sha.as_deref()
         && git::browse::resolve_commit(git_dir, merge).await?.is_some()
     {
         // Three-dot against the merge's own first parent is the same set of
@@ -718,12 +720,12 @@ async fn diff_endpoints(
     Ok(None)
 }
 
-/// Whether this PR would merge cleanly right now: `None` for a clean
+/// Whether this MR would merge cleanly right now: `None` for a clean
 /// merge, `Some(paths)` for the files that conflict. Dry-run only —
 /// `git merge-tree` writes nothing beyond git's own scratch objects, so
 /// unlike [`merge`] this can be called on a plain page render.
 ///
-/// Deliberately probes the `Merge` strategy alone even though a PR can be
+/// Deliberately probes the `Merge` strategy alone even though an MR can be
 /// merged three ways: `Squash` computes the identical tree (it differs
 /// only in how many parents the commit gets), and `Rebase` replays commit
 /// by commit, so a conflict there depends on which commit you stop at.
@@ -738,11 +740,11 @@ pub async fn conflicts(
     ctx: &AppContext,
     target: &ResolvedRepo,
     git_dir: &std::path::Path,
-    pr: &PullRequestMeta,
+    mr: &MergeRequestMeta,
 ) -> Result<Option<Vec<String>>> {
-    let head_ref = fetch_source_ref(ctx, target, git_dir, pr).await?;
+    let head_ref = fetch_source_ref(ctx, target, git_dir, mr).await?;
     let (manifest, _etag) = target.remote.get_manifest().await?;
-    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", pr.target_branch)).cloned() else {
+    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", mr.target_branch)).cloned() else {
         return Ok(None);
     };
     let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
@@ -755,7 +757,7 @@ pub async fn conflicts(
     }
 }
 
-/// Whether this pull request could be merged by moving the target branch
+/// Whether this merge request could be merged by moving the target branch
 /// alone — the target is still an ancestor of the source, nothing diverged.
 /// Read-only, and tolerant like [`conflicts`] of a branch that has since
 /// gone: a probe that only decorates a page must never fail the page.
@@ -763,13 +765,13 @@ pub async fn fast_forwardable(
     ctx: &AppContext,
     target: &ResolvedRepo,
     git_dir: &std::path::Path,
-    pr: &PullRequestMeta,
+    mr: &MergeRequestMeta,
 ) -> Result<bool> {
-    let Ok(head_ref) = fetch_source_ref(ctx, target, git_dir, pr).await else {
+    let Ok(head_ref) = fetch_source_ref(ctx, target, git_dir, mr).await else {
         return Ok(false);
     };
     let (manifest, _etag) = target.remote.get_manifest().await?;
-    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", pr.target_branch)).cloned() else {
+    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", mr.target_branch)).cloned() else {
         return Ok(false);
     };
     let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
@@ -784,7 +786,7 @@ pub enum MergeOutcome {
 }
 
 /// Computes the final sha to fast-forward the target branch to, per
-/// `strategy`. Doesn't touch the manifest or the PR's own metadata — [`merge`]
+/// `strategy`. Doesn't touch the manifest or the MR's own metadata — [`merge`]
 /// does that once for all three strategies, since it's identical either way.
 ///
 /// - `Merge`: a real 3-way merge commit with both `target_sha`/`head_sha` as
@@ -792,18 +794,18 @@ pub enum MergeOutcome {
 /// - `Squash`: the same 3-way merge tree, but a single-parent commit (just
 ///   `target_sha`) — the source branch's own commits never become ancestors
 ///   of the target, only their combined diff does. Message lists each
-///   squashed commit's subject under the PR title, same shape GitHub's
+///   squashed commit's subject under the MR title, same shape GitHub's
 ///   squash-merge produces.
 /// - `Rebase`: replays each source commit onto the target tip one at a time
 ///   via [`git::merge_tree`]'s `merge_base` override (cherry-pick
 ///   semantics), preserving each commit's own author/date. Bails if any
 ///   replayed commit is itself a merge commit or a root commit — a linear
-///   PR branch never hits either, and guessing a merge base for one would
+///   MR branch never hits either, and guessing a merge base for one would
 ///   silently replay the wrong diff (see [`git::RebaseCommit`]'s doc
 ///   comment).
 async fn merge_commit(
     git_dir: &std::path::Path,
-    pr: &PullRequestMeta,
+    mr: &MergeRequestMeta,
     target_sha: &str,
     head_sha: &str,
     strategy: MergeStrategy,
@@ -837,8 +839,8 @@ async fn merge_commit(
                 git::MergeTreeOutcome::Clean(tree) => tree,
             };
             let message = format!(
-                "Merge pull request #{} from {}\n\n{}",
-                pr.number, pr.source_branch, pr.title
+                "Merge merge request #{} from {}\n\n{}",
+                mr.number, mr.source_branch, mr.title
             );
             let sha = git::commit_tree(
                 git_dir,
@@ -860,7 +862,7 @@ async fn merge_commit(
             let range = format!("{target_sha}..{head_sha}");
             let mut commits = git::browse::log(git_dir, &range, usize::MAX, None).await?;
             commits.reverse(); // browse::log is newest-first; a squash body reads oldest-first
-            let mut message = format!("{} (#{})\n", pr.title, pr.number);
+            let mut message = format!("{} (#{})\n", mr.title, mr.number);
             for commit in &commits {
                 message.push_str(&format!("\n* {}", commit.subject));
             }
@@ -884,8 +886,8 @@ async fn merge_commit(
                 let commit = git::commit_detail_for_rebase(git_dir, &sha).await?;
                 let [parent] = commit.parents.as_slice() else {
                     bail!(
-                        "can't rebase pull request #{}: commit {sha} isn't a single-parent commit (merge or root commit in the source branch)",
-                        pr.number
+                        "can't rebase merge request #{}: commit {sha} isn't a single-parent commit (merge or root commit in the source branch)",
+                        mr.number
                     );
                 };
                 let tree = match git::merge_tree(git_dir, &new_tip, &sha, Some(parent)).await? {
@@ -916,7 +918,7 @@ async fn merge_commit(
 /// how each strategy computes its final sha.
 ///
 /// Unlike [`diff`], this opens the target's mirror itself: called directly
-/// from a `POST /_pulls/merge` request, not nested inside a `handler_repo`
+/// from a `POST /_merges/merge` request, not nested inside a `handler_repo`
 /// GET view that already holds it, so there's no reentrant-lock risk here.
 ///
 /// `Err` if `number` doesn't exist, isn't `Open`, is still a draft, has a
@@ -934,19 +936,19 @@ async fn merge_commit(
 const CODEOWNERS_PATH: &str = "CODEOWNERS";
 
 /// `None` if every required approver (the repo's own `RepoConfig::required_reviewers`
-/// plus whoever `CODEOWNERS` names for a path this PR actually touches) has
-/// approved; `Some(missing)` — sorted, deduped — otherwise. The PR's own
+/// plus whoever `CODEOWNERS` names for a path this MR actually touches) has
+/// approved; `Some(missing)` — sorted, deduped — otherwise. The MR's own
 /// author is never counted as "missing" here even if named: self-approval
 /// is already blocked elsewhere ([`add_review`]), so requiring it would
-/// make such a PR permanently unmergeable. `CODEOWNERS` is read from the
-/// *target* branch's tree at `target_sha` (the state this PR would land
+/// make such an MR permanently unmergeable. `CODEOWNERS` is read from the
+/// *target* branch's tree at `target_sha` (the state this MR would land
 /// against), same "target's rules apply" convention GitHub's own feature
 /// uses — a missing file just means no path-based requirements, not an
 /// error.
 async fn missing_required_reviewers(
     target: &ResolvedRepo,
     git_dir: &Path,
-    pr: &PullRequestMeta,
+    mr: &MergeRequestMeta,
     target_sha: &str,
     head_sha: &str,
     summary: &ReviewSummary,
@@ -962,7 +964,7 @@ async fn missing_required_reviewers(
         }
     }
 
-    required.remove(&pr.author);
+    required.remove(&mr.author);
     let approved: std::collections::BTreeSet<&str> = summary.approved_by.iter().map(String::as_str).collect();
     let missing: Vec<String> = required
         .into_iter()
@@ -980,42 +982,42 @@ pub async fn merge(
     locale: gitquarry_i18n::Locale,
 ) -> Result<MergeOutcome> {
     let backend = ctx.backend();
-    let (pr, pr_etag) = pull_requests::get_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
-    let Some(mut pr) = pr else {
-        bail!("{}", gitquarry_i18n::shared::pull_request_not_found(locale, number));
+    let (mr, mr_etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
+    let Some(mut mr) = mr else {
+        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
     };
-    if pr.status != PrStatus::Open {
-        bail!("{}", gitquarry_i18n::shared::pull_request_wrong_status(locale));
+    if mr.status != MrStatus::Open {
+        bail!("{}", gitquarry_i18n::shared::merge_request_wrong_status(locale));
     }
-    if pr.is_draft {
-        bail!("{}", gitquarry_i18n::shared::pull_request_is_draft(locale));
+    if mr.is_draft {
+        bail!("{}", gitquarry_i18n::shared::merge_request_is_draft(locale));
     }
     let reviews = list_reviews(ctx, target, number).await?;
     let summary = review_summary(&reviews);
     if !summary.changes_requested_by.is_empty() {
         bail!(
             "{}",
-            gitquarry_i18n::shared::pull_request_changes_requested_pending(locale)
+            gitquarry_i18n::shared::merge_request_changes_requested_pending(locale)
         );
     }
 
     let mirror = ctx.open_mirror(target).await?;
     let git_dir = &mirror.path;
-    let head_ref = fetch_source_ref(ctx, target, git_dir, &pr).await?;
+    let head_ref = fetch_source_ref(ctx, target, git_dir, &mr).await?;
 
     let (manifest, manifest_etag) = target.remote.get_manifest().await?;
-    let target_ref = format!("refs/heads/{}", pr.target_branch);
+    let target_ref = format!("refs/heads/{}", mr.target_branch);
     let Some(target_sha) = manifest.refs.get(&target_ref).cloned() else {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, &pr.target_branch));
+        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, &mr.target_branch));
     };
     let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, &pr.source_branch));
+        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, &mr.source_branch));
     };
 
-    if let Some(missing) = missing_required_reviewers(target, git_dir, &pr, &target_sha, &head_sha, &summary).await? {
+    if let Some(missing) = missing_required_reviewers(target, git_dir, &mr, &target_sha, &head_sha, &summary).await? {
         bail!(
             "{}",
-            gitquarry_i18n::shared::pull_request_missing_required_reviewers(locale, &missing.join(", "))
+            gitquarry_i18n::shared::merge_request_missing_required_reviewers(locale, &missing.join(", "))
         );
     }
 
@@ -1029,7 +1031,7 @@ pub async fn merge(
         if !git::is_ancestor(git_dir, &target_sha, &head_sha).await? {
             bail!(
                 "{}",
-                gitquarry_i18n::shared::pull_request_not_fast_forwardable(locale, &pr.target_branch)
+                gitquarry_i18n::shared::merge_request_not_fast_forwardable(locale, &mr.target_branch)
             );
         }
         head_sha.clone()
@@ -1042,7 +1044,7 @@ pub async fn merge(
         let key_file = key.to_temp_file()?;
         match merge_commit(
             git_dir,
-            &pr,
+            &mr,
             &target_sha,
             &head_sha,
             strategy,
@@ -1073,43 +1075,43 @@ pub async fn merge(
     if cas != Cas::Ok {
         bail!("{}", gitquarry_i18n::shared::cas_conflict(locale));
     }
-    // Fired here, not after the metadata `put_pull_request` below: the
+    // Fired here, not after the metadata `put_merge_request` below: the
     // merge commit landing on the target branch is what "merged" means,
     // and that CAS above just confirmed it — a concurrent-edit conflict on
-    // the PR's own metadata afterward doesn't unmerge it (see that put's
+    // the MR's own metadata afterward doesn't unmerge it (see that put's
     // own comment).
     crate::events::emit(
         ctx,
-        crate::events::RepoEvent::PullRequest {
+        crate::events::RepoEvent::MergeRequest {
             repo_uid: target.uid.clone(),
             number,
-            action: crate::events::PullRequestAction::Merged,
+            action: crate::events::MergeRequestAction::Merged,
         },
     );
     let stamp = now_stamp();
-    pr.status = PrStatus::Merged;
-    pr.merge_commit_sha = Some(merge_sha.clone());
-    pr.merged_by = Some(merged_by.to_string());
-    pr.merged_at = Some(stamp.clone());
-    pr.updated_at = stamp;
+    mr.status = MrStatus::Merged;
+    mr.merge_commit_sha = Some(merge_sha.clone());
+    mr.merged_by = Some(merged_by.to_string());
+    mr.merged_at = Some(stamp.clone());
+    mr.updated_at = stamp;
     // The merge itself already landed on the target branch at this point —
-    // a CAS conflict here (someone edited the PR concurrently) must not
+    // a CAS conflict here (someone edited the MR concurrently) must not
     // roll that back, so it's a warning, not a bail: the merge commit stays
     // the source of truth regardless of whether this metadata update wins.
-    if pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, pr_etag.as_deref()).await?
+    if merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, mr_etag.as_deref()).await?
         == Cas::Conflict
     {
         eprintln!(
-            "gitquarry: warning: pull request #{number} merged but its metadata CAS conflicted (concurrent edit) — status may not show as merged"
+            "gitquarry: warning: merge request #{number} merged but its metadata CAS conflicted (concurrent edit) — status may not show as merged"
         );
     }
 
     Ok(MergeOutcome::Merged(merge_sha))
 }
 
-/// Records a PR as merged without touching git at all — `mirror::external`'s
-/// Track B PR sync calls this when it observes upstream (GitHub/GitLab/
-/// Codeberg) already reports a linked PR as merged: that merge already
+/// Records an MR as merged without touching git at all — `mirror::external`'s
+/// Track B MR sync calls this when it observes upstream (GitHub/GitLab/
+/// Codeberg) already reports a linked MR as merged: that merge already
 /// happened on the provider's side, and its merge commit arrives locally
 /// through Track A's own pull-mirror sync, not through [`merge`]'s real
 /// `merge-tree`/`commit-tree` path — calling that here would create a
@@ -1125,21 +1127,21 @@ pub async fn mark_merged_externally(
     merged_by: Option<&str>,
 ) -> Result<()> {
     let backend = ctx.backend();
-    let (pr, etag) = pull_requests::get_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
-    let Some(mut pr) = pr else {
-        bail!("no such pull request: #{number}");
+    let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
+    let Some(mut mr) = mr else {
+        bail!("no such merge request: #{number}");
     };
-    if pr.status == PrStatus::Merged {
+    if mr.status == MrStatus::Merged {
         return Ok(());
     }
     let stamp = now_stamp();
-    pr.status = PrStatus::Merged;
-    pr.merge_commit_sha = Some(merge_commit_sha.to_string());
-    pr.merged_by = merged_by.map(str::to_string);
-    pr.merged_at = Some(stamp.clone());
-    pr.updated_at = stamp;
-    match pull_requests::put_pull_request(backend.as_ref(), &ctx.cipher, &target.uid, &pr, etag.as_deref()).await? {
+    mr.status = MrStatus::Merged;
+    mr.merge_commit_sha = Some(merge_commit_sha.to_string());
+    mr.merged_by = merged_by.map(str::to_string);
+    mr.merged_at = Some(stamp.clone());
+    mr.updated_at = stamp;
+    match merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, etag.as_deref()).await? {
         Cas::Ok => Ok(()),
-        Cas::Conflict => bail!("concurrent edit while marking pull request #{number} merged externally"),
+        Cas::Conflict => bail!("concurrent edit while marking merge request #{number} merged externally"),
     }
 }

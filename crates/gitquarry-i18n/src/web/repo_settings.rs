@@ -62,15 +62,15 @@ msg!(topics_placeholder() { Locale::Es => "rust, cli, git", Locale::En => "rust,
 
 msg!(required_reviewers_heading() { Locale::Es => "reviewers requeridos", Locale::En => "required reviewers" });
 msg!(required_reviewers_prose() {
-    Locale::Es => "Deben aprobar antes de poder mergear un PR, ademas de lo que pida un CODEOWNERS en la raiz del repo para los archivos que toque.",
-    Locale::En => "Must approve before a PR can merge, on top of whatever a CODEOWNERS file at the repo root additionally requires for the files it touches.",
+    Locale::Es => "Deben aprobar antes de poder mergear un MR, ademas de lo que pida un CODEOWNERS en la raiz del repo para los archivos que toque.",
+    Locale::En => "Must approve before an MR can merge, on top of whatever a CODEOWNERS file at the repo root additionally requires for the files it touches.",
 });
 msg!(required_reviewers_placeholder() { Locale::Es => "alice, bob", Locale::En => "alice, bob" });
 
 msg!(labels_heading() { Locale::Es => "etiquetas", Locale::En => "labels" });
 msg!(labels_prose() {
-    Locale::Es => "Vocabulario de etiquetas asignables a issues y pull requests de este repo, formato nombre:#color separado por comas.",
-    Locale::En => "This repo's label vocabulary, assignable to issues and pull requests, name:#color pairs, comma-separated.",
+    Locale::Es => "Vocabulario de etiquetas asignables a issues y merge requests de este repo, formato nombre:#color separado por comas.",
+    Locale::En => "This repo's label vocabulary, assignable to issues and merge requests, name:#color pairs, comma-separated.",
 });
 msg!(labels_placeholder() { Locale::Es => "bug:#d73a4a, mejora:#a2eeef", Locale::En => "bug:#d73a4a, enhancement:#a2eeef" });
 
@@ -215,12 +215,12 @@ msg!(mirror_token_shown_once_suffix() {
     Locale::Es => "\" — se muestra una sola vez, guardalo ahora:",
     Locale::En => "\" — shown only once, save it now:",
 });
-msg!(mirror_field_label_sync_pull_requests() {
-    Locale::Es => "sincronizar pull requests",
-    Locale::En => "sync pull requests",
+msg!(mirror_field_label_sync_merge_requests() {
+    Locale::Es => "sincronizar merge requests",
+    Locale::En => "sync merge requests",
 });
-msg!(linked_prs_heading() { Locale::Es => "pull requests vinculadas", Locale::En => "linked pull requests" });
-msg!(no_linked_prs_hint() { Locale::Es => "(sin pull requests vinculadas todavia)", Locale::En => "(no linked pull requests yet)" });
-msg!(pr_link_table_header_local() { Locale::Es => "local", Locale::En => "local" });
-msg!(pr_link_table_header_external() { Locale::Es => "externa", Locale::En => "external" });
-msg!(pr_link_table_header_cursor() { Locale::Es => "ultimo sync", Locale::En => "last synced" });
+msg!(linked_mrs_heading() { Locale::Es => "merge requests vinculados", Locale::En => "linked merge requests" });
+msg!(no_linked_mrs_hint() { Locale::Es => "(sin merge requests vinculados todavia)", Locale::En => "(no linked merge requests yet)" });
+msg!(mr_link_table_header_local() { Locale::Es => "local", Locale::En => "local" });
+msg!(mr_link_table_header_external() { Locale::Es => "externa", Locale::En => "external" });
+msg!(mr_link_table_header_cursor() { Locale::Es => "ultimo sync", Locale::En => "last synced" });

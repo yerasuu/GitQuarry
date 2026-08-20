@@ -118,7 +118,7 @@ async fn set_ref_status_leaves_last_synced_untouched() {
 }
 
 #[tokio::test]
-async fn pr_link_round_trips_and_lists_scoped_to_its_own_mirror() {
+async fn mr_link_round_trips_and_lists_scoped_to_its_own_mirror() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let uid = Uid::from("team/proj".to_string());
@@ -129,17 +129,17 @@ async fn pr_link_round_trips_and_lists_scoped_to_its_own_mirror() {
         remote_updated_cursor: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     };
-    put_pr_link(&backend, &cipher, &uid, "m1", &link, None).await.unwrap();
+    put_mr_link(&backend, &cipher, &uid, "m1", &link, None).await.unwrap();
 
-    let (fetched, etag) = get_pr_link(&backend, &cipher, &uid, "m1", 1).await.unwrap();
+    let (fetched, etag) = get_mr_link(&backend, &cipher, &uid, "m1", 1).await.unwrap();
     assert_eq!(fetched.unwrap().external_number, 42);
     assert!(etag.is_some());
 
     // A different mirror on the same repo has its own, independent set
-    // of links, even for the same local PR number.
-    let other_mirror_links = list_pr_links(&backend, &cipher, &uid, "m2").await.unwrap();
+    // of links, even for the same local MR number.
+    let other_mirror_links = list_mr_links(&backend, &cipher, &uid, "m2").await.unwrap();
     assert!(other_mirror_links.is_empty());
-    let this_mirror_links = list_pr_links(&backend, &cipher, &uid, "m1").await.unwrap();
+    let this_mirror_links = list_mr_links(&backend, &cipher, &uid, "m1").await.unwrap();
     assert_eq!(this_mirror_links.len(), 1);
 }
 

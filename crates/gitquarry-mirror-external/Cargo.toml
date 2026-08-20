@@ -3,7 +3,7 @@ name = "gitquarry-mirror-external"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "External-forge ref/PR mirror sync (GitHub/GitLab/Codeberg) -- a library, not its own process; gitquarry-server wires it into AppContext::mirror_sync at startup, since gitquarry-core can't depend on it directly (this crate depends on core)"
+description = "External-forge ref/MR mirror sync (GitHub/GitLab/Codeberg) -- a library, not its own process; gitquarry-server wires it into AppContext::mirror_sync at startup, since gitquarry-core can't depend on it directly (this crate depends on core)"
 license.workspace = true
 
 [dependencies]

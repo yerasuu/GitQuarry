@@ -43,7 +43,7 @@
 | Status checks requeridos | Sí, ligado a rulesets | Sí, third-party checks — **Ultimate** | Vía Actions/Woodpecker commit status, branch-protection rule |
 | Métodos de merge | merge/squash/rebase | merge/semi-linear/squash/fast-forward, todos **free** | merge/rebase/rebase-merge/squash/fast-forward-only |
 
-**Relevancia gitquarry**: nuestro `pull_request/mod.rs` ya tiene 3 estrategias de merge, reviews append-only, auto-close por keyword — a la par de Codeberg en lo estructural. Gaps confirmados como universales-y-gratuitos en los tres (no premium-gated en ninguno): **CODEOWNERS/reviewers requeridos** y **status checks obligatorios**. Merge queue/trains es feature de escala de equipo grande — bajo prioridad real para gitquarry hoy. Auto-merge notablemente **ausente también en Codeberg** — si Forgejo (que es 10+ años de código Gitea) no lo tiene resuelto, no es urgente para gitquarry tenerlo ya.
+**Relevancia gitquarry**: nuestro `merge_request/mod.rs` ya tiene 3 estrategias de merge, reviews append-only, auto-close por keyword — a la par de Codeberg en lo estructural. Gaps confirmados como universales-y-gratuitos en los tres (no premium-gated en ninguno): **CODEOWNERS/reviewers requeridos** y **status checks obligatorios**. Merge queue/trains es feature de escala de equipo grande — bajo prioridad real para gitquarry hoy. Auto-merge notablemente **ausente también en Codeberg** — si Forgejo (que es 10+ años de código Gitea) no lo tiene resuelto, no es urgente para gitquarry tenerlo ya.
 
 ---
 
@@ -53,7 +53,7 @@
 - **GitHub Actions**: tab "Checks" separado, anotaciones inline en diff desde comandos de workflow, badges de status por commit.
 - **Codeberg**: dos sistemas en paralelo confusamente coexistiendo — Forgejo Actions (compatible GitHub Actions, ya "production ready") + Woodpecker CI (histórico, todavía corriendo). El propio runner hosteado de Codeberg sigue en alpha limitado por preocupaciones de seguridad/bus-factor.
 
-**Relevancia gitquarry**: CI es el gap #1 del roadmap propio (`feature-compare.md` ya lo marca como máximo impacto). Esta comparativa confirma que **status checks obligatorios en PR dependen 100% de tener CI** — sin eso, el merge machinery ya construido (reviews, merge strategies) queda cojo en la práctica de equipo real. Lección de Codeberg: no lanzar dos sistemas de CI en paralelo — elegir uno solo desde el diseño (evitar la confusión Actions/Woodpecker que el propio Codeberg documenta como FAQ recurrente).
+**Relevancia gitquarry**: CI es el gap #1 del roadmap propio (`feature-compare.md` ya lo marca como máximo impacto). Esta comparativa confirma que **status checks obligatorios en MR dependen 100% de tener CI** — sin eso, el merge machinery ya construido (reviews, merge strategies) queda cojo en la práctica de equipo real. Lección de Codeberg: no lanzar dos sistemas de CI en paralelo — elegir uno solo desde el diseño (evitar la confusión Actions/Woodpecker que el propio Codeberg documenta como FAQ recurrente).
 
 ---
 
@@ -88,7 +88,7 @@ Los tres: wiki respaldada por git propio (repo separado), markdown, historial v�
 - **GitLab/GitHub**: sin federación cross-instancia real (ninguno lo necesita, son SaaS centralizados).
 - **Codeberg/Forgejo (ForgeFed)**: solo **star federation** shipeado (2025); issues/PRs/identidad federados siguen siendo roadmap, no implementados.
 
-**Relevancia gitquarry**: esta es la comparación más favorable para el proyecto — `gitquarry-federation` (peers/browse/fork/PR-proxy/tokens de grano fino, 4 capas completas) está **arquitectónicamente más avanzado** que el estado actual de ForgeFed en Forgejo, el peer más cercano en filosofía. Vale la pena que esto quede explícito en cualquier material de posicionamiento del proyecto — no es un gap, es una ventaja real y verificada externamente.
+**Relevancia gitquarry**: esta es la comparación más favorable para el proyecto — `gitquarry-federation` (peers/browse/fork/MR-proxy/tokens de grano fino, 4 capas completas) está **arquitectónicamente más avanzado** que el estado actual de ForgeFed en Forgejo, el peer más cercano en filosofía. Vale la pena que esto quede explícito en cualquier material de posicionamiento del proyecto — no es un gap, es una ventaja real y verificada externamente.
 
 ---
 
@@ -117,7 +117,7 @@ Los tres: wiki respaldada por git propio (repo separado), markdown, historial v�
 No cambia el orden de impacto ya declarado en `feature-compare.md` (CI+webhooks+notificaciones > wiki+package-registry > OAuth2 provider), pero **matiza dos puntos concretos**:
 
 1. **Issues relacionados (blocks/blocked-by) y bulk actions** suben de prioridad dentro del bloque de issues — son gratuitos y universales en los tres competidores, no requieren infra nueva (a diferencia de time-tracking o sub-issues jerárquicas, que sí son más caras de construir bien).
-2. **CODEOWNERS/reviewers requeridos y status checks obligatorios en PR** son el par de features que, cuando se resuelva CI, hay que construir junto y no después — los tres forges los tratan como parte del mismo paquete de "merge gating", no como features separadas.
+2. **CODEOWNERS/reviewers requeridos y status checks obligatorios en MR** son el par de features que, cuando se resuelva CI, hay que construir junto y no después — los tres forges los tratan como parte del mismo paquete de "merge gating", no como features separadas.
 
 Dos ventajas reales confirmadas por esta investigación externa, no solo supuestas internamente:
 - **Search cross-repo** de gitquarry ya adelanta a Codeberg en un punto que Codeberg mismo reconoce como no resuelto.

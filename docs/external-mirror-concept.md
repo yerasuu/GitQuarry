@@ -1,10 +1,10 @@
-# Mirror externo (GitHub / GitLab / Codeberg): sync bidireccional de refs y pull requests
+# Mirror externo (GitHub / GitLab / Codeberg): sync bidireccional de refs y merge requests
 
 > **Track A y Track B implementadas completas (commits 1-12).** Entity+CRUD,
 > plomería git, sync push, sync pull+divergencia, tick periódico, tab de UI
-> (`webui::repo_settings::mirrors`), y — Track B — origin en `PrComment`,
-> `ForgeApi` + clientes GitHub/GitLab/Codeberg, motor de sync de PRs
-> (`mirror::external::pr_sync`) y su estado en la misma tab de UI, todo
+> (`webui::repo_settings::mirrors`), y — Track B — origin en `MrComment`,
+> `ForgeApi` + clientes GitHub/GitLab/Codeberg, motor de sync de MRs
+> (`mirror::external::mr_sync`) y su estado en la misma tab de UI, todo
 > aterrizado. El código real difiere del plan original en varios puntos,
 > anotados en las secciones correspondientes más abajo — no asumir que el
 > texto viejo describe el estado actual sin chequear contra el código.
@@ -13,7 +13,7 @@
 > contra un `ForgeApi` fake in-memory y tests unitarios/de integración
 > locales, nunca contra las APIs reales. La tab de UI en particular quedó
 > más acotada que "formulario add/edit" sugería: edit inline cubre
-> label/url/token/provider/direction/enabled/sync_pull_requests, pero no hay
+> label/url/token/provider/direction/enabled/sync_merge_requests, pero no hay
 > toggle JS mostrar/ocultar — el form de edit de cada mirror siempre está
 > expandido en su propia fila.
 
@@ -65,10 +65,10 @@ igual que `src/federation/access/peer_tokens.rs` + `src/federation/domain/peer_c
 (precedente más cercano para un secreto reversible reusable por target).
 
 - Colección hand-built (no `#[derive(Entity)]` — mismo motivo que
-  `peer_tokens.rs`/`storage/pull_requests.rs`: el path necesita el `Uid`
+  `peer_tokens.rs`/`storage/merge_requests.rs`: el path necesita el `Uid`
   del repo en runtime, y `#[entity(collection = "...")]` solo acepta
   literal de compile-time). `Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/mirrors"))`,
-  igual patrón que `storage/pull_requests.rs:83`'s `pulls_collection`.
+  igual patrón que `storage/merge_requests.rs:83`'s `merges_collection`.
   Clave: id corto generado por mirror (un repo puede tener más de un
   mirror externo, incluso al mismo provider).
 - `ExternalMirrorProvider`: `GitHub | GitLab | Codeberg | Other`.
@@ -90,7 +90,7 @@ igual que `src/federation/access/peer_tokens.rs` + `src/federation/domain/peer_c
   identidad estable por mirror a través de ediciones), `get_external_mirror`,
   `list_external_mirrors(uid)`, `delete_external_mirror`, y
   `update_last_synced(uid, mirror_id, ref_name, sha)` con su propio retry
-  CAS (mismo shape que `pull_requests.rs`) para que dos refs del mismo
+  CAS (mismo shape que `merge_requests.rs`) para que dos refs del mismo
   mirror sincronizando en paralelo no se pisen.
 - `domain.rs`: wrapper fino a nivel `AppContext` (`set`/`list`/`get`/`delete`),
   `set` corre `access::validate_external_mirror` antes de guardar —
@@ -228,7 +228,7 @@ el tick de sync, sin necesidad de etag) se separó de
 (usada solo por la tab de UI), en vez de que la firma original creciera un
 etag que el path de sync nunca usa.
 
-## Track B: sync bidireccional de pull requests / MRs
+## Track B: sync bidireccional de PRs / MRs
 
 Elegido explícitamente por el usuario (no default) sobre la opción más
 angosta de solo-visibilidad: create/comment/merge se propagan en ambas
@@ -236,34 +236,34 @@ direcciones, no solo lectura. Feature bastante más grande que el mirror de
 refs — tres APIs REST distintas (GitHub, GitLab, Codeberg/Gitea), sin
 shape de wire compartido entre ellas, riesgo real de loops de
 comentario/estado si el anti-loop bookkeeping no está bien. Se apoya
-estrictamente sobre Track A: sync de PRs es opt-in por `ExternalMirror`
-(`sync_pull_requests: bool`, default `false`) y reusa `remote_url`/`token`
+estrictamente sobre Track A: sync de MRs es opt-in por `ExternalMirror`
+(`sync_merge_requests: bool`, default `false`) y reusa `remote_url`/`token`
 de ese mismo mirror — sin credencial separada.
 
 ### Modelo de datos adicional
 
-- `ExternalMirror` suma `sync_pull_requests: bool`.
+- `ExternalMirror` suma `sync_merge_requests: bool`.
 - Nueva colección por mirror `ExternalPrLink`:
-  `Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/mirrors/{mirror_id}/pr-links"))`,
-  keyed por número de PR local (scoped bajo un mirror puntual, no todo el
-  repo — un repo puede tener varios `ExternalMirror`s, cada uno con PR
+  `Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/mirrors/{mirror_id}/mr-links"))`,
+  keyed por número de MR local (scoped bajo un mirror puntual, no todo el
+  repo — un repo puede tener varios `ExternalMirror`s, cada uno con MR
   sync independiente). Campos: `external_number: u64`,
   `synced_remote_comment_ids: BTreeSet<u64>` (filtro de import, ver
   abajo), `remote_updated_cursor: String` (el `updated_at` propio del
   provider, usado como parámetro `updated_since` para que cada tick no
   relistee todo).
-- `storage::pull_requests::PrComment` suma un campo aditivo:
+- `storage::merge_requests::MrComment` suma un campo aditivo:
   `origin: Option<String>` (`#[serde(default)]`, id de mirror o `None`
   para comentario genuinamente local) — el filtro de export ("qué
   comentarios locales son míos para empujar afuera") es simplemente
   `origin.is_none()`; un comentario traído desde el lado externo queda
   estampado con el id del mirror para nunca reenviarse como si fuera
   nuevo.
-- El `status` local de un PR sincronizado puede pasar a `Merged` de dos
-  formas: vía `domain::pull_request::merge` propio de gitquarry (sin
+- El `status` local de un MR sincronizado puede pasar a `Merged` de dos
+  formas: vía `domain::merge_request::merge` propio de gitquarry (sin
   cambios), o observado como mergeado upstream durante un barrido de
   sync — este segundo caso necesita un `mark_merged_externally(ctx, target, number, merge_commit_sha)`
-  nuevo y chico en `src/domain/pull_request.rs` que solo cambia los campos
+  nuevo y chico en `src/domain/merge_request.rs` que solo cambia los campos
   de status/`merged_at`/`merge_commit_sha` (CAS-write, mismo shape que ya
   usa `transition`), **nunca** llama al path real `merge-tree`/`commit-tree` —
   ese merge ya pasó del lado del provider y su commit va a llegar
@@ -273,15 +273,15 @@ de ese mismo mirror — sin credencial separada.
 
 Nuevo `src/mirror/external/forge/` — un trait, tres implementaciones
 finas, mismo patrón "un shape compartido, varios adaptadores finos" que ya
-estableció `storage::pull_requests::PrDetail` para el proxy de PRs de
-federación (`pull_requests.rs:185-199`):
+estableció `storage::merge_requests::MrDetail` para el proxy de MRs de
+federación (`merge_requests.rs:185-199`):
 
-- `mod.rs`: trait `ForgeApi` (`list_pull_requests(since: Option<&str>)`,
-  `get_pull_request(number)`, `create_pull_request(new: NewRemotePr)`,
-  `update_pull_request(number, patch: PrPatch)` — título/descripción/
-  estado, `merge_pull_request(number)`, `list_comments(number)`,
-  `add_comment(number, body)`), más los structs compartidos `RemotePr`/
-  `RemoteComment`/`NewRemotePr`/`PrPatch` a los que cada impl mapea.
+- `mod.rs`: trait `ForgeApi` (`list_merge_requests(since: Option<&str>)`,
+  `get_merge_request(number)`, `create_merge_request(new: NewRemoteMr)`,
+  `update_merge_request(number, patch: MrPatch)` — título/descripción/
+  estado, `accept_merge_request(number)`, `list_comments(number)`,
+  `add_comment(number, body)`), más los structs compartidos `RemoteMr`/
+  `RemoteComment`/`NewRemoteMr`/`MrPatch` a los que cada impl mapea.
 - `github.rs`, `gitlab.rs`, `codeberg.rs`: cada uno parsea `owner/repo`
   de `remote_url`, arma su propio header de auth (GitHub
   `Authorization: Bearer <token>`, GitLab `PRIVATE-TOKEN: <token>`,
@@ -308,7 +308,7 @@ federación (`pull_requests.rs:185-199`):
   reimporta localmente como un comentario duplicado. Garantía más fuerte
   que un cursor por conteo (un conteo se puede confundir con posts
   concurrentes entre dos barridos; un set de ids no).
-- **Campos del PR (título/descripción/estado)**: last-write-wins por
+- **Campos del MR (título/descripción/estado)**: last-write-wins por
   timestamp `updated_at` del provider comparado contra
   `remote_updated_cursor` — sin merge de 3 vías de campos de texto (a
   diferencia de la política de divergencia de refs de Track A, acá no hay
@@ -318,23 +318,23 @@ federación (`pull_requests.rs:185-199`):
   deliberadamente más débil de este plan; se muestra explícito en la UI
   del link ("in sync as of ...") para que no quede oculto.
 - **Rate limits**: el cursor `updated_since` mantiene barato el
-  `list_pull_requests` de cada tick (solo PRs tocados desde el último
+  `list_merge_requests` de cada tick (solo MRs tocados desde el último
   sync), mismo intervalo de tick que el barrido periódico de Track A — sin
-  loop de polling separado más rápido para PRs.
+  loop de polling separado más rápido para MRs.
 
-### Descubrimiento de PRs nuevos/existentes
+### Descubrimiento de MRs nuevos/existentes
 
-En cada barrido de mirror (solo si `sync_pull_requests` está prendido,
-después del paso de sync de refs): lista PRs externos actualizados desde
+En cada barrido de mirror (solo si `sync_merge_requests` está prendido,
+después del paso de sync de refs): lista MRs externos actualizados desde
 el cursor → cualquiera sin `ExternalPrLink` genera un
-`PullRequestMeta` local nuevo (`domain::pull_request::create`, reusada sin
+`MergeRequestMeta` local nuevo (`domain::merge_request::create`, reusada sin
 cambios — su check de existencia de branch se satisface porque el sync de
 refs de Track A ya bajó localmente las branches head/base) más una fila de
-link nueva. Simétrico: cualquier PR local sin link, en un repo cuyo mirror
-tiene `sync_pull_requests` prendido, se crea del lado externo vía
-`create_pull_request` y se linkea. Un `merge()` local (función existente,
-`src/domain/pull_request.rs:272-348`) — si el PR mergeado tiene link —
-llama best-effort a `merge_pull_request` en el provider después, log-and-
+link nueva. Simétrico: cualquier MR local sin link, en un repo cuyo mirror
+tiene `sync_merge_requests` prendido, se crea del lado externo vía
+`create_merge_request` y se linkea. Un `merge()` local (función existente,
+`src/domain/merge_request.rs:272-348`) — si el MR mergeado tiene link —
+llama best-effort a `accept_merge_request` en el provider después, log-and-
 warn si falla (mismo patrón "ya tuvo éxito local, la metadata es
 secundaria" que esa función ya usa en su manejo de conflicto CAS al final,
 ~línea 339-345, no un patrón nuevo).
@@ -356,11 +356,11 @@ Este mismo documento — antes de tocar `src/`.
 
 **Track B:**
 - `src/mirror/external/forge/mod.rs`, `github.rs`, `gitlab.rs`, `codeberg.rs` (nuevos)
-- `src/mirror/external/access.rs` (CRUD de `ExternalPrLink`, extiende `ExternalMirror` con `sync_pull_requests`)
-- `src/storage/pull_requests.rs` (agrega `PrComment.origin`)
-- `src/domain/pull_request.rs` (agrega `mark_merged_externally`; `merge()` gana la llamada best-effort a merge externo)
-- `src/mirror/external.rs` (`sync_mirror_once` gana el paso de sync de PRs)
-- `src/webui/repo_settings/mirrors.rs` (checkbox de PR-sync + estado de link por PR)
+- `src/mirror/external/access.rs` (CRUD de `ExternalPrLink`, extiende `ExternalMirror` con `sync_merge_requests`)
+- `src/storage/merge_requests.rs` (agrega `MrComment.origin`)
+- `src/domain/merge_request.rs` (agrega `mark_merged_externally`; `merge()` gana la llamada best-effort a merge externo)
+- `src/mirror/external.rs` (`sync_mirror_once` gana el paso de sync de MRs)
+- `src/webui/repo_settings/mirrors.rs` (checkbox de MR-sync + estado de link por MR)
 
 ## Verificación
 
@@ -393,12 +393,12 @@ Sigue la convención existente del codebase (tests de federación,
   de comentario, filtro por `origin`, comparación de cursor) — suficiente-
   mente pura para testear sin llamada real a la API. Manual (inevitable —
   cuentas reales de GitHub/GitLab/Codeberg, no hay fake local de sus APIs
-  en este codebase): repo scratch + PAT en cada provider. Abrir un PR en
+  en este codebase): repo scratch + PAT en cada provider. Abrir un MR en
   gitquarry, confirmar que aparece en el provider; comentar en cada lado,
   confirmar que el otro lado lo muestra exactamente una vez (no duplicado,
   no en loop) después de dos ticks consecutivos; mergear local, confirmar
-  que el PR del provider queda mergeado; abrir+mergear un PR del lado del
-  provider, confirmar que el PR local pasa a `Merged` y el merge commit
+  que el MR del provider queda mergeado; abrir+mergear un MR del lado del
+  provider, confirmar que el MR local pasa a `Merged` y el merge commit
   llega vía el pull-mirror de Track A, no un segundo merge commit local.
 
 ## Plan de commits (atómico)
@@ -414,17 +414,17 @@ Sigue la convención existente del codebase (tests de federación,
 6. [x] `feat(web): add external mirrors settings tab`
 
 **Track B (después de que Track A esté verificada funcionando):**
-7. [x] `feat(storage): add origin field to PrComment`
+7. [x] `feat(storage): add origin field to MrComment`
 8. [x] `feat(mirror): add ForgeApi trait and GitHub client`
-9. [x] `feat(mirror): sync pull requests against a linked GitHub mirror`
+9. [x] `feat(mirror): sync merge requests against a linked GitHub mirror`
 10. [x] `feat(mirror): add GitLab forge client`
 11. [x] `feat(mirror): add Codeberg forge client`
-12. [x] `feat(web): surface PR-sync status on the mirrors settings tab`
+12. [x] `feat(web): surface MR-sync status on the mirrors settings tab`
 
 **Track B implementada completa.** Verificación real contra cuentas GitHub/
 GitLab/Codeberg sigue pendiente (inevitable, ver sección de Verificación
 más abajo) — lo que aterrizó está probado contra un `ForgeApi` fake
-in-memory (`mirror::external::pr_sync::tests::FakeForge`), no contra las
+in-memory (`mirror::external::mr_sync::tests::FakeForge`), no contra las
 APIs reales. Desviaciones del plan original, encontradas durante la
 implementación:
 
@@ -434,11 +434,11 @@ implementación:
   reexportarlo en cada tick siguiente. Se agregó
   `ExternalPrLink::synced_local_comment_keys: BTreeSet<String>`, poblado
   con la clave de storage de cada comentario ya exportado — para eso
-  `storage::pull_requests::list_pr_comments_with_keys` es nuevo
-  (`PrComment` nunca tuvo un id propio en el wire shape).
-- **`domain::pull_request::create` no acepta un status inicial**: un PR
+  `storage::merge_requests::list_mr_comments_with_keys` es nuevo
+  (`MrComment` nunca tuvo un id propio en el wire shape).
+- **`domain::merge_request::create` no acepta un status inicial**: un MR
   externo descubierto ya-cerrado se crea `Open` y se cierra con una llamada
-  a `close()` inmediata aparte (`pr_sync::create_local_pr_from_remote`); uno
+  a `close()` inmediata aparte (`mr_sync::create_local_mr_from_remote`); uno
   ya-mergeado se deja `Open` a propósito, porque el chequeo de propagación
   de merge que corre justo después no depende del cursor y dispara solo en
   el siguiente pase igual, vía el camino real `mark_merged_externally`.
@@ -456,7 +456,7 @@ implementación:
   self-hosteables. Shape de resto (`merged: bool` + `state`, comentarios
   como issue comments) igual a GitHub.
 - **Ninguno de los tres clientes tiene un `since` real del lado servidor**
-  para `list_pull_requests` — se pide todo ordenado por `updated_at`
+  para `list_merge_requests` — se pide todo ordenado por `updated_at`
   descendente y se corta client-side con `take_while`, no un query param
   del proveedor (cada API tiene semántica ligeramente distinta ahí, no vale
   la pena confiar en ninguna de las tres).

@@ -1,5 +1,5 @@
 use gitquarry_forge_clients::github::*;
-use gitquarry_forge_clients::{RemotePr, RemotePrState};
+use gitquarry_forge_clients::{RemoteMr, RemoteMrState};
 
 #[test]
 fn parses_owner_repo_with_and_without_git_suffix() {
@@ -44,9 +44,9 @@ fn maps_merged_flag_over_open_closed_state() {
         }),
         merge_commit_sha: Some("deadbeef".to_string()),
     };
-    let pr: RemotePr = merged.into();
-    assert_eq!(pr.state, RemotePrState::Merged);
-    assert_eq!(pr.merged_by.as_deref(), Some("bob"));
+    let mr: RemoteMr = merged.into();
+    assert_eq!(mr.state, RemoteMrState::Merged);
+    assert_eq!(mr.merged_by.as_deref(), Some("bob"));
 
     let closed_not_merged = GhPullRequest {
         number: 2,
@@ -69,8 +69,8 @@ fn maps_merged_flag_over_open_closed_state() {
         merged_by: None,
         merge_commit_sha: None,
     };
-    let pr: RemotePr = closed_not_merged.into();
-    assert_eq!(pr.state, RemotePrState::Closed);
+    let mr: RemoteMr = closed_not_merged.into();
+    assert_eq!(mr.state, RemoteMrState::Closed);
 }
 
 #[test]

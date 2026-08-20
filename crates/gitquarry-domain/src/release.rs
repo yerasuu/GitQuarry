@@ -53,11 +53,11 @@ const FIRST_RELEASE_COMMIT_CAP: usize = 200;
 /// `--sort=-creatordate`, same ordering the releases list already sorts
 /// by) — a rough draft meant to be edited before publishing, not a
 /// curated changelog. `Err` if `tag` isn't an actual tag on this repo.
-/// This walks raw commits rather than merged PRs: a `Merge`/`Squash`
-/// [`gitquarry_core::domain::pull_request::merge`] leaves the PR number right in the
-/// merge commit's own subject line (`"Merge pull request #{number} from
+/// This walks raw commits rather than merged MRs: a `Merge`/`Squash`
+/// [`gitquarry_core::domain::merge_request::merge`] leaves the MR number right in the
+/// merge commit's own subject line (`"Merge merge request #{number} from
 /// ..."` / `"{title} (#{number})"`), so it shows up here for free without
-/// this needing to cross-reference PR metadata at all — a `Rebase` merge
+/// this needing to cross-reference MR metadata at all — a `Rebase` merge
 /// doesn't leave that marker, same asymmetry the git history itself has.
 pub async fn generate_notes(
     ctx: &AppContext,

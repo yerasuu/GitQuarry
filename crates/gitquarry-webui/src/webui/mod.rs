@@ -348,35 +348,41 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             axum::routing::post(repo::branches::handler_delete_post),
         );
     let app = app
-        .route("/_pulls", axum::routing::post(repo::pulls::handler_create_post))
-        .route("/_pulls/bulk", axum::routing::post(repo::pulls::handler_bulk_post))
-        .route("/_pulls/close", axum::routing::post(repo::pulls::handler_close_post))
-        .route("/_pulls/reopen", axum::routing::post(repo::pulls::handler_reopen_post))
+        .route("/_merges", axum::routing::post(repo::merges::handler_create_post))
+        .route("/_merges/bulk", axum::routing::post(repo::merges::handler_bulk_post))
+        .route("/_merges/close", axum::routing::post(repo::merges::handler_close_post))
         .route(
-            "/_pulls/comment",
-            axum::routing::post(repo::pulls::handler_comment_post),
+            "/_merges/reopen",
+            axum::routing::post(repo::merges::handler_reopen_post),
         )
         .route(
-            "/_pulls/comment/edit",
-            axum::routing::post(repo::pulls::handler_comment_edit_post),
+            "/_merges/comment",
+            axum::routing::post(repo::merges::handler_comment_post),
         )
         .route(
-            "/_pulls/comment/delete",
-            axum::routing::post(repo::pulls::handler_comment_delete_post),
-        )
-        .route("/_pulls/review", axum::routing::post(repo::pulls::handler_review_post))
-        .route("/_pulls/merge", axum::routing::post(repo::pulls::handler_merge_post))
-        .route(
-            "/_pulls/edit_metadata",
-            axum::routing::post(repo::pulls::handler_edit_metadata_post),
+            "/_merges/comment/edit",
+            axum::routing::post(repo::merges::handler_comment_edit_post),
         )
         .route(
-            "/_pulls/mark_draft",
-            axum::routing::post(repo::pulls::handler_mark_draft_post),
+            "/_merges/comment/delete",
+            axum::routing::post(repo::merges::handler_comment_delete_post),
         )
         .route(
-            "/_pulls/mark_ready",
-            axum::routing::post(repo::pulls::handler_mark_ready_post),
+            "/_merges/review",
+            axum::routing::post(repo::merges::handler_review_post),
+        )
+        .route("/_merges/merge", axum::routing::post(repo::merges::handler_merge_post))
+        .route(
+            "/_merges/edit_metadata",
+            axum::routing::post(repo::merges::handler_edit_metadata_post),
+        )
+        .route(
+            "/_merges/mark_draft",
+            axum::routing::post(repo::merges::handler_mark_draft_post),
+        )
+        .route(
+            "/_merges/mark_ready",
+            axum::routing::post(repo::merges::handler_mark_ready_post),
         )
         .route("/_login_oidc", get(crate::auth::web::login::handler_login_oidc))
         .route("/_callback", get(crate::auth::web::login::handler_callback))

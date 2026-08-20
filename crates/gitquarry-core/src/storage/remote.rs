@@ -286,7 +286,7 @@ impl Remote {
     }
 
     /// Deletes every object under one *sub*-prefix of this repo
-    /// (`"mirrors/"`, `"pulls/"`, ...) — [`Self::delete_all`] scoped down.
+    /// (`"mirrors/"`, `"merges/"`, ...) — [`Self::delete_all`] scoped down.
     ///
     /// Exists for the duplication paths: [`Self::copy_all_to`] copies every
     /// key it finds, by design, so anything a copy must NOT inherit has to

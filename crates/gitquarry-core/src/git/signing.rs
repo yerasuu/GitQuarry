@@ -1,6 +1,6 @@
 //! The instance's own commit-signing key.
 //!
-//! Every commit this server builds on someone's behalf — a pull request's
+//! Every commit this server builds on someone's behalf — a merge request's
 //! merge, squash or rebase commit — can be signed, but never with the
 //! author's key: the bucket only ever holds the *public* half of a user's
 //! GPG key ([`crate::auth::entities::GpgKeyEntry`]), because a server that
@@ -46,7 +46,7 @@ const SIGNING_KEY: Singleton = Singleton::new(".conf/signing_key.json");
 pub const INSTANCE_NAME: &str = "GitQuarry";
 
 /// Deliberately in the same synthetic `noreply` domain
-/// `domain::pull_request::merger_identity` already uses for an account with
+/// `domain::merge_request::merger_identity` already uses for an account with
 /// no address: it is guaranteed not to collide with a real mailbox, and
 /// needs no deploy-time configuration to be stable.
 pub const INSTANCE_EMAIL: &str = "instance@noreply.gitquarry";

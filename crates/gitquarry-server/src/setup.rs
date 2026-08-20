@@ -180,7 +180,7 @@ pub struct WizardForm {
     /// (`auth::domain::user::set_email`), and this account *is* the first
     /// admin. Left blank, every merge commit it stamps carries the
     /// synthetic `<username>@users.noreply.gitquarry` address instead
-    /// (`domain::pull_request::merger_identity`).
+    /// (`domain::merge_request::merger_identity`).
     #[serde(default)]
     pub admin_email: String,
     pub admin_password: String,
@@ -234,7 +234,7 @@ struct WizardForm {
     /// (`auth::domain::user::set_email`), and this account *is* the first
     /// admin. Left blank, every merge commit it stamps carries the
     /// synthetic `<username>@users.noreply.gitquarry` address instead
-    /// (`domain::pull_request::merger_identity`).
+    /// (`domain::merge_request::merger_identity`).
     #[serde(default)]
     admin_email: String,
     admin_password: String,

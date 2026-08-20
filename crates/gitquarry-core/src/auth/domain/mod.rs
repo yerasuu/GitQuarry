@@ -1,5 +1,5 @@
 //! `User`/`Group` mutation CRUD, split out of the top-level `crate::domain`
-//! (which stays for `Repo`/`PullRequest`/`Release` — kernel concepts touched
+//! (which stays for `Repo`/`MergeRequest`/`Release` — kernel concepts touched
 //! by `webui` and `git` alike) because these two are auth-owned:
 //! [`crate::auth::entities`] already holds the `User`/`Group` struct defs
 //! themselves, so this just completes that ownership with the CRUD that

@@ -9,7 +9,7 @@ on a per-release versioning scheme.
 
 ## Git hosting & transport
 
-- Commits this server builds for you — a pull request's merge, squash or
+- Commits this server builds for you — a merge request's merge, squash or
   rebase commit — are signed with a key the instance generates and keeps for
   itself. They show as verified, in a colour distinct from a signature made
   by an account's own key: the instance can only attest that it built the
@@ -94,14 +94,14 @@ on a per-release versioning scheme.
 - Repo topics for discoverability.
 - Watched repos alongside starred repos, with a watch button.
 - Public user profile page listing a user's repos.
-- Pull requests can be merged by fast-forward, which creates no commit at
+- Merge requests can be merged by fast-forward, which creates no commit at
   all: what lands is the author's own commits, carrying the author's own
   signatures. Offered alongside merge, squash and rebase, and greyed out
   once the branches have diverged.
-- A pull request that can't merge cleanly says so on its own page, listing
+- A merge request that can't merge cleanly says so on its own page, listing
   the conflicting files and the commands to resolve them locally, instead of
   turning the merge button into an error page.
-- A merged pull request still renders after its source branch is deleted.
+- A merged MR still renders after its source branch is deleted.
 
 ## External mirroring
 
@@ -112,7 +112,7 @@ on a per-release versioning scheme.
 - What a mirror pulls in passes the same checks a push does: protected
   branches and tags, required signatures, the LFS blob ceiling and the
   owner's storage quota.
-- Optional two-way pull request sync per mirror — title, description,
+- Optional two-way merge request sync per mirror — title, description,
   open/closed state, merges and comments — with the bookkeeping that keeps
   a comment from echoing between the two sides.
 - An instance-wide host allowlist decides where a mirror may point. The

@@ -187,7 +187,7 @@ pub(crate) async fn handler_toggle_text_size(
 /// form points back at this whole group (not just the form that was
 /// submitted), so picking `lg` also un-highlights `sm`/`md` in the same
 /// swap — same "more than the form itself has to refresh" shape
-/// `pulls/mod.rs`'s `#pr-actions` already uses. `data-class-target`/
+/// `merges/mod.rs`'s `#mr-actions` already uses. `data-class-target`/
 /// `data-class-value`: same "paint it before the round trip" idea as
 /// [`super::theme_pref::render_theme_toggle`]'s `data-html-attr`, just
 /// aimed at `#about-body`'s own class instead of `<html>`'s attribute —

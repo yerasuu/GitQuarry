@@ -313,7 +313,7 @@ pub(crate) async fn handler_repo_conf_post(
         access::resolve_owner_display(ctx.backend().as_ref(), &ctx.cipher, config.owner.as_ref()).await?;
     let granted = access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
     let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
-    let pr_links_by_mirror = mirrors::fetch_pr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
+    let mr_links_by_mirror = mirrors::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
     // Async (`data-async-target="#mirrors-section"`, see `super::ASYNC_HEADER`'s
     // own doc comment): `sync_mirror_now`/`delete_mirror` only ever change
     // this one section, and everything `render_mirrors_section` needs is
@@ -325,7 +325,7 @@ pub(crate) async fn handler_repo_conf_post(
             mirrors::render_mirrors_section(
                 &name,
                 &mirrors_list,
-                &pr_links_by_mirror,
+                &mr_links_by_mirror,
                 &csrf_field(&headers),
                 pending_mirror_token.as_ref(),
                 locale,
@@ -373,7 +373,7 @@ pub(crate) async fn handler_repo_conf_post(
             manifest: &manifest,
             granted: &granted,
             mirrors: &mirrors_list,
-            pr_links: &pr_links_by_mirror,
+            mr_links: &mr_links_by_mirror,
         },
         PageChrome {
             csrf: &csrf_field(&headers),
@@ -504,9 +504,9 @@ pub struct RepoConfForm {
     #[serde(default)]
     mirror_enabled: String,
     /// Only read by `add_mirror`/`edit_mirror` — checkbox, present ("1")
-    /// only if checked. Track B opt-in, see `ExternalMirror::sync_pull_requests`.
+    /// only if checked. Track B opt-in, see `ExternalMirror::sync_merge_requests`.
     #[serde(default)]
-    sync_pull_requests: String,
+    sync_merge_requests: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every
@@ -524,7 +524,7 @@ pub(crate) struct Namespaces<'a> {
 /// anything but private — same "cross into a submodule only through a
 /// `pub(crate)` item right here" convention every other name reaching
 /// outside this module already follows.
-pub(crate) use mirrors::fetch_pr_links_by_mirror;
+pub(crate) use mirrors::fetch_mr_links_by_mirror;
 
 /// `manifest`/`granted` always travel together into [`render_settings_page`]
 /// too — this repo's own live branch list and its own permission grants —
@@ -536,9 +536,9 @@ pub(crate) struct RepoState<'a> {
     /// Each mirror with its current etag — the edit form's CAS guard, see
     /// `mirrors::render_mirror_form`.
     pub mirrors: &'a [(gitquarry_mirror_external::access::ExternalMirror, String)],
-    /// Track B: every mirror's linked PRs, keyed by mirror id — see
-    /// `mirrors::fetch_pr_links_by_mirror`.
-    pub pr_links: &'a std::collections::HashMap<String, Vec<gitquarry_mirror_external::access::ExternalPrLink>>,
+    /// Track B: every mirror's linked MRs, keyed by mirror id — see
+    /// `mirrors::fetch_mr_links_by_mirror`.
+    pub mr_links: &'a std::collections::HashMap<String, Vec<gitquarry_mirror_external::access::ExternalPrLink>>,
 }
 
 /// `csrf`/`message`/`locale` bundled so [`render_settings_page`] doesn't
@@ -576,7 +576,7 @@ pub(crate) fn render_settings_page(
         manifest,
         granted,
         mirrors,
-        pr_links,
+        mr_links,
     } = state;
     let PageChrome {
         csrf,
@@ -605,7 +605,7 @@ pub(crate) fn render_settings_page(
             None,
             permissions::render_perm_grid(repo_name, granted, csrf, locale),
         ))
-        (mirrors::render_mirrors_section(repo_name, mirrors, pr_links, csrf, pending_mirror_token, locale))
+        (mirrors::render_mirrors_section(repo_name, mirrors, mr_links, csrf, pending_mirror_token, locale))
         (move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale))
         (danger_zone::render_delete_repo_form(repo_name, config.deleted_at, csrf, retry_for("delete_repo"), retry_for("purge_repo"), locale))
     }

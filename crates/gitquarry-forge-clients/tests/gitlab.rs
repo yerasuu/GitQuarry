@@ -1,5 +1,5 @@
 use gitquarry_forge_clients::gitlab::*;
-use gitquarry_forge_clients::{RemoteComment, RemotePr, RemotePrState};
+use gitquarry_forge_clients::{RemoteComment, RemoteMr, RemoteMrState};
 
 #[test]
 fn parses_api_base_and_url_encodes_a_nested_project_path() {
@@ -42,9 +42,9 @@ fn maps_merged_state_and_falls_back_to_sha_when_merge_commit_sha_is_absent() {
         merge_commit_sha: None,
         sha: Some("fastforwardsha".to_string()),
     };
-    let pr: RemotePr = mr.into();
-    assert_eq!(pr.state, RemotePrState::Merged);
-    assert_eq!(pr.merge_commit_sha.as_deref(), Some("fastforwardsha"));
+    let mr: RemoteMr = mr.into();
+    assert_eq!(mr.state, RemoteMrState::Merged);
+    assert_eq!(mr.merge_commit_sha.as_deref(), Some("fastforwardsha"));
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 ## Context
 
-Builds on `docs/external-mirror-concept.md` (Track A ref-mirror + Track B PR-sync,
+Builds on `docs/external-mirror-concept.md` (Track A ref-mirror + Track B MR-sync,
 both implemented). This doc adds exactly one thing: pulling `mirror::external`
 (everything under `crates/gitquarry-core/src/mirror/external/`) out of
 `gitquarry-core` into its own crate — `linear-humming-locket.md`'s own audit
@@ -49,9 +49,9 @@ assumed — verified with grep against real call sites):
    spawn a sync. That reverse edge is the one real blocker to moving `access`
    above core in the dependency graph (see the index-relocation decision
    below).
-2. `pr_sync/mod.rs` is the one file with real `domain::pull_request` coupling
+2. `mr_sync/mod.rs` is the one file with real `domain::merge_request` coupling
    (`create`/`close`/`mark_merged_externally`, plus direct
-   `storage::pull_requests::*` reads/writes bypassing the domain layer) — zero
+   `storage::merge_requests::*` reads/writes bypassing the domain layer) — zero
    coupling to `domain::remote_fork` despite the original plan's blanket claim
    (grep-verified: no matches). It already depends on the leaf crates
    `gitquarry-forge-clients` and `gitquarry-i18n` from Fase 0 — no change
@@ -61,7 +61,7 @@ assumed — verified with grep against real call sites):
    **exclusively** from `mirror::external` (grep-verified, zero other
    callers) — these move out of `gitquarry-core::git` entirely. `is_ancestor`,
    `scratch_dir`, `pack_objects_for_push`, `update_ref` are shared kernel
-   primitives (`mirror::hook`, `domain::pull_request`, `domain::remote_fork`,
+   primitives (`mirror::hook`, `domain::merge_request`, `domain::remote_fork`,
    `mirror::mod.rs` all call them too) — these stay in core; the new crate
    depends on core for them, same as `gitquarry-domain` already does for
    `AppContext`/`storage`.
@@ -81,7 +81,7 @@ assumed — verified with grep against real call sites):
 | Question | Decision | Why |
 |---|---|---|
 | Shape | New crate `gitquarry-mirror-external`, **intermediate crate** (depends on `gitquarry-core`, same direction as `gitquarry-domain` — never the reverse), not a `tracker`/`ci`-style `Option<Link>` service. Compiles to its own binary reusing today's exact invocation shape: spawned as a subprocess with `GITQUARRY_BUCKET`/`GITQUARRY_REPO_UID`/`GITQUARRY_CONFIG`/`GIT_DIR` env vars. | Matches the coupling reality (bare-repo filesystem + subprocess git plumbing, not pure data CRUD) instead of forcing the tracker shape onto a case that doesn't fit it. |
-| What moves | `mirror::external::{mod,access,domain,pr_sync}` in full, plus the 5 exclusive git-plumbing fns out of `gitquarry-core::git`, plus `sync_cli.rs`'s role (rewritten, see below). | Everything with zero reverse callers except the one index read (next row). |
+| What moves | `mirror::external::{mod,access,domain,mr_sync}` in full, plus the 5 exclusive git-plumbing fns out of `gitquarry-core::git`, plus `sync_cli.rs`'s role (rewritten, see below). | Everything with zero reverse callers except the one index read (next row). |
 | The `access::list_external_mirrors` reverse edge | `set_mirrors_enabled_index`/`has_enabled_mirror(uid) -> bool`/`list_repos_with_enabled_mirrors` move **into `gitquarry-core::storage`** (new small module, sibling to `storage::settings::visible_index` — same "hint, not fact" shape). `mirror::hook.rs` calls this core-owned primitive directly (zero new dependency). The new crate's `domain.rs` calls `gitquarry_core::storage::mirrors_index::set(...)` after every create/update/delete — a normal downstream call, no cycle. | The index's whole purpose was already "answer this exact question cheaply" — moving *only* the index (not the full CRUD/validation/secrets surface) to core is the narrow, non-speculative cut, same reasoning `tracker-binary-split-concept.md` used to keep `closing_issue_numbers` a tiny duplicated primitive rather than pulling in a whole crate for one function. |
 | Git plumbing split | 5 fns (`push_to_remote_url`, `ls_remote_refs`, `list_refs_with_sha`, `fetch_ref_from_remote_url`, `redact_url`) move to a new `gitquarry-mirror-external::git_remote` module. 4 shared fns (`is_ancestor`, `scratch_dir`, `pack_objects_for_push`, `update_ref`) stay in `gitquarry-core::git`, called via `gitquarry_core::git::*` from the new crate. | Grep-verified exclusivity in both directions — no speculative "shared git crate" invented for functions only one side ever calls. |
 | Own runtime state | **Deviation, found during implementation**: NOT a standalone `MirrorSyncState` as originally planned here — `AppContext::open_mirror` (locking, `SyncStrategy` dispatch, GC touch) is real synchronization logic with exactly one implementation that must stay that way; reimplementing it against a narrower type would risk two independent lock/sync paths touching the same bare repo drifting apart. Instead, core gains a small `AppContext::for_mirror_sync(...)` constructor that fills every field this process never touches (`ssh_bind`, `oidc`, `federation`/`ci`/`artifacts`/`tracker`, ...) with a harmless placeholder — same placeholder values `sync_cli.rs` used inline, just centralized in one core-owned function instead of duplicated in this crate's `main.rs`. | Placeholder-field construction is safe to factor out; `open_mirror`'s own locking/sync behavior is not safe to duplicate. Confirmed by reading `open_mirror`/`open_mirror_common` before committing to the narrower-type design this row originally proposed. |
@@ -100,7 +100,7 @@ crates/gitquarry-mirror-external/
 │   ├── git_remote.rs        (moved: push_to_remote_url, ls_remote_refs, list_refs_with_sha, fetch_ref_from_remote_url, redact_url)
 │   ├── access/mod.rs        (moved as-is minus the mirrors-enabled index, which relocates to core)
 │   ├── domain.rs            (moved; refresh_mirrors_enabled_index now calls gitquarry_core::storage::mirrors_index::set)
-│   ├── pr_sync/mod.rs        (moved as-is)
+│   ├── mr_sync/mod.rs        (moved as-is)
 │   └── engine.rs            (moved: plan_ref_sync/sync_mirror_once/sync_repo_mirrors/run_periodic_sync, was mirror/external/mod.rs)
 
 crates/gitquarry-core/src/
@@ -143,7 +143,7 @@ compilable intermediate state to split at, unlike Phase 1 (a pure addition)
 or Phase 2 (no code change at all). Splitting further would mean shipping a
 commit that doesn't build, which is worse than one larger atomic commit.
 
-- New crate `gitquarry-mirror-external`: `access.rs`/`domain.rs`/`pr_sync/mod.rs`/
+- New crate `gitquarry-mirror-external`: `access.rs`/`domain.rs`/`mr_sync/mod.rs`/
   `engine.rs` (renamed from `mod.rs`) moved with import substitutions
   (`crate::` → `gitquarry_core::`), the 5 exclusive git fns moved into the
   new crate's own `git_remote.rs`, 3 exclusive `validate_mirror_*` fns moved
@@ -179,7 +179,7 @@ commit that doesn't build, which is worse than one larger atomic commit.
 
 ## Critical files (new/touched)
 
-- `crates/gitquarry-mirror-external/{Cargo.toml,src/{main,git_remote,access,domain,engine,validate}.rs,src/pr_sync/mod.rs}` (new crate)
+- `crates/gitquarry-mirror-external/{Cargo.toml,src/{main,git_remote,access,domain,engine,validate}.rs,src/mr_sync/mod.rs}` (new crate)
 - `crates/gitquarry-core/src/storage/mirrors_index.rs` (new, relocated index)
 - `crates/gitquarry-core/src/mirror/hook.rs` (touched: index read, spawn target)
 - `crates/gitquarry-core/src/git/mod.rs` (touched: 5 fns removed)
@@ -301,7 +301,7 @@ Commit: `refactor(mirror): call the sync engine in-process instead of spawning a
 - `cargo build --workspace` + `cargo test --workspace` at each phase boundary — Phase 1 in particular: the build failing on a stray `access::` import is the real confirmation the index relocation didn't miss a caller, same discipline the domain-crate scope correction relied on.
 - `cargo clippy --workspace --all-targets` / `cargo fmt --check`, `unsafe_code = forbid`, no exceptions in the new crate.
 - Manual (post-Phase-7, supersedes Phase 6's subprocess-oriented check): push to a repo with an enabled mirror, confirm the *next* clone/fetch/push against that repo picks up the sync (pre-serve hook) without hanging even if the external forge is unreachable (bounded by `MirrorExternalHook`'s 5s timeout). Confirm the periodic sweep runs as an ordinary in-process task from server startup (no second process to find/kill in `ps`).
-- Existing `tests/mirror_external.rs`, `mirror_external_access.rs`, `mirror_external_pr_sync.rs` move to the new crate's own `tests/` (renamed `engine.rs`/`access.rs`/`pr_sync.rs`), plus the mirror-specific cases split out of core's own `tests/git.rs`/`validate.rs` into new `tests/git_remote.rs`/`validate.rs` here — all still built directly against `gitquarry_core::app::AppContext`, per the deviation noted above.
+- Existing `tests/mirror_external.rs`, `mirror_external_access.rs`, `mirror_external_mr_sync.rs` move to the new crate's own `tests/` (renamed `engine.rs`/`access.rs`/`mr_sync.rs`), plus the mirror-specific cases split out of core's own `tests/git.rs`/`validate.rs` into new `tests/git_remote.rs`/`validate.rs` here — all still built directly against `gitquarry_core::app::AppContext`, per the deviation noted above.
 
 ## Plan de commits (atómico)
 

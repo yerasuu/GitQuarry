@@ -2,13 +2,13 @@ use anyhow::Result;
 use gitquarry_core::app::{AppContext, Locks, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::domain::pull_request::{self, NewPullRequest};
+use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
 use gitquarry_core::storage::local::LocalBackend;
-use gitquarry_core::storage::pull_requests::{self, PrComment, PrStatus};
+use gitquarry_core::storage::merge_requests::{self, MrComment, MrStatus};
 use gitquarry_core::storage::remote::{Manifest, Remote};
-use gitquarry_forge_clients::{ForgeApi, NewRemotePr, PrPatch, RemoteComment, RemotePr, RemotePrState};
+use gitquarry_forge_clients::{ForgeApi, MrPatch, NewRemoteMr, RemoteComment, RemoteMr, RemoteMrState};
 use gitquarry_mirror_external::access::{self, ExternalMirror, ExternalMirrorProvider, ExternalPrLink};
-use gitquarry_mirror_external::pr_sync::*;
+use gitquarry_mirror_external::mr_sync::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -17,88 +17,88 @@ use std::sync::{Arc, Mutex};
 /// anti-loop scenario without a real account.
 #[derive(Default)]
 struct FakeForge {
-    prs: Mutex<Vec<RemotePr>>,
+    mrs: Mutex<Vec<RemoteMr>>,
     comments: Mutex<HashMap<u64, Vec<RemoteComment>>>,
     next_number: Mutex<u64>,
     next_comment_id: Mutex<u64>,
 }
 
 impl FakeForge {
-    fn with_pr(self, pr: RemotePr) -> Self {
-        self.prs.lock().unwrap().push(pr);
+    fn with_mr(self, mr: RemoteMr) -> Self {
+        self.mrs.lock().unwrap().push(mr);
         self
     }
 }
 
 #[async_trait::async_trait]
 impl ForgeApi for FakeForge {
-    async fn list_pull_requests(&self, since: Option<&str>) -> Result<Vec<RemotePr>> {
+    async fn list_merge_requests(&self, since: Option<&str>) -> Result<Vec<RemoteMr>> {
         Ok(self
-            .prs
+            .mrs
             .lock()
             .unwrap()
             .iter()
-            .filter(|pr| since.is_none_or(|s| pr.updated_at.as_str() > s))
+            .filter(|mr| since.is_none_or(|s| mr.updated_at.as_str() > s))
             .cloned()
             .collect())
     }
 
-    async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>> {
-        Ok(self.prs.lock().unwrap().iter().find(|pr| pr.number == number).cloned())
+    async fn get_merge_request(&self, number: u64) -> Result<Option<RemoteMr>> {
+        Ok(self.mrs.lock().unwrap().iter().find(|mr| mr.number == number).cloned())
     }
 
-    async fn create_pull_request(&self, new: NewRemotePr) -> Result<RemotePr> {
+    async fn create_merge_request(&self, new: NewRemoteMr) -> Result<RemoteMr> {
         let mut next = self.next_number.lock().unwrap();
         *next = (*next).max(1);
         let number = *next;
         *next += 1;
-        let pr = RemotePr {
+        let mr = RemoteMr {
             number,
             title: new.title,
             body: new.body,
             source_branch: new.head,
             target_branch: new.base,
-            state: RemotePrState::Open,
+            state: RemoteMrState::Open,
             author: "faketester".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             ..Default::default()
         };
-        self.prs.lock().unwrap().push(pr.clone());
-        Ok(pr)
+        self.mrs.lock().unwrap().push(mr.clone());
+        Ok(mr)
     }
 
-    async fn update_pull_request(&self, number: u64, patch: PrPatch) -> Result<()> {
-        let mut prs = self.prs.lock().unwrap();
-        let pr = prs
+    async fn update_merge_request(&self, number: u64, patch: MrPatch) -> Result<()> {
+        let mut mrs = self.mrs.lock().unwrap();
+        let mr = mrs
             .iter_mut()
             .find(|p| p.number == number)
-            .ok_or_else(|| anyhow::anyhow!("no such fake PR #{number}"))?;
+            .ok_or_else(|| anyhow::anyhow!("no such fake MR #{number}"))?;
         if let Some(title) = patch.title {
-            pr.title = title;
+            mr.title = title;
         }
         if let Some(body) = patch.body {
-            pr.body = body;
+            mr.body = body;
         }
         if let Some(state) = patch.state {
-            pr.state = state;
+            mr.state = state;
         }
-        pr.updated_at = "2024-01-01T00:00:01Z".to_string();
+        mr.updated_at = "2024-01-01T00:00:01Z".to_string();
         Ok(())
     }
 
-    async fn merge_pull_request(&self, number: u64) -> Result<RemotePr> {
-        let mut prs = self.prs.lock().unwrap();
-        let pr = prs
+    async fn accept_merge_request(&self, number: u64) -> Result<RemoteMr> {
+        let mut mrs = self.mrs.lock().unwrap();
+        let mr = mrs
             .iter_mut()
             .find(|p| p.number == number)
-            .ok_or_else(|| anyhow::anyhow!("no such fake PR #{number}"))?;
-        pr.state = RemotePrState::Merged;
-        pr.merge_commit_sha = Some("fakemergesha".to_string());
-        pr.merged_by = Some("faketester".to_string());
-        pr.merged_at = Some("2024-01-01T00:00:01Z".to_string());
-        pr.updated_at = "2024-01-01T00:00:01Z".to_string();
-        Ok(pr.clone())
+            .ok_or_else(|| anyhow::anyhow!("no such fake MR #{number}"))?;
+        mr.state = RemoteMrState::Merged;
+        mr.merge_commit_sha = Some("fakemergesha".to_string());
+        mr.merged_by = Some("faketester".to_string());
+        mr.merged_at = Some("2024-01-01T00:00:01Z".to_string());
+        mr.updated_at = "2024-01-01T00:00:01Z".to_string();
+        Ok(mr.clone())
     }
 
     async fn list_comments(&self, number: u64) -> Result<Vec<RemoteComment>> {
@@ -182,14 +182,14 @@ fn test_mirror() -> ExternalMirror {
         provider: ExternalMirrorProvider::GitHub,
         direction: access::SyncDirection::Bidirectional,
         enabled: true,
-        sync_pull_requests: true,
+        sync_merge_requests: true,
         label: "backup".to_string(),
         ..Default::default()
     }
 }
 
 #[tokio::test]
-async fn discovers_a_new_remote_pr_and_links_it() {
+async fn discovers_a_new_remote_mr_and_links_it() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -197,39 +197,39 @@ async fn discovers_a_new_remote_pr_and_links_it() {
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
 
-    let forge = FakeForge::default().with_pr(RemotePr {
+    let forge = FakeForge::default().with_mr(RemoteMr {
         number: 7,
         title: "external title".to_string(),
         body: "external body".to_string(),
         source_branch: "feature".to_string(),
         target_branch: "main".to_string(),
-        state: RemotePrState::Open,
+        state: RemoteMrState::Open,
         author: "alice".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         updated_at: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     });
 
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
 
-    let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, &target.uid)
+    let local_mrs = merge_requests::list_merge_requests(&ctx.backend(), &ctx.cipher, &target.uid)
         .await
         .unwrap();
-    assert_eq!(local_prs.len(), 1);
-    assert_eq!(local_prs[0].title, "external title");
+    assert_eq!(local_mrs.len(), 1);
+    assert_eq!(local_mrs[0].title, "external title");
 
-    let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
+    let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
         .await
         .unwrap();
     assert_eq!(links.len(), 1);
     assert_eq!(links[0].external_number, 7);
-    assert_eq!(links[0].local_number, local_prs[0].number);
+    assert_eq!(links[0].local_number, local_mrs[0].number);
 }
 
 #[tokio::test]
-async fn creates_a_linked_remote_pr_for_an_unlinked_local_one() {
+async fn creates_a_linked_remote_mr_for_an_unlinked_local_one() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -237,10 +237,10 @@ async fn creates_a_linked_remote_pr_for_an_unlinked_local_one() {
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
 
-    pull_request::create(
+    merge_request::create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -254,13 +254,13 @@ async fn creates_a_linked_remote_pr_for_an_unlinked_local_one() {
     .unwrap();
 
     let forge = FakeForge::default();
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
 
-    assert_eq!(forge.prs.lock().unwrap().len(), 1);
-    assert_eq!(forge.prs.lock().unwrap()[0].title, "local title");
-    let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
+    assert_eq!(forge.mrs.lock().unwrap().len(), 1);
+    assert_eq!(forge.mrs.lock().unwrap()[0].title, "local title");
+    let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
         .await
         .unwrap();
     assert_eq!(links.len(), 1);
@@ -275,10 +275,10 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
 
-    let pr = pull_request::create(
+    let mr = merge_request::create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -291,48 +291,48 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
     .await
     .unwrap();
 
-    let forge = FakeForge::default().with_pr(RemotePr {
+    let forge = FakeForge::default().with_mr(RemoteMr {
         number: 7,
         title: "t".to_string(),
         body: "d".to_string(),
         source_branch: "feature".to_string(),
         target_branch: "main".to_string(),
-        state: RemotePrState::Open,
+        state: RemoteMrState::Open,
         author: "bob".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         updated_at: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     });
     let link = ExternalPrLink {
-        local_number: pr.number,
+        local_number: mr.number,
         external_number: 7,
         remote_updated_cursor: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     };
-    access::put_pr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", &link, None)
+    access::put_mr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", &link, None)
         .await
         .unwrap();
 
     // Seed one genuinely-local comment and one already-imported one
     // (which must never be re-exported).
-    pull_request::add_comment(
+    merge_request::add_comment(
         &ctx,
         &target,
-        pr.number,
+        mr.number,
         "alice",
         "local reply",
         gitquarry_i18n::Locale::En,
     )
     .await
     .unwrap();
-    let imported = PrComment {
+    let imported = MrComment {
         author: "carol".to_string(),
         body: "already from github".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         origin: Some("m1".to_string()),
         ..Default::default()
     };
-    pull_requests::add_pr_comment(ctx.backend().as_ref(), &ctx.cipher, &target.uid, pr.number, &imported)
+    merge_requests::add_mr_comment(ctx.backend().as_ref(), &ctx.cipher, &target.uid, mr.number, &imported)
         .await
         .unwrap();
     // A genuine inbound comment on the external side, never seen locally yet.
@@ -346,7 +346,7 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
         }],
     );
 
-    sync_one_linked_pr(&ctx, &target, &mirror, &forge, pr.number)
+    sync_one_linked_mr(&ctx, &target, &mirror, &forge, mr.number)
         .await
         .unwrap();
 
@@ -357,13 +357,13 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
     assert!(!exported.iter().any(|c| c.body == "already from github"));
 
     // Imported the one genuine remote comment exactly once.
-    let local_comments = pull_requests::list_pr_comments(&ctx.backend(), &ctx.cipher, &target.uid, pr.number)
+    let local_comments = merge_requests::list_mr_comments(&ctx.backend(), &ctx.cipher, &target.uid, mr.number)
         .await
         .unwrap();
     assert_eq!(local_comments.iter().filter(|c| c.body == "from github").count(), 1);
 
     // Second tick: nothing new to export or import.
-    sync_one_linked_pr(&ctx, &target, &mirror, &forge, pr.number)
+    sync_one_linked_mr(&ctx, &target, &mirror, &forge, mr.number)
         .await
         .unwrap();
     let exported_again = forge.comments.lock().unwrap().get(&7).unwrap().clone();
@@ -372,7 +372,7 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
         exported.len(),
         "no duplicate export on a second tick"
     );
-    let local_comments_again = pull_requests::list_pr_comments(&ctx.backend(), &ctx.cipher, &target.uid, pr.number)
+    let local_comments_again = merge_requests::list_mr_comments(&ctx.backend(), &ctx.cipher, &target.uid, mr.number)
         .await
         .unwrap();
     assert_eq!(
@@ -383,7 +383,7 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
 }
 
 #[tokio::test]
-async fn merge_on_the_external_side_marks_the_local_pr_merged() {
+async fn merge_on_the_external_side_marks_the_local_mr_merged() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -391,10 +391,10 @@ async fn merge_on_the_external_side_marks_the_local_pr_merged() {
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
 
-    let pr = pull_request::create(
+    let mr = merge_request::create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -407,35 +407,35 @@ async fn merge_on_the_external_side_marks_the_local_pr_merged() {
     .await
     .unwrap();
 
-    let forge = FakeForge::default().with_pr(RemotePr {
+    let forge = FakeForge::default().with_mr(RemoteMr {
         number: 7,
         title: "t".to_string(),
         body: "d".to_string(),
         source_branch: "feature".to_string(),
         target_branch: "main".to_string(),
-        state: RemotePrState::Open,
+        state: RemoteMrState::Open,
         author: "bob".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         updated_at: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     });
     let link = ExternalPrLink {
-        local_number: pr.number,
+        local_number: mr.number,
         external_number: 7,
         remote_updated_cursor: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     };
-    access::put_pr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", &link, None)
+    access::put_mr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", &link, None)
         .await
         .unwrap();
 
-    forge.merge_pull_request(7).await.unwrap();
-    sync_one_linked_pr(&ctx, &target, &mirror, &forge, pr.number)
+    forge.accept_merge_request(7).await.unwrap();
+    sync_one_linked_mr(&ctx, &target, &mirror, &forge, mr.number)
         .await
         .unwrap();
 
-    let local = pull_request::get(&ctx, &target, pr.number).await.unwrap().unwrap();
-    assert_eq!(local.status, PrStatus::Merged);
+    let local = merge_request::get(&ctx, &target, mr.number).await.unwrap().unwrap();
+    assert_eq!(local.status, MrStatus::Merged);
     assert_eq!(local.merge_commit_sha.as_deref(), Some("fakemergesha"));
 }
 
@@ -448,10 +448,10 @@ async fn remote_title_change_wins_when_newer_than_the_cursor() {
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
 
-    let pr = pull_request::create(
+    let mr = merge_request::create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -464,49 +464,49 @@ async fn remote_title_change_wins_when_newer_than_the_cursor() {
     .await
     .unwrap();
 
-    let forge = FakeForge::default().with_pr(RemotePr {
+    let forge = FakeForge::default().with_mr(RemoteMr {
         number: 7,
         title: "new title from github".to_string(),
         body: "d".to_string(),
         source_branch: "feature".to_string(),
         target_branch: "main".to_string(),
-        state: RemotePrState::Open,
+        state: RemoteMrState::Open,
         author: "bob".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         updated_at: "2024-01-02T00:00:00Z".to_string(),
         ..Default::default()
     });
     let link = ExternalPrLink {
-        local_number: pr.number,
+        local_number: mr.number,
         external_number: 7,
         remote_updated_cursor: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     };
-    access::put_pr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", &link, None)
+    access::put_mr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", &link, None)
         .await
         .unwrap();
 
-    sync_one_linked_pr(&ctx, &target, &mirror, &forge, pr.number)
+    sync_one_linked_mr(&ctx, &target, &mirror, &forge, mr.number)
         .await
         .unwrap();
 
-    let local = pull_request::get(&ctx, &target, pr.number).await.unwrap().unwrap();
+    let local = merge_request::get(&ctx, &target, mr.number).await.unwrap().unwrap();
     assert_eq!(local.title, "new title from github");
 }
 
 #[test]
 fn a_line_comment_carries_its_position_into_the_exported_body() {
-    let plain = PrComment {
+    let plain = MrComment {
         body: "looks good".to_string(),
         ..Default::default()
     };
     assert_eq!(export_body(&plain), "looks good");
 
-    let anchored = PrComment {
+    let anchored = MrComment {
         body: "why this?".to_string(),
-        anchor: Some(gitquarry_core::storage::pull_requests::CommentAnchor {
+        anchor: Some(gitquarry_core::storage::merge_requests::CommentAnchor {
             path: "src/main.rs".to_string(),
-            side: gitquarry_core::storage::pull_requests::DiffSide::New,
+            side: gitquarry_core::storage::merge_requests::DiffSide::New,
             line: 42,
         }),
         ..Default::default()
@@ -515,7 +515,7 @@ fn a_line_comment_carries_its_position_into_the_exported_body() {
 }
 
 #[tokio::test]
-async fn a_pull_only_mirror_never_creates_a_pr_on_the_external_side() {
+async fn a_pull_only_mirror_never_creates_a_mr_on_the_external_side() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -526,10 +526,10 @@ async fn a_pull_only_mirror_never_creates_a_pr_on_the_external_side() {
         ..test_mirror()
     };
 
-    pull_request::create(
+    merge_request::create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -543,19 +543,19 @@ async fn a_pull_only_mirror_never_creates_a_pr_on_the_external_side() {
     .unwrap();
 
     let forge = FakeForge::default();
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
 
-    assert!(forge.prs.lock().unwrap().is_empty(), "a pull-only mirror pushed a PR");
-    let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
+    assert!(forge.mrs.lock().unwrap().is_empty(), "a pull-only mirror pushed an MR");
+    let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
         .await
         .unwrap();
     assert!(links.is_empty());
 }
 
 #[tokio::test]
-async fn a_push_only_mirror_never_imports_a_remote_pr() {
+async fn a_push_only_mirror_never_imports_a_remote_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -566,27 +566,27 @@ async fn a_push_only_mirror_never_imports_a_remote_pr() {
         ..test_mirror()
     };
 
-    let forge = FakeForge::default().with_pr(RemotePr {
+    let forge = FakeForge::default().with_mr(RemoteMr {
         number: 9,
         title: "external title".to_string(),
         body: "external body".to_string(),
         source_branch: "feature".to_string(),
         target_branch: "main".to_string(),
-        state: RemotePrState::Open,
+        state: RemoteMrState::Open,
         author: "bob".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         updated_at: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     });
 
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
 
-    let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, &target.uid)
+    let local_mrs = merge_requests::list_merge_requests(&ctx.backend(), &ctx.cipher, &target.uid)
         .await
         .unwrap();
-    assert!(local_prs.is_empty(), "a push-only mirror imported a remote PR");
+    assert!(local_mrs.is_empty(), "a push-only mirror imported a remote MR");
 }
 
 /// The anti-loop bookkeeping has to survive a lost CAS race on the link:
@@ -601,10 +601,10 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
 
-    let pr = pull_request::create(
+    let mr = merge_request::create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -616,12 +616,12 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
     )
     .await
     .unwrap();
-    pull_requests::add_pr_comment(
+    merge_requests::add_mr_comment(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &target.uid,
-        pr.number,
-        &PrComment {
+        mr.number,
+        &MrComment {
             author: "alice".to_string(),
             body: "mine to export".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
@@ -632,19 +632,19 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
     .unwrap();
 
     let forge = FakeForge::default();
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
     assert_eq!(forge.comments.lock().unwrap().values().flatten().count(), 1);
 
     // Someone else writes the link between the two passes, invalidating the
     // etag the next pass would have used.
-    let (mut stored, etag) = access::get_pr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", pr.number)
+    let (mut stored, etag) = access::get_mr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", mr.number)
         .await
         .unwrap();
     let mut stored = stored.take().unwrap();
     stored.remote_updated_cursor = "2024-01-02T00:00:00Z".to_string();
-    access::put_pr_link(
+    access::put_mr_link(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &target.uid,
@@ -655,7 +655,7 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
     .await
     .unwrap();
 
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
     assert_eq!(
@@ -665,41 +665,41 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
     );
 }
 
-/// A PR opened from a fork carries a head branch that lives in that fork,
+/// An MR opened from a fork carries a head branch that lives in that fork,
 /// which Track A never mirrors — so it can never be imported, and must be
 /// skipped instead of failing `create` again on every tick.
 #[tokio::test]
-async fn an_external_pr_whose_branches_arent_mirrored_is_skipped_not_retried() {
+async fn an_external_mr_whose_branches_arent_mirrored_is_skipped_not_retried() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     let mirror = test_mirror();
 
-    let forge = FakeForge::default().with_pr(RemotePr {
+    let forge = FakeForge::default().with_mr(RemoteMr {
         number: 11,
         title: "from a fork".to_string(),
         body: String::new(),
         // Never mirrored here: it only exists in the contributor's fork.
         source_branch: "contributor-patch".to_string(),
         target_branch: "main".to_string(),
-        state: RemotePrState::Open,
+        state: RemoteMrState::Open,
         author: "carol".to_string(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
         updated_at: "2024-01-01T00:00:00Z".to_string(),
         ..Default::default()
     });
 
-    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+    sync_merge_requests_once_with(&ctx, &target, &mirror, &forge)
         .await
         .unwrap();
 
-    let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, &target.uid)
+    let local_mrs = merge_requests::list_merge_requests(&ctx.backend(), &ctx.cipher, &target.uid)
         .await
         .unwrap();
-    assert!(local_prs.is_empty());
-    let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
+    assert!(local_mrs.is_empty());
+    let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
         .await
         .unwrap();
-    assert!(links.is_empty(), "a PR that can't be imported shouldn't get a link");
+    assert!(links.is_empty(), "an MR that can't be imported shouldn't get a link");
 }

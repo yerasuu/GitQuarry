@@ -85,11 +85,11 @@ pub async fn log(git_dir: &Path, rev: &str, limit: usize, path: Option<&str>) ->
 /// Separate from [`log`]/[`CommitInfo`] because the body is the one field
 /// no listing view ever wants: `%b` is multi-line by nature, and
 /// [`LOG_FORMAT`] packs one commit per *line*, so it can't carry one
-/// without breaking every parse. Only [`crate::domain::pull_request::create`]
+/// without breaking every parse. Only [`crate::domain::merge_request::create`]
 /// needs it, one commit at a time.
 ///
 /// The body comes back trimmed: `%b` keeps the trailing newlines git stores
-/// after the message, which would otherwise land verbatim in a PR
+/// after the message, which would otherwise land verbatim in an MR
 /// description.
 pub async fn commit_message(git_dir: &Path, rev: &str) -> Result<(String, String)> {
     let out = run_text(

@@ -1,4 +1,4 @@
-//! `webui::repo::pulls`'s page copy.
+//! `webui::repo::merges`'s page copy.
 
 use super::super::{Locale, msg};
 
@@ -6,9 +6,9 @@ msg!(number_column() { Locale::Es => "#", Locale::En => "#" });
 msg!(title_column() { Locale::Es => "titulo", Locale::En => "title" });
 msg!(status_column() { Locale::Es => "estado", Locale::En => "status" });
 msg!(author_column() { Locale::Es => "autor", Locale::En => "author" });
-msg!(no_pulls_yet_hint() { Locale::Es => "(sin pull requests aun)", Locale::En => "(no pull requests yet)" });
+msg!(no_merges_yet_hint() { Locale::Es => "(sin merge requests aun)", Locale::En => "(no merge requests yet)" });
 msg!(no_matches_hint() { Locale::Es => "(sin resultados)", Locale::En => "(no matches)" });
-msg!(search_pulls_placeholder() { Locale::Es => "buscar en titulo y descripcion", Locale::En => "search title and description" });
+msg!(search_merges_placeholder() { Locale::Es => "buscar en titulo y descripcion", Locale::En => "search title and description" });
 msg!(search_button() { Locale::Es => "buscar", Locale::En => "search" });
 msg!(bulk_close_option() { Locale::Es => "cerrar", Locale::En => "close" });
 msg!(bulk_reopen_option() { Locale::Es => "reabrir", Locale::En => "reopen" });
@@ -19,8 +19,8 @@ msg!(closed_status() { Locale::Es => "cerrado", Locale::En => "closed" });
 msg!(merged_status() { Locale::Es => "fusionado", Locale::En => "merged" });
 msg!(all_status_filter() { Locale::Es => "todos", Locale::En => "all" });
 
-msg!(new_pull_heading() { Locale::Es => "nuevo pull request", Locale::En => "new pull request" });
-msg!(new_pull_button() { Locale::Es => "nuevo pull request", Locale::En => "new pull request" });
+msg!(new_merge_heading() { Locale::Es => "nuevo merge request", Locale::En => "new merge request" });
+msg!(new_merge_button() { Locale::Es => "nuevo merge request", Locale::En => "new merge request" });
 msg!(source_repo_label() { Locale::Es => "repo origen", Locale::En => "source repo" });
 msg!(source_repo_placeholder() {
     Locale::Es => "vacio para este repo, o owner/name de tu fork",
@@ -30,7 +30,7 @@ msg!(source_branch_label() { Locale::Es => "rama origen", Locale::En => "source 
 msg!(target_branch_label() { Locale::Es => "rama destino", Locale::En => "target branch" });
 msg!(title_label() { Locale::Es => "titulo", Locale::En => "title" });
 msg!(description_label() { Locale::Es => "descripcion", Locale::En => "description" });
-msg!(create_pull_button() { Locale::Es => "crear pull request", Locale::En => "create pull request" });
+msg!(create_merge_button() { Locale::Es => "crear merge request", Locale::En => "create merge request" });
 
 msg!(opened_by_prefix() { Locale::Es => "abierto por ", Locale::En => "opened by " });
 msg!(opened_by_middle() { Locale::Es => " el ", Locale::En => " on " });
@@ -38,8 +38,8 @@ msg!(close_button() { Locale::Es => "cerrar", Locale::En => "close" });
 msg!(reopen_button() { Locale::Es => "reabrir", Locale::En => "reopen" });
 msg!(merge_button() { Locale::Es => "fusionar", Locale::En => "merge" });
 msg!(merge_confirm() {
-    Locale::Es => "fusionar este pull request? esta accion no se puede deshacer.",
-    Locale::En => "merge this pull request? this cannot be undone.",
+    Locale::Es => "fusionar este merge request? esta accion no se puede deshacer.",
+    Locale::En => "merge this merge request? this cannot be undone.",
 });
 msg!(merge_strategy_label() { Locale::Es => "estrategia de fusion", Locale::En => "merge strategy" });
 msg!(merge_strategy_merge_option() { Locale::Es => "fusion (merge commit)", Locale::En => "merge commit" });
@@ -82,12 +82,12 @@ msg!(changes_requested_by_prefix() {
 });
 msg!(review_verdict_label() { Locale::Es => "veredicto", Locale::En => "verdict" });
 msg!(submit_review_button() { Locale::Es => "enviar revision", Locale::En => "submit review" });
-msg!(own_pull_request_review_hint() {
-    Locale::Es => "es tu pull request: solo podes dejar una revision neutral",
-    Locale::En => "this is your own pull request: you can only leave a neutral review",
+msg!(own_merge_request_review_hint() {
+    Locale::Es => "es tu merge request: solo podes dejar una revision neutral",
+    Locale::En => "this is your own merge request: you can only leave a neutral review",
 });
 
-// Conflict notice on an open PR's page — the file list used to exist only
+// Conflict notice on an open MR's page — the file list used to exist only
 // as a `400` thrown by the merge handler.
 msg!(conflicts_heading() { Locale::Es => "conflictos con la rama destino", Locale::En => "conflicts with the target branch" });
 msg!(conflicts_intro(target: &str) {

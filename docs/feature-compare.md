@@ -32,7 +32,7 @@
 **Faltante / gaps**
 - Sin issue templates.
 - Sin fechas límite (due dates) ni time tracking.
-- Sin issues enlazados (blocks/blocked-by), solo el auto-close por keyword en merge de PR (ver `pull_request/mod.rs`).
+- Sin issues enlazados (blocks/blocked-by), solo el auto-close por keyword en merge de MR (ver `merge_request/mod.rs`).
 - Sin sub-issues / tareas anidadas.
 - Sin reacciones a comentarios.
 - Comment delete **solo por autor**: a diferencia de GitHub/GitLab, un maintainer no puede borrar un comentario ajeno abusivo sin pasar por otro mecanismo — es una limitación de moderación real, no solo un detalle técnico.
@@ -44,14 +44,14 @@
 - CRUD simple, mismo patrón `transition` que issues.
 
 **Faltante / gaps**
-- Sin back-reference indexada a issues/PRs que apuntan al milestone (se resuelve en lectura) — funciona, pero implica costo de cómputo en cada vista de progreso en vez de un contador mantenido.
+- Sin back-reference indexada a issues/MRs que apuntan al milestone (se resuelve en lectura) — funciona, pero implica costo de cómputo en cada vista de progreso en vez de un contador mantenido.
 - Sin burndown/progress automático mencionado.
 - Sin jerarquía de milestones ni vista de roadmap.
 
-### `domain/pull_request/mod.rs` (833 líneas, el módulo más rico)
+### `domain/merge_request/mod.rs` (833 líneas, el módulo más rico)
 
 **Implementado**
-- PRs cross-fork o mismo-repo; `create` exige que `source_repo` sea el propio target o un fork cuyo `RepoConfig::forked_from` apunte de vuelta.
+- MRs cross-fork o mismo-repo; `create` exige que `source_repo` sea el propio target o un fork cuyo `RepoConfig::forked_from` apunte de vuelta.
 - Status machine `Open/Closed/Merged`; `is_draft` como bool separado.
 - Reviews append-only (cambiar de opinión crea fila nueva), solo cuenta el último veredicto por reviewer (`review_summary`); bloquea auto-aprobación del propio autor.
 - Merge vía `git merge-tree --write-tree` (sin working tree), 3 estrategias (`Merge/Squash/Rebase`). `merge` exige Open + no-draft + ningún `ChangesRequested` pendiente — las aprobaciones **no** son requisito, solo el rechazo bloquea.
@@ -63,7 +63,7 @@
 - Sin merge queue / merge trains.
 - Sin status checks obligatorios — consecuencia directa de no tener CI integrado; hoy nada puede bloquear un merge por resultado de build/test.
 - Sin "suggested changes" aplicables directamente desde el diff.
-- Sin PR templates.
+- Sin MR templates.
 - No queda claro en el doc si un push nuevo a la rama invalida approvals previos automáticamente (dado que las reviews son append-only e inmutables, esto es una ambigüedad a verificar en código, no un gap confirmado).
 - Sin auto-merge programado ("mergear cuando se cumplan las condiciones").
 
@@ -75,7 +75,7 @@
 - (Confirmado en la sección de roadmap, no detallado acá): soporte de draft/prerelease.
 
 **Faltante / gaps**
-- Sin generación automática de release notes desde commits/PRs mergeados desde el último tag (feature estándar en GitHub).
+- Sin generación automática de release notes desde commits/MRs mergeados desde el último tag (feature estándar en GitHub).
 - Sin firma/verificación (GPG o sigstore) de los assets generados.
 - Sin integración con package registry para publicar el release como paquete versionado — pero esto depende de que exista un package registry, que hoy no existe.
 
@@ -85,7 +85,7 @@
 - Fork desde un peer federado (capa 2 de federación): trae refs del mirror remoto, empaqueta y sube objetos, escribe `RepoConfig` con `forked_from_peer`, siempre `Visibility::Public`.
 
 **Faltante / gaps**
-- Fork remoto **siempre público** — no hay opción de fork privado cross-peer, lo cual limita casos de uso donde alguien quiere forkear un repo público de otro peer para trabajar en privado antes de proponer un PR de vuelta.
+- Fork remoto **siempre público** — no hay opción de fork privado cross-peer, lo cual limita casos de uso donde alguien quiere forkear un repo público de otro peer para trabajar en privado antes de proponer un MR de vuelta.
 - No se menciona si hay re-sync incremental posterior al fork inicial (¿se puede volver a traer commits nuevos del upstream peer después de forkear, o es una copia de un solo momento?) — pregunta abierta, no resuelta en el snapshot.
 - Sin mención de manejo de colisión de nombres entre repos de distintos peers.
 
@@ -102,15 +102,15 @@
 - Sin "transfer ownership" a otro namespace descrito explícitamente (rename cambia el nombre, pero mover un repo a otro dueño/organización es otra cosa y no aparece).
 - Sin repo templates ("crear repo a partir de este como plantilla").
 - `delete` irreversible de inmediato, sin papelera/período de gracia — GitHub sí ofrece una ventana de recuperación tras borrar; esto es una diferencia operacional real, no solo cosmética.
-- Sin mención de qué pasa con issues/PRs abiertos al hacer fork (¿se copian? ¿quedan huérfanos del lado del fork?).
+- Sin mención de qué pasa con issues/MRs abiertos al hacer fork (¿se copian? ¿quedan huérfanos del lado del fork?).
 
 ### Storage (`storage/`)
 
 **Implementado**
 - Dos namespaces disjuntos: `repos/` (git data) y `.conf/index/` (índices, tratados como "hints, no hechos", siempre re-verificados contra `RepoConfig`).
-- `RepoConfig` es `Entity` de s3db, key = uid; issues/milestones/PRs usan `Collection::new_owned` con prefix runtime.
-- Contadores de número (issue/milestone/PR) como secuencias independientes, CAS get/increment/put con retry (máx 8).
-- Tipos de PR (meta/comment/review) viven en `gitquarry-wire` por cruzar el límite de IPC; issues/milestones se quedan locales.
+- `RepoConfig` es `Entity` de s3db, key = uid; issues/milestones/MRs usan `Collection::new_owned` con prefix runtime.
+- Contadores de número (issue/milestone/MR) como secuencias independientes, CAS get/increment/put con retry (máx 8).
+- Tipos de MR (meta/comment/review) viven en `gitquarry-wire` por cruzar el límite de IPC; issues/milestones se quedan locales.
 - `storage/remote.rs`: `copy_all_to` (fork) es re-encrypt-and-copy real, no copy server-side — el AEAD ata el ciphertext a su key vía AAD, así que una copia cruda sería indescifrable en el prefix nuevo. Orden de subida: `.pack` antes que `.idx`.
 - `storage/audit.rs`: trail append-only, keys mes-bucketed, cálculo de fecha proleptic-Gregorian hecho a mano (Howard Hinnant) para evitar una dependencia; `record` es fire-and-forget, nunca falla la acción que describe.
 
@@ -145,10 +145,10 @@
 - GC puramente LRU: sin pinning manual para mantener repos "calientes" en cache aunque tengan poco tráfico reciente.
 
 **(b) External mirror — implementado**
-- Sync bidireccional de refs y PRs con GitHub/GitLab/Codeberg vía git plano + REST, sin SDKs de proveedor.
+- Sync bidireccional de refs y MRs con GitHub/GitLab/Codeberg vía git plano + REST, sin SDKs de proveedor.
 - Tres direcciones: `PushOnly`/`PullOnly`/`Bidirectional`.
 - Política de conflicto: comparación 3-way (sha local/remoto/last-synced) por ref, fast-forward automático en cualquier dirección, divergencia real se marca `Diverged` en la UI — **nunca** auto-mergea ni fuerza.
-- Track B (PR/MR sync) con adapters finos por proveedor (GitHub/GitLab/Codeberg) y bookkeeping anti-loop (campo `origin`, cursors de sync).
+- Track B (MR/MR sync) con adapters finos por proveedor (GitHub/GitLab/Codeberg) y bookkeeping anti-loop (campo `origin`, cursors de sync).
 
 **Faltante / gaps (b)**
 - Solo tres proveedores soportados (GitHub, GitLab, Codeberg); agregar uno nuevo requiere un adapter dedicado en Track B, no hay un modo genérico.
@@ -200,7 +200,7 @@
 **Implementado**
 - **Gossip**: `GossipTable` in-memory (cap 500), auto-link con doble threshold (≥3 fuentes independientes + ≥24h de edad), promoción siempre a `PeerAccessLevel::BrowseOnly` (nunca directo a sister instance).
 - **Browse/fork remoto**: dividido entre procesos — federation valida (peer linkeado, no baneado, tier suficiente) y reenvía; los mecanismos git pesados viven en `core::domain::remote_fork`.
-- **PR-proxy**: lectura del lado core, escritura del lado federation (bearer token del peer); `authorize()` combina un ceiling local con una llamada viva a `/_internal/authorize` en core.
+- **MR-proxy**: lectura del lado core, escritura del lado federation (bearer token del peer); `authorize()` combina un ceiling local con una llamada viva a `/_internal/authorize` en core.
 - **Tokens de grano fino**: `AccessToken` scoped por repo (`BTreeSet<Uid>`) + bool `write` como ceiling, resolución fail-closed con re-verificación completa en cada uso.
 - **Moderación/bans**: ban exige reason obligatorio; unban resetea siempre a `BrowseOnly` (nunca restaura el tier previo); transparencia pública sin auth en `/_api/banned-peers`; `total_bans_issued` cuenta solo bans originados localmente.
 - **Sister sync**: handshake de mutuo consentimiento + reconciliación periódica de listas de bans vía `PeerCredential` compartido.
@@ -210,7 +210,7 @@
 - **Gap conocido y deliberado, documentado en el propio código fuente**: sin identidad criptográfica de peer (mTLS/signed requests) — el rate-limit override es heurística de IP-text-match. Es una superficie de spoofing real: alguien que controle o falsifique la IP de origen podría intentar explotar el override.
 - `unban` resetea siempre a `BrowseOnly`, nunca restaura el tier previo — decisión conservadora, pero implica trabajo manual repetido para re-promover un peer tras un ban erróneo o temporal.
 - Sin federación de identidad de usuario: un usuario de un peer no puede autenticarse en otro peer con la misma cuenta.
-- El PR-proxy federado parece limitado a proxyar sobre repos ya conocidos vía fork/browse, no a una vista federada unificada de issues/PRs cross-instancia (a diferencia de la visión a largo plazo de proyectos como ForgeFed).
+- El MR-proxy federado parece limitado a proxyar sobre repos ya conocidos vía fork/browse, no a una vista federada unificada de issues/MRs cross-instancia (a diferencia de la visión a largo plazo de proyectos como ForgeFed).
 - Sin mención de qué ocurre cuando la red gossip supera el cap de 500 entradas (¿eviction? ¿priorización por actividad?).
 
 ---
@@ -223,7 +223,7 @@
 - Cero JS de cliente salvo un archivo (`/_assets/app.js`); CSP `script-src 'self'` estricta.
 - Browsing: tree/blob/blame/log (con grep)/compare/stats/refs, render de README, resaltado de sintaxis.
 - Issues: lista/detalle/creación, comentarios, labels, assignees, milestone, close/reopen.
-- Pull requests: diff anotado con comentarios inline, reviews (approve/request-changes/comment), merge con las 3 estrategias, draft toggle, edición de metadata.
+- Merge requests: diff anotado con comentarios inline, reviews (approve/request-changes/comment), merge con las 3 estrategias, draft toggle, edición de metadata.
 - Milestones: vista única con formulario de creación inline.
 - Releases: notas markdown, assets descargables.
 - Repo settings: general/default-branch/permisos/protected branches-tags/topics/labels/límite LFS/mirrors externos/mover repo/danger-zone (delete con confirmación por nombre).
@@ -232,7 +232,7 @@
 
 **Faltante / gaps (explícitos en el roadmap)**
 - **Sin wiki.**
-- **Sin CI/CD** — impacta directamente en la ausencia de status checks en PRs.
+- **Sin CI/CD** — impacta directamente en la ausencia de status checks en MRs.
 - **Sin webhooks** — sin integraciones externas (Slack, Discord, deploy triggers) salvo desarrollo a medida.
 - **Sin notificaciones** — ni email ni in-app; el usuario debe revisar manualmente.
 - **Sin package registry.**
@@ -268,7 +268,7 @@
 ### gitquarry-wire
 
 **Implementado**
-- DTOs mínimos compartidos entre los 2-3 boundaries de IPC: `Uid` (hex 128-bit estable, inmutable a través de renames), `InstanceInfo`, `RepoSummary`, modelo completo de PR wire (única fuente de verdad para PRs entre core y federation).
+- DTOs mínimos compartidos entre los 2-3 boundaries de IPC: `Uid` (hex 128-bit estable, inmutable a través de renames), `InstanceInfo`, `RepoSummary`, modelo completo de MR wire (única fuente de verdad para MRs entre core y federation).
 
 **Faltante / gaps**
 - Sin versionado explícito del protocolo wire descrito — dado que `core` y `federation` se despliegan como binarios separados, la compatibilidad hacia atrás entre versiones desplegadas de forma independiente es una pregunta arquitectónica abierta que el snapshot no responde.
@@ -277,7 +277,7 @@
 
 ## Síntesis del roadmap (tal como lo declara el propio snapshot)
 
-**Hecho**: LFS, 2FA, releases (con draft/prerelease), permisos de teams, search, PRs, issues, mirror externo (Track A+B), federación completa (4 capas + binary split).
+**Hecho**: LFS, 2FA, releases (con draft/prerelease), permisos de teams, search, MRs, issues, mirror externo (Track A+B), federación completa (4 capas + binary split).
 
 **Pendiente**: wiki, CI, webhooks, notificaciones, package registry, OAuth2 como provider.
 
@@ -285,8 +285,8 @@
 
 Si hay que ordenar los pendientes por impacto en adopción real:
 
-1. **CI + webhooks + notificaciones** — el bloque de mayor impacto. Sin CI no hay status checks en PRs (afecta directamente la calidad del merge machinery ya construido); sin webhooks no hay integraciones externas; sin notificaciones, el flujo de colaboración depende de que la gente entre a mirar manualmente. Los tres juntos son lo que más limita el uso en equipo a escala hoy.
-2. **Wiki y package registry** — impacto medio; son features esperadas por comparación directa con GitHub/GitLab/Codeberg, pero no bloquean el flujo central de código/issues/PRs que ya está completo.
+1. **CI + webhooks + notificaciones** — el bloque de mayor impacto. Sin CI no hay status checks en MRs (afecta directamente la calidad del merge machinery ya construido); sin webhooks no hay integraciones externas; sin notificaciones, el flujo de colaboración depende de que la gente entre a mirar manualmente. Los tres juntos son lo que más limita el uso en equipo a escala hoy.
+2. **Wiki y package registry** — impacto medio; son features esperadas por comparación directa con GitHub/GitLab/Codeberg, pero no bloquean el flujo central de código/issues/MRs que ya está completo.
 3. **OAuth2 como provider** — impacto a mediano plazo, relevante sobre todo si se busca que terceros construyan integraciones "Login with gitquarry"; no bloquea el uso directo de la plataforma.
 
 Fuera del roadmap declarado, los gaps estructurales más notables detectados en este análisis son: ausencia de cuotas de storage, delete de repo sin papelera de recuperación, LFS sin locking API, y la falta de identidad criptográfica de peer en federación (gap ya reconocido y documentado como fuera de scope por el propio proyecto).****

@@ -7,7 +7,7 @@ use super::repo_link::repo_link;
 /// The tab links themselves — the familiar ` | `-separated inline row above
 /// `mobile.css`'s breakpoint, a plain stacked vertical list below it
 /// (`.tabs-list a` forces `display: block`) either way. Shared by
-/// [`tabs_bar`] and `pulls`'s own status filter — duplicating this
+/// [`tabs_bar`] and `merges`'s own status filter — duplicating this
 /// list/separator markup risked one copy drifting (a missing
 /// `aria-hidden`) in a way a shared helper can't.
 ///
@@ -21,7 +21,7 @@ use super::repo_link::repo_link;
 /// saving room on.
 ///
 /// `id` must be unique *on the page* when given: more than one of these
-/// can render together (the pull-request list shows the main tabs bar and
+/// can render together (the merge-request list shows the main tabs bar and
 /// its own status filter at once), and `:checked ~` needs each row's own
 /// checkbox/list pair matched unambiguously — not shared with a sibling
 /// row's.
@@ -274,7 +274,7 @@ pub(crate) fn settings_section(heading: &str, prose: Option<&str>, body: maud::M
 }
 
 /// One labelled control: `label` above it, hint below when there is one.
-/// The `div.field` markup predates this (`/_settings`, the PR forms) but
+/// The `div.field` markup predates this (`/_settings`, the MR forms) but
 /// had no CSS rule at all, so it rendered as a bare block and every account
 /// page skipped labels entirely in favour of placeholders — which vanish on
 /// first keystroke, aren't announced as labels, and give no click target.
@@ -351,12 +351,12 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
         ("stats", chrome::stats_tab(locale)),
         ("releases", chrome::releases_tab(locale)),
     ];
-    tab_defs.push(("pulls", chrome::pulls_tab(locale)));
+    tab_defs.push(("merges", chrome::merges_tab(locale)));
     tab_defs.push(("settings", chrome::settings_tab(locale)));
     let tabs: Vec<(&str, String, String)> = tab_defs
         .iter()
         .map(|(view, label)| {
-            let rev_for_link = if matches!(*view, "settings" | "releases" | "pulls") {
+            let rev_for_link = if matches!(*view, "settings" | "releases" | "merges") {
                 ""
             } else {
                 rev
