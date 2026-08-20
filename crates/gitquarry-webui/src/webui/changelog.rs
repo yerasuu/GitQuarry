@@ -14,7 +14,10 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 
-const CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
+/// The notes for the version this binary *is*: the path is built from
+/// `CARGO_PKG_VERSION`, so a release cut without its notes file fails the
+/// build instead of quietly shipping a page describing an older one.
+const RELEASE_NOTES: &str = include_str!(concat!("../../../../tag-changelog/v", env!("CARGO_PKG_VERSION"), ".md"));
 
 pub(crate) async fn handler_changelog_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let locale = effective_locale(&ctx, &headers).await;
@@ -26,7 +29,7 @@ pub(crate) async fn handler_changelog_get(State(ctx): State_, headers: HeaderMap
         }
         // `readme`, not a class of its own: every markdown style in the
         // sheet is scoped under it, and this is the same kind of content.
-        div class="readme" { (maud::PreEscaped(super::markdown::render(CHANGELOG))) }
+        div class="readme" { (maud::PreEscaped(super::markdown::render(RELEASE_NOTES))) }
     }
     .into_string();
     Ok(Html(layout(
