@@ -5,6 +5,17 @@
 use super::{Locale, msg};
 
 msg!(
+    /// One entry of the instance's external-mirror host allowlist doesn't
+    /// look like a host at all. Shared because both edges reject it: the
+    /// settings form that stores the list, and the mirror save that
+    /// matches a URL against it.
+    invalid_mirror_host_pattern(host: &str) {
+        Locale::Es => "host de mirror invalido: {host}. Solo nombres ASCII (letras, digitos, `.`, `-`), con `*.` delante opcional.",
+        Locale::En => "invalid mirror host: {host}. ASCII names only (letters, digits, `.`, `-`), optionally prefixed with `*.`.",
+    }
+);
+
+msg!(
     /// A `Cas::Conflict` on a bucket-side write: someone else's edit landed
     /// first. Confirmed duplicated verbatim across 9 files before this
     /// (`domain::repo::rename` plus 8 web `Flash::Err` sites) — this is the

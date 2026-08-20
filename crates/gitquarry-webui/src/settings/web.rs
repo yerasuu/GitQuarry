@@ -67,6 +67,10 @@ pub(crate) struct SettingsForm {
     oidc_client_secret: String,
     #[serde(default)]
     oidc_redirect_base_url: String,
+    /// One host per line or comma-separated — see
+    /// [`parse_mirror_hosts`].
+    #[serde(default)]
+    mirror_allowed_hosts: String,
     #[serde(default)]
     csrf: String,
 }
@@ -143,7 +147,11 @@ pub(crate) async fn handler_settings_post(
     // error, and shouldn't lose the rest of the form to a separate error
     // page either — a rejected value re-renders this same page with
     // everything else still filled in, same as the CAS-conflict case below.
-    let validation_error = if let Some(e) = mirrors_max_age
+    let mirror_allowed_hosts = parse_mirror_hosts(&form.mirror_allowed_hosts);
+    let bad_mirror_host = mirror_allowed_hosts.iter().find(|host| !is_host_pattern(host)).cloned();
+    let validation_error = if let Some(host) = bad_mirror_host {
+        Some(gitquarry_i18n::shared::invalid_mirror_host_pattern(locale, &host))
+    } else if let Some(e) = mirrors_max_age
         .as_deref()
         .and_then(|age| gitquarry_core::mirror::gc::parse_age(age).err())
     {
@@ -173,6 +181,7 @@ pub(crate) async fn handler_settings_post(
         oidc_client_id: oidc_fields.1,
         oidc_client_secret: oidc_fields.2,
         oidc_redirect_base_url: oidc_fields.3,
+        mirror_allowed_hosts: mirror_allowed_hosts.clone(),
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
     let flash = if let Some(msg) = &validation_error {
@@ -195,6 +204,28 @@ pub(crate) async fn handler_settings_post(
         locale,
     ))
     .into_response())
+}
+
+/// Splits the textarea into host patterns — newline *or* comma separated,
+/// since an operator pasting a list will use either, and lowercased because
+/// a host comparison that depends on how it was typed isn't a comparison.
+fn parse_mirror_hosts(raw: &str) -> Vec<String> {
+    raw.split(['\n', ','])
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+/// A host name, or a `*.` prefix followed by one. ASCII only: an IDN typed
+/// in unicode can't be compared safely against what a URL carries, so it has
+/// to be given in punycode.
+fn is_host_pattern(pattern: &str) -> bool {
+    let host = pattern.strip_prefix("*.").unwrap_or(pattern);
+    !host.is_empty()
+        && host != "."
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
 }
 
 fn render_settings_form(
@@ -237,6 +268,13 @@ fn render_settings_form(
                 div class="field" {
                     label { (t::settings_mirrors_max_size_label(locale)) }
                     input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
+                }
+            }))
+            (settings_section(&t::settings_external_mirrors_heading(locale), Some(&t::settings_mirror_hosts_prose(locale)), html! {
+                div class="field" {
+                    label { (t::settings_mirror_hosts_label(locale)) }
+                    textarea name="mirror_allowed_hosts" rows="4" cols="50"
+                        placeholder="github.com\ncodeberg.org\n*.gitlab.example.com" { (settings.mirror_allowed_hosts.join("\n")) }
                 }
             }))
             (settings_section(&t::settings_oidc_heading(locale), None, html! {

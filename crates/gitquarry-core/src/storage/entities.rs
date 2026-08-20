@@ -48,6 +48,22 @@ pub struct ServerSettings {
     /// registered with the IdP is `{this}/_callback`.
     #[serde(default)]
     pub oidc_redirect_base_url: Option<String>,
+    /// Hosts an external mirror (`gitquarry-mirror-external`) may point at,
+    /// as exact names or `*.` patterns. **Empty means no host at all**, so
+    /// the feature is off until an instance admin opens it host by host.
+    ///
+    /// This is an egress policy, not a repo setting, which is why it lives
+    /// here and can't be widened per repo: configuring a mirror makes *the
+    /// server* open connections to a host of the configurer's choosing,
+    /// from the server's own network position, and repo-settings authority
+    /// (`Maintainer`, or `Owner` for a mirror specifically) is a long way
+    /// from being trusted with that. Checking names rather than resolved
+    /// addresses is the only enforceable option here: the ref sync runs
+    /// `git` as a subprocess, which does its own DNS inside its own
+    /// process, so an address-range check would be a TOCTOU with DNS
+    /// rebinding on the other side of it.
+    #[serde(default)]
+    pub mirror_allowed_hosts: Vec<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol

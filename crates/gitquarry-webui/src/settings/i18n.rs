@@ -32,6 +32,16 @@ msg!(settings_mirrors_max_size_placeholder() {
     Locale::En => "5G (number + B/K/M/G)",
 });
 
+msg!(settings_external_mirrors_heading() {
+    Locale::Es => "mirrors externos",
+    Locale::En => "external mirrors",
+});
+msg!(settings_mirror_hosts_prose() {
+    Locale::Es => "Hosts a los que un repo puede espejar (uno por linea, o separados por comas). Acepta `*.ejemplo.com`. Vacio = ningun mirror externo permitido: configurar uno hace que el servidor abra conexiones al host que elija quien lo configure, asi que la lista la abris vos, host por host.",
+    Locale::En => "Hosts a repo may mirror to (one per line, or comma-separated). `*.example.com` works. Empty means no external mirror at all: configuring one makes the server open connections to whatever host the configurer picks, so you open this list yourself, host by host.",
+});
+msg!(settings_mirror_hosts_label() { Locale::Es => "hosts permitidos", Locale::En => "allowed hosts" });
+
 msg!(settings_oidc_heading() { Locale::Es => "login OIDC", Locale::En => "OIDC login" });
 // Split around the `code`/`a` elements the paragraph embeds — see
 // `webui::settings::render_settings_form` for how these five stitch back
