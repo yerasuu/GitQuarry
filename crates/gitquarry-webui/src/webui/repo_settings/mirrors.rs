@@ -213,6 +213,18 @@ pub(super) async fn save_mirror(
             if let Err(e) = gitquarry_mirror_external::engine::sync_one_mirror_now(ctx, resolved, &mirror).await {
                 return Ok((FlashOutcome::Invalid(e.to_string()), None));
             }
+            // Recorded like every other mirror action on this tab: this one
+            // pushes the repo's refs to a third party on demand, which is
+            // exactly the kind of thing an audit log exists for.
+            gitquarry_core::storage::audit::record(
+                ctx.backend().as_ref(),
+                &ctx.cipher,
+                actor,
+                "mirror.sync",
+                name,
+                non_empty(mirror.label.clone()),
+            )
+            .await;
             let _ = locale;
             Ok((FlashOutcome::Ok("sync triggered."), None))
         }
