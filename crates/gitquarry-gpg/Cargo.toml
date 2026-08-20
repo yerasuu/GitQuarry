@@ -1,6 +1,6 @@
 [package]
 name = "gitquarry-gpg"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.97"
 description = "OpenPGP key validation and detached-signature verification by shelling out to the system gpg binary"

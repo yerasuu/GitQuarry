@@ -1,6 +1,6 @@
 [package]
 name = "gitquarry-i18n"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.97"
 description = "Hand-rolled message catalog (Locale enum + msg! macro) shared across gitquarry's kernel, domain layer, and web UI"
