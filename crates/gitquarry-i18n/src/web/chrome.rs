@@ -70,3 +70,4 @@ msg!(footer_copyright(year: &str, holder: &str) {
     Locale::Es => "© {year} {holder}",
     Locale::En => "© {year} {holder}",
 });
+msg!(license_heading() { Locale::Es => "licencia", Locale::En => "license" });

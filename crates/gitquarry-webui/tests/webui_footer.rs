@@ -16,6 +16,10 @@ fn the_footer_carries_the_copyright_licence_and_changelog() {
     assert!(html.contains("2026"), "no copyright year: {html}");
     assert!(html.contains("Yerasuu"), "no copyright holder");
     assert!(html.contains("AGPL-3.0-or-later"), "no licence");
+    // The file this binary ships, not gnu.org's copy: the AGPL's terms have
+    // to reach a network user from the operator, and an outbound link
+    // points at text the project doesn't control.
+    assert!(html.contains("href=\"/_license\""), "licence links off-site");
     assert!(html.contains("href=\"/_changelog\""), "no changelog link");
 }
 

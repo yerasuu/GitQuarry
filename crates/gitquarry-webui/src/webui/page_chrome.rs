@@ -695,7 +695,7 @@ pub fn layout(
                 footer class="site-footer" {
                     span { (chrome::footer_copyright(locale, COPYRIGHT_YEAR, COPYRIGHT_HOLDER)) }
                     " · "
-                    a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="license" { "AGPL-3.0-or-later" }
+                    a href="/_license" rel="license" { "AGPL-3.0-or-later" }
                     " · "
                     a href="/_changelog" { (chrome::changelog_nav(locale)) " " (env!("CARGO_PKG_VERSION")) }
                 }

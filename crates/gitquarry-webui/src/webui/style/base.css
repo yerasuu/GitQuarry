@@ -598,3 +598,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .site-footer { max-width: 70rem; margin: auto auto 0; padding: 1.5rem 1rem;
                border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85em; }
 .site-footer a { color: var(--muted); }
+
+/* The licence is hard-wrapped at ~70 columns already, so it needs no
+   reflow -- only a scrollbar for the few lines that overrun a narrow
+   viewport, rather than the whole page scrolling sideways with them. */
+.license-text { white-space: pre-wrap; overflow-x: auto; font-size: 0.85em; }
