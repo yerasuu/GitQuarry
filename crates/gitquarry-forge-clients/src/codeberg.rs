@@ -39,6 +39,12 @@ impl CodebergForge {
         super::check_path_segment("repository name", &repo)?;
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            // No redirect following. The instance's host allowlist is what
+            // decides where a mirror may make this server open connections;
+            // a 302 from an allowed host would otherwise pick a different
+            // destination — including one inside the network the server
+            // sits in — after that check already passed.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .context("building the Codeberg HTTP client")?;
         Ok(CodebergForge {

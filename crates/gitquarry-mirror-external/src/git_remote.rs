@@ -57,7 +57,7 @@ const TOKEN_ENV: &str = "GITQUARRY_MIRROR_TOKEN";
 /// [`TOKEN_ENV`] instead of asking anybody. The empty `credential.helper=`
 /// first wipes whatever the system/global config might have configured, so
 /// only this one runs.
-fn credential_args() -> [&'static OsStr; 6] {
+fn credential_args() -> [&'static OsStr; 8] {
     [
         OsStr::new("-c"),
         OsStr::new("credential.helper="),
@@ -67,6 +67,12 @@ fn credential_args() -> [&'static OsStr; 6] {
         ),
         OsStr::new("-c"),
         OsStr::new("credential.interactive=false"),
+        // The host allowlist decides where a mirror may point this server;
+        // a redirect would let an allowed host hand that decision to
+        // somewhere else after the check passed. git's own default follows
+        // the initial request, which is exactly the case that matters here.
+        OsStr::new("-c"),
+        OsStr::new("http.followRedirects=false"),
     ]
 }
 
