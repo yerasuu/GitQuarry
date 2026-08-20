@@ -603,3 +603,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    reflow -- only a scrollbar for the few lines that overrun a narrow
    viewport, rather than the whole page scrolling sideways with them. */
 .license-text { white-space: pre-wrap; overflow-x: auto; font-size: 0.85em; }
+
+/* Same markdown styling as a README, without the rule and gap that
+   separate that one from the file listing above it -- a PR body and each
+   comment are already inside their own block. */
+.readme.plain { border-top: none; padding-top: 0; margin-top: 0.3em; }

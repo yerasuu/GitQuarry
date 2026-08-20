@@ -689,10 +689,14 @@ async fn render_pull_detail_impl(
         };
         format!("{repo_label}:{}", pr.source_branch)
     };
-    let description_html = super::components::link_number_mentions(ctx, target, repo_name, &pr.description).await;
+    let description_html = crate::webui::markdown::render(
+        &super::components::link_number_mentions(ctx, target, repo_name, &pr.description).await,
+    );
     let mut thread_htmls = Vec::with_capacity(thread.len());
     for (_id, comment) in &thread {
-        thread_htmls.push(super::components::link_number_mentions(ctx, target, repo_name, &comment.body).await);
+        thread_htmls.push(crate::webui::markdown::render(
+            &super::components::link_number_mentions(ctx, target, repo_name, &comment.body).await,
+        ));
     }
 
     Ok(html! {
@@ -716,7 +720,7 @@ async fn render_pull_detail_impl(
             p class="muted" { (t::reviewers_label(locale)) ": " (pr.requested_reviewers.join(", ")) }
         }
         @if !pr.description.is_empty() {
-            p { (PreEscaped(&description_html)) }
+            div class="readme plain" { (PreEscaped(&description_html)) }
         }
         @if let Some(paths) = &conflicts {
             (render_conflict_notice(repo_name, &pr, paths, locale))
@@ -790,7 +794,7 @@ async fn render_pull_detail_impl(
                         " — " (t::line_comment_prefix(locale)) code { (anchor.path) ":" (anchor.line) }
                     }
                 }
-                p { (PreEscaped(&thread_htmls[i])) }
+                div class="readme plain" { (PreEscaped(&thread_htmls[i])) }
                 @let is_comment_author = viewer.as_deref() == Some(comment.author.as_str());
                 (super::components::comment_edit_delete_controls(
                     "/_pulls",

@@ -635,9 +635,16 @@ fn scan_number_mentions(text: &str) -> Vec<(std::ops::Range<usize>, u64)> {
     spans
 }
 
-/// Renders `text` HTML-escaped, with every `#123` mention that resolves to
-/// a real PR on `target` turned into a link. A number that resolves to
-/// nothing is left as plain escaped text, not a dead link.
+/// Rewrites every `#123` mention that resolves to a real PR on `target`
+/// into a markdown link, leaving the rest of `text` alone. A number that
+/// resolves to nothing stays plain text, not a dead link.
+///
+/// Markdown out, not HTML, and nothing escaped here: the result is meant to
+/// be handed to [`crate::webui::markdown::render`], which escapes the text,
+/// strips raw HTML and rejects `javascript:` targets. Emitting escaped HTML
+/// instead — as this used to — meant the caller could only drop it in
+/// verbatim, so a description written as markdown rendered as one flat
+/// paragraph with its list bullets and fences showing.
 ///
 /// Used for a PR's own description and flat-thread comments — not the
 /// annotated inline diff comments, which go through a different render
@@ -650,7 +657,7 @@ pub(crate) async fn link_number_mentions(
 ) -> String {
     let spans = scan_number_mentions(text);
     if spans.is_empty() {
-        return esc(text);
+        return text.to_string();
     }
 
     let mut numbers: Vec<u64> = spans.iter().map(|(_, n)| *n).collect();
@@ -671,17 +678,21 @@ pub(crate) async fn link_number_mentions(
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     for (span, number) in &spans {
-        out.push_str(&esc(&text[last..span.start]));
+        out.push_str(&text[last..span.start]);
         match resolved.get(number) {
             Some(view) => {
                 let href = repo_link(repo_name, view, "").number(*number).to_string();
-                out.push_str(&format!(r#"<a href="{}">#{number}</a>"#, esc(&href)));
+                // Pointy-bracket destination: a repo or namespace name is
+                // validated, but this is still user-controlled text landing
+                // in a link target, and `<...>` is the one form that can't
+                // be ended early by a stray `)`.
+                out.push_str(&format!("[#{number}](<{href}>)"));
             }
-            None => out.push_str(&esc(&text[span.clone()])),
+            None => out.push_str(&text[span.clone()]),
         }
         last = span.end;
     }
-    out.push_str(&esc(&text[last..]));
+    out.push_str(&text[last..]);
     out
 }
 
