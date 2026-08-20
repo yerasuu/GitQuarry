@@ -27,6 +27,7 @@ fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
     }

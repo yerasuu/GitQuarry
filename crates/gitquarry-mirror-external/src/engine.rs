@@ -76,33 +76,6 @@ async fn sync_all_repos_once(ctx: &AppContext) -> Result<()> {
         .await
 }
 
-/// Builds the credentialed URL the sync path actually pushes/fetches
-/// against — `remote_url` never carries a token (see
-/// [`access::ExternalMirror`]'s own doc comment), so it's stitched in here,
-/// right before use, never stored. `validate_mirror_token` already rejects
-/// `@`/`:`/`/` in `token`, so this can't have its authority segment
-/// smuggled into a different host.
-#[cfg(any(test, feature = "test-util"))]
-pub fn credentialed_url(remote_url: &str, token: &str) -> String {
-    credentialed_url_impl(remote_url, token)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn credentialed_url(remote_url: &str, token: &str) -> String {
-    credentialed_url_impl(remote_url, token)
-}
-fn credentialed_url_impl(remote_url: &str, token: &str) -> String {
-    if let Some(rest) = remote_url.strip_prefix("https://") {
-        format!("https://x-access-token:{token}@{rest}")
-    } else if let Some(rest) = remote_url.strip_prefix("http://") {
-        format!("http://x-access-token:{token}@{rest}")
-    } else {
-        // Unreachable given `validate_mirror_url` already gates on this at
-        // save time — falling back to the bare url rather than panicking
-        // keeps this function total.
-        remote_url.to_string()
-    }
-}
-
 /// Lock key for a whole sweep of one repo — deliberately *not* the repo's
 /// own key (`AppContext::open_mirror`'s), which [`sync_mirror_once`] takes
 /// while it runs and which every clone and push needs too.
@@ -504,12 +477,15 @@ pub async fn sync_mirror_once(
     let (settings, _etag) =
         gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
     crate::validate::check_host_allowed(&mirror.remote_url, &crate::validate::effective_allowed_hosts(&settings))?;
-    let url = credentialed_url(&mirror.remote_url, &mirror.token);
+    // The plain stored URL: the token rides in `git`'s environment instead
+    // of its argv or this string — see `git_remote::TOKEN_ENV`.
+    let url = mirror.remote_url.clone();
+    let token = mirror.token.clone();
     // Before `open_mirror`, deliberately: this is the one round trip that
     // needs no local repo at all, and it's the one most likely to be slow
     // (an unreachable or throttling forge). Taking the repo's lock first
     // would make every clone and push of this repo wait behind it.
-    let remote_refs = crate::git_remote::ls_remote_refs(&url).await?;
+    let remote_refs = crate::git_remote::ls_remote_refs(&url, &token).await?;
 
     let local_mirror = ctx.open_mirror(resolved).await?;
     let bare_repo = &local_mirror.path;
@@ -557,7 +533,7 @@ pub async fn sync_mirror_once(
         let deleted_one_side = last_synced.is_some() && (local_sha.is_none() || remote_sha.is_none());
         let needs_remote_objects = !deleted_one_side && remote_sha.is_some() && local_sha != remote_sha;
         if needs_remote_objects
-            && let Err(e) = crate::git_remote::fetch_ref_from_remote_url(bare_repo, &url, &ref_name).await
+            && let Err(e) = crate::git_remote::fetch_ref_from_remote_url(bare_repo, &url, &token, &ref_name).await
         {
             record_ref_status(ctx, resolved, mirror, &ref_name, RefSyncStatus::Error(e.to_string())).await;
             report.errors.push((ref_name.clone(), e.to_string()));
@@ -577,7 +553,7 @@ pub async fn sync_mirror_once(
             None => continue,
             Some(RefAction::Record(sha)) => Ok(sha),
             Some(RefAction::Push(sha)) => {
-                crate::git_remote::push_to_remote_url(bare_repo, &url, &[format!("{ref_name}:{ref_name}")])
+                crate::git_remote::push_to_remote_url(bare_repo, &url, &token, &[format!("{ref_name}:{ref_name}")])
                     .await
                     .inspect(|()| report.pushed += 1)
                     .map(|()| sha)

@@ -76,8 +76,8 @@ pub async fn revoke(ctx: &AppContext, owner_uid: &Uid, uid: &str, caller_is_admi
     if &token.owner_uid != owner_uid && !caller_is_admin {
         return Ok(());
     }
-    PersonalAccessToken::delete(ctx.backend().as_ref(), &ctx.cipher, uid).await;
-    token.release_token_hash(ctx.backend().as_ref()).await;
+    let _ = PersonalAccessToken::delete(ctx.backend().as_ref(), &ctx.cipher, uid).await;
+    let _ = token.release_token_hash(ctx.backend().as_ref()).await;
     access::remove_owner_index(ctx.backend().as_ref(), &ctx.cipher, &token.owner_uid, &token.uid).await;
     Ok(())
 }

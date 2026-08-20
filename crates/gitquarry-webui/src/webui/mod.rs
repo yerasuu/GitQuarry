@@ -95,6 +95,7 @@
 //!   fly — no upload, no third-party fetch (see its own doc for why).
 
 pub mod audit;
+pub mod bootstrap;
 pub mod changelog;
 pub mod export;
 pub mod fork;
@@ -241,6 +242,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
     let app = Router::new()
         .route("/_assets/app.js", get(handler_app_js))
         .route("/_assets/styler.js", get(handler_styler_js))
+        .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
         .route("/_metrics", get(health::handler_metrics))
         .route("/", get(repo::handler_index))

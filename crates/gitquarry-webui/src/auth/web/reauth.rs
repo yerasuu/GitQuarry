@@ -40,8 +40,12 @@ pub(super) async fn require_reauth_throttled(
     attempt: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Result<(), String> {
-    if ctx.login_attempts.is_locked(&me.username) {
-        return Err(gitquarry_i18n::shared::too_many_failed_attempts(locale));
+    // Delay rather than refuse — same reasoning as `LoginAttempts::penalty`,
+    // and here the caller is already an authenticated session, so a lockout
+    // would only ever hurt the person who owns the account.
+    let penalty = ctx.login_attempts.penalty(&me.username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
     match require_reauth(me, attempt, locale) {
         Ok(()) => {

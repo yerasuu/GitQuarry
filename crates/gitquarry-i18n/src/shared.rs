@@ -997,6 +997,35 @@ msg!(
 );
 
 msg!(
+    /// `webui::bootstrap::handler_bootstrap_get` on an instance that already
+    /// has a login method: the first-boot window is over, and the token
+    /// can't reopen it.
+    bootstrap_already_done() {
+        Locale::Es => "esta instancia ya tiene un metodo de login configurado",
+        Locale::En => "this instance already has a login method configured",
+    }
+);
+
+msg!(
+    /// `webui::bootstrap::handler_bootstrap_get` with a wrong or missing
+    /// token — deliberately says nothing about which.
+    bootstrap_token_invalid() {
+        Locale::Es => "token de arranque invalido",
+        Locale::En => "invalid bootstrap token",
+    }
+);
+
+msg!(
+    /// `settings::web::require_admin`/`repo_settings::require_repo_authority`
+    /// during the first-boot window, for a request carrying no bootstrap
+    /// grant: the admin pages need the token the process printed at startup.
+    bootstrap_grant_required() {
+        Locale::Es => "esta instancia todavia no tiene login configurado: abri /_bootstrap con el token que el proceso imprimio al arrancar",
+        Locale::En => "this instance has no login configured yet: open /_bootstrap with the token the process printed at startup",
+    }
+);
+
+msg!(
     /// No `MergeRequestMeta` exists for `number` in this repo — confirmed
     /// duplicated across `domain::merge_request::{get, transition, add_comment}`.
     merge_request_not_found(number: u64) {

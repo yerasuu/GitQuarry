@@ -141,7 +141,9 @@ async fn recent_keys(backend: &dyn Backend) -> Result<Vec<String>> {
     for _ in 0..MAX_MONTHS_BACK {
         let (y, mo, _d) = cursor;
         let coll = audit_collection(&format!("{y:04}-{mo:02}"));
-        collected.extend(coll.list_names(backend).await?.into_iter().map(|name| coll.key(&name)));
+        for name in coll.list_names(backend).await? {
+            collected.push(coll.key(&name)?);
+        }
         if collected.len() >= LIST_LIMIT {
             collected.sort_unstable_by(|a, b| b.cmp(a));
             collected.truncate(LIST_LIMIT);
@@ -183,7 +185,7 @@ pub async fn record(
         Ok(Cas::Conflict) => {
             eprintln!(
                 "gitquarry: warning: key collision in audit log ({}), entry lost",
-                coll.key(&name)
+                coll.key(&name).unwrap_or(name)
             )
         }
         Err(e) => eprintln!("gitquarry: warning: couldn't write audit log: {e:#}"),

@@ -61,7 +61,7 @@ async fn ls_remote_refs_lists_every_ref_by_name() {
     let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init");
     update_ref(&git_dir, "refs/heads/main", &sha).await.unwrap();
 
-    let refs = ls_remote_refs(&git_dir.to_string_lossy()).await.unwrap();
+    let refs = ls_remote_refs(&git_dir.to_string_lossy(), "").await.unwrap();
     assert_eq!(refs.get("refs/heads/main"), Some(&sha));
 }
 
@@ -79,7 +79,7 @@ async fn fetch_ref_from_remote_url_brings_objects_without_moving_local_refs() {
     std::fs::create_dir_all(&local_git_dir).unwrap();
     run_git(&local_git_dir, &["init", "--quiet", "--bare"]);
 
-    fetch_ref_from_remote_url(&local_git_dir, &remote_git_dir.to_string_lossy(), "refs/heads/main")
+    fetch_ref_from_remote_url(&local_git_dir, &remote_git_dir.to_string_lossy(), "", "refs/heads/main")
         .await
         .unwrap();
     // Objects arrived, but no local ref was moved by the fetch itself.
@@ -130,7 +130,7 @@ async fn ls_remote_refs_skips_the_peeled_entry_of_an_annotated_tag() {
     update_ref(&git_dir, "refs/heads/main", &sha).await.unwrap();
     run_git(&git_dir, &["tag", "-a", "v1", "-m", "release", &sha]);
 
-    let refs = ls_remote_refs(&git_dir.to_string_lossy()).await.unwrap();
+    let refs = ls_remote_refs(&git_dir.to_string_lossy(), "").await.unwrap();
     // The tag itself is a real ref (pointing at the tag object, not the
     // commit); its `^{}` companion is not a name any refspec can carry.
     assert!(refs.contains_key("refs/tags/v1"));

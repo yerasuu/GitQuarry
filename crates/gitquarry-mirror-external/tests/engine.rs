@@ -29,6 +29,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
     }
@@ -283,18 +284,6 @@ async fn plan_ref_sync_respects_push_only_and_pull_only_directions() {
             .await
             .unwrap(),
         None
-    );
-}
-
-#[test]
-fn credentialed_url_embeds_token_as_userinfo() {
-    assert_eq!(
-        credentialed_url("https://github.com/acme/demo.git", "ghp_abc"),
-        "https://x-access-token:ghp_abc@github.com/acme/demo.git"
-    );
-    assert_eq!(
-        credentialed_url("http://gitea.internal/acme/demo", "tok123"),
-        "http://x-access-token:tok123@gitea.internal/acme/demo"
     );
 }
 

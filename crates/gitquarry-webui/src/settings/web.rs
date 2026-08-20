@@ -30,7 +30,20 @@ use maud::{Markup, PreEscaped, html};
 pub(crate) async fn require_admin(ctx: &AppContext, headers: &HeaderMap, return_to: &str) -> Option<Response> {
     let login_configured = login::login_enforced(ctx).await;
     if !login_configured {
-        return None;
+        // First boot: no session can exist yet, so the only thing that can
+        // stand in for one is the token this process printed at startup,
+        // already exchanged for a grant cookie at `/_bootstrap`.
+        if crate::webui::bootstrap::holds_grant(ctx, headers) {
+            return None;
+        }
+        let locale = effective_locale(ctx, headers).await;
+        return Some(
+            AppError::forbidden(anyhow::anyhow!(
+                "{}",
+                gitquarry_i18n::shared::bootstrap_grant_required(locale)
+            ))
+            .into_response(),
+        );
     }
     match login::current_user(ctx, headers).await {
         Some(user) if user.is_admin => None,

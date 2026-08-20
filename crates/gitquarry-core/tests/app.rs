@@ -6,18 +6,41 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
-fn locks_out_after_max_attempts_and_clear_resets_it() {
+fn penalises_after_max_attempts_and_clear_resets_it() {
     let attempts = LoginAttempts::default();
     for _ in 0..LOGIN_MAX_ATTEMPTS {
-        assert!(!attempts.is_locked("alice"));
+        assert!(attempts.penalty("alice").is_zero());
         attempts.record_failure("alice");
     }
-    assert!(attempts.is_locked("alice"));
-    // A different username is unaffected.
-    assert!(!attempts.is_locked("bob"));
+    assert!(!attempts.penalty("alice").is_zero());
+    // A different username is unaffected — the penalty is never a lockout
+    // one account can inflict on another.
+    assert!(attempts.penalty("bob").is_zero());
 
     attempts.clear("alice");
-    assert!(!attempts.is_locked("alice"));
+    assert!(attempts.penalty("alice").is_zero());
+}
+
+#[test]
+fn the_penalty_doubles_per_failure_and_stops_at_the_cap() {
+    assert!(LoginAttempts::penalty_for(0).is_zero());
+    assert!(LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS - 1).is_zero());
+    // The cap is where the delay starts, then doubles per further failure.
+    assert_eq!(
+        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS),
+        std::time::Duration::from_secs(1)
+    );
+    assert_eq!(
+        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS + 1),
+        std::time::Duration::from_secs(2)
+    );
+    assert_eq!(
+        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS + 2),
+        std::time::Duration::from_secs(4)
+    );
+    // However many attempts pile up, one request never stalls a worker for
+    // longer than the cap.
+    assert_eq!(LoginAttempts::penalty_for(500), LOGIN_MAX_PENALTY);
 }
 
 #[test]
@@ -151,6 +174,7 @@ fn test_ctx(root: &std::path::Path) -> (AppContext, Arc<CountingBackend>) {
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
     };

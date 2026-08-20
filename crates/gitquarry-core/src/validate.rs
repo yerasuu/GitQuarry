@@ -223,7 +223,11 @@ pub fn sniff_avatar_content_type(bytes: &[u8]) -> Result<&'static str> {
 
 /// Short sha for display in the UI, without cutting a char in half.
 pub fn short_sha(sha: &str) -> &str {
-    &sha[..sha.len().min(12)]
+    // `get`, not a plain byte slice: every caller passes hex today, but a
+    // byte index that lands mid-character panics, and a display helper is
+    // the last place that should be able to take a request down. Falls back
+    // to the whole string when 12 isn't a character boundary.
+    sha.get(..sha.len().min(12)).unwrap_or(sha)
 }
 
 /// Validates a log search term before it's passed straight into

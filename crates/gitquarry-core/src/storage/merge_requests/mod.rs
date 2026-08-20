@@ -249,7 +249,7 @@ pub async fn put_mr_comment(
 /// Soft-delete — same best-effort, tombstoned-not-gone convention as
 /// `storage::issues::delete_issue_comment`.
 pub async fn delete_mr_comment(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, number: u64, comment_id: &str) {
-    mr_comments_collection(uid, number)
+    let _ = mr_comments_collection(uid, number)
         .delete(backend, cipher, comment_id)
-        .await
+        .await;
 }

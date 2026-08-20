@@ -52,17 +52,20 @@ pub async fn put_repo_config(
 }
 
 /// One repo-name index entry: which uid currently claims a full repo name
-/// (`namespace/local-name`). The raw name is safe as a literal key segment
-/// without base64 encoding — same reasoning as `auth::access`'s `namespace`
-/// index, since every repo name passing through here already went through
-/// [`crate::validate::sanitize_path`] (no `..`, no control chars, no `\`).
+/// (`namespace/local-name`). Base64, not `Raw`: the name carries the `/`
+/// between namespace and local name, and a raw `/` in an index segment
+/// would relocate the pointer object into a sibling namespace instead of
+/// naming one entry — which is exactly what `s3db`'s own segment check
+/// refuses. `sanitize_path` already rules out `..`, control characters and
+/// `\`; the separator is the one unsafe character left, and encoding is
+/// what keeps it inside a single key segment.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct RepoUidPointer {
     #[serde(default)]
     uid: Uid,
 }
 
-const REPO_NAME_INDEX: SecondaryIndex = SecondaryIndex::new(super::INDEX_PREFIX, "repo-name", Segment::Raw);
+const REPO_NAME_INDEX: SecondaryIndex = SecondaryIndex::new(super::INDEX_PREFIX, "repo-name", Segment::Base64);
 
 /// `None` if nothing currently claims `full_name` — the read side every
 /// existing-repo lookup (browsing, clone, settings, fork's source, star
@@ -109,7 +112,7 @@ pub async fn claim_repo_name(
 /// pointing `full_name` at its new value. A failure here just leaves a
 /// stale hint the next [`claim_repo_name`] conflict self-heals through.
 pub async fn release_repo_name(backend: &dyn Backend, full_name: &str) {
-    REPO_NAME_INDEX.release(backend, full_name).await;
+    let _ = REPO_NAME_INDEX.release(backend, full_name).await;
 }
 
 /// Self-healing repo-name claim: attempts a fresh CAS-create for `uid`; on
@@ -195,7 +198,7 @@ pub async fn remove_owner_index(backend: &dyn Backend, cipher: &Cipher, owner: &
     if owner_uid(owner).is_empty() {
         return;
     }
-    owner_index(owner).delete(backend, cipher, repo_uid.as_str()).await;
+    let _ = owner_index(owner).delete(backend, cipher, repo_uid.as_str()).await;
 }
 
 /// Every repo uid currently indexed under `owner` — a hint, not a fact: a
@@ -274,7 +277,7 @@ pub async fn set_visible_index(backend: &dyn Backend, cipher: &Cipher, repo_uid:
     if visible {
         let _ = visible_index().put(backend, cipher, repo_uid.as_str(), &(), None).await;
     } else {
-        visible_index().delete(backend, cipher, repo_uid.as_str()).await;
+        let _ = visible_index().delete(backend, cipher, repo_uid.as_str()).await;
     }
 }
 
@@ -306,7 +309,7 @@ pub async fn set_deleted_index(backend: &dyn Backend, cipher: &Cipher, repo_uid:
     if deleted {
         let _ = deleted_index().put(backend, cipher, repo_uid.as_str(), &(), None).await;
     } else {
-        deleted_index().delete(backend, cipher, repo_uid.as_str()).await;
+        let _ = deleted_index().delete(backend, cipher, repo_uid.as_str()).await;
     }
 }
 
@@ -355,7 +358,7 @@ pub async fn set_mirrors_enabled_index(
             .put(backend, cipher, repo_uid.as_str(), &(), None)
             .await?;
     } else {
-        mirrors_enabled_index().delete(backend, cipher, repo_uid.as_str()).await;
+        let _ = mirrors_enabled_index().delete(backend, cipher, repo_uid.as_str()).await;
     }
     Ok(())
 }

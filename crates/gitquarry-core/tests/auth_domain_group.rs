@@ -29,6 +29,7 @@ fn test_ctx(backend: LocalBackend, cipher: Cipher) -> gitquarry_core::app::AppCo
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
     }
