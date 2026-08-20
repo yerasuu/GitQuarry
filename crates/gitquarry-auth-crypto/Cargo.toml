@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-auth-crypto"
 version.workspace = true
-edition = "2024"
-rust-version = "1.97"
+edition.workspace = true
+rust-version.workspace = true
 description = "Self-contained auth primitives (password hashing, TOTP, OIDC client discovery) with no dependency on gitquarry-core"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"

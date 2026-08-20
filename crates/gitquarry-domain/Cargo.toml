@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-domain"
 version.workspace = true
-edition = "2024"
-rust-version = "1.97"
+edition.workspace = true
+rust-version.workspace = true
 description = "Product-facing functionality (release CRUD, operator maintenance commands) that needs gitquarry-core's kernel but that the kernel never needs back"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 gitquarry-core = { path = "../gitquarry-core" }
