@@ -66,3 +66,7 @@ msg!(changelog_running_version(version: &str) {
     Locale::Es => "Esta instancia ejecuta la version {version}. Estas notas son las de ese binario, no las de la ultima publicada.",
     Locale::En => "This instance runs version {version}. These notes are that binary's own, not the latest published ones.",
 });
+msg!(footer_copyright(year: &str, holder: &str) {
+    Locale::Es => "© {year} {holder}",
+    Locale::En => "© {year} {holder}",
+});

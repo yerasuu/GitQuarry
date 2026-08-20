@@ -628,6 +628,13 @@ pub(crate) const STYLE: &str = concat!(
 /// to `--accent` (see their own comments), so the two are still visually
 /// distinct where it matters most (that alias is what actually caused the
 /// original collision, not this preset choice alone).
+/// Who the copyright line names, and from when. Constants rather than a
+/// setting: this is the project's own notice, not something a deploy
+/// customises — a fork changes it here, in the same commit it changes the
+/// name everywhere else.
+const COPYRIGHT_HOLDER: &str = "Yerasuu";
+const COPYRIGHT_YEAR: &str = "2026";
+
 pub fn layout(
     title: &str,
     header: &str,
@@ -681,6 +688,16 @@ pub fn layout(
                 main id="content" tabindex="-1" {
                     (maud::PreEscaped(header))
                     (maud::PreEscaped(body))
+                }
+                // Outside `main`, so "skip to content" lands on the page's
+                // own content and a screen reader reaching the end of it
+                // isn't handed the same three links on every page.
+                footer class="site-footer" {
+                    span { (chrome::footer_copyright(locale, COPYRIGHT_YEAR, COPYRIGHT_HOLDER)) }
+                    " · "
+                    a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="license" { "AGPL-3.0-or-later" }
+                    " · "
+                    a href="/_changelog" { (chrome::changelog_nav(locale)) " " (env!("CARGO_PKG_VERSION")) }
                 }
             }
         }
