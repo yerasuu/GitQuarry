@@ -264,7 +264,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         git_rate_limiter: Default::default(),
         allow_push_create,
         events: Default::default(),
-        mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook)),
+        mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook::default())),
     });
 
     // Detached, not part of the `select!` below: a sweep failure logs and
