@@ -26,8 +26,8 @@ tokio = { version = "1.53.1", features = [
 # Its own project now -- pinned by tag, never a floating branch, so
 # a rebuild always resolves the exact same engine. Public repo, fetched
 # over plain https, no credentials needed.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.1", features = ["streaming"] }
-s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.1" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.2", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.2" }
 
 # Plain DTOs shared with the gitquarry-federation binary
 gitquarry-wire = { path = "../gitquarry-wire" }

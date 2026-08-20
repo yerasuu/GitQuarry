@@ -10,7 +10,7 @@ license.workspace = true
 gitquarry-core = { path = "../gitquarry-core" }
 gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.1" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.2" }
 anyhow = "1.0.104"
 futures = "0.3.33"
 rand = "0.10.2"
