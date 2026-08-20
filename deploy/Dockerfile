@@ -21,8 +21,14 @@ FROM debian:trixie-slim
 # the SSH signatures this instance puts on the commits it builds
 # (`git::signing`). Without it a merge fails outright rather than landing
 # unsigned, since `commit-tree -S` reports the missing helper as an error.
+#
+# `gnupg` for `gpg`: `gitquarry-gpg` shells out to the binary, so without it
+# an account can't even register a public key (`add_gpg_key` computes its
+# fingerprint first) and no commit or release-asset signature can be
+# verified. Nothing crashes — the verification result is simply always
+# "unverified", which is why this was easy to miss.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git ca-certificates openssh-client && \
+    apt-get install -y --no-install-recommends git ca-certificates openssh-client gnupg && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/gitquarry /usr/local/bin/gitquarry

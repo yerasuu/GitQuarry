@@ -6,6 +6,13 @@
 //! signature "Verified" badge would reuse [`verify_detached_signature`]
 //! the same way.
 //!
+//! The binary being absent is reported once, loudly, by [`gpg_missing_hint`]
+//! rather than per call: it is an operator condition (a deploy image
+//! without `gnupg`), and the failure it otherwise produces is
+//! indistinguishable from "this signature doesn't match any key" — the two
+//! look identical to every caller, so a missing binary silently turned
+//! every commit unverified with nothing to explain it.
+//!
 //! Every operation runs against a fresh, per-call temp `--homedir` that's
 //! discarded when the function returns — nothing here ever touches a
 //! shared/system GPG keyring, so concurrent requests (and unrelated users'
@@ -14,6 +21,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::process::Command;
 
 /// Same tempdir every call here starts from — `0700` explicitly rather
@@ -31,6 +39,32 @@ fn scratch_homedir() -> Result<tempfile::TempDir> {
     Ok(dir)
 }
 
+/// Whether the "gpg isn't installed" line has already been printed. One
+/// warning per process, not per call: a single commit-list page can ask for
+/// dozens of verifications, and a page's worth of identical lines would
+/// bury the one thing worth reading.
+static WARNED_MISSING: AtomicBool = AtomicBool::new(false);
+
+/// Turns a failure to *spawn* `gpg` into an error that says what to do
+/// about it, and warns on stderr the first time.
+///
+/// Worth separating from every other error here because it is the only one
+/// an operator can fix, and the only one that isn't about the key or
+/// signature at all: without this, a deploy image missing `gnupg` reads
+/// exactly like a signature that doesn't verify.
+fn spawn_error(action: &str, err: std::io::Error) -> anyhow::Error {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        if !WARNED_MISSING.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "gitquarry: `gpg` isn't on PATH — GPG key registration fails and no commit or \
+                 release signature can be verified. Install gnupg in the deploy image."
+            );
+        }
+        return anyhow::anyhow!("`gpg` isn't installed on this server, so {action} can't be checked");
+    }
+    anyhow::Error::new(err).context(format!("couldn't run gpg for {action}"))
+}
+
 async fn import(homedir: &Path, armored_key: &str) -> Result<()> {
     let key_path = homedir.join("key.asc");
     tokio::fs::write(&key_path, armored_key)
@@ -43,7 +77,7 @@ async fn import(homedir: &Path, armored_key: &str) -> Result<()> {
         .arg(&key_path)
         .output()
         .await
-        .context("couldn't run gpg --import")?;
+        .map_err(|e| spawn_error("this key", e))?;
     if !out.status.success() {
         bail!(
             "not a valid OpenPGP public key: {}",
@@ -69,7 +103,7 @@ pub async fn fingerprint(armored_key: &str) -> Result<String> {
         .args(["--batch", "--no-tty", "--with-colons", "--list-keys"])
         .output()
         .await
-        .context("couldn't run gpg --list-keys")?;
+        .map_err(|e| spawn_error("this key", e))?;
     if !out.status.success() {
         bail!(
             "gpg --list-keys failed: {}",
@@ -119,6 +153,6 @@ pub async fn verify_detached_signature(data: &[u8], signature: &str, armored_key
         .arg(&data_path)
         .output()
         .await
-        .context("couldn't run gpg --verify")?;
+        .map_err(|e| spawn_error("this signature", e))?;
     Ok(out.status.success())
 }
