@@ -101,6 +101,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         totp_secret: None,
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
+        totp_last_step: 0,
         locale_default: String::new(),
         storage_quota_bytes: None,
         avatar_content_type: None,
@@ -537,6 +538,24 @@ pub async fn consume_recovery_code(ctx: &AppContext, username: &str, code: &str)
         return Ok(false);
     };
     user.totp_recovery_codes.remove(matched_at);
+    Ok(access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok)
+}
+
+/// Records `step` as the newest TOTP step spent by a successful login, so
+/// the same code can't be presented twice inside its validity window.
+/// `Ok(false)` if the stored record moved underneath us (another login
+/// racing this one) or already sits at or past `step` — either way the
+/// caller must treat this attempt as failed rather than issue a session,
+/// which is what makes the check a real one-shot rather than an advisory
+/// note.
+pub async fn record_totp_step(ctx: &AppContext, username: &str, step: u64) -> Result<bool> {
+    let (Some(mut user), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await? else {
+        return Ok(false);
+    };
+    if step <= user.totp_last_step {
+        return Ok(false);
+    }
+    user.totp_last_step = step;
     Ok(access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok)
 }
 

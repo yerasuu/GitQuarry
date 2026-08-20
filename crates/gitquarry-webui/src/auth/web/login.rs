@@ -575,12 +575,23 @@ pub(crate) async fn handler_login_totp_post(
     let user = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, &pending.username)
         .await?
         .0;
-    let code_ok = user.as_ref().is_some_and(|u| {
-        u.totp_enabled
-            && u.totp_secret
-                .as_deref()
-                .is_some_and(|s| gitquarry_auth_crypto::totp::verify_code(s, form.code.trim()))
+    // The step the code matched, kept rather than discarded: a code is
+    // valid across three 30s steps, so without spending the step here an
+    // observed code stays usable for up to 90s after its owner logged in.
+    let matched_step = user.as_ref().and_then(|u| {
+        if !u.totp_enabled {
+            return None;
+        }
+        let step = gitquarry_auth_crypto::totp::matching_step(u.totp_secret.as_deref()?, form.code.trim())?;
+        (step > u.totp_last_step).then_some(step)
     });
+    // Written before the session is built: if the CAS loses to another
+    // login racing this one, that other login spent the step and this one
+    // is a replay.
+    let code_ok = match matched_step {
+        Some(step) => gitquarry_core::auth::domain::user::record_totp_step(&ctx, &pending.username, step).await?,
+        None => false,
+    };
     // A live TOTP code always wins outright; only bother spending a
     // recovery code (one-time use — see `domain::user::consume_recovery_code`)
     // when the submitted string didn't already verify as one.
