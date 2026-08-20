@@ -8,9 +8,9 @@ use anyhow::{Result, bail};
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::{Cas, uid::Uid};
 
-/// Creates a brand-new mirror (mints its id) or, if `mirror.id` is already
-/// set and `expected_etag` is `Some`, edits an existing one — both paths
-/// validate before writing.
+/// Creates a brand-new mirror, minting its id — whatever `mirror.id`
+/// carried is overwritten, so this can never be talked into overwriting an
+/// existing one. Editing is [`update`]'s job, with an etag.
 pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: ExternalMirror) -> Result<ExternalMirror> {
     mirror.id = access::generate_mirror_id();
     match access::set_external_mirror(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror, None).await? {
