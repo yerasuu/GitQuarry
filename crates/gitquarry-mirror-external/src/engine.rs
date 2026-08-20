@@ -121,6 +121,16 @@ fn sweep_lock_key(uid: &Uid) -> String {
 /// but the illusion of parallelism.
 pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Result<()> {
     let _sweep_guard = ctx.locks.lock(&sweep_lock_key(&resolved.uid)).await;
+    // A soft-deleted repo is unreachable over ssh/http but still sits in
+    // the `mirrors-enabled` index, so only this sweep could still reach it
+    // — and pushing its refs to a third party after its owner deleted it is
+    // the last thing deleting a repo should mean. `mirror::policy` covers
+    // the pull direction (it refuses to write into a deleted repo); this is
+    // the other half.
+    let (config, _etag) = resolved.remote.get_repo_config().await?;
+    if config.deleted_at.is_some() {
+        return Ok(());
+    }
     for mirror in crate::domain::list(ctx, &resolved.uid)
         .await?
         .into_iter()

@@ -850,3 +850,51 @@ fn a_ref_deleted_on_one_side_isnt_reported_as_a_sweep_failure() {
     };
     assert!(diverged.failure_summary().is_some());
 }
+
+/// Deleting a repo has to stop its refs flowing out to a third party — the
+/// sweep is the only path that can still reach a soft-deleted repo, since
+/// ssh/http turn it away long before the pre-serve hook.
+#[tokio::test]
+async fn a_deleted_repo_stops_being_mirrored_outward() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(root.path()));
+
+    let (_target_dir, target_path, _sha) = plain_bare_repo_with_commit("upstream\n").await;
+    let source = ctx.create_repo("alice/source-deleted").await.unwrap().unwrap();
+    {
+        ctx.open_mirror(&source).await.unwrap();
+    }
+    let mut mirror = domain::create(
+        &ctx,
+        &source.uid,
+        access::ExternalMirror {
+            remote_url: "https://example.invalid/acme/target.git".to_string(),
+            token: "s3cr3t-token".to_string(),
+            enabled: true,
+            label: "test target".to_string(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    mirror.remote_url = target_path.to_string_lossy().to_string();
+
+    let (mut config, etag) = source.remote.get_repo_config().await.unwrap();
+    config.deleted_at = Some(1);
+    gitquarry_core::storage::settings::put_repo_config(
+        ctx.backend().as_ref(),
+        source.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &ctx.cipher,
+    )
+    .await
+    .unwrap();
+
+    sync_repo_mirrors(&ctx, &source).await.unwrap();
+
+    // Nothing was recorded as synced: the sweep didn't touch this repo.
+    let (persisted, _) = domain::get(&ctx, &source.uid, &mirror.id).await.unwrap().unwrap();
+    assert!(persisted.last_synced.is_empty());
+    assert!(persisted.ref_status.is_empty());
+}
