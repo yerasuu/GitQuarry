@@ -75,9 +75,37 @@ fn a_url_with_no_host_is_refused() {
 }
 
 #[test]
-fn the_host_allowlist_starts_shut() {
+fn the_matcher_allows_nothing_on_an_empty_list() {
+    // The matcher itself is unconditional — what an instance actually
+    // allows comes from `effective_allowed_hosts`, below.
     let nothing_allowed: Vec<String> = Vec::new();
     assert!(check_host_allowed("https://github.com/a/b.git", &nothing_allowed).is_err());
+}
+
+#[test]
+fn a_stock_instance_already_allows_every_forge_with_a_client() {
+    let stock = gitquarry_core::storage::entities::ServerSettings::default();
+    let allowed = effective_allowed_hosts(&stock);
+    for host in BUILTIN_HOSTS {
+        assert!(allowed.iter().any(|h| h == host), "{host} isn't allowed out of the box");
+        assert!(check_host_allowed(&format!("https://{host}/a/b.git"), &allowed).is_ok());
+    }
+    assert!(check_host_allowed("https://gitlab.internal.test/a/b.git", &allowed).is_err());
+}
+
+#[test]
+fn a_configured_host_widens_the_set_without_replacing_it() {
+    // The stored list adds a self-hosted forge; it never costs the instance
+    // the providers this build already speaks to.
+    let settings = gitquarry_core::storage::entities::ServerSettings {
+        mirror_extra_hosts: vec!["gitlab.internal.test".to_string(), "GitHub.com".to_string()],
+        ..Default::default()
+    };
+    let allowed = effective_allowed_hosts(&settings);
+    assert!(check_host_allowed("https://gitlab.internal.test/a/b.git", &allowed).is_ok());
+    assert!(check_host_allowed("https://codeberg.org/a/b.git", &allowed).is_ok());
+    // An entry that repeats a built-in (in any case) doesn't duplicate it.
+    assert_eq!(allowed.iter().filter(|h| *h == "github.com").count(), 1);
 }
 
 #[test]

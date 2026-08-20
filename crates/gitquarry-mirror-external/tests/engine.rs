@@ -34,14 +34,14 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
     }
 }
 
-/// The instance's external-mirror host allowlist starts empty — nothing is
-/// allowed until an admin opens a host — so any test that stores a mirror
-/// has to make the same call the settings page does first.
+/// Every build allows the forges it has a client for, but a test's
+/// stand-in target isn't one of those — so a test that stores a mirror adds
+/// its host the same way an admin adds a self-hosted forge.
 async fn allow_mirror_host(ctx: &AppContext, host: &str) {
     let (mut settings, etag) = gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
         .await
         .unwrap();
-    settings.mirror_allowed_hosts.push(host.to_string());
+    settings.mirror_extra_hosts.push(host.to_string());
     gitquarry_core::storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher)
         .await
         .unwrap();

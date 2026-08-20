@@ -70,7 +70,7 @@ pub async fn delete(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<()> 
 async fn check_host_allowed(ctx: &AppContext, remote_url: &str) -> Result<()> {
     let (settings, _etag) =
         gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
-    crate::validate::check_host_allowed(remote_url, &settings.mirror_allowed_hosts)
+    crate::validate::check_host_allowed(remote_url, &crate::validate::effective_allowed_hosts(&settings))
 }
 
 /// Re-derives `.conf/index/mirrors-enabled/<uid>` from this repo's *actual*

@@ -108,6 +108,32 @@ pub fn validate_mirror_label(label: &str) -> Result<()> {
     Ok(())
 }
 
+/// The forges this build has a client for, and so mirrors to with nothing
+/// configured — re-exported so the settings page can name them without
+/// depending on `gitquarry-forge-clients` itself.
+pub const BUILTIN_HOSTS: [&str; 3] = gitquarry_forge_clients::PUBLIC_FORGE_HOSTS;
+
+/// The host allowlist actually in force: every forge this build has a
+/// client for, plus whatever the instance added
+/// (`ServerSettings::mirror_extra_hosts`).
+///
+/// A union rather than a replacement, so the providers the code already
+/// speaks to are never something an operator has to remember to re-list —
+/// the configured list exists to *widen* this to a self-hosted forge, not
+/// to narrow the feature's own targets. Turning mirroring off is a matter
+/// of not configuring one (and the owner tier that gates doing so), not of
+/// emptying this.
+pub fn effective_allowed_hosts(settings: &gitquarry_core::storage::entities::ServerSettings) -> Vec<String> {
+    let mut hosts: Vec<String> = BUILTIN_HOSTS.iter().map(|host| host.to_string()).collect();
+    for extra in &settings.mirror_extra_hosts {
+        let extra = extra.trim().to_ascii_lowercase();
+        if !extra.is_empty() && !hosts.contains(&extra) {
+            hosts.push(extra);
+        }
+    }
+    hosts
+}
+
 /// Host part of an already-[`validate_mirror_url`]-checked URL, lowercased
 /// and without any port — what [`check_host_allowed`] matches against.
 /// `None` when the string carries no `scheme://` at all.

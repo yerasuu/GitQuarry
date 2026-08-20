@@ -48,22 +48,27 @@ pub struct ServerSettings {
     /// registered with the IdP is `{this}/_callback`.
     #[serde(default)]
     pub oidc_redirect_base_url: Option<String>,
-    /// Hosts an external mirror (`gitquarry-mirror-external`) may point at,
-    /// as exact names or `*.` patterns. **Empty means no host at all**, so
-    /// the feature is off until an instance admin opens it host by host.
+    /// Extra hosts an external mirror (`gitquarry-mirror-external`) may
+    /// point at, beyond the ones every build already allows — exact names
+    /// or `*.` patterns.
     ///
-    /// This is an egress policy, not a repo setting, which is why it lives
-    /// here and can't be widened per repo: configuring a mirror makes *the
-    /// server* open connections to a host of the configurer's choosing,
-    /// from the server's own network position, and repo-settings authority
-    /// (`Maintainer`, or `Owner` for a mirror specifically) is a long way
-    /// from being trusted with that. Checking names rather than resolved
-    /// addresses is the only enforceable option here: the ref sync runs
-    /// `git` as a subprocess, which does its own DNS inside its own
-    /// process, so an address-range check would be a TOCTOU with DNS
-    /// rebinding on the other side of it.
-    #[serde(default)]
-    pub mirror_allowed_hosts: Vec<String>,
+    /// *Additional*, never a replacement: the public host of each forge
+    /// this build has a client for is always allowed
+    /// (`gitquarry_forge_clients::PUBLIC_FORGE_HOSTS`, unioned in by
+    /// `gitquarry_mirror_external::validate::effective_allowed_hosts`), so a
+    /// stock instance mirrors to GitHub/GitLab/Codeberg with nothing to
+    /// configure and this field only ever names a self-hosted forge the
+    /// instance also trusts.
+    ///
+    /// What it's for: mirroring makes *the server* open connections to a
+    /// host chosen by whoever configures the mirror, from the server's own
+    /// network position. Everything outside the built-in set plus this list
+    /// is refused — which is what keeps that from reaching an internal
+    /// address. Matching is on the name, never on a resolved address: the
+    /// ref sync shells out to `git`, which resolves inside its own process,
+    /// so an address check would be a TOCTOU with DNS rebinding behind it.
+    #[serde(default, alias = "mirror_allowed_hosts")]
+    pub mirror_extra_hosts: Vec<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol

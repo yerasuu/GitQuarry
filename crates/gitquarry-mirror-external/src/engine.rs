@@ -503,7 +503,7 @@ pub async fn sync_mirror_once(
     // it slipped in before the policy changed.
     let (settings, _etag) =
         gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
-    crate::validate::check_host_allowed(&mirror.remote_url, &settings.mirror_allowed_hosts)?;
+    crate::validate::check_host_allowed(&mirror.remote_url, &crate::validate::effective_allowed_hosts(&settings))?;
     let url = credentialed_url(&mirror.remote_url, &mirror.token);
     // Before `open_mirror`, deliberately: this is the one round trip that
     // needs no local repo at all, and it's the one most likely to be slow

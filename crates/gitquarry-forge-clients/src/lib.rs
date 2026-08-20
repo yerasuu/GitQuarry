@@ -18,6 +18,23 @@ pub mod gitlab;
 
 use anyhow::{Result, bail};
 
+/// Public host of every forge this crate has a real client for — the set an
+/// instance's external-mirror allowlist starts with
+/// (`ServerSettings::mirror_allowed_hosts`, resolved by
+/// `gitquarry_mirror_external::validate::effective_allowed_hosts`).
+///
+/// Lives here rather than in the settings or the sync engine because it's a
+/// fact about *which providers are implemented*: a fourth adapter lands
+/// with its host in this array, and nothing else has to be told. Only the
+/// public instances — a self-hosted GitLab or Gitea is somebody's own host,
+/// which only that operator can name.
+///
+/// Safe as a default in a way an arbitrary host isn't: these three are the
+/// mirroring feature's whole point, and none of them is on anybody's
+/// internal network, which is what the allowlist exists to keep the server
+/// away from.
+pub const PUBLIC_FORGE_HOSTS: [&str; 3] = ["github.com", "gitlab.com", "codeberg.org"];
+
 /// Every adapter here splices a repo's owner/name straight into a REST
 /// path, unescaped. Forge account and repository names are already limited
 /// to this alphabet on all three providers, so anything outside it can't
