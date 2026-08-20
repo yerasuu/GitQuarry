@@ -147,6 +147,7 @@ fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
     }
@@ -326,4 +327,39 @@ async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
         assert_eq!(status, StatusCode::OK);
     }
     assert!(saw_429, "never got rate limited within the cap + margin");
+}
+
+#[test]
+fn the_rate_limit_key_ignores_a_forwarded_header_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
+    // Trusting the header without a proxy that owns it would let any client
+    // pick its own bucket, i.e. opt out of the limit entirely.
+    assert_eq!(
+        gitquarry_core::git::http::client_key(&ctx, &headers, "127.0.0.1".parse().unwrap()),
+        "127.0.0.1"
+    );
+}
+
+#[test]
+fn the_rate_limit_key_uses_the_first_forwarded_hop_when_trusted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = test_ctx(dir.path());
+    ctx.trust_forwarded_for = true;
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-forwarded-for", "9.9.9.9, 10.0.0.1".parse().unwrap());
+    assert_eq!(
+        gitquarry_core::git::http::client_key(&ctx, &headers, "127.0.0.1".parse().unwrap()),
+        "9.9.9.9"
+    );
+
+    // No header (a request that didn't come through the proxy) falls back
+    // to the socket rather than lumping everyone into one empty key.
+    assert_eq!(
+        gitquarry_core::git::http::client_key(&ctx, &axum::http::HeaderMap::new(), "127.0.0.1".parse().unwrap()),
+        "127.0.0.1"
+    );
 }

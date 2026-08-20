@@ -80,6 +80,11 @@ pub struct AppContext {
     /// handler's implicit "first push creates the repo" branch. `false` by
     /// default (see that field's doc comment for why).
     pub allow_push_create: bool,
+    /// `config::Config::trust_forwarded_for` — whether `git::http`'s
+    /// anonymous rate limiter may key on `X-Forwarded-For` instead of the
+    /// socket address. `false` by default; see that field for why it can't
+    /// be on unless a proxy owns the header.
+    pub trust_forwarded_for: bool,
     /// Clone/fetch flood tracker for `git::http`'s `info/refs`/`upload-pack`
     /// handlers — see [`GitRateLimiter`].
     pub git_rate_limiter: GitRateLimiter,

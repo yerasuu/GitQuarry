@@ -101,9 +101,10 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // verifies everything against S3 for real, writes the config, and
     // returns exactly what the branch below would've loaded from it — same
     // process, no restart needed to pick up what it just wrote.
-    let (bucket, _bucket_cfg, backend, cipher, allow_push_create) = if config_path.is_file() {
+    let (bucket, _bucket_cfg, backend, cipher, allow_push_create, trust_forwarded_for) = if config_path.is_file() {
         let conf = config::Config::load_from(&config_path)?;
         let allow_push_create = conf.allow_push_create();
+        let trust_forwarded_for = conf.trust_forwarded_for();
         config::warn_if_world_readable(&config_path);
         // Without --bucket: if the config only has one configured, there's no
         // ambiguity.
@@ -146,14 +147,23 @@ pub async fn run(rest: &[String]) -> Result<()> {
                 outcome.backend,
                 outcome.cipher,
                 allow_push_create,
+                trust_forwarded_for,
             )
         } else {
-            (bucket, bucket_cfg, backend, cipher, allow_push_create)
+            (
+                bucket,
+                bucket_cfg,
+                backend,
+                cipher,
+                allow_push_create,
+                trust_forwarded_for,
+            )
         }
     } else {
         // First run, no `gitquarry.toml` at all yet — the setup wizard
-        // writes a bucket-only config, so `allow_push_create` is off too
-        // until an operator opts in by hand.
+        // writes a bucket-only config, so `allow_push_create` and
+        // `trust_forwarded_for` are both off until an operator opts in by
+        // hand.
         let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
         let outcome = setup::run(&config_path, &web_bind, None).await?;
         (
@@ -161,6 +171,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             outcome.bucket_cfg,
             outcome.backend,
             outcome.cipher,
+            false,
             false,
         )
     };
@@ -263,6 +274,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create,
+        trust_forwarded_for,
         events: Default::default(),
         mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook::default())),
     });

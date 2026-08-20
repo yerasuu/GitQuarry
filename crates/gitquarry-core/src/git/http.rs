@@ -155,6 +155,41 @@ fn extract_variable_segment<'a>(path: &'a str, infix: &str, trailing: &str) -> O
     (!repo.is_empty()).then_some((repo, var))
 }
 
+/// What the anonymous rate limiter counts against: the socket address, or
+/// — only when the instance says a proxy owns the header
+/// ([`AppContext::trust_forwarded_for`]) — the first `X-Forwarded-For` hop.
+///
+/// Behind a reverse proxy the socket address is the proxy's, so every
+/// anonymous client in the world shares one bucket and one of them can
+/// spend it for everybody. Trusting the header without a proxy that
+/// overwrites it is the opposite failure: each request picks its own
+/// bucket, and the limit stops existing. Neither is safe to guess, hence
+/// the setting.
+#[cfg(any(test, feature = "test-util"))]
+pub fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+    client_key_impl(ctx, headers, socket_ip)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+    client_key_impl(ctx, headers, socket_ip)
+}
+
+fn client_key_impl(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+    if !ctx.trust_forwarded_for {
+        return socket_ip.to_string();
+    }
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        // `client, proxy1, proxy2` — the first entry is the hop that faced
+        // the client, same reading `webui::cookies::is_https` gives
+        // `X-Forwarded-Proto`.
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|hop| !hop.is_empty())
+        .map_or_else(|| socket_ip.to_string(), str::to_string)
+}
+
 pub async fn middleware(
     State(ctx): State<Arc<AppContext>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -169,7 +204,8 @@ pub async fn middleware(
     }
     let repo = repo.to_string();
     let oid = oid.map(str::to_string);
-    match handle(&ctx, &repo, kind, oid.as_deref(), addr.ip(), req).await {
+    let client = client_key(&ctx, req.headers(), addr.ip());
+    match handle(&ctx, &repo, kind, oid.as_deref(), client, req).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("gitquarry: git-http: {e:#}");
@@ -183,7 +219,7 @@ async fn handle(
     raw_repo: &str,
     kind: Kind,
     oid: Option<&str>,
-    client_ip: std::net::IpAddr,
+    client_key: String,
     req: Request,
 ) -> Result<Response> {
     let name = validate::sanitize_path(raw_repo)?;
@@ -216,7 +252,7 @@ async fn handle(
             if kind != Kind::ReceivePack {
                 let under_limit = match &actor {
                     Some(username) => ctx.git_rate_limiter.check_authenticated(username),
-                    None => ctx.git_rate_limiter.check_anonymous(&client_ip.to_string()),
+                    None => ctx.git_rate_limiter.check_anonymous(&client_key),
                 };
                 if !under_limit {
                     return Ok(too_many_requests());

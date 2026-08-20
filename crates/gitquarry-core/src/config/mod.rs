@@ -46,6 +46,16 @@ pub struct RawConfig {
     /// fail loudly, not silently create a new empty repo.
     #[serde(default)]
     allow_push_create: bool,
+    /// Whether `X-Forwarded-For`'s first hop may be taken as the client
+    /// address for anonymous git rate limiting. Off by default, and it has
+    /// to stay off unless a reverse proxy in front of this server always
+    /// *overwrites* that header: a client that can set it freely rotates
+    /// its own rate-limit bucket at will, which is strictly worse than the
+    /// socket address. On, behind such a proxy, it's the only way the limit
+    /// distinguishes clients at all — every request otherwise arrives from
+    /// the proxy's single address and shares one bucket.
+    #[serde(default)]
+    trust_forwarded_for: bool,
 }
 
 /// Mirror of `RawConfig` for writing instead of reading — kept separate so
@@ -62,6 +72,7 @@ struct RawConfigOut<'a> {
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
     allow_push_create: bool,
+    trust_forwarded_for: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
     /// without guessing which candidate won.
     path: PathBuf,
@@ -94,6 +105,7 @@ impl Config {
         Ok(Config {
             buckets: raw.buckets,
             allow_push_create: raw.allow_push_create,
+            trust_forwarded_for: raw.trust_forwarded_for,
             path: path.to_path_buf(),
         })
     }
@@ -101,6 +113,11 @@ impl Config {
     /// See [`RawConfig::allow_push_create`]'s doc comment.
     pub fn allow_push_create(&self) -> bool {
         self.allow_push_create
+    }
+
+    /// See [`RawConfig::trust_forwarded_for`]'s doc comment.
+    pub fn trust_forwarded_for(&self) -> bool {
+        self.trust_forwarded_for
     }
 
     /// Config path that would be used per the usual resolution order. Useful
