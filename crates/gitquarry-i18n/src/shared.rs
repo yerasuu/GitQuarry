@@ -985,6 +985,15 @@ msg!(
 );
 
 msg!(
+    /// `domain::pull_request::merge` refusing a fast-forward: the target
+    /// branch moved on, so no pointer move expresses the merge any more.
+    pull_request_not_fast_forwardable(branch: &str) {
+        Locale::Es => "no se puede avanzar {branch} sin crear un commit: la rama ha divergido, usa merge, squash o rebase",
+        Locale::En => "can't fast-forward {branch} without creating a commit: the branch has diverged, use merge, squash or rebase",
+    }
+);
+
+msg!(
     /// `domain::pull_request::transition`: the PR's current status doesn't
     /// allow the requested move (e.g. reopening a merged PR, closing an
     /// already-closed one).
