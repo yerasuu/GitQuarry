@@ -47,6 +47,23 @@ pub struct CommitSigCache {
     /// them reads as stale exactly once and then re-stamps itself.
     #[serde(default)]
     pub epoch: u64,
+    /// The signature was this instance's own, not any account's — see
+    /// `domain::commit_signature::CommitSigner`. A separate flag rather
+    /// than a sentinel in `verified_username`, because the instance is not
+    /// an account and must never be looked up as one.
+    #[serde(default)]
+    pub instance: bool,
+}
+
+impl CommitSigCache {
+    /// The cached verdict in the shape callers actually want.
+    pub fn signer(&self) -> Option<crate::domain::commit_signature::CommitSigner> {
+        use crate::domain::commit_signature::CommitSigner;
+        if self.instance {
+            return Some(CommitSigner::Instance);
+        }
+        self.verified_username.clone().map(CommitSigner::User)
+    }
 }
 
 /// Bumped by every identity change that can flip a signature verdict:

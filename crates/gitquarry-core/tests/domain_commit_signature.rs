@@ -13,7 +13,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::Cipher;
-use gitquarry_core::domain::commit_signature::verified_signer;
+use gitquarry_core::domain::commit_signature::{CommitSigner, verified_signer};
 use gitquarry_core::storage::commit_sig::{bump_signing_epoch, signing_epoch};
 use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_i18n::Locale;
@@ -220,7 +220,7 @@ async fn registering_a_key_after_a_miss_makes_the_commit_verify() {
     )
     .await
     .unwrap();
-    assert_eq!(after, Some("alice".to_string()));
+    assert_eq!(after, Some(CommitSigner::User("alice".to_string())));
 }
 
 /// The other half, and the one that actually matters for trust: a key
@@ -250,7 +250,7 @@ async fn removing_a_key_stops_it_vouching_for_an_already_verified_commit() {
     )
     .await
     .unwrap();
-    assert_eq!(verified, Some("alice".to_string()));
+    assert_eq!(verified, Some(CommitSigner::User("alice".to_string())));
 
     let fingerprint = gitquarry_gpg::fingerprint(&repo.armored_public).await.unwrap();
     user::remove_gpg_key(&ctx, "alice", &fingerprint, Locale::En)

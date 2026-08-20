@@ -908,6 +908,126 @@ async fn init_target_mirror(ctx: &AppContext, target: &ResolvedRepo, conflicting
     (main_sha, feature_sha)
 }
 
+/// The merge commit the server builds carries the *instance's* signature —
+/// never the merger's, whose private key the bucket has no business
+/// holding. The author stays whoever merged; the committer becomes the
+/// instance, because git matches an SSH signature against the
+/// allowed-signers principal for the committer address.
+#[tokio::test]
+async fn a_merge_commit_is_signed_by_the_instance_and_authored_by_the_merger() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let sha = match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap()
+    {
+        MergeOutcome::Merged(sha) => sha,
+        MergeOutcome::Conflict(paths) => panic!("expected a clean merge, got {paths:?}"),
+    };
+
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let raw = String::from_utf8(
+        std::process::Command::new("git")
+            .env("GIT_DIR", &git_dir)
+            .args(["cat-file", "commit", &sha])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+
+    assert!(raw.contains("author bob "), "{raw}");
+    assert!(
+        raw.contains(&format!(
+            "committer {} <{}>",
+            gitquarry_core::git::signing::INSTANCE_NAME,
+            gitquarry_core::git::signing::INSTANCE_EMAIL
+        )),
+        "{raw}"
+    );
+    assert!(raw.contains("-----BEGIN SSH SIGNATURE-----"), "{raw}");
+}
+
+/// End to end, the part every earlier piece exists for: git itself grades
+/// the merge commit's signature as good (which only happens once the mirror
+/// carries this instance's allowed-signers file), and the verification path
+/// reports *who* — the instance, not the account that pressed merge.
+#[tokio::test]
+async fn a_merge_commit_reads_back_as_signed_by_the_instance() {
+    use gitquarry_core::domain::commit_signature::{CommitSigner, verified_signer};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    let sha = match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap()
+    {
+        MergeOutcome::Merged(sha) => sha,
+        MergeOutcome::Conflict(paths) => panic!("expected a clean merge, got {paths:?}"),
+    };
+
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let info = gitquarry_core::git::browse::log(&git_dir, &sha, 1, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        info.signature_status, 'G',
+        "git didn't accept the instance's own signature — is the mirror's allowed-signers file missing?"
+    );
+
+    let signer = verified_signer(
+        &ctx.backend(),
+        &ctx.cipher,
+        &git_dir,
+        &sha,
+        info.signature_status,
+        &info.author_email,
+    )
+    .await
+    .unwrap();
+    assert_eq!(signer, Some(CommitSigner::Instance));
+}
+
 #[tokio::test]
 async fn merge_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();

@@ -8,6 +8,7 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::{access, entities::User};
 use gitquarry_core::domain;
+use gitquarry_core::domain::commit_signature::CommitSigner;
 use gitquarry_core::git::browse::{CommitInfo, RefInfo};
 use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
@@ -35,7 +36,32 @@ use tokio::task::JoinSet;
 /// email fallback. [`author_cell`] uses this to tell "verified" from
 /// "unverified" apart in the signature indicator, not just to pick an
 /// avatar.
-pub(crate) type AvatarMatches = HashMap<String, (User, bool)>;
+#[derive(Default)]
+pub(crate) struct AvatarMatches {
+    by_sha: HashMap<String, (User, bool)>,
+    /// Shas this instance signed itself. Not in `by_sha` because the
+    /// instance is not an account: it has no avatar to show and no profile
+    /// to link, only a badge saying the commit was built here.
+    instance_signed: std::collections::HashSet<String>,
+}
+
+impl AvatarMatches {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn get(&self, sha: &str) -> Option<&(User, bool)> {
+        self.by_sha.get(sha)
+    }
+
+    fn insert(&mut self, sha: String, value: (User, bool)) {
+        self.by_sha.insert(sha, value);
+    }
+
+    pub(crate) fn is_instance_signed(&self, sha: &str) -> bool {
+        self.instance_signed.contains(sha)
+    }
+}
 
 pub(crate) async fn commit_avatars(ctx: &AppContext, git_dir: &Path, commits: &[CommitInfo]) -> AvatarMatches {
     avatars_for(
@@ -92,14 +118,18 @@ async fn avatars_for(
         });
     }
     let mut gpg_username_by_sha: HashMap<String, String> = HashMap::new();
+    let mut instance_signed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut fallback_email_by_sha: HashMap<String, String> = HashMap::new();
     while let Some(result) = set.join_next().await {
         let Ok((sha, author_email, signer)) = result else {
             continue;
         };
         match signer {
-            Some(username) => {
+            Some(CommitSigner::User(username)) => {
                 gpg_username_by_sha.insert(sha, username);
+            }
+            Some(CommitSigner::Instance) => {
+                instance_signed.insert(sha);
             }
             None if !author_email.is_empty() => {
                 fallback_email_by_sha.insert(sha, author_email);
@@ -128,6 +158,7 @@ async fn avatars_for(
         access::avatar_by_commit_email(&backend, &cipher, fallback_email_by_sha.values().cloned()).await;
 
     let mut out = AvatarMatches::new();
+    out.instance_signed = instance_signed;
     for (sha, username) in gpg_username_by_sha {
         if let Some(user) = users_by_username.get(&username) {
             out.insert(sha, (user.clone(), true));
@@ -158,7 +189,11 @@ fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &A
             None => (crate::webui::identicon::identicon(author_name, 16)),
         }
         " " (author_name)
-        (signature_indicator(signature_status, avatars.get(sha).filter(|(_, verified)| *verified).map(|(u, _)| u.username.as_str())))
+        (signature_indicator(
+            signature_status,
+            avatars.get(sha).filter(|(_, verified)| *verified).map(|(u, _)| u.username.as_str()),
+            avatars.is_instance_signed(sha),
+        ))
     }
 }
 
@@ -170,10 +205,15 @@ fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &A
 /// gitquarry account signed it, if any. Empty for `'N'` (unsigned): no
 /// badge at all, same as the single-commit page's own
 /// `webui::repo::commit::signature_badge` treats it.
-fn signature_indicator(signature_status: char, verified_by: Option<&str>) -> Markup {
+fn signature_indicator(signature_status: char, verified_by: Option<&str>, instance_signed: bool) -> Markup {
     html! {
         @if let Some(username) = verified_by {
             " " span class="badge ok" title=(format!("verified signature ({username})")) { "verified" }
+        } @else if instance_signed {
+            // A weaker claim than "verified", and shown as a different
+            // badge so it can't be mistaken for one: the instance vouches
+            // for having built the commit, not for who wrote it.
+            " " span class="badge accent" title="built and signed by this instance" { "instance" }
         } @else {
             @match signature_status {
                 'B' | 'R' | 'Y' => { " " span class="badge danger" title="signature check failed" { "invalid" } }

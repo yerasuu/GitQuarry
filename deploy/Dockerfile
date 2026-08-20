@@ -17,8 +17,12 @@ FROM debian:trixie-slim
 # The refs/summary web views (crates/gitquarry-core/src/git/browse/refs.rs)
 # for-each-ref with `%(signature:grade)` -- bookworm's git 2.39 rejects
 # that atom outright ("unknown field name"), trixie's 2.47 accepts it.
+# `openssh-client` for `ssh-keygen`: git shells out to it to make and check
+# the SSH signatures this instance puts on the commits it builds
+# (`git::signing`). Without it a merge fails outright rather than landing
+# unsigned, since `commit-tree -S` reports the missing helper as an error.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git ca-certificates && \
+    apt-get install -y --no-install-recommends git ca-certificates openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/gitquarry /usr/local/bin/gitquarry
