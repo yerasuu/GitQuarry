@@ -1,16 +1,10 @@
 # Build context must be the repo root, not this directory (COPY below needs
-# Cargo.toml/Cargo.lock/crates/LICENSE/tag-changelog from there):
-# docker build -f deploy/Dockerfile .
+# Cargo.toml/Cargo.lock/crates from there): docker build -f deploy/Dockerfile .
 FROM rust:1.97-bookworm AS builder
 
 WORKDIR /usr/src/gitquarry
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# `webui`'s licence and changelog pages `include_str!` these two from the
-# repo root at compile time, so the build fails outright without them —
-# they are not runtime assets.
-COPY LICENSE ./
-COPY tag-changelog ./tag-changelog
 
 # The shipped bin package is still named `gitquarry`, but it now lives in
 # `crates/gitquarry-server` — `gitquarry-core` went lib-only when the webui
