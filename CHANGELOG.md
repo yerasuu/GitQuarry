@@ -9,6 +9,12 @@ on a per-release versioning scheme.
 
 ## Git hosting & transport
 
+- Commits this server builds for you — a pull request's merge, squash or
+  rebase commit — are signed with a key the instance generates and keeps for
+  itself. They show as verified, in a colour distinct from a signature made
+  by an account's own key: the instance can only attest that it built the
+  commit, never who wrote it.
+
 - Serve git repositories directly from S3-compatible object storage, with no
   separate git server process required.
 - Embedded SSH server with public-key authentication, later reworked around
@@ -36,6 +42,8 @@ on a per-release versioning scheme.
 - Per-language byte-size bar on the repo summary page.
 - HTML rendering migrated from ad hoc string templates to a typed templating
   engine (maud) across the entire UI.
+- Site footer carrying the copyright, the licence and the running version,
+  linking to the changelog the binary itself was built from (`/_changelog`).
 
 ## Internationalization
 
@@ -43,6 +51,16 @@ on a per-release versioning scheme.
   template catalog threaded through every page.
 
 ## Auth & permissions
+
+- Account settings reorganized into profile (avatar and email addresses),
+  security (password, two-factor, recovery codes) and keys (SSH and GPG),
+  instead of one flat page mixing all three. Every settings page now uses
+  the same card layout with labelled fields.
+- Changing your own password asks for it twice, so a typo can't lock you out
+  of an account with no other way in.
+- An account can change its own primary email, but only where OIDC isn't
+  configured — with OIDC that address decides which account a login lands
+  on, so it stays admin-managed.
 
 - OIDC login alongside local admin and local user accounts, with a unified
   admin page design.
@@ -76,6 +94,14 @@ on a per-release versioning scheme.
 - Repo topics for discoverability.
 - Watched repos alongside starred repos, with a watch button.
 - Public user profile page listing a user's repos.
+- Pull requests can be merged by fast-forward, which creates no commit at
+  all: what lands is the author's own commits, carrying the author's own
+  signatures. Offered alongside merge, squash and rebase, and greyed out
+  once the branches have diverged.
+- A pull request that can't merge cleanly says so on its own page, listing
+  the conflicting files and the commands to resolve them locally, instead of
+  turning the merge button into an error page.
+- A merged pull request still renders after its source branch is deleted.
 
 ## Releases & assets
 

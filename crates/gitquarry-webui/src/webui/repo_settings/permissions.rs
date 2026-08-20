@@ -122,7 +122,7 @@ pub(super) fn render_perm_grid_fragment(
                 @for (user, current) in granted {
                     tr {
                         td {
-                            (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 18))
+                            (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref()))
                             (user.username)
                             " " span class=(crate::webui::permission_badge_class(*current)) { (permission_tier_label(*current, locale)) }
                             @if user.is_admin {

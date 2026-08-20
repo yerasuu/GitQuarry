@@ -1,7 +1,11 @@
 * { box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: var(--fs);
-       line-height: var(--lh); margin: 0; padding: 0; color: var(--fg); background: var(--bg); }
-#content { max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; }
+       line-height: var(--lh); margin: 0; padding: 0; color: var(--fg); background: var(--bg);
+       /* Column flexbox purely so the footer's `margin-top: auto` can push
+          it to the viewport bottom on pages too short to fill the screen.
+          Stacking is otherwise identical to the block layout it replaces. */
+       display: flex; flex-direction: column; min-height: 100vh; }
+#content { max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; width: 100%; }
 .skip-link { position: absolute; left: -999px; top: 0; background: var(--bg); color: var(--fg);
              padding: var(--pad-y) var(--pad-x); border: 1px solid var(--accent); border-radius: 0 0 var(--radius-sm) 0; z-index: 10; }
 .skip-link:focus { left: 0; }
@@ -166,6 +170,30 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .settings-sidebar a:hover { background: var(--surface-3); color: var(--fg); }
 .settings-sidebar a.active { background: var(--surface-3); color: var(--accent); font-weight: bold; }
 .settings-content { flex: 1; min-width: 0; }
+/* The page's own title, above its stack of `.settings-section` cards —
+   `account_settings_page` renders it from the same tuple the sidebar entry
+   comes from, so it is never a second, drift-prone copy of the name. */
+.settings-title { margin-top: 0; }
+/* One card per concern. `.card`/`.card-pad` (from `styler`) already own the
+   border/radius/padding/background; this only adds what stacking needs,
+   same division of labour `.sidebar-box`/`.repo-card` above already follow. */
+.settings-section { margin-bottom: 1rem; }
+.settings-section > h3 { margin-top: 0; }
+.settings-section > :last-child { margin-bottom: 0; }
+/* Labelled control: label above, optional hint below. The `div.field`
+   markup existed in `/_settings` and the pull-request forms long before
+   this rule did — with no CSS at all it was an unstyled block, which is why
+   every other form reached for placeholder-only inputs instead. Capped
+   width because a full-bleed text input on a wide screen is harder to scan,
+   not easier: the eye loses which label a control belongs to. */
+.field { display: flex; flex-direction: column; gap: 0.25em; margin-bottom: var(--gap); max-width: 34rem; }
+.field > label { color: var(--fg2); }
+.field > .hint { color: var(--muted); font-size: 0.85em; }
+/* A row of controls that belong to one action (a value plus its
+   confirmation, or a value plus the re-auth it needs) — stacked on mobile
+   by `mobile.css`, side by side when there is room. */
+.field-row { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: flex-end; }
+.field-row .field { margin-bottom: 0; }
 /* Shell (border/radius/padding/background/shadow) comes from `styler`'s
    own `.card`/`.card-pad` now (markup: `class="card card-pad sidebar-box"`)
    — `.sidebar-box` itself only keeps the spacing/layout `.card` doesn't
@@ -198,6 +226,15 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    name/description/meta (stars, primary language dot, topics) stacked the
    way Codeberg/Forgejo's dashboard lists repos, reusing `.decoration`
    (topics) and `.lang-swatch` (language dot) unmodified. */
+/* Conflicting-file list on a pull request that can't fast-forward, plus
+   the collapsed how-to under it. A plain list, not a table: it is one
+   column of paths and nothing else, and it sits directly under the warning
+   alert that introduces it. */
+.conflict-paths { margin: 0.4rem 0 0.6rem; padding-left: 1.4em; }
+.conflict-paths li { margin: 0.15em 0; }
+.conflict-help { margin-bottom: 1rem; }
+.conflict-help summary { cursor: pointer; color: var(--fg2); }
+.conflict-help pre { margin-top: 0.5em; }
 .repo-cards { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
 /* Shell comes from `styler`'s `.card`/`.card-pad` now (markup:
    `class="card card-pad repo-card"`) — `.repo-cards`'s own `gap` above
@@ -396,11 +433,44 @@ table.diff-annotated tr.diff-comment td { white-space: normal; padding: var(--pa
    text-size toggle scales them too) instead of their own fixed pixel
    attrs, colored by whatever text color they're dropped into. */
 .icon { width: 1em; height: 1em; vertical-align: -0.15em; flex-shrink: 0; }
-/* `web::identicon`'s per-user SVGs — square with soft corners (not a full
-   circle, stays closer to this project's flat/square aesthetic than a
-   photo-style avatar would), sized per call site via the `width`/`height`
-   attrs already on the element rather than a fixed class size. */
-.avatar { border-radius: 3px; vertical-align: middle; margin-right: 0.4em; flex-shrink: 0; }
+/* `web::identicon`'s per-user SVGs *and* uploaded photos — square with soft
+   corners (not a full circle, stays closer to this project's flat/square
+   aesthetic than a photo-style avatar would), sized per call site via the
+   `width`/`height` attrs already on the element rather than a fixed class
+   size. The uploaded half used to carry `border-radius:50%` inline, so the
+   two shapes disagreed: a photo came out round and a generated identicon
+   square, on the very same row.
+   A percentage radius rather than a fixed `3px`: the same rule has to look
+   right from a 14px table row to a 48px settings page, and a fixed radius
+   reads as a sharp square at the large end and an almost-circle at the
+   small one. `object-fit` matters only for the uploaded half — an identicon
+   is always square — but costs nothing on an SVG and keeps one rule for
+   both. */
+.avatar {
+  /* Sized off the surrounding text, exactly like `.icon` above, instead of
+     the per-call-site pixel attrs this used to carry. A filled square reads
+     heavier than the letters beside it, so a fixed 14px next to a name sat
+     taller than the name itself — and the ratio then drifted again with the
+     density switch and the text-size toggle, which move the text but not a
+     pixel constant. Twice the text size: an avatar that only matched the
+     text read as a bullet point rather than a picture of someone, and at
+     `2em` it spans roughly two lines' worth of cap height — recognisable at
+     a glance, still clearly subordinate to the name it labels. */
+  width: 2em;
+  height: 2em;
+  border-radius: 22%;
+  object-fit: cover;
+  /* `middle`, not a small negative baseline nudge: at twice the text size
+     the box is taller than the line it sits on, so it has to be centred
+     against the text rather than dropped slightly below the baseline. */
+  vertical-align: middle;
+  margin-right: 0.4em;
+  flex-shrink: 0;
+}
+/* The one avatar that isn't beside a name: the account settings page shows
+   it on its own as the thing being edited, so it keeps the explicit size
+   its call site asks for. */
+.avatar-fixed { width: auto; height: auto; }
 .bar-row td { padding: 0.15em 0.5em; }
 /* Repo summary's language bar: one stacked row of same-line segments
    (unlike `.bar-row`'s independent bar-per-row), each segment's width/hue
@@ -521,3 +591,20 @@ form button:active { background: var(--surface-4); box-shadow: none; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* Narrow-viewport overrides live in their own `mobile.css` now — see that
    file's own doc comment for why. */
+
+/* Mirrors `#content`'s column so the notice lines up with the page text
+   rather than the viewport, and `margin-top: auto` pins it to the bottom of
+   short pages instead of leaving it floating mid-screen. */
+.site-footer { max-width: 70rem; margin: auto auto 0; padding: 1.5rem 1rem;
+               border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85em; }
+.site-footer a { color: var(--muted); }
+
+/* The licence is hard-wrapped at ~70 columns already, so it needs no
+   reflow -- only a scrollbar for the few lines that overrun a narrow
+   viewport, rather than the whole page scrolling sideways with them. */
+.license-text { white-space: pre-wrap; overflow-x: auto; font-size: 0.85em; }
+
+/* Same markdown styling as a README, without the rule and gap that
+   separate that one from the file listing above it -- a PR body and each
+   comment are already inside their own block. */
+.readme.plain { border-top: none; padding-top: 0; margin-top: 0.3em; }

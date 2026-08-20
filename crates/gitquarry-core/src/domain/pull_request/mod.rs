@@ -600,6 +600,7 @@ pub fn review_summary(reviews: &[PrReview]) -> ReviewSummary {
     summary
 }
 
+#[derive(Default)]
 pub struct PrDiff {
     pub stat: String,
     pub diff: String,
@@ -657,13 +658,123 @@ pub async fn diff(
     git_dir: &std::path::Path,
     pr: &PullRequestMeta,
 ) -> Result<PrDiff> {
-    let base = pr.target_branch.as_str();
-    let head = fetch_source_ref(ctx, target, git_dir, pr).await?;
-    let stat = git::browse::diffstat_range(git_dir, base, &head).await?;
-    let diff = git::browse::diff_range(git_dir, base, &head).await?;
+    let Some((base, head)) = diff_endpoints(ctx, target, git_dir, pr).await? else {
+        return Ok(PrDiff::default());
+    };
+    let stat = git::browse::diffstat_range(git_dir, &base, &head).await?;
+    let diff = git::browse::diff_range(git_dir, &base, &head).await?;
     let range = format!("{base}..{head}");
     let commits = git::browse::log(git_dir, &range, usize::MAX, None).await?;
     Ok(PrDiff { stat, diff, commits })
+}
+
+/// The `(base, head)` pair [`diff`] compares, or `None` when there is
+/// nothing left to compare at all.
+///
+/// Normally that is simply `(target_branch, source_branch)`. The reason it
+/// needs resolving at all is that a *merged* pull request usually outlives
+/// its source branch — the merge form's own "delete branch" checkbox
+/// removes it — and every `git diff base...head` behind the pull-request
+/// page then failed on an unknown revision, so viewing a closed pull
+/// request returned a 500.
+///
+/// The fallback compares the merge commit against its own first parent,
+/// which for both a merge and a squash is exactly what the pull request
+/// landed on the target. A rebase-merged one is the imperfect case: its
+/// recorded sha is the last replayed commit, so only that commit shows —
+/// still an honest, readable page rather than an error, and the commit
+/// list beside it says the same.
+///
+/// `None` (an empty diff, no error) is the last resort: a pull request
+/// closed *without* merging whose branch was then deleted has no surviving
+/// endpoint to reconstruct anything from.
+async fn diff_endpoints(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    git_dir: &std::path::Path,
+    pr: &PullRequestMeta,
+) -> Result<Option<(String, String)>> {
+    // Tolerated, not propagated: for a cross-fork pull request this opens
+    // the source fork's mirror and fetches from it, and that fork may be
+    // gone by now — which is the same "nothing to compare" case as a
+    // deleted branch, not a server error.
+    let head = fetch_source_ref(ctx, target, git_dir, pr).await.ok();
+    if let Some(head) = head
+        && git::browse::resolve_commit(git_dir, &head).await?.is_some()
+        && git::browse::resolve_commit(git_dir, &pr.target_branch).await?.is_some()
+    {
+        return Ok(Some((pr.target_branch.clone(), head)));
+    }
+    if let Some(merge) = pr.merge_commit_sha.as_deref()
+        && git::browse::resolve_commit(git_dir, merge).await?.is_some()
+    {
+        // Three-dot against the merge's own first parent is the same set of
+        // changes two-dot would give (the first parent *is* the merge base
+        // of the pair), and keeps this on the identical code path the
+        // normal case uses.
+        return Ok(Some((format!("{merge}^"), merge.to_string())));
+    }
+    Ok(None)
+}
+
+/// Whether this PR would merge cleanly right now: `None` for a clean
+/// merge, `Some(paths)` for the files that conflict. Dry-run only —
+/// `git merge-tree` writes nothing beyond git's own scratch objects, so
+/// unlike [`merge`] this can be called on a plain page render.
+///
+/// Deliberately probes the `Merge` strategy alone even though a PR can be
+/// merged three ways: `Squash` computes the identical tree (it differs
+/// only in how many parents the commit gets), and `Rebase` replays commit
+/// by commit, so a conflict there depends on which commit you stop at.
+/// Reporting "merge and squash would conflict here" is honest for two of
+/// the three and never a false *clean* for the third — a rebase that
+/// conflicts always has at least one conflicting path in this set too.
+///
+/// Errors like a deleted target branch surface as `Ok(None)`, not `Err`:
+/// this only ever decorates a page, and a merge attempt reports the real
+/// reason properly. A view must not 500 because a probe couldn't run.
+pub async fn conflicts(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    git_dir: &std::path::Path,
+    pr: &PullRequestMeta,
+) -> Result<Option<Vec<String>>> {
+    let head_ref = fetch_source_ref(ctx, target, git_dir, pr).await?;
+    let (manifest, _etag) = target.remote.get_manifest().await?;
+    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", pr.target_branch)).cloned() else {
+        return Ok(None);
+    };
+    let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
+        return Ok(None);
+    };
+    match git::merge_tree(git_dir, &target_sha, &head_sha, None).await {
+        Ok(git::MergeTreeOutcome::Conflicted(paths)) => Ok(Some(paths)),
+        Ok(git::MergeTreeOutcome::Clean(_)) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Whether this pull request could be merged by moving the target branch
+/// alone — the target is still an ancestor of the source, nothing diverged.
+/// Read-only, and tolerant like [`conflicts`] of a branch that has since
+/// gone: a probe that only decorates a page must never fail the page.
+pub async fn fast_forwardable(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    git_dir: &std::path::Path,
+    pr: &PullRequestMeta,
+) -> Result<bool> {
+    let Ok(head_ref) = fetch_source_ref(ctx, target, git_dir, pr).await else {
+        return Ok(false);
+    };
+    let (manifest, _etag) = target.remote.get_manifest().await?;
+    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", pr.target_branch)).cloned() else {
+        return Ok(false);
+    };
+    let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
+        return Ok(false);
+    };
+    Ok(git::is_ancestor(git_dir, &target_sha, &head_sha).await.unwrap_or(false))
 }
 
 pub enum MergeOutcome {
@@ -696,10 +807,29 @@ async fn merge_commit(
     head_sha: &str,
     strategy: MergeStrategy,
     merger: (&str, &str),
+    signing_key: Option<&std::path::Path>,
 ) -> Result<MergeOutcome> {
     let merge_date = git_date_now();
     let merger_ident = (merger.0, merger.1, merge_date.as_str());
+    // Author stays whoever asked for the merge; committer becomes the
+    // instance whenever it signs. Git checks an SSH signature against the
+    // allowed-signers principal for the *committer* address, so a signed
+    // commit has to be committed by the identity that owns the key — the
+    // same author/committer split GitHub's own web-made commits use.
+    let committer_ident = if signing_key.is_some() {
+        (
+            git::signing::INSTANCE_NAME,
+            git::signing::INSTANCE_EMAIL,
+            merge_date.as_str(),
+        )
+    } else {
+        merger_ident
+    };
     match strategy {
+        // Handled entirely by [`merge`] before it ever gets here: a
+        // fast-forward creates no commit, so there is nothing for this
+        // function — whose only job is building one — to do.
+        MergeStrategy::FastForward => Ok(MergeOutcome::Merged(head_sha.to_string())),
         MergeStrategy::Merge => {
             let tree = match git::merge_tree(git_dir, target_sha, head_sha, None).await? {
                 git::MergeTreeOutcome::Conflicted(paths) => return Ok(MergeOutcome::Conflict(paths)),
@@ -715,7 +845,8 @@ async fn merge_commit(
                 &[target_sha, head_sha],
                 &message,
                 merger_ident,
-                merger_ident,
+                committer_ident,
+                signing_key,
             )
             .await?;
             Ok(MergeOutcome::Merged(sha))
@@ -732,7 +863,16 @@ async fn merge_commit(
             for commit in &commits {
                 message.push_str(&format!("\n* {}", commit.subject));
             }
-            let sha = git::commit_tree(git_dir, &tree, &[target_sha], &message, merger_ident, merger_ident).await?;
+            let sha = git::commit_tree(
+                git_dir,
+                &tree,
+                &[target_sha],
+                &message,
+                merger_ident,
+                committer_ident,
+                signing_key,
+            )
+            .await?;
             Ok(MergeOutcome::Merged(sha))
         }
         MergeStrategy::Rebase => {
@@ -757,7 +897,8 @@ async fn merge_commit(
                     &[&new_tip],
                     &commit.message,
                     (&commit.author_name, &commit.author_email, &commit.author_date),
-                    merger_ident,
+                    committer_ident,
+                    signing_key,
                 )
                 .await?;
             }
@@ -877,19 +1018,41 @@ pub async fn merge(
         );
     }
 
-    let (merger_name, merger_email) = merger_identity(ctx, merged_by).await?;
-    let merge_sha = match merge_commit(
-        git_dir,
-        &pr,
-        &target_sha,
-        &head_sha,
-        strategy,
-        (&merger_name, &merger_email),
-    )
-    .await?
-    {
-        MergeOutcome::Conflict(paths) => return Ok(MergeOutcome::Conflict(paths)),
-        MergeOutcome::Merged(sha) => sha,
+    // Fast-forward builds nothing, so it needs no merger identity to stamp,
+    // no signing key, and can't conflict: the branch moves to commits that
+    // already exist, exactly as their author wrote — and signed — them.
+    // Everything below (packing the new objects, the manifest CAS, the
+    // metadata update) is identical either way, which is why this only
+    // picks the sha.
+    let merge_sha = if strategy == MergeStrategy::FastForward {
+        if !git::is_ancestor(git_dir, &target_sha, &head_sha).await? {
+            bail!(
+                "{}",
+                gitquarry_i18n::shared::pull_request_not_fast_forwardable(locale, &pr.target_branch)
+            );
+        }
+        head_sha.clone()
+    } else {
+        let (merger_name, merger_email) = merger_identity(ctx, merged_by).await?;
+        // Loaded (and, the very first time, generated) only on the path
+        // that actually builds a commit: a deploy that only ever
+        // fast-forwards never mints a key at all.
+        let key = git::signing::load_or_create(backend.as_ref(), &ctx.cipher).await?;
+        let key_file = key.to_temp_file()?;
+        match merge_commit(
+            git_dir,
+            &pr,
+            &target_sha,
+            &head_sha,
+            strategy,
+            (&merger_name, &merger_email),
+            Some(key_file.path()),
+        )
+        .await?
+        {
+            MergeOutcome::Conflict(paths) => return Ok(MergeOutcome::Conflict(paths)),
+            MergeOutcome::Merged(sha) => sha,
+        }
     };
 
     let scratch = git::scratch_dir(git_dir)?;

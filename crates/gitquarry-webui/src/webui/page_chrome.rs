@@ -183,12 +183,12 @@ pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> Stri
 }
 
 /// Section ids/hrefs/labels for [`account_settings_page`]'s sidebar —
-/// `"profile"`/`"appearance"`/`"security"`/`"favorites"`/`"pat"`,
+/// `"profile"`/`"appearance"`/`"security"`/`"keys"`/`"favorites"`/`"pat"`,
 /// each a top-level `/_account/<id>` route (no username in the URL: unlike
 /// the public [`crate::auth::web::profile`] page, every one of these only
 /// ever operates on the logged-in session's own account, resolved
 /// server-side — there's nothing here a URL segment could usefully name).
-fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 5] {
+fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 6] {
     use gitquarry_i18n::web::chrome;
     [
         ("profile", "/_account/profile", chrome::account_profile_section(locale)),
@@ -198,6 +198,7 @@ fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static 
             chrome::account_appearance_section(locale),
         ),
         ("security", "/_account/security", chrome::security_tab(locale)),
+        ("keys", "/_account/keys", chrome::keys_tab(locale)),
         ("favorites", "/_account/favorites", chrome::favorites_tab(locale)),
         ("pat", "/_account/pat", chrome::pat_tab(locale)),
     ]
@@ -221,6 +222,16 @@ pub(crate) fn account_settings_page(
 ) -> maud::Markup {
     use gitquarry_i18n::web::chrome;
     let sections = account_sections(locale);
+    // The page's own `h2` comes from the same tuple the sidebar entry does,
+    // so the two can never drift apart and no page needs a second copy of
+    // its own title as a separate message. Without it every account page
+    // opened straight into an `h3`/`h4` with no heading above it, leaving
+    // the section unnamed for anyone not reading the sidebar's active row.
+    let title = sections
+        .iter()
+        .find(|(id, _, _)| *id == active)
+        .map(|(_, _, label)| label.clone())
+        .unwrap_or_default();
     maud::html! {
         div class="settings-layout" {
             nav class="settings-sidebar" aria-label=(chrome::settings_sidebar_nav_label(locale)) {
@@ -232,7 +243,49 @@ pub(crate) fn account_settings_page(
                     }
                 }
             }
-            div class="settings-content" { (content) }
+            div class="settings-content" {
+                h2 class="settings-title" { (title) }
+                (content)
+            }
+        }
+    }
+}
+
+/// One settings block: a card with its own `h3`, optional explanatory
+/// prose, and whatever form/table `body` is. Every `/_account/*` page (and
+/// the admin `/_settings`) is a stack of these rather than a flat run of
+/// `h4` + bare `<form>` — a long page like `security` was otherwise a wall
+/// of controls with nothing marking where one concern ended and the next
+/// began.
+///
+/// `heading` is an `h3` because [`account_settings_page`] already owns the
+/// page's `h2`: the old pages started at `h4` with nothing above them,
+/// skipping two levels for anyone navigating by headings.
+pub(crate) fn settings_section(heading: &str, prose: Option<&str>, body: maud::Markup) -> maud::Markup {
+    maud::html! {
+        section class="card card-pad settings-section" {
+            h3 { (heading) }
+            @if let Some(prose) = prose {
+                p class="muted" { (prose) }
+            }
+            (body)
+        }
+    }
+}
+
+/// One labelled control: `label` above it, hint below when there is one.
+/// The `div.field` markup predates this (`/_settings`, the PR forms) but
+/// had no CSS rule at all, so it rendered as a bare block and every account
+/// page skipped labels entirely in favour of placeholders — which vanish on
+/// first keystroke, aren't announced as labels, and give no click target.
+pub(crate) fn field(label: &str, hint: Option<&str>, control: maud::Markup) -> maud::Markup {
+    maud::html! {
+        div class="field" {
+            label { (label) }
+            (control)
+            @if let Some(hint) = hint {
+                span class="hint" { (hint) }
+            }
         }
     }
 }
@@ -575,6 +628,13 @@ pub(crate) const STYLE: &str = concat!(
 /// to `--accent` (see their own comments), so the two are still visually
 /// distinct where it matters most (that alias is what actually caused the
 /// original collision, not this preset choice alone).
+/// Who the copyright line names, and from when. Constants rather than a
+/// setting: this is the project's own notice, not something a deploy
+/// customises — a fork changes it here, in the same commit it changes the
+/// name everywhere else.
+const COPYRIGHT_HOLDER: &str = "Yerasuu";
+const COPYRIGHT_YEAR: &str = "2026";
+
 pub fn layout(
     title: &str,
     header: &str,
@@ -628,6 +688,16 @@ pub fn layout(
                 main id="content" tabindex="-1" {
                     (maud::PreEscaped(header))
                     (maud::PreEscaped(body))
+                }
+                // Outside `main`, so "skip to content" lands on the page's
+                // own content and a screen reader reaching the end of it
+                // isn't handed the same three links on every page.
+                footer class="site-footer" {
+                    span { (chrome::footer_copyright(locale, COPYRIGHT_YEAR, COPYRIGHT_HOLDER)) }
+                    " · "
+                    a href="/_license" rel="license" { "AGPL-3.0-or-later" }
+                    " · "
+                    a href="/_changelog" { (chrome::changelog_nav(locale)) " " (env!("CARGO_PKG_VERSION")) }
                 }
             }
         }

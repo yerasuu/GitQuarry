@@ -15,6 +15,7 @@ msg!(audit_tab() { Locale::Es => "auditoria", Locale::En => "audit" });
 
 msg!(profile_tab() { Locale::Es => "perfil", Locale::En => "profile" });
 msg!(favorites_tab() { Locale::Es => "favoritos", Locale::En => "favorites" });
+msg!(keys_tab() { Locale::Es => "claves", Locale::En => "keys" });
 msg!(security_tab() { Locale::Es => "seguridad", Locale::En => "security" });
 msg!(pat_tab() { Locale::Es => "tokens personales", Locale::En => "personal tokens" });
 msg!(account_settings_tab() { Locale::Es => "ajustes", Locale::En => "settings" });
@@ -59,3 +60,14 @@ msg!(owner_label() { Locale::Es => "propietario", Locale::En => "owner" });
 
 msg!(limited_visibility_badge() { Locale::Es => "limitado", Locale::En => "limited" });
 msg!(private_visibility_badge() { Locale::Es => "privado", Locale::En => "private" });
+msg!(changelog_nav() { Locale::Es => "changelog", Locale::En => "changelog" });
+msg!(changelog_heading() { Locale::Es => "cambios", Locale::En => "changelog" });
+msg!(changelog_running_version(version: &str) {
+    Locale::Es => "Esta instancia ejecuta la version {version}. Estas notas son las de ese binario, no las de la ultima publicada.",
+    Locale::En => "This instance runs version {version}. These notes are that binary's own, not the latest published ones.",
+});
+msg!(footer_copyright(year: &str, holder: &str) {
+    Locale::Es => "© {year} {holder}",
+    Locale::En => "© {year} {holder}",
+});
+msg!(license_heading() { Locale::Es => "licencia", Locale::En => "license" });

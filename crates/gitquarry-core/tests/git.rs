@@ -115,9 +115,17 @@ async fn commit_tree_writes_a_commit_with_the_given_parents_and_message() {
     // A leading `-` in the message must reach `-m` as its value, not get
     // parsed as a new flag.
     let identity = ("tester", "tester@example.com", "1700000000 +0000");
-    let merge_sha = commit_tree(&git_dir, &tree, &[&ours, &theirs], "-merge message", identity, identity)
-        .await
-        .unwrap();
+    let merge_sha = commit_tree(
+        &git_dir,
+        &tree,
+        &[&ours, &theirs],
+        "-merge message",
+        identity,
+        identity,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(merge_sha.len(), 40);
 
     let parents = capture_git(&git_dir, &["log", "-1", "--format=%P", &merge_sha], "");

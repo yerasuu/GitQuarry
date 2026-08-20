@@ -115,3 +115,48 @@ msg!(reauth_placeholder() {
     Locale::Es => "contraseña actual o código 2FA",
     Locale::En => "current password or 2FA code",
 });
+
+// Field labels. These pages moved from placeholder-only inputs to real
+// `<label>`s: a placeholder disappears on the first keystroke, is not
+// announced as a label, and gives no click target.
+msg!(add_pubkey_label() { Locale::Es => "clave pública SSH", Locale::En => "SSH public key" });
+msg!(add_pubkey_hint() {
+    Locale::Es => "La línea completa de tu .pub, incluido el tipo y el comentario final.",
+    Locale::En => "The full line from your .pub file, key type and trailing comment included.",
+});
+msg!(add_gpg_key_label() { Locale::Es => "clave pública GPG", Locale::En => "GPG public key" });
+msg!(reauth_label() { Locale::Es => "confirma tu identidad", Locale::En => "confirm it is you" });
+msg!(reauth_hint() {
+    Locale::Es => "Tu contraseña actual, o un código 2FA si lo tienes activo.",
+    Locale::En => "Your current password, or a 2FA code if you have it enabled.",
+});
+msg!(new_password_label() { Locale::Es => "contraseña nueva", Locale::En => "new password" });
+msg!(confirm_password_label() { Locale::Es => "repite la contraseña nueva", Locale::En => "repeat the new password" });
+msg!(password_mismatch() {
+    Locale::Es => "las dos contraseñas no coinciden",
+    Locale::En => "the two passwords don't match",
+});
+msg!(clear_password_hint() {
+    Locale::Es => "Déjala en blanco para quedarte sin contraseña y entrar solo por SSH u OIDC.",
+    Locale::En => "Leave blank to end up with no password and sign in only over SSH or OIDC.",
+});
+
+// Primary-email block on `/_account/profile`. Self-service only where OIDC
+// can't resolve a login by the address — see
+// `gitquarry_core::auth::domain::user::set_own_email`.
+msg!(primary_email_heading() { Locale::Es => "correo principal", Locale::En => "primary email" });
+msg!(primary_email_purpose() {
+    Locale::Es => "La dirección con la que se te identifica: enlaza tus commits con esta cuenta y, si hay OIDC, resuelve tu login.",
+    Locale::En => "The address you're identified by: it links your commits to this account and, with OIDC, resolves your login.",
+});
+msg!(primary_email_label() { Locale::Es => "correo principal", Locale::En => "primary email" });
+msg!(primary_email_hint() {
+    Locale::Es => "Déjalo en blanco para quedarte sin correo principal.",
+    Locale::En => "Leave blank to end up with no primary email.",
+});
+msg!(primary_email_admin_managed() {
+    Locale::Es => "Con OIDC configurado esta dirección decide a qué cuenta entra un login, así que solo un admin puede cambiarla desde /_users.",
+    Locale::En => "With OIDC configured this address decides which account a login lands on, so only an admin can change it, from /_users.",
+});
+msg!(no_primary_email() { Locale::Es => "(sin correo principal)", Locale::En => "(no primary email)" });
+msg!(save_email_button() { Locale::Es => "guardar correo", Locale::En => "save email" });

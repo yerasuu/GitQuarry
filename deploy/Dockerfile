@@ -1,10 +1,16 @@
 # Build context must be the repo root, not this directory (COPY below needs
-# Cargo.toml/Cargo.lock/crates from there): docker build -f deploy/Dockerfile .
+# Cargo.toml/Cargo.lock/crates/LICENSE/tag-changelog from there):
+# docker build -f deploy/Dockerfile .
 FROM rust:1.97-bookworm AS builder
 
 WORKDIR /usr/src/gitquarry
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# `webui`'s licence and changelog pages `include_str!` these two from the
+# repo root at compile time, so the build fails outright without them —
+# they are not runtime assets.
+COPY LICENSE ./
+COPY tag-changelog ./tag-changelog
 
 # The shipped bin package is still named `gitquarry`, but it now lives in
 # `crates/gitquarry-server` — `gitquarry-core` went lib-only when the webui
@@ -17,8 +23,18 @@ FROM debian:trixie-slim
 # The refs/summary web views (crates/gitquarry-core/src/git/browse/refs.rs)
 # for-each-ref with `%(signature:grade)` -- bookworm's git 2.39 rejects
 # that atom outright ("unknown field name"), trixie's 2.47 accepts it.
+# `openssh-client` for `ssh-keygen`: git shells out to it to make and check
+# the SSH signatures this instance puts on the commits it builds
+# (`git::signing`). Without it a merge fails outright rather than landing
+# unsigned, since `commit-tree -S` reports the missing helper as an error.
+#
+# `gnupg` for `gpg`: `gitquarry-gpg` shells out to the binary, so without it
+# an account can't even register a public key (`add_gpg_key` computes its
+# fingerprint first) and no commit or release-asset signature can be
+# verified. Nothing crashes — the verification result is simply always
+# "unverified", which is why this was easy to miss.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git ca-certificates && \
+    apt-get install -y --no-install-recommends git ca-certificates openssh-client gnupg && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/gitquarry /usr/local/bin/gitquarry

@@ -1,13 +1,15 @@
-//! `/_account/profile`: self-service avatar upload/remove — the "profile"
-//! section of the account settings sidebar (`crate::webui::account_settings_page`).
+//! `/_account/profile`: how the logged-in account presents itself — its
+//! avatar and the email addresses it answers to — the "profile" section of
+//! the account settings sidebar (`crate::webui::account_settings_page`).
 //! Also owns the public image serve (`GET /_avatar/<username>`), unrelated
 //! to the sidebar but keyed by username since it's a public URL embedded in
 //! every `<img>` `crate::webui::identicon::account_avatar` renders anywhere
 //! on the site, not just here.
 
+use super::login;
 use crate::webui::{
-    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    require_csrf, require_login,
+    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme, field,
+    layout, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -30,7 +32,7 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
     };
     let topnav = super::login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
-    let content = render_avatar_section(&user, &csrf_field(&headers), locale);
+    let content = render_profile_section(&user, &csrf_field(&headers), ctx.oidc.is_none(), None, locale);
     let body = account_settings_page("profile", content, locale).into_string();
     Ok(Html(layout(
         "profile",
@@ -44,26 +46,233 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
     .into_response())
 }
 
-/// The `/_account/profile` page's content — just the avatar, for now (the
-/// account-settings equivalent of what used to be a section embedded on the
-/// old combined preferences page).
-fn render_avatar_section(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
+/// The `/_account/profile` page: how this account presents itself — its
+/// avatar and the addresses it answers to. Emails moved here from
+/// `security`, which is now only about *signing in*: an address is an
+/// identity, not a credential, and grouping it with passwords and 2FA made
+/// that page a catch-all.
+///
+/// `email_self_service` is [`gitquarry_core::app::AppContext::oidc`] being
+/// unset — see `domain::user::set_own_email` for why the primary address is
+/// admin-managed wherever OIDC can resolve a login by it.
+fn render_profile_section(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    message: Option<crate::webui::Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    use crate::auth::i18n::security as t;
     html! {
-        h4 { (crate::auth::i18n::avatar::heading(locale)) }
-        p class="muted" { (crate::auth::i18n::avatar::description(locale)) }
-        p { (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 64)) }
-        form method="post" action="/_account/profile" enctype="multipart/form-data" {
-            (PreEscaped(csrf))
-            input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required;
-            button type="submit" { (crate::auth::i18n::avatar::upload_button(locale)) }
-        }
-        @if user.avatar_content_type.is_some() {
-            form method="post" action="/_account/profile/delete" {
+        (PreEscaped(crate::webui::render_flash(message, locale)))
+
+        (settings_section(&crate::auth::i18n::avatar::heading(locale), Some(&crate::auth::i18n::avatar::description(locale)), html! {
+            p { (crate::webui::identicon::account_avatar_sized(&user.username, user.avatar_content_type.as_deref(), 48)) }
+            form method="post" action="/_account/profile" enctype="multipart/form-data" {
                 (PreEscaped(csrf))
-                button type="submit" { (crate::auth::i18n::avatar::remove_button(locale)) }
+                input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required;
+                button type="submit" { (crate::auth::i18n::avatar::upload_button(locale)) }
+            }
+            @if user.avatar_content_type.is_some() {
+                form method="post" action="/_account/profile/delete" {
+                    (PreEscaped(csrf))
+                    button type="submit" { (crate::auth::i18n::avatar::remove_button(locale)) }
+                }
+            }
+        }))
+
+        (settings_section(&t::primary_email_heading(locale), Some(&t::primary_email_purpose(locale)), html! {
+            @if email_self_service {
+                form method="post" action=(EMAIL_ACTION_URL) {
+                    (PreEscaped(csrf))
+                    input type="hidden" name="email_action" value="set_email";
+                    (field(&t::primary_email_label(locale), Some(&t::primary_email_hint(locale)), html! {
+                        input type="email" name="email" size="40" value=(user.email.clone().unwrap_or_default()) autocomplete="email";
+                    }))
+                    button type="submit" { (t::save_email_button(locale)) }
+                }
+            } @else {
+                p {
+                    @match &user.email {
+                        Some(email) => code { (email) },
+                        None => em { (t::no_primary_email(locale)) },
+                    }
+                }
+                p class="muted" { (t::primary_email_admin_managed(locale)) }
+            }
+        }))
+
+        (settings_section(&t::secondary_emails_heading(locale), Some(&t::secondary_emails_purpose(locale)), html! {
+            (render_secondary_emails_table(user, csrf, locale))
+            form method="post" action=(EMAIL_ACTION_URL) {
+                (PreEscaped(csrf))
+                input type="hidden" name="email_action" value="add_secondary_email";
+                (field(&t::secondary_email_column_header(locale), None, html! {
+                    input type="email" name="secondary_email" size="40" placeholder=(t::add_secondary_email_placeholder(locale));
+                }))
+                button type="submit" { (t::add_secondary_email_button(locale)) }
+            }
+        }))
+    }
+}
+
+/// The secondary-emails table alone, wrapped in a stable `id` so a removal
+/// can swap just this fragment.
+fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
+    use crate::auth::i18n::security as t;
+    html! {
+        div id="secondary-emails-table" {
+            table class="list" {
+                tr { th { (t::secondary_email_column_header(locale)) } th {} }
+                @if user.secondary_emails.is_empty() {
+                    tr { td colspan="2" { em { (t::no_secondary_emails_yet_hint(locale)) } } }
+                }
+                @for email in &user.secondary_emails {
+                    tr {
+                        td { (email) }
+                        td {
+                            form method="post" action=(EMAIL_ACTION_URL) style="display:inline" data-async data-async-target="#secondary-emails-table" {
+                                (PreEscaped(csrf))
+                                input type="hidden" name="email_action" value="remove_secondary_email";
+                                input type="hidden" name="secondary_email" value=(email);
+                                button type="submit" { (t::delete_button(locale)) }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+const EMAIL_ACTION_URL: &str = "/_account/profile/emails";
+
+#[derive(serde::Deserialize)]
+pub(crate) struct EmailForm {
+    /// Wire name `email_action`, not `action` — same `[OverrideBuiltins]`
+    /// reason [`super::keys::KeysForm`] documents for its own rename.
+    #[serde(rename = "email_action")]
+    action: String,
+    #[serde(default)]
+    csrf: String,
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    secondary_email: String,
+}
+
+/// `POST /_account/profile/emails` — its own route rather than the section's
+/// own URL because that one takes a `multipart/form-data` avatar upload,
+/// and a plain urlencoded form can't share an extractor with it.
+pub(crate) async fn handler_emails_post(
+    State(ctx): State_,
+    headers: HeaderMap,
+    axum::extract::Form(form): axum::extract::Form<EmailForm>,
+) -> Result<Response, AppError> {
+    let me = match require_login(&ctx, &headers, "/_account/profile").await {
+        Ok(u) => u,
+        Err(resp) => return Ok(resp),
+    };
+    require_csrf(&headers, &form.csrf)?;
+    let locale = effective_locale(&ctx, &headers).await;
+    let topnav = login::topnav(&ctx, &headers).await;
+    let csrf = csrf_field(&headers);
+    let self_service = ctx.oidc.is_none();
+
+    macro_rules! fail {
+        ($msg:expr) => {
+            return Ok(axum::response::Html(layout(
+                "profile",
+                "",
+                &account_settings_page(
+                    "profile",
+                    render_profile_section(
+                        &me,
+                        &csrf,
+                        self_service,
+                        Some(crate::webui::Flash::Err(&$msg)),
+                        locale,
+                    ),
+                    locale,
+                )
+                .into_string(),
+                &topnav,
+                effective_theme(&ctx, &headers).await,
+                effective_density(&ctx, &headers).await,
+                locale,
+            ))
+            .into_response())
+        };
+    }
+
+    let cas = match form.action.as_str() {
+        "set_email" => {
+            match domain::user::set_own_email(
+                &ctx,
+                &me.username,
+                crate::webui::non_empty(form.email.clone()).as_deref(),
+                locale,
+            )
+            .await
+            {
+                Ok(cas) => cas,
+                Err(e) => fail!(e.to_string()),
+            }
+        }
+        "add_secondary_email" => {
+            match domain::user::add_secondary_email(&ctx, &me.username, form.secondary_email.trim(), locale).await {
+                Ok(cas) => cas,
+                Err(e) => fail!(e.to_string()),
+            }
+        }
+        "remove_secondary_email" => {
+            match domain::user::remove_secondary_email(&ctx, &me.username, form.secondary_email.trim(), locale).await {
+                Ok(cas) => cas,
+                Err(e) => fail!(e.to_string()),
+            }
+        }
+        other => fail!(gitquarry_i18n::shared::unknown_action(locale, other)),
+    };
+    if cas == gitquarry_core::storage::Cas::Conflict {
+        fail!(gitquarry_i18n::shared::cas_conflict(locale));
+    }
+
+    let Some(me) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username)
+        .await?
+        .0
+    else {
+        return Err(AppError::forbidden(anyhow::anyhow!(
+            "{}",
+            gitquarry_i18n::shared::account_no_longer_exists(locale)
+        )));
+    };
+    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_secondary_email" {
+        return Ok(
+            axum::response::Html(render_secondary_emails_table(&me, &csrf, locale).into_string()).into_response(),
+        );
+    }
+    let body = account_settings_page(
+        "profile",
+        render_profile_section(
+            &me,
+            &csrf,
+            self_service,
+            Some(crate::webui::Flash::Ok("saved.")),
+            locale,
+        ),
+        locale,
+    )
+    .into_string();
+    Ok(axum::response::Html(layout(
+        "profile",
+        "",
+        &body,
+        &topnav,
+        effective_theme(&ctx, &headers).await,
+        effective_density(&ctx, &headers).await,
+        locale,
+    ))
+    .into_response())
 }
 
 pub(crate) async fn handler_avatar_upload_post(

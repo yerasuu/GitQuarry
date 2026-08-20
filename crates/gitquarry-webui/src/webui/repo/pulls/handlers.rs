@@ -224,12 +224,22 @@ async fn async_pr_actions_response(
     let can_manage = super::can_manage(ctx, headers, repo_name, &pr.author).await?;
     let can_merge = super::can_merge(ctx, headers, repo_name).await?;
     let is_same_repo = pr.source_repo == resolved.uid;
+    // Re-probed rather than carried over from the page that rendered the
+    // form: this fragment is swapped in *after* an action landed, and the
+    // one that most obviously changes the answer is the merge itself.
+    let fast_forwardable = if pr.status == gitquarry_core::storage::pull_requests::PrStatus::Open && can_merge {
+        let mirror = ctx.open_mirror(resolved).await?;
+        domain::pull_request::fast_forwardable(ctx, resolved, &mirror.path, &pr).await?
+    } else {
+        false
+    };
     Ok(Html(
         super::render_pr_actions(
             &pr,
             can_manage,
             can_merge,
             is_same_repo,
+            fast_forwardable,
             repo_name,
             &csrf_field(headers),
             locale,
@@ -676,11 +686,12 @@ pub(crate) async fn handler_merge_post(
                 let _ = domain::repo::delete_branch(&resolved, &branch, locale).await;
             }
         }
-        domain::pull_request::MergeOutcome::Conflict(paths) => {
-            return Err(AppError::bad_request(anyhow::anyhow!(
-                "{}",
-                gitquarry_i18n::shared::pull_request_merge_conflict(locale, &paths.join(", "))
-            )));
+        domain::pull_request::MergeOutcome::Conflict(_) => {
+            // Back to the PR, which now renders the conflicting files and
+            // how to resolve them (`pulls::render_conflict_notice`) — the
+            // `400` this used to return put that same list on a page the
+            // reader had to leave, and losing it on reload.
+            return Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response());
         }
     }
     if headers.contains_key(ASYNC_HEADER) {

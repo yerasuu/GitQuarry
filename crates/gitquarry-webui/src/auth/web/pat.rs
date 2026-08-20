@@ -12,7 +12,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, copy_button, csrf_field, effective_density, effective_locale,
-    effective_theme, layout, render_flash, require_csrf, require_login,
+    effective_theme, field, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -208,7 +208,6 @@ fn render_pat_page(
     use crate::auth::i18n::pat as t;
     let action_url = "/_account/pat";
     html! {
-        p class="muted" { (t::page_intro(locale)) }
         (PreEscaped(render_flash(message, locale)))
 
         @if let Some(secret) = pending_secret {
@@ -216,54 +215,57 @@ fn render_pat_page(
             p { pre { (secret) } " " (copy_button(secret, locale)) }
         }
 
-        table class="list" {
-            tr {
-                th { (t::label_column_header(locale)) }
-                th { (t::scopes_column_header(locale)) }
-                th { (t::expires_column_header(locale)) }
-                th { (t::last_used_column_header(locale)) }
-                th {}
-            }
-            @if tokens.is_empty() {
-                tr { td colspan="5" { em { (t::no_tokens_yet_hint(locale)) } } }
-            }
-            @for token in tokens {
+        (settings_section(&t::tokens_heading(locale), Some(&t::page_intro(locale)), html! {
+            table class="list" {
                 tr {
-                    td { (token.label) }
-                    td {
-                        @for (i, (repo_uid, perm)) in token.scopes.iter().enumerate() {
-                            @if i > 0 { ", " }
-                            code { (repo_names.get(repo_uid).map(String::as_str).unwrap_or("?")) ":" (format!("{perm:?}").to_lowercase()) }
+                    th { (t::label_column_header(locale)) }
+                    th { (t::scopes_column_header(locale)) }
+                    th { (t::expires_column_header(locale)) }
+                    th { (t::last_used_column_header(locale)) }
+                    th {}
+                }
+                @if tokens.is_empty() {
+                    tr { td colspan="5" { em { (t::no_tokens_yet_hint(locale)) } } }
+                }
+                @for token in tokens {
+                    tr {
+                        td { (token.label) }
+                        td {
+                            @for (i, (repo_uid, perm)) in token.scopes.iter().enumerate() {
+                                @if i > 0 { ", " }
+                                code { (repo_names.get(repo_uid).map(String::as_str).unwrap_or("?")) ":" (format!("{perm:?}").to_lowercase()) }
+                            }
                         }
-                    }
-                    td { (token.expires_at.as_deref().unwrap_or("—")) }
-                    td { (token.last_used_at.as_deref().unwrap_or("—")) }
-                    td {
-                        form method="post" action=(&action_url) style="display:inline" {
-                            (PreEscaped(csrf))
-                            input type="hidden" name="action" value="revoke";
-                            input type="hidden" name="uid" value=(token.uid.as_str());
-                            button type="submit" { (t::revoke_button(locale)) }
+                        td { (token.expires_at.as_deref().unwrap_or("—")) }
+                        td { (token.last_used_at.as_deref().unwrap_or("—")) }
+                        td {
+                            form method="post" action=(&action_url) style="display:inline" {
+                                (PreEscaped(csrf))
+                                input type="hidden" name="action" value="revoke";
+                                input type="hidden" name="uid" value=(token.uid.as_str());
+                                button type="submit" { (t::revoke_button(locale)) }
+                            }
                         }
                     }
                 }
             }
-        }
+        }))
 
-        h4 { (t::create_heading(locale)) }
-        form method="post" action=(&action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="create";
-            p {
-                input name="label" size="30" placeholder=(t::label_placeholder(locale));
+        (settings_section(&t::create_heading(locale), None, html! {
+            form method="post" action=(&action_url) {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="create";
+                (field(&t::label_column_header(locale), None, html! {
+                    input name="label" size="30" placeholder=(t::label_placeholder(locale));
+                }))
+                (field(&t::scopes_column_header(locale), None, html! {
+                    input name="scopes" size="60" placeholder=(t::scopes_placeholder(locale));
+                }))
+                (field(&t::expires_column_header(locale), None, html! {
+                    input name="expires_days" type="number" min="1" size="6" placeholder=(t::expires_days_placeholder(locale));
+                }))
+                button type="submit" { (t::create_button(locale)) }
             }
-            p {
-                input name="scopes" size="60" placeholder=(t::scopes_placeholder(locale));
-            }
-            p {
-                input name="expires_days" type="number" min="1" size="6" placeholder=(t::expires_days_placeholder(locale));
-            }
-            button type="submit" { (t::create_button(locale)) }
-        }
+        }))
     }
 }

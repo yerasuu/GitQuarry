@@ -1,7 +1,7 @@
 //! Topics — cosmetic discovery/categorization labels.
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, non_empty, repo_link};
+use crate::webui::{AppError, non_empty, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -52,15 +52,13 @@ pub fn render_topics_form(
     let stored = config.topics.iter().cloned().collect::<Vec<_>>().join(", ");
     let current = retry.map_or(stored.as_str(), |f| f.topics.as_str());
     html! {
-        h4 { (gitquarry_i18n::web::repo_settings::topics_heading(locale)) }
-        p class="muted" {
-            (gitquarry_i18n::web::repo_settings::topics_prose(locale))
-        }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_topics";
-            input name="topics" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::topics_placeholder(locale));
-            button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
-        }
+        (settings_section(&gitquarry_i18n::web::repo_settings::topics_heading(locale), Some(&gitquarry_i18n::web::repo_settings::topics_prose(locale)), html! {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_topics";
+                input name="topics" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::topics_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
+            }
+        }))
     }
 }

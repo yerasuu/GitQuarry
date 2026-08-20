@@ -19,17 +19,35 @@ const DIFF: &str = concat!(
 
 /// A `View` with the fixture's repo/number, varying only what each test
 /// actually exercises.
-fn view<'a>(can_comment: bool, active: Option<&'a CommentAnchor>, headers: &'a HeaderMap) -> View<'a> {
-    view_as(can_comment, active, None, headers)
+fn view<'a>(
+    bodies: &'a [String],
+    can_comment: bool,
+    active: Option<&'a CommentAnchor>,
+    headers: &'a HeaderMap,
+) -> View<'a> {
+    view_as(bodies, can_comment, active, None, headers)
+}
+
+/// Comment bodies rendered the way the handler renders them, in the same
+/// order as the comments they belong to -- `render` indexes into this by
+/// position, so a test that got the order wrong would silently show the
+/// wrong body under a line.
+fn bodies(comments: &[(String, PrComment)]) -> Vec<String> {
+    comments
+        .iter()
+        .map(|(_, comment)| gitquarry_webui::webui::markdown::render(&comment.body))
+        .collect()
 }
 
 fn view_as<'a>(
+    bodies: &'a [String],
     can_comment: bool,
     active: Option<&'a CommentAnchor>,
     viewer: Option<&'a str>,
     headers: &'a HeaderMap,
 ) -> View<'a> {
     View {
+        comment_bodies: bodies,
         repo_name: "team/proj",
         number: 1,
         can_comment,
@@ -41,10 +59,10 @@ fn view_as<'a>(
     }
 }
 
-fn view_as_moderator<'a>(viewer: Option<&'a str>, headers: &'a HeaderMap) -> View<'a> {
+fn view_as_moderator<'a>(bodies: &'a [String], viewer: Option<&'a str>, headers: &'a HeaderMap) -> View<'a> {
     View {
         can_moderate: true,
-        ..view_as(false, None, viewer, headers)
+        ..view_as(bodies, false, None, viewer, headers)
     }
 }
 
@@ -126,7 +144,8 @@ fn a_context_line_anchors_to_the_new_side() {
 #[test]
 fn a_comment_lands_under_the_line_it_anchors_to() {
     let comments = vec![anchored("c1", "f.txt", DiffSide::Old, 4, "why remove this?")];
-    let out = render(DIFF, &comments, &view(false, None, &HeaderMap::new()));
+    let bodies = bodies(&comments);
+    let out = render(DIFF, &comments, &view(&bodies, false, None, &HeaderMap::new()));
     assert_eq!(out.placed, HashSet::from([0]));
 
     let html = out.markup.into_string();
@@ -142,7 +161,8 @@ fn an_anchor_that_no_longer_matches_a_line_is_left_unplaced() {
         anchored("c1", "f.txt", DiffSide::New, 999, "stale"),
         anchored("c2", "other.txt", DiffSide::New, 3, "wrong file"),
     ];
-    let out = render(DIFF, &comments, &view(false, None, &HeaderMap::new()));
+    let bodies = bodies(&comments);
+    let out = render(DIFF, &comments, &view(&bodies, false, None, &HeaderMap::new()));
     assert!(out.placed.is_empty());
     let html = out.markup.into_string();
     assert!(!html.contains("stale"));
@@ -151,7 +171,7 @@ fn an_anchor_that_no_longer_matches_a_line_is_left_unplaced() {
 
 #[test]
 fn each_hunk_gets_a_matching_toggle_and_row_group() {
-    let out = render(DIFF, &[], &view(false, None, &HeaderMap::new()));
+    let out = render(DIFF, &[], &view(&[], false, None, &HeaderMap::new()));
     let html = out.markup.into_string();
     assert!(html.contains(r#"data-toggle-rows="hunk-0""#), "{html}");
     assert!(html.contains(r#"aria-expanded="true""#), "{html}");
@@ -160,10 +180,10 @@ fn each_hunk_gets_a_matching_toggle_and_row_group() {
 
 #[test]
 fn the_per_line_link_only_shows_for_a_viewer_who_may_comment() {
-    let out = render(DIFF, &[], &view(false, None, &HeaderMap::new()));
+    let out = render(DIFF, &[], &view(&[], false, None, &HeaderMap::new()));
     assert!(!out.markup.into_string().contains("anchor_line"));
 
-    let out = render(DIFF, &[], &view(true, None, &HeaderMap::new()));
+    let out = render(DIFF, &[], &view(&[], true, None, &HeaderMap::new()));
     let html = out.markup.into_string();
     assert!(html.contains("anchor_path=f.txt"), "{html}");
     assert!(html.contains("anchor_side=old&amp;anchor_line=4"), "{html}");
@@ -176,7 +196,7 @@ fn the_form_expands_only_on_the_active_anchor() {
         side: DiffSide::New,
         line: 4,
     };
-    let out = render(DIFF, &[], &view(true, Some(&active), &HeaderMap::new()));
+    let out = render(DIFF, &[], &view(&[], true, Some(&active), &HeaderMap::new()));
     let html = out.markup.into_string();
     assert_eq!(html.matches(r#"action="/_pulls/comment""#).count(), 1);
     // The form's hidden fields carry the anchor back to the handler.
@@ -188,9 +208,13 @@ fn the_form_expands_only_on_the_active_anchor() {
 fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
     let comments = vec![anchored("c1", "f.txt", DiffSide::Old, 4, "why remove this?")];
 
-    let as_someone_else = render(DIFF, &comments, &view_as(false, None, Some("alice"), &HeaderMap::new()))
-        .markup
-        .into_string();
+    let as_someone_else = render(
+        DIFF,
+        &comments,
+        &view_as(&bodies(&comments), false, None, Some("alice"), &HeaderMap::new()),
+    )
+    .markup
+    .into_string();
     assert!(
         !as_someone_else.contains(r#"action="/_pulls/comment/edit""#),
         "{as_someone_else}"
@@ -200,9 +224,13 @@ fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
         "{as_someone_else}"
     );
 
-    let as_the_author = render(DIFF, &comments, &view_as(false, None, Some("bob"), &HeaderMap::new()))
-        .markup
-        .into_string();
+    let as_the_author = render(
+        DIFF,
+        &comments,
+        &view_as(&bodies(&comments), false, None, Some("bob"), &HeaderMap::new()),
+    )
+    .markup
+    .into_string();
     assert!(
         as_the_author.contains(r#"action="/_pulls/comment/edit""#),
         "{as_the_author}"
@@ -217,9 +245,13 @@ fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
 fn a_moderator_can_delete_someone_elses_placed_comment_but_not_edit_it() {
     let comments = vec![anchored("c1", "f.txt", DiffSide::Old, 4, "why remove this?")];
 
-    let as_moderator = render(DIFF, &comments, &view_as_moderator(Some("alice"), &HeaderMap::new()))
-        .markup
-        .into_string();
+    let as_moderator = render(
+        DIFF,
+        &comments,
+        &view_as_moderator(&bodies(&comments), Some("alice"), &HeaderMap::new()),
+    )
+    .markup
+    .into_string();
     assert!(
         !as_moderator.contains(r#"action="/_pulls/comment/edit""#),
         "{as_moderator}"

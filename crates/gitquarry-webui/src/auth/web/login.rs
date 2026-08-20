@@ -895,7 +895,7 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
                  <a href=\"/_account/profile\">{}</a>\
                  <form method=\"post\" action=\"/_logout\" class=\"dropdown-form\">{}<button type=\"submit\">{}</button></form>\
                  </div></details>",
-                crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 18)
+                crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref())
                     .into_string(),
                 esc(&user.username),
                 gitquarry_i18n::web::chrome::profile_tab(locale),

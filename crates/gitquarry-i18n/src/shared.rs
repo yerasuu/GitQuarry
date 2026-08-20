@@ -117,6 +117,16 @@ msg!(
 );
 
 msg!(
+    /// `auth::domain::user::reject_if_claimed_as_secondary`: the address is
+    /// already somebody's additional email, so claiming it as a primary
+    /// would put the same address in two indexes at once.
+    email_claimed_as_secondary() {
+        Locale::Es => "esa direccion ya figura como correo adicional de una cuenta; quitala de alli primero",
+        Locale::En => "that address is already an account's additional email; remove it there first",
+    }
+);
+
+msg!(
     /// `auth::domain::user::add_secondary_email`: the email is already
     /// claimed by a different user, either as their primary `email` or one
     /// of their own `secondary_emails`.
@@ -495,6 +505,16 @@ msg!(
     account_is_not_admin() {
         Locale::Es => "tu usuario no es admin",
         Locale::En => "your account isn't an admin",
+    }
+);
+
+msg!(
+    /// `auth::domain::user::set_own_email` refusing while OIDC is
+    /// configured — the address is a login identity there, so only an admin
+    /// assigns it.
+    primary_email_is_admin_managed() {
+        Locale::Es => "con OIDC configurado, el correo principal solo lo puede cambiar un admin",
+        Locale::En => "with OIDC configured, only an admin can change the primary email",
     }
 );
 
@@ -965,6 +985,15 @@ msg!(
 );
 
 msg!(
+    /// `domain::pull_request::merge` refusing a fast-forward: the target
+    /// branch moved on, so no pointer move expresses the merge any more.
+    pull_request_not_fast_forwardable(branch: &str) {
+        Locale::Es => "no se puede avanzar {branch} sin crear un commit: la rama ha divergido, usa merge, squash o rebase",
+        Locale::En => "can't fast-forward {branch} without creating a commit: the branch has diverged, use merge, squash or rebase",
+    }
+);
+
+msg!(
     /// `domain::pull_request::transition`: the PR's current status doesn't
     /// allow the requested move (e.g. reopening a merged PR, closing an
     /// already-closed one).
@@ -982,15 +1011,6 @@ msg!(
     source_repo_not_a_fork() {
         Locale::Es => "el repo origen no es un fork de este repo",
         Locale::En => "the source repo isn't a fork of this repo",
-    }
-);
-
-msg!(
-    /// `domain::pull_request::merge`'s `MergeTreeOutcome::Conflicted` case:
-    /// `paths` is the conflicting files, already comma-joined by the caller.
-    pull_request_merge_conflict(paths: &str) {
-        Locale::Es => "no se puede fusionar automaticamente, conflictos en: {paths}",
-        Locale::En => "can't auto-merge, conflicts in: {paths}",
     }
 );
 
@@ -1056,25 +1076,6 @@ msg!(
 );
 
 msg!(
-    /// No `IssueMeta` exists for `number` in this repo — same shape as
-    /// `pull_request_not_found`, confirmed duplicated across
-    /// `domain::issue::{get, transition, add_comment, edit}`.
-    issue_not_found(number: u64) {
-        Locale::Es => "no existe el issue #{number}",
-        Locale::En => "no issue #{number} exists",
-    }
-);
-
-msg!(
-    /// `domain::issue::transition`: the issue's current status doesn't
-    /// allow the requested move (e.g. reopening an already-open issue).
-    issue_wrong_status() {
-        Locale::Es => "este issue no esta en un estado valido para esa accion",
-        Locale::En => "this issue isn't in a valid status for that action",
-    }
-);
-
-msg!(
     /// `domain::issue::edit`: a submitted label name isn't in the repo's
     /// own `RepoConfig.labels` vocabulary.
     unknown_label(name: &str) {
@@ -1089,47 +1090,6 @@ msg!(
     unknown_assignee(username: &str) {
         Locale::Es => "no existe el usuario \"{username}\"",
         Locale::En => "no such user \"{username}\"",
-    }
-);
-
-msg!(
-    /// `domain::board::{rename_column, remove_column, add_card, move_card}`:
-    /// the column index doesn't name an existing column — most likely a
-    /// stale form submitted after someone else already removed it.
-    board_column_not_found() {
-        Locale::Es => "esa columna ya no existe",
-        Locale::En => "that column no longer exists",
-    }
-);
-
-msg!(
-    /// `domain::board::remove_column`: refuses to drop a column that still
-    /// has cards on it — a `Note` card's text has no copy anywhere else, so
-    /// silently discarding it on column removal would be real data loss,
-    /// not just an organizational change. Move or remove every card first.
-    board_column_not_empty() {
-        Locale::Es => "mueve o borra las tarjetas de esta columna antes de borrarla",
-        Locale::En => "move or remove this column's cards before deleting it",
-    }
-);
-
-msg!(
-    /// `domain::board::{move_card, remove_card}`: the card id doesn't name
-    /// an existing card — most likely a stale form submitted after someone
-    /// else already moved/removed it.
-    board_card_not_found() {
-        Locale::Es => "esa tarjeta ya no existe",
-        Locale::En => "that card no longer exists",
-    }
-);
-
-msg!(
-    /// `domain::board::add_card`: an `Issue`/`PullRequest` card must point
-    /// at a real, existing issue/PR in this same repo — never a dangling
-    /// number a card would otherwise render as a broken link forever.
-    board_card_target_not_found() {
-        Locale::Es => "ese issue o pull request no existe en este repo",
-        Locale::En => "that issue or pull request doesn't exist in this repo",
     }
 );
 

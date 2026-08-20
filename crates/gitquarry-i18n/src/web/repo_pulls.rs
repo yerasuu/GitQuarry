@@ -86,3 +86,24 @@ msg!(own_pull_request_review_hint() {
     Locale::Es => "es tu pull request: solo podes dejar una revision neutral",
     Locale::En => "this is your own pull request: you can only leave a neutral review",
 });
+
+// Conflict notice on an open PR's page — the file list used to exist only
+// as a `400` thrown by the merge handler.
+msg!(conflicts_heading() { Locale::Es => "conflictos con la rama destino", Locale::En => "conflicts with the target branch" });
+msg!(conflicts_intro(target: &str) {
+    Locale::Es => "Esta rama no se puede fusionar automaticamente en {target}. Los siguientes ficheros cambian en ambos lados:",
+    Locale::En => "This branch can't be merged into {target} automatically. These files changed on both sides:",
+});
+msg!(conflicts_howto_summary() {
+    Locale::Es => "como resolverlo en local",
+    Locale::En => "how to resolve it locally",
+});
+
+msg!(merge_strategy_fast_forward_option() {
+    Locale::Es => "avanzar sin commit (fast-forward)",
+    Locale::En => "fast-forward (no new commit)",
+});
+msg!(merge_strategy_fast_forward_unavailable() {
+    Locale::Es => "- no disponible, la rama ha divergido",
+    Locale::En => "- unavailable, the branch has diverged",
+});

@@ -22,13 +22,12 @@ use s3db::Collection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// [`PrStatus`], [`PullRequestMeta`], [`PrComment`], [`PrDetail`] now live
-/// in `gitquarry-wire` — they cross the (future) core/federation IPC
-/// boundary, so both sides need the identical type. Re-exported here so
-/// existing call sites (`storage::pull_requests::PullRequestMeta`, ...)
-/// don't need to change.
+/// [`PrStatus`], [`PullRequestMeta`], [`PrComment`] and friends live in
+/// `gitquarry-wire`, the crate for types more than one crate needs to
+/// agree on byte-for-byte. Re-exported here so existing call sites
+/// (`storage::pull_requests::PullRequestMeta`, ...) don't need to change.
 pub use gitquarry_wire::{
-    CommentAnchor, DiffSide, MergeStrategy, PrComment, PrDetail, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
+    CommentAnchor, DiffSide, MergeStrategy, PrComment, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
 };
 
 #[derive(Debug, Default, Serialize, Deserialize)]

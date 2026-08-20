@@ -743,8 +743,13 @@ async fn diff_returns_the_commits_and_the_diff_between_branches() {
     assert!(d.diff.contains("world"), "{}", d.diff);
 }
 
+/// A cross-fork pull request whose fork has no such branch — the fork was
+/// deleted, or never pushed it. Renders as an empty diff rather than
+/// failing: this is a read view, and a 500 there hides the pull request's
+/// own title, description and discussion behind a data problem the reader
+/// can do nothing about.
 #[tokio::test]
-async fn diff_errs_when_the_forks_branch_doesnt_exist() {
+async fn diff_is_empty_when_the_forks_branch_doesnt_exist() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -759,7 +764,9 @@ async fn diff_errs_when_the_forks_branch_doesnt_exist() {
         target_branch: "main".to_string(),
         ..Default::default()
     };
-    assert!(diff(&ctx, &target, &git_dir, &pr).await.is_err());
+    let d = diff(&ctx, &target, &git_dir, &pr).await.unwrap();
+    assert!(d.diff.is_empty());
+    assert!(d.commits.is_empty());
 }
 
 #[tokio::test]
@@ -906,6 +913,317 @@ async fn init_target_mirror(ctx: &AppContext, target: &ResolvedRepo, conflicting
         .insert("refs/heads/feature".to_string(), feature_sha.clone());
     target.remote.put_manifest(&manifest, None).await.unwrap();
     (main_sha, feature_sha)
+}
+
+/// A merged pull request whose source branch was deleted afterwards — the
+/// merge form's own "delete branch" checkbox does exactly that — must still
+/// render. `diff` resolves the head by *branch name* for a same-repo PR, so
+/// once the branch is gone every `git diff base...head` behind the pull
+/// request page failed, and the page 500'd.
+#[tokio::test]
+async fn diff_survives_a_source_branch_deleted_after_the_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap();
+
+    // What `delete_branch=1` on the merge form does.
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let status = std::process::Command::new("git")
+        .current_dir(&git_dir)
+        .args(["branch", "-D", "feature"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let (mut manifest, etag) = target.remote.get_manifest().await.unwrap();
+    manifest.refs.remove("refs/heads/feature");
+    target.remote.put_manifest(&manifest, etag.as_deref()).await.unwrap();
+
+    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let d = diff(&ctx, &target, &git_dir, &pr)
+        .await
+        .expect("a merged pull request must still render after its branch is deleted");
+    // The merge commit preserves what the pull request landed, so the diff
+    // is still the real thing rather than a blank stand-in.
+    assert!(d.diff.contains("f.txt"), "{}", d.diff);
+}
+
+/// The last-resort case: closed *without* merging, and the branch deleted
+/// afterwards. Nothing survives to reconstruct a diff from, so the page
+/// renders with an empty one rather than failing — a closed pull request's
+/// title, description and discussion are still worth reading.
+#[tokio::test]
+async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    close(&ctx, &target, 1, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&git_dir)
+            .args(["branch", "-D", "feature"])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let d = diff(&ctx, &target, &git_dir, &pr).await.unwrap();
+    assert!(d.diff.is_empty());
+    assert!(d.commits.is_empty());
+}
+
+/// Fast-forward lands the author's own commits untouched: no new object is
+/// created, so the target branch ends up pointing at the exact sha the
+/// source branch already had. That is the whole reason the strategy exists
+/// — a commit the server builds can only ever carry the server's own
+/// signature, never the author's.
+#[tokio::test]
+async fn fast_forward_moves_the_branch_without_creating_a_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    let (_main_sha, feature_sha) = init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let outcome = merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::FastForward,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap();
+
+    match outcome {
+        MergeOutcome::Merged(sha) => assert_eq!(sha, feature_sha, "a new commit was created"),
+        MergeOutcome::Conflict(paths) => panic!("fast-forward can't conflict, got: {paths:?}"),
+    }
+    let (manifest, _etag) = target.remote.get_manifest().await.unwrap();
+    assert_eq!(manifest.refs.get("refs/heads/main"), Some(&feature_sha));
+}
+
+/// Once the branches diverge there is no pointer move that expresses the
+/// merge, so this refuses with a message naming the other three strategies
+/// rather than quietly building the commit it promised not to.
+#[tokio::test]
+async fn fast_forward_refuses_a_diverged_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    // The conflicting fixture's two branches each carry their own commit,
+    // so neither is an ancestor of the other.
+    init_target_mirror(&ctx, &target, true).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let err = match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::FastForward,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a diverged branch must not fast-forward"),
+    };
+    assert!(err.contains("diverged"), "{err}");
+}
+
+/// The probe the merge form disables its own option from.
+#[tokio::test]
+async fn fast_forwardable_tracks_whether_the_branches_diverged() {
+    for (conflicting, expected) in [(false, true), (true, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let target = test_target(dir.path());
+        init_target_mirror(&ctx, &target, conflicting).await;
+        let new = NewPullRequest {
+            source_repo: &target.uid,
+            source_branch: "feature",
+            target_branch: "main",
+            title: "t",
+            description: "d",
+            author: "alice",
+        };
+        create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+        let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+        let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+
+        let can = fast_forwardable(&ctx, &target, &git_dir, &pr).await.unwrap();
+        assert_eq!(can, expected, "conflicting={conflicting}");
+    }
+}
+
+/// The merge commit the server builds carries the *instance's* signature —
+/// never the merger's, whose private key the bucket has no business
+/// holding. The author stays whoever merged; the committer becomes the
+/// instance, because git matches an SSH signature against the
+/// allowed-signers principal for the committer address.
+#[tokio::test]
+async fn a_merge_commit_is_signed_by_the_instance_and_authored_by_the_merger() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let sha = match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap()
+    {
+        MergeOutcome::Merged(sha) => sha,
+        MergeOutcome::Conflict(paths) => panic!("expected a clean merge, got {paths:?}"),
+    };
+
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let raw = String::from_utf8(
+        std::process::Command::new("git")
+            .env("GIT_DIR", &git_dir)
+            .args(["cat-file", "commit", &sha])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+
+    assert!(raw.contains("author bob "), "{raw}");
+    assert!(
+        raw.contains(&format!(
+            "committer {} <{}>",
+            gitquarry_core::git::signing::INSTANCE_NAME,
+            gitquarry_core::git::signing::INSTANCE_EMAIL
+        )),
+        "{raw}"
+    );
+    assert!(raw.contains("-----BEGIN SSH SIGNATURE-----"), "{raw}");
+}
+
+/// End to end, the part every earlier piece exists for: git itself grades
+/// the merge commit's signature as good (which only happens once the mirror
+/// carries this instance's allowed-signers file), and the verification path
+/// reports *who* — the instance, not the account that pressed merge.
+#[tokio::test]
+async fn a_merge_commit_reads_back_as_signed_by_the_instance() {
+    use gitquarry_core::domain::commit_signature::{CommitSigner, verified_signer};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    let sha = match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap()
+    {
+        MergeOutcome::Merged(sha) => sha,
+        MergeOutcome::Conflict(paths) => panic!("expected a clean merge, got {paths:?}"),
+    };
+
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let info = gitquarry_core::git::browse::log(&git_dir, &sha, 1, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        info.signature_status, 'G',
+        "git didn't accept the instance's own signature — is the mirror's allowed-signers file missing?"
+    );
+
+    let signer = verified_signer(
+        &ctx.backend(),
+        &ctx.cipher,
+        &git_dir,
+        &sha,
+        info.signature_status,
+        &info.author_email,
+    )
+    .await
+    .unwrap();
+    assert_eq!(signer, Some(CommitSigner::Instance));
 }
 
 #[tokio::test]
@@ -1194,6 +1512,55 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
         .unwrap(),
         MergeOutcome::Merged(_)
     ));
+}
+
+/// The read-only probe the pull-request page renders its conflict notice
+/// from: same verdict `merge` reaches, without writing anything or needing
+/// merge permission — the reader seeing "this won't merge" is usually not
+/// the person who can merge it.
+#[tokio::test]
+async fn conflicts_reports_the_same_paths_a_merge_attempt_would() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, true).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let mirror = ctx.open_mirror(&target).await.unwrap();
+
+    let paths = conflicts(&ctx, &target, &mirror.path, &pr).await.unwrap();
+    assert_eq!(paths, Some(vec!["f.txt".to_string()]));
+}
+
+/// A pull request that merges cleanly reports no conflicts at all, so the
+/// notice never shows on a healthy PR.
+#[tokio::test]
+async fn conflicts_is_none_when_the_branches_merge_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let mirror = ctx.open_mirror(&target).await.unwrap();
+
+    assert_eq!(conflicts(&ctx, &target, &mirror.path, &pr).await.unwrap(), None);
 }
 
 #[tokio::test]

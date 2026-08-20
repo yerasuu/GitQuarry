@@ -4,7 +4,7 @@
 //! paths a PR touches (see that function's own doc comment).
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, non_empty, repo_link};
+use crate::webui::{AppError, non_empty, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -54,13 +54,13 @@ pub fn render_required_reviewers_form(
     let stored = config.required_reviewers.iter().cloned().collect::<Vec<_>>().join(", ");
     let current = retry.map_or(stored.as_str(), |f| f.required_reviewers.as_str());
     html! {
-        h4 { (t::required_reviewers_heading(locale)) }
-        p class="muted" { (t::required_reviewers_prose(locale)) }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_required_reviewers";
-            input name="required_reviewers" value=(current) size="60" placeholder=(t::required_reviewers_placeholder(locale));
-            button type="submit" { (t::save_button(locale)) }
-        }
+        (settings_section(&t::required_reviewers_heading(locale), Some(&t::required_reviewers_prose(locale)), html! {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_required_reviewers";
+                input name="required_reviewers" value=(current) size="60" placeholder=(t::required_reviewers_placeholder(locale));
+                button type="submit" { (t::save_button(locale)) }
+            }
+        }))
     }
 }

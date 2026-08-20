@@ -15,16 +15,19 @@ use sha2::{Digest, Sha256};
 /// `seed` is typically a username — same seed always produces the same
 /// icon, different seeds almost always differ (a 5x5 symmetric grid has
 /// 2^15 possible patterns, plenty for visually distinguishing usernames in
-/// a list, not for cryptographic uniqueness). `size_px` is the rendered
-/// square's side length; callers pick it per context (small in a list row,
-/// larger on a profile page) rather than this module assuming one.
+/// a list, not for cryptographic uniqueness). No size here: the rendered
+/// square takes its side length from the surrounding text (`.avatar` in
+/// `base.css`), so it keeps its proportion to whatever name it sits beside
+/// under both densities and all three text sizes. The one call site that
+/// needs a fixed pixel size asks for it explicitly, via
+/// [`account_avatar_sized`].
 #[cfg(any(test, feature = "test-util"))]
-pub fn identicon(seed: &str, size_px: u32) -> Markup {
-    identicon_impl(seed, size_px)
+pub fn identicon(seed: &str) -> Markup {
+    identicon_impl(seed, None)
 }
 #[cfg(not(any(test, feature = "test-util")))]
-pub(crate) fn identicon(seed: &str, size_px: u32) -> Markup {
-    identicon_impl(seed, size_px)
+pub(crate) fn identicon(seed: &str) -> Markup {
+    identicon_impl(seed, None)
 }
 
 /// `avatar_content_type`: the account's `User::avatar_content_type` if
@@ -35,17 +38,35 @@ pub(crate) fn identicon(seed: &str, size_px: u32) -> Markup {
 /// calling [`identicon`] directly rather than paying for a lookup just for
 /// this — the identicon fallback is deliberately cheap enough that skipping
 /// an avatar in those spots isn't a correctness issue, only a cosmetic one.
-pub(crate) fn account_avatar(username: &str, avatar_content_type: Option<&str>, size_px: u32) -> Markup {
+pub(crate) fn account_avatar(username: &str, avatar_content_type: Option<&str>) -> Markup {
+    account_avatar_impl(username, avatar_content_type, None)
+}
+
+/// [`account_avatar`] at one explicit pixel size, for the single place an
+/// avatar isn't sitting beside a name: the account settings page, where it
+/// is the subject of the page rather than an ornament on a row. Everywhere
+/// else takes the `em`-relative default, so the avatar keeps its proportion
+/// to the name it belongs to under both densities and all three text sizes.
+pub(crate) fn account_avatar_sized(username: &str, avatar_content_type: Option<&str>, size_px: u32) -> Markup {
+    account_avatar_impl(username, avatar_content_type, Some(size_px))
+}
+
+fn account_avatar_impl(username: &str, avatar_content_type: Option<&str>, size_px: Option<u32>) -> Markup {
+    let class = if size_px.is_some() {
+        "avatar avatar-fixed"
+    } else {
+        "avatar"
+    };
     match avatar_content_type {
         Some(_) => html! {
-            img src=(format!("/_avatar/{}", crate::webui::url_encode(username))) width=(size_px) height=(size_px)
-                class="avatar" alt="" style="border-radius:50%;object-fit:cover;";
+            img src=(format!("/_avatar/{}", crate::webui::url_encode(username)))
+                width=[size_px] height=[size_px] class=(class) alt="";
         },
         None => identicon_impl(username, size_px),
     }
 }
 
-fn identicon_impl(seed: &str, size_px: u32) -> Markup {
+fn identicon_impl(seed: &str, size_px: Option<u32>) -> Markup {
     let digest = Sha256::digest(seed.as_bytes());
     let hue = u32::from(digest[0]) * 360 / 256;
     // Only the left 3 columns are hashed; columns 3-4 mirror columns 1-0,
@@ -65,8 +86,9 @@ fn identicon_impl(seed: &str, size_px: u32) -> Markup {
         }
     }
     html! {
-        svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 5" width=(size_px) height=(size_px)
-            class="avatar" aria-hidden="true" focusable="false" {
+        svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 5" width=[size_px] height=[size_px]
+            class=(if size_px.is_some() { "avatar avatar-fixed" } else { "avatar" })
+            aria-hidden="true" focusable="false" {
             rect x="0" y="0" width="5" height="5" fill="var(--surface)";
             @for (row, col) in cells {
                 rect x=(col) y=(row) width="1" height="1" fill=(format!("hsl({hue} 55% 45%)"));

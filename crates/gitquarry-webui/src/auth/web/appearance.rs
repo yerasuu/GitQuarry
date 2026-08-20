@@ -14,7 +14,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, TextSize, account_settings_page, csrf_field, effective_density, effective_locale,
-    effective_theme, layout, render_flash, require_csrf, require_login,
+    effective_theme, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -153,43 +153,43 @@ pub fn render_appearance_page(
     html! {
         (PreEscaped(render_flash(message, locale)))
 
-        h4 { (crate::auth::i18n::appearance::text_size_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::appearance::text_size_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="set_text_size_pref";
-            select name="text_size" {
-                option value="sm" selected[current == Some(TextSize::Sm)] { (crate::auth::i18n::appearance::text_size_small(locale)) }
-                option value="md" selected[current == Some(TextSize::Md)] { (crate::auth::i18n::appearance::text_size_medium(locale)) }
-                option value="lg" selected[current == Some(TextSize::Lg)] { (crate::auth::i18n::appearance::text_size_large(locale)) }
+        (settings_section(&crate::auth::i18n::appearance::text_size_heading(locale), Some(&crate::auth::i18n::appearance::text_size_description(locale)), html! {
+            form method="post" action=(action_url) {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_text_size_pref";
+                select name="text_size" {
+                    option value="sm" selected[current == Some(TextSize::Sm)] { (crate::auth::i18n::appearance::text_size_small(locale)) }
+                    option value="md" selected[current == Some(TextSize::Md)] { (crate::auth::i18n::appearance::text_size_medium(locale)) }
+                    option value="lg" selected[current == Some(TextSize::Lg)] { (crate::auth::i18n::appearance::text_size_large(locale)) }
+                }
+                button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
 
-        h4 { (crate::auth::i18n::appearance::theme_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::appearance::theme_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="set_theme_pref";
-            select name="theme" {
-                option value="" selected[user.theme_default.is_empty()] { (crate::auth::i18n::appearance::theme_automatic(locale)) }
-                option value="light" selected[user.theme_default == "light"] { (crate::auth::i18n::appearance::theme_light(locale)) }
-                option value="dark" selected[user.theme_default == "dark"] { (crate::auth::i18n::appearance::theme_dark(locale)) }
+        (settings_section(&crate::auth::i18n::appearance::theme_heading(locale), Some(&crate::auth::i18n::appearance::theme_description(locale)), html! {
+            form method="post" action=(action_url) {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_theme_pref";
+                select name="theme" {
+                    option value="" selected[user.theme_default.is_empty()] { (crate::auth::i18n::appearance::theme_automatic(locale)) }
+                    option value="light" selected[user.theme_default == "light"] { (crate::auth::i18n::appearance::theme_light(locale)) }
+                    option value="dark" selected[user.theme_default == "dark"] { (crate::auth::i18n::appearance::theme_dark(locale)) }
+                }
+                button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
 
-        h4 { (crate::auth::i18n::appearance::density_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::appearance::density_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="set_density_pref";
-            select name="density" {
-                option value="" selected[user.density_default.is_empty()] { (crate::auth::i18n::appearance::density_default_label(locale)) }
-                option value="dense" selected[user.density_default == "dense"] { (crate::auth::i18n::appearance::density_dense_label(locale)) }
-                option value="airy" selected[user.density_default == "airy"] { (crate::auth::i18n::appearance::density_airy_label(locale)) }
+        (settings_section(&crate::auth::i18n::appearance::density_heading(locale), Some(&crate::auth::i18n::appearance::density_description(locale)), html! {
+            form method="post" action=(action_url) {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_density_pref";
+                select name="density" {
+                    option value="" selected[user.density_default.is_empty()] { (crate::auth::i18n::appearance::density_default_label(locale)) }
+                    option value="dense" selected[user.density_default == "dense"] { (crate::auth::i18n::appearance::density_dense_label(locale)) }
+                    option value="airy" selected[user.density_default == "airy"] { (crate::auth::i18n::appearance::density_airy_label(locale)) }
+                }
+                button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
     }
 }

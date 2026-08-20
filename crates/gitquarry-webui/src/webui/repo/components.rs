@@ -8,6 +8,7 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::{access, entities::User};
 use gitquarry_core::domain;
+use gitquarry_core::domain::commit_signature::CommitSigner;
 use gitquarry_core::git::browse::{CommitInfo, RefInfo};
 use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
@@ -35,7 +36,32 @@ use tokio::task::JoinSet;
 /// email fallback. [`author_cell`] uses this to tell "verified" from
 /// "unverified" apart in the signature indicator, not just to pick an
 /// avatar.
-pub(crate) type AvatarMatches = HashMap<String, (User, bool)>;
+#[derive(Default)]
+pub(crate) struct AvatarMatches {
+    by_sha: HashMap<String, (User, bool)>,
+    /// Shas this instance signed itself. Not in `by_sha` because the
+    /// instance is not an account: it has no avatar to show and no profile
+    /// to link, only a badge saying the commit was built here.
+    instance_signed: std::collections::HashSet<String>,
+}
+
+impl AvatarMatches {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn get(&self, sha: &str) -> Option<&(User, bool)> {
+        self.by_sha.get(sha)
+    }
+
+    fn insert(&mut self, sha: String, value: (User, bool)) {
+        self.by_sha.insert(sha, value);
+    }
+
+    pub(crate) fn is_instance_signed(&self, sha: &str) -> bool {
+        self.instance_signed.contains(sha)
+    }
+}
 
 pub(crate) async fn commit_avatars(ctx: &AppContext, git_dir: &Path, commits: &[CommitInfo]) -> AvatarMatches {
     avatars_for(
@@ -92,14 +118,28 @@ async fn avatars_for(
         });
     }
     let mut gpg_username_by_sha: HashMap<String, String> = HashMap::new();
+    let mut instance_signed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut fallback_email_by_sha: HashMap<String, String> = HashMap::new();
     while let Some(result) = set.join_next().await {
         let Ok((sha, author_email, signer)) = result else {
             continue;
         };
         match signer {
-            Some(username) => {
+            Some(CommitSigner::User(username)) => {
                 gpg_username_by_sha.insert(sha, username);
+            }
+            Some(CommitSigner::Instance) => {
+                instance_signed.insert(sha.clone());
+                // The *author* is still the account that asked for the
+                // merge, and their avatar belongs on the row like on any
+                // other commit. An instance signature says who built the
+                // commit, never who wrote it, so it has no business
+                // erasing the author — which is exactly what leaving this
+                // arm without an email fallback did: the row dropped to a
+                // generated identicon.
+                if !author_email.is_empty() {
+                    fallback_email_by_sha.insert(sha, author_email);
+                }
             }
             None if !author_email.is_empty() => {
                 fallback_email_by_sha.insert(sha, author_email);
@@ -128,6 +168,7 @@ async fn avatars_for(
         access::avatar_by_commit_email(&backend, &cipher, fallback_email_by_sha.values().cloned()).await;
 
     let mut out = AvatarMatches::new();
+    out.instance_signed = instance_signed;
     for (sha, username) in gpg_username_by_sha {
         if let Some(user) = users_by_username.get(&username) {
             out.insert(sha, (user.clone(), true));
@@ -154,11 +195,15 @@ async fn avatars_for(
 fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &AvatarMatches) -> Markup {
     html! {
         @match avatars.get(sha) {
-            Some((user, _)) => (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 16)),
-            None => (crate::webui::identicon::identicon(author_name, 16)),
+            Some((user, _)) => (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref())),
+            None => (crate::webui::identicon::identicon(author_name)),
         }
         " " (author_name)
-        (signature_indicator(signature_status, avatars.get(sha).filter(|(_, verified)| *verified).map(|(u, _)| u.username.as_str())))
+        (signature_indicator(
+            signature_status,
+            avatars.get(sha).filter(|(_, verified)| *verified).map(|(u, _)| u.username.as_str()),
+            avatars.is_instance_signed(sha),
+        ))
     }
 }
 
@@ -170,10 +215,19 @@ fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &A
 /// gitquarry account signed it, if any. Empty for `'N'` (unsigned): no
 /// badge at all, same as the single-commit page's own
 /// `webui::repo::commit::signature_badge` treats it.
-fn signature_indicator(signature_status: char, verified_by: Option<&str>) -> Markup {
+fn signature_indicator(signature_status: char, verified_by: Option<&str>, instance_signed: bool) -> Markup {
     html! {
         @if let Some(username) = verified_by {
             " " span class="badge ok" title=(format!("verified signature ({username})")) { "verified" }
+        } @else if instance_signed {
+            // Same word as an account's own signature, a different colour:
+            // both are genuinely verified signatures, and a row this narrow
+            // is the wrong place to spell out whose — the commit's own page
+            // says that in full. The `title` carries it regardless, so the
+            // distinction never rests on colour alone, which would be lost
+            // on a screen reader and on anyone who can't tell the two hues
+            // apart.
+            " " span class="badge accent" title="verified signature (built and signed by this instance)" { "verified" }
         } @else {
             @match signature_status {
                 'B' | 'R' | 'Y' => { " " span class="badge danger" title="signature check failed" { "invalid" } }
@@ -547,62 +601,28 @@ pub(super) fn side_by_side_diff(diff: &str) -> Markup {
     }
 }
 
-/// Byte-range spans of `#123`-shaped mentions in `text`, each with its
-/// parsed number — a manual scan rather than pulling in `regex` for one
-/// pattern, same reasoning `git::redact_url` gives for its own `://` scan.
-/// A `#` only starts a span when not immediately preceded by an
-/// alphanumeric char, so a real anchor-ish fragment like `foo#1` still
-/// counts (word boundaries only matter *before* the `#`) while something
-/// like `a1#2` doesn't accidentally split mid-token.
-fn scan_number_mentions(text: &str) -> Vec<(std::ops::Range<usize>, u64)> {
-    let bytes = text.as_bytes();
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'#'
-            && i.checked_sub(1)
-                .map(|p| bytes[p])
-                .is_none_or(|b| !b.is_ascii_alphanumeric())
-        {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j > i + 1 {
-                if let Ok(number) = text[i + 1..j].parse::<u64>() {
-                    spans.push((i..j, number));
-                }
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    spans
-}
-
-/// Renders `text` HTML-escaped, with every `#123` mention that resolves to
-/// a real PR on `target` turned into a link. A number that resolves to
-/// nothing is left as plain escaped text, not a dead link.
+/// Every `#123` in `text` that names a real pull request on `target`,
+/// mapped to its link. What isn't in the map isn't linked, which is how a
+/// mention of a number that doesn't exist stays plain text instead of
+/// becoming a dead link.
 ///
-/// Used for a PR's own description and flat-thread comments — not the
-/// annotated inline diff comments, which go through a different render
-/// path ([`super::pulls::annotated_diff`]) this doesn't touch.
-pub(crate) async fn link_number_mentions(
+/// Separate from the rendering so the substitution can happen inside
+/// [`crate::webui::markdown::render_with_mentions`], on the parsed event
+/// stream: only the parser knows whether a given `#123` is prose or the
+/// contents of a code fence. Resolving here scans the raw text, so a number
+/// that only ever appears in code costs one lookup and is then never used.
+pub(crate) async fn resolve_number_mentions(
     ctx: &AppContext,
     target: &ResolvedRepo,
     repo_name: &str,
     text: &str,
-) -> String {
-    let spans = scan_number_mentions(text);
-    if spans.is_empty() {
-        return esc(text);
-    }
-
+) -> std::collections::HashMap<u64, String> {
+    let spans = crate::webui::markdown::scan_number_mentions(text);
     let mut numbers: Vec<u64> = spans.iter().map(|(_, n)| *n).collect();
     numbers.sort_unstable();
     numbers.dedup();
-    let mut resolved: std::collections::HashMap<u64, &'static str> = std::collections::HashMap::new();
+
+    let mut resolved = std::collections::HashMap::new();
     for number in numbers {
         if domain::pull_request::get(ctx, target, number)
             .await
@@ -610,25 +630,10 @@ pub(crate) async fn link_number_mentions(
             .flatten()
             .is_some()
         {
-            resolved.insert(number, "pull");
+            resolved.insert(number, repo_link(repo_name, "pull", "").number(number).to_string());
         }
     }
-
-    let mut out = String::with_capacity(text.len());
-    let mut last = 0;
-    for (span, number) in &spans {
-        out.push_str(&esc(&text[last..span.start]));
-        match resolved.get(number) {
-            Some(view) => {
-                let href = repo_link(repo_name, view, "").number(*number).to_string();
-                out.push_str(&format!(r#"<a href="{}">#{number}</a>"#, esc(&href)));
-            }
-            None => out.push_str(&esc(&text[span.clone()])),
-        }
-        last = span.end;
-    }
-    out.push_str(&esc(&text[last..]));
-    out
+    resolved
 }
 
 /// Inline edit (a collapsed `<details>`, native zero-JS toggle) + delete

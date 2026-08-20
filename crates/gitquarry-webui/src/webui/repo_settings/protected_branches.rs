@@ -3,7 +3,7 @@
 //! this only edits which branches count).
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, non_empty, repo_link};
+use crate::webui::{AppError, non_empty, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -68,15 +68,16 @@ pub fn render_protected_branches_form(
     let stored = config.protected_branches.iter().cloned().collect::<Vec<_>>().join(", ");
     let current = retry.map_or(stored.as_str(), |f| f.protected.as_str());
     html! {
-        h4 { (gitquarry_i18n::web::repo_settings::protected_branches_heading(locale)) }
-        p class="muted" {
-            (gitquarry_i18n::web::repo_settings::protected_branches_prose(locale, &branches.join(", ")))
-        }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_protected_branches";
-            input name="protected" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::protected_branches_placeholder(locale));
-            button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
-        }
+        (settings_section(&gitquarry_i18n::web::repo_settings::protected_branches_heading(locale), None, html! {
+            p class="muted" {
+                (gitquarry_i18n::web::repo_settings::protected_branches_prose(locale, &branches.join(", ")))
+            }
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_protected_branches";
+                input name="protected" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::protected_branches_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
+            }
+        }))
     }
 }

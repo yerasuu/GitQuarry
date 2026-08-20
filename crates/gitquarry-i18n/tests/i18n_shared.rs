@@ -577,12 +577,6 @@ fn pull_request_wrong_status_differs_by_locale() {
         pull_request_wrong_status(Locale::En)
     );
 }
-
-#[test]
-fn pull_request_merge_conflict_carries_the_paths() {
-    assert!(pull_request_merge_conflict(Locale::Es, "a.txt, b.txt").contains("a.txt, b.txt"));
-}
-
 #[test]
 fn source_repo_not_a_fork_differs_by_locale() {
     assert_ne!(source_repo_not_a_fork(Locale::Es), source_repo_not_a_fork(Locale::En));
