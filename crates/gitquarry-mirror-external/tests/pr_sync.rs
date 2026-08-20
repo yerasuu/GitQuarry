@@ -513,3 +513,78 @@ fn a_line_comment_carries_its_position_into_the_exported_body() {
     };
     assert_eq!(export_body(&anchored), "`src/main.rs:42`\n\nwhy this?");
 }
+
+#[tokio::test]
+async fn a_pull_only_mirror_never_creates_a_pr_on_the_external_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    put_branch(&target, "main", &"a".repeat(40)).await;
+    put_branch(&target, "feature", &"b".repeat(40)).await;
+    let mirror = ExternalMirror {
+        direction: access::SyncDirection::PullOnly,
+        ..test_mirror()
+    };
+
+    pull_request::create(
+        &ctx,
+        &target,
+        NewPullRequest {
+            source_repo: &target.uid,
+            source_branch: "feature",
+            target_branch: "main",
+            title: "local only",
+            description: "stays here",
+            author: "alice",
+        },
+        gitquarry_i18n::Locale::DEFAULT,
+    )
+    .await
+    .unwrap();
+
+    let forge = FakeForge::default();
+    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+        .await
+        .unwrap();
+
+    assert!(forge.prs.lock().unwrap().is_empty(), "a pull-only mirror pushed a PR");
+    let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1")
+        .await
+        .unwrap();
+    assert!(links.is_empty());
+}
+
+#[tokio::test]
+async fn a_push_only_mirror_never_imports_a_remote_pr() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    put_branch(&target, "main", &"a".repeat(40)).await;
+    put_branch(&target, "feature", &"b".repeat(40)).await;
+    let mirror = ExternalMirror {
+        direction: access::SyncDirection::PushOnly,
+        ..test_mirror()
+    };
+
+    let forge = FakeForge::default().with_pr(RemotePr {
+        number: 9,
+        title: "external title".to_string(),
+        body: "external body".to_string(),
+        source_branch: "feature".to_string(),
+        target_branch: "main".to_string(),
+        state: RemotePrState::Open,
+        author: "bob".to_string(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+        updated_at: "2024-01-01T00:00:00Z".to_string(),
+        ..Default::default()
+    });
+
+    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+        .await
+        .unwrap();
+
+    let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, &target.uid)
+        .await
+        .unwrap();
+    assert!(local_prs.is_empty(), "a push-only mirror imported a remote PR");
+}

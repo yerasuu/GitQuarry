@@ -5,6 +5,11 @@
 //! already pulled the head/base branches locally, so a PR's branches
 //! always exist by the time this runs.
 //!
+//! [`ExternalMirror::direction`] governs this track exactly as it governs
+//! Track A's refs: a `PullOnly` mirror never creates, patches, merges or
+//! comments on the external side, and a `PushOnly` one never imports
+//! anything from it.
+//!
 //! Anti-loop bookkeeping (the riskiest part, per the design doc) lives
 //! entirely in [`sync_one_linked_pr`]: outbound comments are filtered by
 //! `origin.is_none()` *and* `ExternalPrLink::synced_local_comment_keys` (the
@@ -103,7 +108,7 @@ pub async fn sync_pull_requests_once_with(
 
     let remote_prs = forge.list_pull_requests(cursor.as_deref()).await?;
     for remote_pr in &remote_prs {
-        if linked_by_external.contains_key(&remote_pr.number) {
+        if linked_by_external.contains_key(&remote_pr.number) || !mirror.direction.allows_pull() {
             continue;
         }
         match create_local_pr_from_remote(ctx, resolved, &mirror.id, remote_pr).await {
@@ -120,7 +125,7 @@ pub async fn sync_pull_requests_once_with(
 
     let local_prs = pull_requests::list_pull_requests(&ctx.backend(), &ctx.cipher, uid).await?;
     for pr in &local_prs {
-        if linked_locals.contains(&pr.number) {
+        if linked_locals.contains(&pr.number) || !mirror.direction.allows_push() {
             continue;
         }
         match forge
@@ -250,12 +255,14 @@ pub async fn sync_one_linked_pr(
         bail!("missing local PR #{local_number}");
     };
 
-    if remote_pr.state == RemotePrState::Merged && local_pr.status != PrStatus::Merged {
+    let allows_push = mirror.direction.allows_push();
+    let allows_pull = mirror.direction.allows_pull();
+    if allows_pull && remote_pr.state == RemotePrState::Merged && local_pr.status != PrStatus::Merged {
         if let Some(sha) = remote_pr.merge_commit_sha.as_deref() {
             pull_request::mark_merged_externally(ctx, resolved, local_number, sha, remote_pr.merged_by.as_deref())
                 .await?;
         }
-    } else if local_pr.status == PrStatus::Merged && remote_pr.state != RemotePrState::Merged {
+    } else if allows_push && local_pr.status == PrStatus::Merged && remote_pr.state != RemotePrState::Merged {
         // Best-effort: the local merge already succeeded and is the source
         // of truth regardless of whether the external side accepts it (same
         // tolerance `domain::pull_request::merge`'s own CAS-conflict warning
@@ -269,7 +276,7 @@ pub async fn sync_one_linked_pr(
     } else {
         let remote_is_newer = remote_pr.updated_at.as_str() > link.remote_updated_cursor.as_str();
         let local_is_newer = local_pr.updated_at.as_str() > link.remote_updated_cursor.as_str();
-        if remote_is_newer {
+        if remote_is_newer && allows_pull {
             local_pr.title = remote_pr.title.clone();
             local_pr.description = remote_pr.body.clone();
             match remote_pr.state {
@@ -293,7 +300,7 @@ pub async fn sync_one_linked_pr(
                     mirror.label
                 );
             }
-        } else if local_is_newer {
+        } else if local_is_newer && allows_push {
             let state = match (local_pr.status, remote_pr.state) {
                 (PrStatus::Closed, RemotePrState::Open) => Some(RemotePrState::Closed),
                 (PrStatus::Open, RemotePrState::Closed) => Some(RemotePrState::Open),
@@ -324,8 +331,10 @@ pub async fn sync_one_linked_pr(
     // goes out with its position spelled into the body (see
     // [`export_body`]) — [`ForgeApi::add_comment`] posts issue-style
     // comments, which carry no diff position of their own.
-    let local_comments =
-        pull_requests::list_pr_comments_with_keys(&ctx.backend(), &ctx.cipher, uid, local_number).await?;
+    let local_comments = match allows_push {
+        true => pull_requests::list_pr_comments_with_keys(&ctx.backend(), &ctx.cipher, uid, local_number).await?,
+        false => Vec::new(),
+    };
     for (key, comment) in &local_comments {
         if comment.origin.is_some() || link.synced_local_comment_keys.contains(key) {
             continue;
@@ -345,7 +354,10 @@ pub async fn sync_one_linked_pr(
     // Inbound: remote comments never yet imported (including ones this
     // same pass just exported — pre-seeded into `synced_remote_comment_ids`
     // above, so they never round-trip back in as if new).
-    let remote_comments = forge.list_comments(link.external_number).await?;
+    let remote_comments = match allows_pull {
+        true => forge.list_comments(link.external_number).await?,
+        false => Vec::new(),
+    };
     for rc in &remote_comments {
         if link.synced_remote_comment_ids.contains(&rc.id) {
             continue;
