@@ -1,28 +1,72 @@
-//! What a PR description survives on its way to the page.
+//! What a PR body — a description, a comment, a review, an inline note —
+//! survives on its way to the page.
 //!
-//! `link_number_mentions` now hands markdown to `markdown::render` instead
-//! of pre-escaped HTML, which only works if the renderer keeps the two
-//! things that pipeline depends on: the relative link it synthesizes for a
-//! `#123` mention, and ordinary block markdown.
+//! Two things had to hold at once, and they pull against each other: the
+//! body is markdown written by a person, and `#123` in it should reach a
+//! pull request. Substituting the link into the *source text* satisfies the
+//! second and breaks the first, because a `#123` inside a code fence is not
+//! a mention. So the substitution happens on the parsed event stream, and
+//! these pin the cases that distinguishes.
 
-use gitquarry_webui::webui::markdown::render;
+use gitquarry_webui::webui::markdown::{render, render_with_mentions};
+use std::collections::HashMap;
 
-/// The exact shape `link_number_mentions` emits. The pointy brackets are
-/// the part worth pinning: without them a `)` anywhere in a repo path would
-/// end the destination early, and the renderer is also free to reject link
-/// targets it doesn't like — a relative one has to be allowed.
+fn mentions() -> HashMap<u64, String> {
+    HashMap::from([(7, "/yerasuu/gitquarry/_pulls/7".to_string())])
+}
+
 #[test]
-fn a_mention_link_survives_the_renderer() {
-    let html = render("see [#7](</yerasuu/gitquarry/_pulls/7>) for the fix");
+fn a_mention_in_prose_becomes_a_link() {
+    let html = render_with_mentions("see #7 for the fix", &mentions());
 
-    assert!(html.contains(r#"href="/yerasuu/gitquarry/_pulls/7""#), "{html}");
+    assert!(
+        html.contains(r#"<a href="/yerasuu/gitquarry/_pulls/7">#7</a>"#),
+        "{html}"
+    );
+}
+
+/// The reason this moved out of the source text: a fence is code, and the
+/// author wrote those characters on purpose.
+#[test]
+fn a_mention_inside_a_code_fence_stays_literal() {
+    let html = render_with_mentions("```\ngit show #7\n```", &mentions());
+
+    assert!(!html.contains("<a href"), "{html}");
     assert!(html.contains("#7"), "{html}");
 }
 
-/// The regression itself: a description written as a list used to reach the
-/// page as one flat paragraph with its bullets showing as literal `-`.
+/// Same for a backtick span, which the parser hands over as its own event
+/// rather than as text.
 #[test]
-fn a_description_written_as_markdown_renders_as_markdown() {
+fn a_mention_inside_inline_code_stays_literal() {
+    let html = render_with_mentions("run `deploy --pr #7` first", &mentions());
+
+    assert!(!html.contains("<a href"), "{html}");
+}
+
+/// An `<a>` inside an `<a>` isn't valid HTML, and the author already said
+/// where that text should point.
+#[test]
+fn a_mention_inside_an_existing_link_is_left_alone() {
+    let html = render_with_mentions("[see #7](https://example.com/x)", &mentions());
+
+    assert_eq!(html.matches("<a href").count(), 1, "{html}");
+    assert!(html.contains("https://example.com/x"), "{html}");
+}
+
+/// A number nobody resolved is not a dead link.
+#[test]
+fn an_unresolved_number_stays_plain_text() {
+    let html = render_with_mentions("see #999 and #7", &mentions());
+
+    assert_eq!(html.matches("<a href").count(), 1, "{html}");
+    assert!(html.contains("#999"), "{html}");
+}
+
+/// The regression that started this: a body written as a list used to reach
+/// the page as one flat paragraph with its bullets showing as literal `-`.
+#[test]
+fn a_body_written_as_markdown_renders_as_markdown() {
     let html = render("Highlights:\n\n- first\n- second\n\n`inline code` and **bold**.");
 
     assert!(html.contains("<ul>"), "{html}");
@@ -31,8 +75,8 @@ fn a_description_written_as_markdown_renders_as_markdown() {
     assert!(html.contains("<strong>bold</strong>"), "{html}");
 }
 
-/// The other half of moving escaping into the renderer: a body is still
-/// untrusted, so raw HTML in one must not reach the page.
+/// Moving the escaping into the renderer must not have moved it out of the
+/// way: a body is still untrusted text from anyone who can comment.
 #[test]
 fn raw_html_in_a_body_is_still_stripped() {
     let html = render("hello <script>alert(1)</script> world");
