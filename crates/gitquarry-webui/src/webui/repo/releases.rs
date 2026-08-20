@@ -659,22 +659,26 @@ fn encode_hex(bytes: &[u8]) -> String {
 /// `tag`/`csrf`) is read first, the `file` field's bytes are streamed into a
 /// scratch tempfile (hashed and size-counted along the way, capped at
 /// [`MAX_ASSET_UPLOAD_BYTES`]) — never fully buffered in memory. Login/CSRF/
-/// write-permission are only checked *after* the whole body is drained
-/// (multipart fields have to be read in the order the client sent them, and
-/// axum's extractor gives no way to peek `repo`/`csrf` before consuming
-/// `file` if a client sends `file` first); the size cap above is what bounds
-/// the resulting disk-fill exposure from an unauthorized or CSRF-invalid
-/// request in the meantime, not a login gate up front.
+/// A session is required *before* the body is touched: an anonymous client
+/// could otherwise make the server write [`MAX_ASSET_UPLOAD_BYTES`] to disk
+/// per request just by opening one, and the cap bounds a single upload, not
+/// how many an attacker may start. CSRF and the write-permission check stay
+/// after the drain — their inputs (`csrf`, `repo`) are body fields, and
+/// multipart fields can only be read in the order the client sent them.
 pub(crate) async fn handler_upload_asset_post(
     State(ctx): State_,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
-    // Computed before login/CSRF (see this fn's own doc comment on why
-    // those checks wait until after the body drains) — `ctx`/`headers` are
-    // available from the start, so there's no reason for these early
-    // error paths to fall back to a plain default instead.
     let locale = effective_locale(&ctx, &headers).await;
+    // Headers alone answer "is anyone logged in", so this doesn't have to
+    // wait for the body — and it must not: everything below writes the
+    // uploaded bytes to disk. `return_to` is the index rather than the
+    // repo, which is only known once the body has been read.
+    let me = match require_login(&ctx, &headers, "/").await {
+        Ok(u) => u,
+        Err(resp) => return Ok(resp),
+    };
     let mut repo = String::new();
     let mut tag = String::new();
     let mut csrf = String::new();
@@ -749,10 +753,6 @@ pub(crate) async fn handler_upload_asset_post(
         }
     }
 
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
-        Ok(u) => u,
-        Err(resp) => return Ok(resp),
-    };
     require_csrf(&headers, &csrf)?;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
