@@ -782,10 +782,12 @@ pub(crate) async fn handler_callback(
         .claims(&client.id_token_verifier(), &nonce)
         .context(gitquarry_i18n::shared::failed_to_verify_id_token(locale))?;
 
-    // `None` (provider just doesn't send the claim) is treated as trusting
-    // the issuer, same as any claim it doesn't bother asserting either way.
-    // An explicit `false` is the provider telling us not to trust it.
-    if claims.email_verified() == Some(false) {
+    // Nothing short of an explicit `true` will do. Identity here is the
+    // email and nothing else (`SessionSubject::Email`), so an IdP that
+    // merely *omits* the claim — or one where anyone may self-register an
+    // address — would otherwise let an attacker sign up as an existing
+    // account's email and be handed that account.
+    if claims.email_verified() != Some(true) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::oidc_email_not_verified(locale)
@@ -802,11 +804,50 @@ pub(crate) async fn handler_callback(
     // `current_user`. No match is not an error: the cookie is simply
     // useless (`current_user` finds nobody), so `0` is as good a stamp as
     // any.
-    let epoch = gitquarry_core::auth::access::resolve_by_email(ctx.backend().as_ref(), &ctx.cipher, &email)
+    let account = gitquarry_core::auth::access::resolve_by_email(ctx.backend().as_ref(), &ctx.cipher, &email)
         .await
         .ok()
-        .flatten()
-        .map_or(0, |u| u.session_epoch);
+        .flatten();
+
+    // An account that enrolled TOTP keeps its second factor whichever door
+    // the first one came through — the IdP proved the email, not that this
+    // is the person who holds the authenticator.
+    if let Some(user) = account.as_ref().filter(|u| u.totp_enabled) {
+        let pending = PendingTotpCookie {
+            username: user.username.clone(),
+            return_to: flow.return_to.clone(),
+            exp: deadline(PENDING_TOTP_TTL_SECS),
+        };
+        let sealed = ctx.cipher.seal(
+            PENDING_TOTP_COOKIE,
+            &serde_json::to_vec(&pending)?,
+            gitquarry_core::crypto::CompressionStrategy::None,
+        );
+        let (pending_header, pending_value) = set_cookie(
+            &headers,
+            PENDING_TOTP_COOKIE,
+            &B64.encode(sealed),
+            PENDING_TOTP_TTL_SECS,
+        );
+        let (clear_header, clear_value) = set_cookie(&headers, FLOW_COOKIE, "", 0);
+        let mut resp = Redirect::to("/_login_totp").into_response();
+        let resp_headers = resp.headers_mut();
+        resp_headers.append(
+            pending_header,
+            pending_value
+                .parse()
+                .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+        );
+        resp_headers.append(
+            clear_header,
+            clear_value
+                .parse()
+                .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+        );
+        return Ok(resp);
+    }
+
+    let epoch = account.map_or(0, |u| u.session_epoch);
     let (session_header, session_value) =
         build_session_cookie(&headers, &ctx.cipher, SessionSubject::Email(email), epoch)?;
     let (clear_header, clear_value) = set_cookie(&headers, FLOW_COOKIE, "", 0);
