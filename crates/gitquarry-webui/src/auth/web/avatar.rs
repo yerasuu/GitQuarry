@@ -67,7 +67,7 @@ fn render_profile_section(
         (PreEscaped(crate::webui::render_flash(message, locale)))
 
         (settings_section(&crate::auth::i18n::avatar::heading(locale), Some(&crate::auth::i18n::avatar::description(locale)), html! {
-            p { (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 48)) }
+            p { (crate::webui::identicon::account_avatar_sized(&user.username, user.avatar_content_type.as_deref(), 48)) }
             form method="post" action="/_account/profile" enctype="multipart/form-data" {
                 (PreEscaped(csrf))
                 input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required;
