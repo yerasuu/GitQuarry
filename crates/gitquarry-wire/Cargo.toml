@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-wire"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Plain serde DTOs shared across gitquarry-core/gitquarry-federation process and peer-to-peer boundaries"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

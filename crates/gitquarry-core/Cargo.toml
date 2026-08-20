@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-core"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Git remote backed by S3: domain/storage/auth/git/ssh/git-smart-HTTP core, consumed by the gitquarry binary"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 # Async runtime
