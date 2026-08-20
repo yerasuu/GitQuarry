@@ -491,6 +491,12 @@ pub async fn confirm_totp(
     let (plaintext, hashed) = fresh_recovery_codes()?;
     user.totp_enabled = true;
     user.totp_recovery_codes = hashed;
+    // Turning 2FA on is a statement about who may hold this account, so
+    // every session that predates it goes — same reasoning as
+    // [`set_password`]'s own bump. A session issued before enrollment was
+    // established with one factor and would otherwise outlive the decision
+    // to require two.
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     Ok((cas, plaintext))
 }
@@ -570,6 +576,10 @@ pub async fn disable_totp(ctx: &AppContext, username: &str, locale: gitquarry_i1
     user.totp_secret = None;
     user.totp_enabled = false;
     user.totp_recovery_codes = Vec::new();
+    // Also a credential change, and this one is reachable by an admin with
+    // no re-auth at all (the break-glass path above) — all the more reason
+    // for whatever sessions existed to stop counting.
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 
