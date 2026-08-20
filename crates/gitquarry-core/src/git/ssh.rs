@@ -312,7 +312,12 @@ impl ConnHandler {
             None
         };
 
-        crate::mirror::sync_external_before_serving(&self.ctx, &resolved).await;
+        // Reads only, same reasoning as `git::http`'s own call: pulling
+        // from the external side immediately before accepting a push is how
+        // a valid push gets rejected as stale.
+        if git_subcmd != "receive-pack" {
+            crate::mirror::sync_external_before_serving(&self.ctx, &resolved).await;
+        }
         let mirror = self.ctx.open_mirror(&resolved).await?;
         let mut child = spawn_git_subcommand(
             &self.ctx,

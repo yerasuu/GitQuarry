@@ -46,8 +46,9 @@ const DOWNLOAD_CONCURRENCY: usize = 8;
 /// `gitquarry-server`-startup decision core never sees.
 #[async_trait::async_trait]
 pub trait MirrorSyncHook: Send + Sync {
-    /// Called right before serving a clone/fetch (`upload-pack`) or
-    /// accepting a push (`receive-pack`) — see [`sync_external_before_serving`].
+    /// Called right before serving a clone/fetch (`upload-pack`) — see
+    /// [`sync_external_before_serving`], including why a push is
+    /// deliberately not one of the triggers.
     /// Implementations must never propagate an error or block
     /// indefinitely: a slow/unreachable external forge must never turn
     /// into a hung or failed git operation, the single most
@@ -67,10 +68,16 @@ impl std::fmt::Debug for dyn MirrorSyncHook {
 }
 
 /// Calls [`AppContext::mirror_sync`]'s hook, if any is wired, right before
-/// serving a clone/fetch (`upload-pack`) or accepting a push
-/// (`receive-pack`) — both [`crate::git::ssh`] and [`crate::git::http`] call
-/// this immediately before their own [`AppContext::open_mirror`] call, so a
-/// client sees the freshest state the wired-in sync can produce.
+/// serving a clone/fetch (`upload-pack`) — both [`crate::git::ssh`] and
+/// [`crate::git::http`] call this immediately before their own
+/// [`AppContext::open_mirror`] call, so a client sees the freshest state the
+/// wired-in sync can produce.
+///
+/// Reads only: a push is deliberately *not* a trigger. Pulling from the
+/// external side and then accepting the push means the pull may have moved
+/// the branch first, leaving the pre-receive hook to reject the client's
+/// push as stale — a sync nobody asked for breaking a valid push. Whatever
+/// the push lands goes out on the next sweep regardless.
 ///
 /// Skips entirely (zero overhead, not even the virtual call) when either no
 /// hook is wired at all, or this repo has no enabled external mirror —

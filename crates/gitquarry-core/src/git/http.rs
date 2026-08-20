@@ -222,7 +222,15 @@ async fn handle(
                     return Ok(too_many_requests());
                 }
             }
-            crate::mirror::sync_external_before_serving(ctx, &resolved).await;
+            // Reads only. Syncing right before a push is actively harmful:
+            // a pull that lands first moves the branch, and the pre-receive
+            // hook then rejects the client's own push as stale ("changed in
+            // S3 since the last fetch") — a sync nobody asked for turning a
+            // valid push into a failure. The push's own refs reach the
+            // external side on the next sweep either way.
+            if kind != Kind::ReceivePack {
+                crate::mirror::sync_external_before_serving(ctx, &resolved).await;
+            }
             let mirror = ctx.open_mirror(&resolved).await?;
             match kind {
                 Kind::InfoRefs => {
