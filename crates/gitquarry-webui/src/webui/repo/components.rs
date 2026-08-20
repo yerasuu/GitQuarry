@@ -129,7 +129,17 @@ async fn avatars_for(
                 gpg_username_by_sha.insert(sha, username);
             }
             Some(CommitSigner::Instance) => {
-                instance_signed.insert(sha);
+                instance_signed.insert(sha.clone());
+                // The *author* is still the account that asked for the
+                // merge, and their avatar belongs on the row like on any
+                // other commit. An instance signature says who built the
+                // commit, never who wrote it, so it has no business
+                // erasing the author — which is exactly what leaving this
+                // arm without an email fallback did: the row dropped to a
+                // generated identicon.
+                if !author_email.is_empty() {
+                    fallback_email_by_sha.insert(sha, author_email);
+                }
             }
             None if !author_email.is_empty() => {
                 fallback_email_by_sha.insert(sha, author_email);
