@@ -248,6 +248,11 @@ pub enum RefAction {
     Push(String),
     Pull(String),
     Diverged,
+    /// The ref exists on exactly one side *and* this mirror has a
+    /// `last_synced` sha for it, so it once existed on both: somebody
+    /// deleted it. Never re-created from the surviving side — that would
+    /// silently undo the deletion on the next tick, forever.
+    DeletedOneSide,
 }
 #[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +261,7 @@ enum RefAction {
     Push(String),
     Pull(String),
     Diverged,
+    DeletedOneSide,
 }
 
 /// The three-way comparison itself: `local`/`remote` are this ref's current
@@ -264,15 +270,16 @@ enum RefAction {
 /// where both sides moved needs a real `gitquarry_core::git::is_ancestor`
 /// call — every other branch is a pure lookup.
 ///
-/// - Local only: push (new local ref) if the direction allows it.
-/// - Remote only: pull (new remote ref) if the direction allows it.
+/// - Present on one side only, with a `last_synced` sha: it existed on
+///   both once, so this is a deletion — [`RefAction::DeletedOneSide`],
+///   never re-created from the surviving side.
+/// - Local only, never synced: push (new local ref) if the direction allows it.
+/// - Remote only, never synced: pull (new remote ref) if the direction allows it.
 /// - Same sha: nothing to move, just make sure it's recorded.
-/// - One side unchanged since `last_synced`, the other moved: sync in the
-///   direction that moved, if allowed.
-/// - Both moved (including "no `last_synced` at all yet, and they already
-///   disagree" — an unknown baseline is treated as "moved" on both sides):
-///   fast-forward whichever side is behind, via `is_ancestor`. Neither is
-///   an ancestor of the other → [`RefAction::Diverged`], never forced.
+/// - Different shas: fast-forward whichever side is behind, via
+///   `is_ancestor` — regardless of which one moved since `last_synced`, so
+///   a rewound side is never replayed onto the other. Neither is an
+///   ancestor of the other → [`RefAction::Diverged`], never forced.
 #[cfg(any(test, feature = "test-util"))]
 pub async fn plan_ref_sync(
     bare_repo: &std::path::Path,
@@ -301,23 +308,23 @@ async fn plan_ref_sync_impl(
     direction: access::SyncDirection,
 ) -> Result<Option<RefAction>> {
     Ok(match (local, remote) {
+        (Some(_), None) | (None, Some(_)) if last_synced.is_some() => Some(RefAction::DeletedOneSide),
         (Some(l), None) => direction.allows_push().then(|| RefAction::Push(l.to_string())),
         (None, Some(r)) => direction.allows_pull().then(|| RefAction::Pull(r.to_string())),
         (None, None) => None,
         (Some(l), Some(r)) if l == r => (last_synced != Some(l)).then(|| RefAction::Record(l.to_string())),
+        // Ancestry decides, never "which side moved since `last_synced`":
+        // a side that moved backwards (a force-push on the external forge,
+        // a local history rewrite) is *not* something to replay onto the
+        // other side just because the other one sat still. Only a genuine
+        // fast-forward syncs; anything else is a divergence.
         (Some(l), Some(r)) => {
-            let local_moved = last_synced != Some(l);
-            let remote_moved = last_synced != Some(r);
-            match (local_moved, remote_moved) {
-                (true, false) => direction.allows_push().then(|| RefAction::Push(l.to_string())),
-                (false, true) => direction.allows_pull().then(|| RefAction::Pull(r.to_string())),
-                _ if gitquarry_core::git::is_ancestor(bare_repo, l, r).await? => {
-                    direction.allows_pull().then(|| RefAction::Pull(r.to_string()))
-                }
-                _ if gitquarry_core::git::is_ancestor(bare_repo, r, l).await? => {
-                    direction.allows_push().then(|| RefAction::Push(l.to_string()))
-                }
-                _ => Some(RefAction::Diverged),
+            if gitquarry_core::git::is_ancestor(bare_repo, l, r).await? {
+                direction.allows_pull().then(|| RefAction::Pull(r.to_string()))
+            } else if gitquarry_core::git::is_ancestor(bare_repo, r, l).await? {
+                direction.allows_push().then(|| RefAction::Push(l.to_string()))
+            } else {
+                Some(RefAction::Diverged)
             }
         }
     })
@@ -368,6 +375,34 @@ async fn persist_pulled_ref_to_s3(resolved: &ResolvedRepo, bare_repo: &Path, ref
     )
 }
 
+/// Best-effort per-ref status write. Deliberately not `?` at the call
+/// sites: this sweep's contract is that one ref's trouble never stops the
+/// rest, and a bucket write failing while *recording* trouble is the worst
+/// possible reason to abandon every remaining ref.
+async fn record_ref_status(
+    ctx: &AppContext,
+    resolved: &ResolvedRepo,
+    mirror: &access::ExternalMirror,
+    ref_name: &str,
+    status: RefSyncStatus,
+) {
+    if let Err(e) = access::set_ref_status(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        &resolved.uid,
+        &mirror.id,
+        ref_name,
+        status,
+    )
+    .await
+    {
+        eprintln!(
+            "gitquarry-mirror-external: warning: couldn't record status for '{ref_name}' on mirror {}: {e:#}",
+            mirror.id
+        );
+    }
+}
+
 /// Syncs every ref of one mirror against its `last_synced` memory and the
 /// external side's own current state — push/pull/fast-forward per
 /// [`plan_ref_sync`], never forcing a genuine divergence. One ref failing (a
@@ -415,15 +450,7 @@ pub async fn sync_mirror_once(
         if needs_remote_objects
             && let Err(e) = crate::git_remote::fetch_ref_from_remote_url(bare_repo, &url, &ref_name).await
         {
-            access::set_ref_status(
-                ctx.backend().as_ref(),
-                &ctx.cipher,
-                &resolved.uid,
-                &mirror.id,
-                &ref_name,
-                RefSyncStatus::Error(e.to_string()),
-            )
-            .await?;
+            record_ref_status(ctx, resolved, mirror, &ref_name, RefSyncStatus::Error(e.to_string())).await;
             report.errors.push((ref_name.clone(), e.to_string()));
             continue;
         }
@@ -431,15 +458,7 @@ pub async fn sync_mirror_once(
         let action = match plan_ref_sync(bare_repo, local_sha, remote_sha, last_synced, mirror.direction).await {
             Ok(action) => action,
             Err(e) => {
-                access::set_ref_status(
-                    ctx.backend().as_ref(),
-                    &ctx.cipher,
-                    &resolved.uid,
-                    &mirror.id,
-                    &ref_name,
-                    RefSyncStatus::Error(e.to_string()),
-                )
-                .await?;
+                record_ref_status(ctx, resolved, mirror, &ref_name, RefSyncStatus::Error(e.to_string())).await;
                 report.errors.push((ref_name.clone(), e.to_string()));
                 continue;
             }
@@ -464,16 +483,14 @@ pub async fn sync_mirror_once(
                 }
                 .await
             }
-            Some(RefAction::Diverged) => {
-                access::set_ref_status(
-                    ctx.backend().as_ref(),
-                    &ctx.cipher,
-                    &resolved.uid,
-                    &mirror.id,
-                    &ref_name,
-                    RefSyncStatus::Diverged,
-                )
-                .await?;
+            // Both land on `Diverged`: the two sides disagree and this sweep
+            // refuses to force either one. A deletion isn't a *divergence*
+            // strictly speaking, but it needs exactly the same treatment —
+            // shown in the UI, `last_synced` left alone, nothing written —
+            // and giving it its own `RefSyncStatus` variant would mean
+            // migrating a stored enum for no behavioural difference.
+            Some(RefAction::Diverged | RefAction::DeletedOneSide) => {
+                record_ref_status(ctx, resolved, mirror, &ref_name, RefSyncStatus::Diverged).await;
                 report.diverged.push(ref_name.clone());
                 continue;
             }
@@ -481,7 +498,10 @@ pub async fn sync_mirror_once(
 
         match outcome {
             Ok(sha) => {
-                access::update_last_synced(
+                // Logged, not propagated: the ref itself did sync. Losing
+                // the bookkeeping only costs a redundant `Record` next
+                // tick, which is no reason to drop the refs still queued.
+                if let Err(e) = access::update_last_synced(
                     ctx.backend().as_ref(),
                     &ctx.cipher,
                     &resolved.uid,
@@ -489,18 +509,16 @@ pub async fn sync_mirror_once(
                     &ref_name,
                     &sha,
                 )
-                .await?;
+                .await
+                {
+                    eprintln!(
+                        "gitquarry-mirror-external: warning: '{ref_name}' synced but recording it on mirror {} failed: {e:#}",
+                        mirror.id
+                    );
+                }
             }
             Err(e) => {
-                access::set_ref_status(
-                    ctx.backend().as_ref(),
-                    &ctx.cipher,
-                    &resolved.uid,
-                    &mirror.id,
-                    &ref_name,
-                    RefSyncStatus::Error(e.to_string()),
-                )
-                .await?;
+                record_ref_status(ctx, resolved, mirror, &ref_name, RefSyncStatus::Error(e.to_string())).await;
                 report.errors.push((ref_name.clone(), e.to_string()));
             }
         }

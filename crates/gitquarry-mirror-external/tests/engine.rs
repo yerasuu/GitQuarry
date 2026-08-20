@@ -216,6 +216,46 @@ async fn plan_ref_sync_diverges_when_neither_side_is_an_ancestor_of_the_other() 
 }
 
 #[tokio::test]
+async fn plan_ref_sync_diverges_rather_than_replaying_a_rewound_remote() {
+    let (dir, _a, b, c) = ancestry_fixture().await;
+    let bare = dir.path().join("repo.git");
+    // The remote rewrote its history (`b` -> `c`, siblings) while the local
+    // side sat exactly where the last sync left it. "Only the remote moved"
+    // used to be enough to pull it, silently discarding `b` locally.
+    let action = plan_ref_sync(
+        &bare,
+        Some(&b),
+        Some(&c),
+        Some(&b),
+        access::SyncDirection::Bidirectional,
+    )
+    .await
+    .unwrap();
+    assert_eq!(action, Some(RefAction::Diverged));
+}
+
+#[tokio::test]
+async fn plan_ref_sync_never_resurrects_a_ref_deleted_on_either_side() {
+    let (dir, _a, b, _c) = ancestry_fixture().await;
+    let bare = dir.path().join("repo.git");
+    // Deleted locally: the remote still advertises the sha this mirror last
+    // synced, so pulling it back would undo the deletion every tick.
+    assert_eq!(
+        plan_ref_sync(&bare, None, Some(&b), Some(&b), access::SyncDirection::Bidirectional)
+            .await
+            .unwrap(),
+        Some(RefAction::DeletedOneSide)
+    );
+    // Deleted on the external forge: same, mirrored.
+    assert_eq!(
+        plan_ref_sync(&bare, Some(&b), None, Some(&b), access::SyncDirection::Bidirectional)
+            .await
+            .unwrap(),
+        Some(RefAction::DeletedOneSide)
+    );
+}
+
+#[tokio::test]
 async fn plan_ref_sync_respects_push_only_and_pull_only_directions() {
     let (dir, _a, b, _c) = ancestry_fixture().await;
     let bare = dir.path().join("repo.git");
