@@ -37,6 +37,14 @@ impl GitLabForge {
     /// already validated by `validate::validate_mirror_url` at save time.
     pub fn new(remote_url: &str, token: &str) -> Result<Self> {
         let (api_base, project_path) = parse_api_base_and_project(remote_url)?;
+        // Same guard `github.rs`/`codeberg.rs` apply to their own
+        // owner/repo: the encoder below only escapes `%`, so a `?` or `#`
+        // anywhere in the path would still cut the REST URL short and send
+        // the request somewhere else entirely. GitLab's own namespace and
+        // project names are limited to this alphabet regardless.
+        for segment in project_path.split("%2F") {
+            super::check_path_segment("project path segment", segment)?;
+        }
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()

@@ -85,3 +85,12 @@ fn list_comments_filters_out_system_notes() {
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].body, "looks good");
 }
+
+#[test]
+fn a_project_path_that_cant_name_a_real_project_is_refused() {
+    // Percent-encoding the separators isn't enough: `?`/`#` would still
+    // truncate the REST path into a query or fragment.
+    assert!(GitLabForge::new("https://gitlab.example.com/group/proj?x=1", "tok").is_err());
+    assert!(GitLabForge::new("https://gitlab.example.com/group/../root", "tok").is_err());
+    assert!(GitLabForge::new("https://gitlab.example.com/group/sub/proj.git", "tok").is_ok());
+}

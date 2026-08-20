@@ -33,6 +33,13 @@ pub(crate) fn check_path_segment(kind: &str, value: &str) -> Result<()> {
     {
         bail!("invalid {kind} in mirror url: {value:?}");
     }
+    // `.` and `..` pass the alphabet above (a dot is legal inside a real
+    // name) but name a path traversal rather than a repo — and the HTTP
+    // client resolves them before the request goes out, silently
+    // retargeting it at a different endpoint.
+    if value == "." || value == ".." {
+        bail!("invalid {kind} in mirror url: {value:?}");
+    }
     Ok(())
 }
 
