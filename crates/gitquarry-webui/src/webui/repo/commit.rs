@@ -44,8 +44,15 @@ pub async fn render_commit(
                 // Deliberately not the same badge: this attests that this
                 // server built the commit, never that the author stands
                 // behind it — only their own key says that.
+                // Spelled out here, where there is room for it: the
+                // compact row badge only has space for "verified", so this
+                // page is what tells a reader *who* verified — and that
+                // this instance vouches for having built the commit, not
+                // for who wrote the code in it.
                 Some(gitquarry_core::domain::commit_signature::CommitSigner::Instance) => {
-                    " " span class="badge accent" title="built and signed by this instance" { "signed by this instance" }
+                    " " span class="badge accent" title="built and signed by this instance" {
+                        "verified signature (this instance)"
+                    }
                 }
                 None => (signature_badge(signature)),
             }

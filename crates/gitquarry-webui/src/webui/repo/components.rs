@@ -220,10 +220,14 @@ fn signature_indicator(signature_status: char, verified_by: Option<&str>, instan
         @if let Some(username) = verified_by {
             " " span class="badge ok" title=(format!("verified signature ({username})")) { "verified" }
         } @else if instance_signed {
-            // A weaker claim than "verified", and shown as a different
-            // badge so it can't be mistaken for one: the instance vouches
-            // for having built the commit, not for who wrote it.
-            " " span class="badge accent" title="built and signed by this instance" { "instance" }
+            // Same word as an account's own signature, a different colour:
+            // both are genuinely verified signatures, and a row this narrow
+            // is the wrong place to spell out whose — the commit's own page
+            // says that in full. The `title` carries it regardless, so the
+            // distinction never rests on colour alone, which would be lost
+            // on a screen reader and on anyone who can't tell the two hues
+            // apart.
+            " " span class="badge accent" title="verified signature (built and signed by this instance)" { "verified" }
         } @else {
             @match signature_status {
                 'B' | 'R' | 'Y' => { " " span class="badge danger" title="signature check failed" { "invalid" } }
