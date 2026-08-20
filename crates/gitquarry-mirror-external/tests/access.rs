@@ -224,3 +224,25 @@ async fn a_recorded_failure_never_carries_an_embedded_token() {
     assert!(!error.contains("ghp_secret"), "{error}");
     assert!(error.contains("https://github.com/acme/demo.git"), "{error}");
 }
+
+#[test]
+fn a_far_side_error_is_capped_before_it_becomes_bucket_state() {
+    // A forge's error *page* comes back verbatim in the adapters' error
+    // text; stored uncapped it would sit in the bucket and be re-rendered
+    // into the settings tab on every load.
+    let huge = "x".repeat(10_000);
+    let capped = cap_error(&huge);
+    assert!(capped.len() < 600, "not capped: {} bytes", capped.len());
+    assert!(capped.ends_with("… (truncated)"));
+    // Short messages, which is what most of them are, pass through whole.
+    assert_eq!(cap_error("fatal: repository not found"), "fatal: repository not found");
+}
+
+#[test]
+fn capping_never_splits_a_character() {
+    // The cut point has to be a char boundary — `&str[..n]` panics
+    // otherwise, and this text comes from the far side.
+    let multibyte = "é".repeat(5_000);
+    let capped = cap_error(&multibyte);
+    assert!(capped.ends_with("… (truncated)"));
+}

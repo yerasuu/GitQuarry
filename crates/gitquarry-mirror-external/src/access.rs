@@ -26,6 +26,29 @@ use std::collections::BTreeMap;
 /// its own CAS retry loop.
 const UPDATE_MAX_RETRIES: u32 = 8;
 
+/// Longest error text kept on a mirror or one of its refs.
+///
+/// These strings are whatever the other side said: `git`'s stderr, or an
+/// HTTP body a forge returned verbatim (`{url} returned {status}: {body}`
+/// in the `gitquarry-forge-clients` adapters). An error page can be
+/// megabytes, and this text is stored in the bucket and re-rendered into
+/// the settings tab on every load — a diagnostic is worth the first
+/// paragraph, never the whole document.
+const MAX_ERROR_LEN: usize = 500;
+
+/// Caps `text` at [`MAX_ERROR_LEN`], on a character boundary, marking that
+/// it was cut so nobody reads a truncated message as the whole story.
+pub fn cap_error(text: &str) -> String {
+    if text.len() <= MAX_ERROR_LEN {
+        return text.to_string();
+    }
+    let cut = (0..=MAX_ERROR_LEN)
+        .rev()
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(0);
+    format!("{}… (truncated)", &text[..cut])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ExternalMirrorProvider {
     #[default]
@@ -368,6 +391,12 @@ pub async fn set_ref_status(
     ref_name: &str,
     status: RefSyncStatus,
 ) -> Result<()> {
+    // Same cap `set_mirror_error` applies one level up, for the same
+    // reason: a per-ref error carries the far side's own text too.
+    let status = match status {
+        RefSyncStatus::Error(msg) => RefSyncStatus::Error(cap_error(&crate::git_remote::redact_url(&msg))),
+        other => other,
+    };
     update_ref_status(backend, cipher, uid, mirror_id, ref_name, move |s, _| {
         *s = status.clone();
     })
@@ -390,7 +419,7 @@ pub async fn set_mirror_error(
     mirror_id: &str,
     error: Option<String>,
 ) -> Result<()> {
-    let error = error.map(|e| crate::git_remote::redact_url(&e));
+    let error = error.map(|e| cap_error(&crate::git_remote::redact_url(&e)));
     let collection = mirrors_collection(uid);
     for attempt in 1..=UPDATE_MAX_RETRIES {
         let (mirror, etag) = collection.get::<ExternalMirror>(backend, cipher, mirror_id).await?;
