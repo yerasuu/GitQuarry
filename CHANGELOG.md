@@ -52,6 +52,12 @@ on a per-release versioning scheme.
 
 ## Auth & permissions
 
+- The admin pages are closed on a fresh instance too. Until a login method
+  exists there is no session to check, so opening them needs a token the
+  process prints at startup, exchanged once at `/_bootstrap`. It dies with
+  the process and stops working the moment the first account has a password.
+- Repeated wrong passwords slow an account's login attempts down rather than
+  locking it, so knowing a username isn't enough to keep its owner out.
 - Account settings reorganized into profile (avatar and email addresses),
   security (password, two-factor, recovery codes) and keys (SSH and GPG),
   instead of one flat page mixing all three. Every settings page now uses
@@ -155,6 +161,9 @@ on a per-release versioning scheme.
 
 ## Ops & admin tooling
 
+- `trust_forwarded_for` in the config, for a deployment behind a reverse
+  proxy: the anonymous git rate limit keys on the forwarded client address
+  instead of the proxy's own. Off unless the proxy owns that header.
 - `gitquarry fsck` to detect stray objects in a repo.
 - `gitquarry repack` to consolidate a repo's packs.
 - Audit log of admin and repo actions.
