@@ -91,6 +91,24 @@ fn credentialed_url_impl(remote_url: &str, token: &str) -> String {
     }
 }
 
+/// Lock key for a whole sweep of one repo — deliberately *not* the repo's
+/// own key (`AppContext::open_mirror`'s), which [`sync_mirror_once`] takes
+/// while it runs and which every clone and push needs too.
+///
+/// Two sweeps of the same repo used to be able to interleave: Track A
+/// serialized itself on the repo lock, but [`crate::pr_sync`] runs after
+/// that guard is dropped and took no lock at all, so two concurrent
+/// triggers (two git requests through `mirror::sync_external_before_serving`,
+/// or one of those racing the periodic tick) both discovered the same
+/// unlinked PR and both created it — duplicate PRs upstream, duplicate
+/// imports locally.
+///
+/// A sweep always takes this lock *before* the repo's own, never the other
+/// way round, so the two can't cycle.
+fn sweep_lock_key(uid: &Uid) -> String {
+    format!("mirror-sweep/{uid}")
+}
+
 /// Syncs every enabled mirror of one repo, one at a time — mirrors are
 /// independent of each other, so one failing must never block the others
 /// (log-and-continue, same resilience `mirror::gc::sweep_once` and the
@@ -102,6 +120,7 @@ fn credentialed_url_impl(remote_url: &str, token: &str) -> String {
 /// behind each other anyway — a concurrency bound here would buy nothing
 /// but the illusion of parallelism.
 pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Result<()> {
+    let _sweep_guard = ctx.locks.lock(&sweep_lock_key(&resolved.uid)).await;
     for mirror in crate::domain::list(ctx, &resolved.uid)
         .await?
         .into_iter()
@@ -164,6 +183,10 @@ pub async fn sync_one_mirror_now(
     resolved: &ResolvedRepo,
     mirror: &access::ExternalMirror,
 ) -> Result<()> {
+    // Same exclusion the periodic/pre-serve sweep takes (see
+    // [`sweep_lock_key`]): a click landing while one of those runs must
+    // queue behind it, not sync the same mirror alongside it.
+    let _sweep_guard = ctx.locks.lock(&sweep_lock_key(&resolved.uid)).await;
     let outcome = async {
         // A ref that failed to push is exactly what this click needs to
         // hear about, and `sync_mirror_once` deliberately doesn't `Err` on
