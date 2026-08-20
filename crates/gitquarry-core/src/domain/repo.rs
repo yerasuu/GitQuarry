@@ -290,6 +290,11 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
     }
     storage::settings::set_visible_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     storage::settings::set_deleted_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
+    // `delete_all` above took the repo's own `mirrors/` objects with it, but
+    // this index lives outside the repo prefix: left behind, it makes the
+    // external-mirror sweep resolve and list a uid that no longer exists,
+    // once per tick, forever — one leaked entry per purged repo.
+    storage::settings::set_mirrors_enabled_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     access::clear_repo_permission_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid).await?;
     Ok(())
 }
