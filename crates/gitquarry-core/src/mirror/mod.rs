@@ -14,6 +14,7 @@ pub mod gc;
 pub mod hook;
 #[cfg(not(any(test, feature = "test-util")))]
 mod hook;
+pub mod policy;
 
 pub use hook::run_pre_receive_hook;
 

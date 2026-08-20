@@ -427,6 +427,15 @@ pub async fn sync_mirror_once(
     let local_mirror = ctx.open_mirror(resolved).await?;
     let bare_repo = &local_mirror.path;
     let local_refs = crate::git_remote::list_refs_with_sha(bare_repo).await?;
+    // A pulled ref lands in S3 without ever passing through
+    // `git receive-pack`, so the repo's own push policy (protected refs,
+    // required signatures, blob ceiling, owner quota) has to be applied
+    // here or not at all. Loaded once per sweep, and only for a mirror
+    // that can actually pull: a push-only one never writes anything local.
+    let gate = match mirror.direction.allows_pull() {
+        true => Some(gitquarry_core::mirror::policy::InboundGate::load(ctx, resolved).await?),
+        false => None,
+    };
     let is_branch_or_tag = |name: &&String| name.starts_with("refs/heads/") || name.starts_with("refs/tags/");
     let ref_names: BTreeSet<String> = local_refs
         .keys()
@@ -477,6 +486,11 @@ pub async fn sync_mirror_once(
             }
             Some(RefAction::Pull(sha)) => {
                 async {
+                    if let Some(gate) = &gate
+                        && let Some(reason) = gate.check(ctx, bare_repo, &ref_name, local_sha, &sha).await?
+                    {
+                        bail!("refused by this repo's own policy: {reason}");
+                    }
                     // No fetch here: every path that reaches a `Pull` has
                     // already gone through the prefetch above (a pull means
                     // the two sides differ, which is exactly its trigger).

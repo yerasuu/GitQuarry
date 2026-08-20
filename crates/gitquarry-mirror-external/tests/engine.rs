@@ -761,3 +761,66 @@ fn a_divergence_is_reported_too_but_never_over_a_real_error() {
     };
     assert_eq!(both.failure_summary().unwrap(), "refs/heads/dev: remote rejected");
 }
+
+/// A pulled ref writes packs and a manifest straight into S3, never
+/// through `git receive-pack` — so the repo's own push policy has to be
+/// enforced on this path too, or `require_signed_commits` (and protected
+/// refs, and the blob ceiling) would be trivially bypassable by pointing a
+/// mirror at a repo the puller controls.
+#[tokio::test]
+async fn sync_mirror_once_refuses_a_pull_that_violates_the_repos_own_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(root.path()));
+
+    let (_target_dir, target_path, sha) = plain_bare_repo_with_commit("unsigned work\n").await;
+
+    let source = ctx.create_repo("alice/source-policy").await.unwrap().unwrap();
+    {
+        ctx.open_mirror(&source).await.unwrap();
+    }
+    let (mut config, etag) = source.remote.get_repo_config().await.unwrap();
+    config.require_signed_commits.insert("main".to_string());
+    gitquarry_core::storage::settings::put_repo_config(
+        ctx.backend().as_ref(),
+        source.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &ctx.cipher,
+    )
+    .await
+    .unwrap();
+
+    let mut mirror = domain::create(
+        &ctx,
+        &source.uid,
+        access::ExternalMirror {
+            remote_url: "https://example.invalid/acme/target.git".to_string(),
+            token: "s3cr3t-token".to_string(),
+            enabled: true,
+            label: "test target".to_string(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    mirror.remote_url = target_path.to_string_lossy().to_string();
+
+    let report = sync_mirror_once(&ctx, &source, &mirror).await.unwrap();
+    assert_eq!(report.pulled, 0);
+    assert!(
+        report
+            .failure_summary()
+            .is_some_and(|msg| msg.contains("signed commits")),
+        "expected the signed-commit policy to be the refusal reason, got {:?}",
+        report.failure_summary()
+    );
+
+    // Neither the local mirror nor S3 may carry the refused ref.
+    let source_path = ctx.mirrors_root.join(source.uid.as_str());
+    let source_refs = gitquarry_mirror_external::git_remote::list_refs_with_sha(&source_path)
+        .await
+        .unwrap();
+    assert_ne!(source_refs.get("refs/heads/main"), Some(&sha));
+    let (manifest, _etag) = source.remote.get_manifest().await.unwrap();
+    assert_eq!(manifest.refs.get("refs/heads/main"), None);
+}
