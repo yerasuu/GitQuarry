@@ -68,12 +68,24 @@ pub async fn list_refs_with_sha(git_dir: &Path) -> Result<std::collections::Hash
 
 /// Every ref `url` currently advertises, as a ref-name -> sha map.
 ///
+/// `--refs`, not a plain `ls-remote`: the default output also carries the
+/// peeled `refs/tags/<x>^{}` line for every annotated tag (and `HEAD`),
+/// and `^{}` is not a ref name a refspec can name at all — a caller that
+/// took those for real refs tried to `fetch`/`push` them and got
+/// `fatal: invalid refspec 'refs/tags/<x>^{}'` on every tick, for every
+/// repo carrying a single annotated tag.
+///
 /// `url` may carry an embedded token (`https://x-access-token:<token>@...`)
 /// — any `Err` is redacted with [`redact_url`] before it reaches the caller.
 pub async fn ls_remote_refs(url: &str) -> Result<std::collections::HashMap<String, String>> {
     let out = run_text(
         None,
-        &[OsStr::new("ls-remote"), OsStr::new("--end-of-options"), OsStr::new(url)],
+        &[
+            OsStr::new("ls-remote"),
+            OsStr::new("--refs"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(url),
+        ],
     )
     .await
     .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;

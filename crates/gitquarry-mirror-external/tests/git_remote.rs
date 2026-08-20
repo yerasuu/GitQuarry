@@ -119,3 +119,25 @@ fn redact_url_strips_every_occurrence() {
     let redacted = redact_url(text);
     assert!(!redacted.contains("s3cr3t"));
 }
+
+#[tokio::test]
+async fn ls_remote_refs_skips_the_peeled_entry_of_an_annotated_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let git_dir = dir.path().join("repo.git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    run_git(&git_dir, &["init", "--quiet", "--bare"]);
+    let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init");
+    update_ref(&git_dir, "refs/heads/main", &sha).await.unwrap();
+    run_git(&git_dir, &["tag", "-a", "v1", "-m", "release", &sha]);
+
+    let refs = ls_remote_refs(&git_dir.to_string_lossy()).await.unwrap();
+    // The tag itself is a real ref (pointing at the tag object, not the
+    // commit); its `^{}` companion is not a name any refspec can carry.
+    assert!(refs.contains_key("refs/tags/v1"));
+    assert_ne!(refs.get("refs/tags/v1"), Some(&sha));
+    assert!(
+        refs.keys().all(|name| !name.ends_with("^{}")),
+        "peeled entries leaked into the ref map: {:?}",
+        refs.keys().collect::<Vec<_>>()
+    );
+}
