@@ -232,6 +232,12 @@ pub struct SyncReport {
     pub pulled: usize,
     /// Refs that moved on both sides with neither an ancestor of the other.
     pub diverged: Vec<String>,
+    /// Refs deleted on one side, left alone on the other. Tracked apart
+    /// from `diverged` precisely so [`Self::failure_summary`] ignores them:
+    /// somebody deleting a branch is a normal thing to do, and counting it
+    /// as a failure left the mirror permanently red — and every "sync now"
+    /// click reporting an error — until the other side was deleted too.
+    pub deleted: Vec<String>,
     /// `(ref name, error)`, in sweep order. Already redacted: every git
     /// call that takes a credentialed URL redacts its own `Err`.
     pub errors: Vec<(String, String)>,
@@ -508,7 +514,11 @@ pub async fn sync_mirror_once(
         // at all (nothing to fetch), or both sides already agree (nothing
         // to resolve). This is also the *only* fetch on the pull path —
         // `RefAction::Pull` below deliberately doesn't repeat it.
-        let needs_remote_objects = remote_sha.is_some() && local_sha != remote_sha;
+        // A ref present on one side only, with a `last_synced` sha, was
+        // deleted — `plan_ref_sync` refuses to touch it either way, so
+        // fetching its objects would be a round trip per tick, forever.
+        let deleted_one_side = last_synced.is_some() && (local_sha.is_none() || remote_sha.is_none());
+        let needs_remote_objects = !deleted_one_side && remote_sha.is_some() && local_sha != remote_sha;
         if needs_remote_objects
             && let Err(e) = crate::git_remote::fetch_ref_from_remote_url(bare_repo, &url, &ref_name).await
         {
@@ -552,15 +562,17 @@ pub async fn sync_mirror_once(
                 }
                 .await
             }
-            // Both land on `Diverged`: the two sides disagree and this sweep
-            // refuses to force either one. A deletion isn't a *divergence*
-            // strictly speaking, but it needs exactly the same treatment —
-            // shown in the UI, `last_synced` left alone, nothing written —
-            // and giving it its own `RefSyncStatus` variant would mean
-            // migrating a stored enum for no behavioural difference.
-            Some(RefAction::Diverged | RefAction::DeletedOneSide) => {
+            // Both get `RefSyncStatus::Diverged`: the two sides disagree
+            // and this sweep refuses to force either one. Giving a deletion
+            // its own stored variant would mean migrating an enum for no
+            // behavioural difference — the *report* is where they part
+            // ways, since only one of them is a failure.
+            Some(action @ (RefAction::Diverged | RefAction::DeletedOneSide)) => {
                 record_ref_status(ctx, resolved, mirror, &ref_name, RefSyncStatus::Diverged).await;
-                report.diverged.push(ref_name.clone());
+                match action {
+                    RefAction::DeletedOneSide => report.deleted.push(ref_name.clone()),
+                    _ => report.diverged.push(ref_name.clone()),
+                }
                 continue;
             }
         };

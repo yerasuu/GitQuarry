@@ -833,3 +833,20 @@ async fn sync_mirror_once_refuses_a_pull_that_violates_the_repos_own_policy() {
     let (manifest, _etag) = source.remote.get_manifest().await.unwrap();
     assert_eq!(manifest.refs.get("refs/heads/main"), None);
 }
+
+/// Somebody deleting a branch is a normal thing to do — it must not leave
+/// the mirror permanently red, unlike a genuine divergence.
+#[test]
+fn a_ref_deleted_on_one_side_isnt_reported_as_a_sweep_failure() {
+    let deleted = SyncReport {
+        deleted: vec!["refs/heads/gone".to_string()],
+        ..Default::default()
+    };
+    assert_eq!(deleted.failure_summary(), None);
+
+    let diverged = SyncReport {
+        diverged: vec!["refs/heads/both-moved".to_string()],
+        ..Default::default()
+    };
+    assert!(diverged.failure_summary().is_some());
+}
