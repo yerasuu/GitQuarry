@@ -1,7 +1,7 @@
 //! Required reviewers — usernames who must approve before
-//! `domain::pull_request::merge` lets any PR land, on top of whatever a
+//! `domain::merge_request::merge` lets any MR land, on top of whatever a
 //! `CODEOWNERS` file in the repo additionally requires for the specific
-//! paths a PR touches (see that function's own doc comment).
+//! paths an MR touches (see that function's own doc comment).
 
 use super::{FlashOutcome, RepoConfForm};
 use crate::webui::{AppError, non_empty, repo_link, settings_section};

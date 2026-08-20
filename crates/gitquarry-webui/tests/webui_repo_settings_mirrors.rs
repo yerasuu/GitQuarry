@@ -129,9 +129,9 @@ fn a_whole_mirror_failure_shows_with_its_message_in_the_tooltip() {
 }
 
 #[test]
-fn shows_linked_prs_only_for_a_mirror_with_pr_sync_on() {
+fn shows_linked_prs_only_for_a_mirror_with_mr_sync_on() {
     let mut mirror = sample_mirror("m1");
-    mirror.sync_pull_requests = true;
+    mirror.sync_merge_requests = true;
     let mut links = HashMap::new();
     links.insert(
         "m1".to_string(),
@@ -151,14 +151,14 @@ fn shows_linked_prs_only_for_a_mirror_with_pr_sync_on() {
         gitquarry_i18n::Locale::En,
     )
     .into_string();
-    assert!(html.contains("linked pull requests"));
+    assert!(html.contains("linked merge requests"));
     assert!(html.contains("#3"));
     assert!(html.contains("#7"));
 }
 
 #[test]
-fn hides_the_linked_prs_section_when_pr_sync_is_off() {
-    let mirror = sample_mirror("m1"); // sync_pull_requests defaults to false
+fn hides_the_linked_prs_section_when_mr_sync_is_off() {
+    let mirror = sample_mirror("m1"); // sync_merge_requests defaults to false
     let no_links = HashMap::new();
     let html = render_mirrors_section(
         "acme/demo",
@@ -169,5 +169,5 @@ fn hides_the_linked_prs_section_when_pr_sync_is_off() {
         gitquarry_i18n::Locale::En,
     )
     .into_string();
-    assert!(!html.contains("linked pull requests"));
+    assert!(!html.contains("linked merge requests"));
 }

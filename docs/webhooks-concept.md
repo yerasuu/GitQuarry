@@ -11,7 +11,7 @@ Roadmap gap paired with CI — `docs/feature-compare.md` names CI+webhooks+notif
 | Question | Decision | Why |
 |---|---|---|
 | Event source | One internal emission point, `events::emit(ctx, RepoEvent)`, called from the places domain state actually changes — not something webhooks or CI each reinvent. | This *is* the Phase 0 `docs/ci-cd-concept.md` deferred; building it twice (once per consumer) would duplicate "what counts as a push" logic exactly the way that doc warned against. |
-| v1 event types | `push`, `pull_request` (opened/updated/merged/closed), `issue` (opened/closed), `release` (published). | Covers GitHub-parity basics without shipping every issue/PR sub-event (comment, label, milestone) on day one — those are Phase 5, additive, not blocking. |
+| v1 event types | `push`, `merge_request` (opened/updated/merged/closed), `issue` (opened/closed), `release` (published). | Covers GitHub-parity basics without shipping every issue/MR sub-event (comment, label, milestone) on day one — those are Phase 5, additive, not blocking. |
 | Storage | New `Webhook` entity, own `s3db` collection scoped per-repo (`Collection::new_owned`, same pattern `access::repo_permission_index` already uses for a per-repo-scoped collection) — **not** folded into `RepoConfig` the way `labels: Vec<Label>` is. | A webhook holds a signing secret; embedding it in `RepoConfig` would put that secret in the payload of every ordinary repo-settings read. Same reasoning `docs/ci-cd-concept.md` gives for keeping `Secret` its own entity. |
 | Delivery timing | Fire-and-forget background task, spawned the same detached way `ssh.rs:337`'s post-push block already spawns `update_primary_language` — a push must never block on a slow or dead webhook target. | Git push latency is a hard UX constraint; webhook delivery reliability is handled by retry, not by making the pusher wait. |
 | Signing | HMAC-SHA256 over the raw JSON body with the webhook's own secret, sent as `X-GitQuarry-Signature-256`; event type as `X-GitQuarry-Event`. GitHub-compatible header shape. | Lets existing receiver-side tooling (already written against GitHub's convention) work against gitquarry with zero changes on the receiving end. |
@@ -36,9 +36,9 @@ Concrete rules for `validate_webhook_url` / the delivery path:
 
 ### Phase 1 — internal event bus (the `docs/ci-cd-concept.md` Phase 0 dependency)
 
-- `crates/gitquarry-core/src/events/mod.rs` (new): `RepoEvent` enum (`Push`, `PullRequest`, `Issue`, `Release` variants carrying just the ids/shas needed, not full domain objects — consumers fetch detail via existing domain functions if they need more), `emit(ctx, event)` fanning out to registered consumers.
+- `crates/gitquarry-core/src/events/mod.rs` (new): `RepoEvent` enum (`Push`, `MergeRequest`, `Issue`, `Release` variants carrying just the ids/shas needed, not full domain objects — consumers fetch detail via existing domain functions if they need more), `emit(ctx, event)` fanning out to registered consumers.
 - Wire the `Push` variant into the existing post-`receive-pack`-success block (`git/ssh.rs:337`, `git/http.rs`'s equivalent) — today that block only re-syncs the mirror; it gains one more detached call.
-- Wire `PullRequest`/`Issue`/`Release` variants into the relevant `domain/pull_request/`, `domain/issue.rs`, `domain/release.rs` mutation points, right after each successful CAS write.
+- Wire `MergeRequest`/`Issue`/`Release` variants into the relevant `domain/merge_request/`, `domain/issue.rs`, `domain/release.rs` mutation points, right after each successful CAS write.
 - v1 consumer registered here: none yet — Phase 2/3 add the webhook dispatcher, Phase 6 of `docs/ci-cd-concept.md` adds CI. Keeps this phase reviewable on its own.
 
 ### Phase 2 — `Webhook` entity + validation
@@ -60,7 +60,7 @@ Concrete rules for `validate_webhook_url` / the delivery path:
 
 ### Phase 5 — event coverage expansion
 
-- Additive `RepoEvent` variants: comment created (issue/PR), label changed, milestone changed, PR review submitted. Each is a small addition to an existing domain mutation point, not new plumbing — Phase 1's bus already carries arbitrary variants.
+- Additive `RepoEvent` variants: comment created (issue/MR), label changed, milestone changed, MR review submitted. Each is a small addition to an existing domain mutation point, not new plumbing — Phase 1's bus already carries arbitrary variants.
 
 ### Phase 6 — `gitquarry-ci` wiring
 
@@ -80,7 +80,7 @@ Concrete rules for `validate_webhook_url` / the delivery path:
 - `crates/gitquarry-core/src/webhooks/{mod,delivery,payload}.rs` (new)
 - `crates/gitquarry-core/src/validate.rs` (`validate_webhook_url`)
 - `crates/gitquarry-core/src/git/{ssh,http}.rs` (Push event emission)
-- `crates/gitquarry-core/src/domain/{pull_request/,issue.rs,release.rs}` (event emission)
+- `crates/gitquarry-core/src/domain/{merge_request/,issue.rs,release.rs}` (event emission)
 - `crates/gitquarry-webui/src/auth/web/repo_settings/webhooks.rs` (new)
 
 ## Verification

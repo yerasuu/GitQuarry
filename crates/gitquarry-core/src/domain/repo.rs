@@ -312,10 +312,10 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
 /// host they control, which needs no token to do since a blank token field
 /// means "keep the stored one" — the credential itself.
 ///
-/// `pulls/` and `lfs-locks/` aren't credentials, just wrong: a fork
-/// starting life with the upstream's pull requests, review threads and
+/// `merges/` and `lfs-locks/` aren't credentials, just wrong: a fork
+/// starting life with the upstream's merge requests, review threads and
 /// held LFS locks isn't what a fork is, and no forge behaves that way.
-const NOT_INHERITED_BY_A_COPY: [&str; 3] = ["mirrors/", "pulls/", "lfs-locks/"];
+const NOT_INHERITED_BY_A_COPY: [&str; 3] = ["mirrors/", "merges/", "lfs-locks/"];
 
 /// Strips [`NOT_INHERITED_BY_A_COPY`] from a freshly copied repo. Runs
 /// *after* the copy rather than filtering inside `copy_all_to`: that
@@ -816,8 +816,8 @@ pub async fn set_topics(ctx: &AppContext, resolved: &ResolvedRepo, raw_csv: &str
 
 /// Parses `"alice, bob, ..."`, hard-validating each name resolves to a real
 /// user — unlike [`set_topics`]'s silently-drop-the-bad-token tolerance, a
-/// typo'd required reviewer would make every future PR on this repo
-/// permanently unmergeable (`domain::pull_request::missing_required_reviewers`
+/// typo'd required reviewer would make every future MR on this repo
+/// permanently unmergeable (`domain::merge_request::missing_required_reviewers`
 /// has no way to know "nobody by that name can ever satisfy this"), so this
 /// bails on the first name that doesn't resolve and names it, same as
 /// `domain::issue::edit`'s assignee validation.

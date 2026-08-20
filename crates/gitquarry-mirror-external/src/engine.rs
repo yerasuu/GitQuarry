@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// How many CAS-conflict retries [`persist_pulled_ref_to_s3`] attempts
-/// before giving up — same bound `storage::pull_requests::next_pr_number`
+/// before giving up — same bound `storage::merge_requests::next_mr_number`
 /// uses for its own CAS retry loop.
 const MANIFEST_CAS_MAX_RETRIES: u32 = 8;
 
@@ -108,11 +108,11 @@ fn credentialed_url_impl(remote_url: &str, token: &str) -> String {
 /// while it runs and which every clone and push needs too.
 ///
 /// Two sweeps of the same repo used to be able to interleave: Track A
-/// serialized itself on the repo lock, but [`crate::pr_sync`] runs after
+/// serialized itself on the repo lock, but [`crate::mr_sync`] runs after
 /// that guard is dropped and took no lock at all, so two concurrent
 /// triggers (two git requests through `mirror::sync_external_before_serving`,
 /// or one of those racing the periodic tick) both discovered the same
-/// unlinked PR and both created it — duplicate PRs upstream, duplicate
+/// unlinked MR and both created it — duplicate MRs upstream, duplicate
 /// imports locally.
 ///
 /// A sweep always takes this lock *before* the repo's own, never the other
@@ -161,14 +161,14 @@ pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Res
                 Some(format!("{e:#}"))
             }
         };
-        // Track B, opt-in: PR discovery assumes Track A's own ref sync
-        // right above already pulled every PR's head/base branch locally,
+        // Track B, opt-in: MR discovery assumes Track A's own ref sync
+        // right above already pulled every MR's head/base branch locally,
         // so this always runs after, never in parallel with it.
-        if mirror.sync_pull_requests
-            && let Err(e) = crate::pr_sync::sync_pull_requests_once(ctx, resolved, &mirror).await
+        if mirror.sync_merge_requests
+            && let Err(e) = crate::mr_sync::sync_merge_requests_once(ctx, resolved, &mirror).await
         {
             eprintln!(
-                "gitquarry-mirror-external: warning: PR sync for mirror '{}' ({}) failed: {e:#}",
+                "gitquarry-mirror-external: warning: MR sync for mirror '{}' ({}) failed: {e:#}",
                 mirror.label, mirror.id
             );
             // Only if the ref sync above didn't already fail: that one is
@@ -219,8 +219,8 @@ pub async fn sync_one_mirror_now(
         if let Some(failure) = report.failure_summary() {
             bail!("{failure}");
         }
-        if mirror.sync_pull_requests {
-            crate::pr_sync::sync_pull_requests_once(ctx, resolved, mirror).await?;
+        if mirror.sync_merge_requests {
+            crate::mr_sync::sync_merge_requests_once(ctx, resolved, mirror).await?;
         }
         Ok(())
     }

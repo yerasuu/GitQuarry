@@ -2,7 +2,7 @@
 //! (GitHub/GitLab/Codeberg), see `docs/external-mirror-concept.md`. Last
 //! phase of Track A: everything below is a thin transport layer over
 //! `mirror::external::domain`/`access` — no sync logic lives here. Track
-//! B's own last phase (PR-sync status) lives here too: a `sync_pull_requests`
+//! B's own last phase (MR-sync status) lives here too: a `sync_merge_requests`
 //! checkbox on the mirror form, and — for a mirror with it on — a small
 //! table of its `ExternalPrLink`s.
 
@@ -19,23 +19,23 @@ use gitquarry_mirror_external::domain;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashMap;
 
-/// Every linked PR for every mirror in `mirrors` that has `sync_pull_requests`
+/// Every linked MR for every mirror in `mirrors` that has `sync_merge_requests`
 /// on, keyed by mirror id — fetched once per page render/action and passed
 /// down to [`render_mirrors_section`], rather than each mirror row fetching
 /// its own (this can run inside a hot request path, same reasoning as
 /// `access::list_external_mirrors`' own "small, curated, fine to just list"
-/// tradeoff, extended one level to its PR links).
-pub(crate) async fn fetch_pr_links_by_mirror(
+/// tradeoff, extended one level to its MR links).
+pub(crate) async fn fetch_mr_links_by_mirror(
     ctx: &AppContext,
     uid: &Uid,
     mirrors: &[(ExternalMirror, String)],
 ) -> Result<HashMap<String, Vec<ExternalPrLink>>> {
     let mut by_mirror = HashMap::new();
     for (mirror, _etag) in mirrors {
-        if !mirror.sync_pull_requests {
+        if !mirror.sync_merge_requests {
             continue;
         }
-        let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id).await?;
+        let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id).await?;
         by_mirror.insert(mirror.id.clone(), links);
     }
     Ok(by_mirror)
@@ -98,7 +98,7 @@ pub(super) async fn save_mirror(
                 provider: parse_provider(&form.provider),
                 direction: parse_direction(&form.direction),
                 enabled: form.mirror_enabled == "1",
-                sync_pull_requests: form.sync_pull_requests == "1",
+                sync_merge_requests: form.sync_merge_requests == "1",
                 label: form.label.trim().to_string(),
                 ..Default::default()
             };
@@ -139,7 +139,7 @@ pub(super) async fn save_mirror(
             mirror.provider = parse_provider(&form.provider);
             mirror.direction = parse_direction(&form.direction);
             mirror.enabled = form.mirror_enabled == "1";
-            mirror.sync_pull_requests = form.sync_pull_requests == "1";
+            mirror.sync_merge_requests = form.sync_merge_requests == "1";
             mirror.label = form.label.trim().to_string();
             let cas = match domain::update(ctx, &resolved.uid, &mirror, &form.mirror_etag).await {
                 Ok(cas) => cas,
@@ -257,7 +257,7 @@ fn render_mirror_form(
 ) -> Markup {
     use gitquarry_i18n::web::repo_settings as t;
     let action_url = repo_link(repo_name, "settings", "").to_string();
-    let (action, mirror_id, etag, remote_url, provider, direction, label, enabled, sync_pull_requests) = match existing
+    let (action, mirror_id, etag, remote_url, provider, direction, label, enabled, sync_merge_requests) = match existing
     {
         Some((m, etag)) => (
             "edit_mirror",
@@ -268,7 +268,7 @@ fn render_mirror_form(
             m.direction,
             m.label.as_str(),
             m.enabled,
-            m.sync_pull_requests,
+            m.sync_merge_requests,
         ),
         None => (
             "add_mirror",
@@ -319,8 +319,8 @@ fn render_mirror_form(
                 " " (t::mirror_field_label_enabled(locale))
             }
             label {
-                input type="checkbox" name="sync_pull_requests" value="1" checked[sync_pull_requests];
-                " " (t::mirror_field_label_sync_pull_requests(locale))
+                input type="checkbox" name="sync_merge_requests" value="1" checked[sync_merge_requests];
+                " " (t::mirror_field_label_sync_merge_requests(locale))
             }
             button type="submit" {
                 (if mirror_id.is_empty() { t::add_mirror_button(locale) } else { t::save_mirror_button(locale) })
@@ -329,23 +329,23 @@ fn render_mirror_form(
     }
 }
 
-/// One mirror's linked PRs — local number, external number, and the
+/// One mirror's linked MRs — local number, external number, and the
 /// last-synced cursor (`ExternalPrLink::remote_updated_cursor`), all a
 /// settings-tab operator needs to sanity-check Track B's sync without
 /// digging into storage directly. Nothing here is actionable (no
-/// merge/close/comment buttons) — that's the pull-request pages themselves.
-fn render_pr_links_table(links: &[ExternalPrLink], locale: gitquarry_i18n::Locale) -> Markup {
+/// merge/close/comment buttons) — that's the merge-request pages themselves.
+fn render_mr_links_table(links: &[ExternalPrLink], locale: gitquarry_i18n::Locale) -> Markup {
     use gitquarry_i18n::web::repo_settings as t;
     html! {
         @if links.is_empty() {
-            p class="muted" { em { (t::no_linked_prs_hint(locale)) } }
+            p class="muted" { em { (t::no_linked_mrs_hint(locale)) } }
         } @else {
             div class="scroll-x" {
             table class="list" {
                 tr {
-                    th { (t::pr_link_table_header_local(locale)) }
-                    th { (t::pr_link_table_header_external(locale)) }
-                    th { (t::pr_link_table_header_cursor(locale)) }
+                    th { (t::mr_link_table_header_local(locale)) }
+                    th { (t::mr_link_table_header_external(locale)) }
+                    th { (t::mr_link_table_header_cursor(locale)) }
                 }
                 @for link in links {
                     tr {
@@ -363,7 +363,7 @@ fn render_pr_links_table(links: &[ExternalPrLink], locale: gitquarry_i18n::Local
 pub fn render_mirrors_section(
     repo_name: &str,
     mirrors: &[(ExternalMirror, String)],
-    pr_links: &HashMap<String, Vec<ExternalPrLink>>,
+    mr_links: &HashMap<String, Vec<ExternalPrLink>>,
     csrf: &str,
     pending_token: Option<&(String, String)>,
     locale: gitquarry_i18n::Locale,
@@ -432,11 +432,11 @@ pub fn render_mirrors_section(
                             }
                         }
                     }
-                    @if mirror.sync_pull_requests {
+                    @if mirror.sync_merge_requests {
                         tr {
                             td colspan="5" {
-                                strong { (t::linked_prs_heading(locale)) }
-                                (render_pr_links_table(pr_links.get(&mirror.id).map_or(&[][..], Vec::as_slice), locale))
+                                strong { (t::linked_mrs_heading(locale)) }
+                                (render_mr_links_table(mr_links.get(&mirror.id).map_or(&[][..], Vec::as_slice), locale))
                             }
                         }
                     }

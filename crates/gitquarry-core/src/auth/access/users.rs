@@ -57,7 +57,7 @@ pub async fn get_user(
 }
 
 /// Batched avatar-mime lookup for a set of usernames — what a list view
-/// (`IssueMeta::author`/`PullRequestMeta::author`: denormalized `String`s,
+/// (`IssueMeta::author`/`MergeRequestMeta::author`: denormalized `String`s,
 /// no `User` fetched for them anywhere else today) needs to pick an
 /// uploaded avatar over the identicon fallback per row, without holding a
 /// full `User` per row the way [`super::repo_index::list_repo_permissions`]'s

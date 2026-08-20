@@ -2,17 +2,17 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::domain::pull_request::{self, NewPullRequest};
+use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
 use gitquarry_core::storage::local::LocalBackend;
-use gitquarry_core::storage::pull_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
+use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_i18n::Locale;
-use gitquarry_webui::webui::repo::pulls::handlers::parse_verdict;
-use gitquarry_webui::webui::repo::pulls::*;
+use gitquarry_webui::webui::repo::merges::handlers::parse_verdict;
+use gitquarry_webui::webui::repo::merges::*;
 use std::sync::Arc;
 
-/// The query params a plain pull-detail view arrives with: none. The
+/// The query params a plain merge-detail view arrives with: none. The
 /// anchor params only appear when the diff's per-line link was followed.
 fn no_params() -> std::collections::HashMap<String, String> {
     std::collections::HashMap::new()
@@ -68,9 +68,9 @@ async fn put_branch(target: &ResolvedRepo, branch: &str, sha: &str) {
 }
 
 /// A real bare repo with `main` and a `feature` branch one commit ahead —
-/// `domain::pull_request::diff` shells real `git diff`/`git log` against
+/// `domain::merge_request::diff` shells real `git diff`/`git log` against
 /// this, unlike the manifest-only fake shas `put_branch` writes (which
-/// only need to satisfy `branch_exists`'s existence check at PR-creation
+/// only need to satisfy `branch_exists`'s existence check at MR-creation
 /// time).
 fn init_repo_with_branches(root: &std::path::Path) -> std::path::PathBuf {
     let git_dir = root.join("bare.git");
@@ -79,7 +79,7 @@ fn init_repo_with_branches(root: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Same as [`init_repo_with_branches`] but at an exact, caller-chosen
-/// `git_dir` — `pull_request::merge`'s test needs it placed exactly
+/// `git_dir` — `merge_request::merge`'s test needs it placed exactly
 /// where `AppContext::open_mirror` would put it (`mirrors_root/<uid>`),
 /// not an arbitrary subdirectory.
 fn init_mirror_with_branches(git_dir: &std::path::Path) {
@@ -129,24 +129,24 @@ fn init_mirror_with_branches(git_dir: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn pulls_list_shows_hint_when_empty() {
+async fn merges_list_shows_hint_when_empty() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
-    let html = render_pulls_list(&ctx, &target, "team/proj", "open", None, &HeaderMap::new(), Locale::En)
+    let html = render_merges_list(&ctx, &target, "team/proj", "open", None, &HeaderMap::new(), Locale::En)
         .await
         .unwrap();
-    assert!(html.contains("no pull requests yet"));
+    assert!(html.contains("no merge requests yet"));
 }
 
 #[tokio::test]
-async fn pulls_list_shows_each_pr_linked_by_number() {
+async fn merges_list_shows_each_mr_linked_by_number() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -154,22 +154,22 @@ async fn pulls_list_shows_each_pr_linked_by_number() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
 
-    let html = render_pulls_list(&ctx, &target, "team/proj", "open", None, &HeaderMap::new(), Locale::En)
+    let html = render_merges_list(&ctx, &target, "team/proj", "open", None, &HeaderMap::new(), Locale::En)
         .await
         .unwrap();
     assert!(html.contains("Add widget"));
-    assert!(html.contains("view=pull&amp;number=1") || html.contains("view=pull&number=1"));
+    assert!(html.contains("view=merge&amp;number=1") || html.contains("view=merge&number=1"));
 }
 
 #[tokio::test]
-async fn pull_detail_404s_for_a_nonexistent_number() {
+async fn merge_detail_404s_for_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     assert!(
-        render_pull_detail(
+        render_merge_detail(
             &ctx,
             &target,
             "team/proj",
@@ -185,14 +185,14 @@ async fn pull_detail_404s_for_a_nonexistent_number() {
 }
 
 #[tokio::test]
-async fn pull_detail_shows_close_form_only_for_the_author_or_a_developer() {
+async fn merge_detail_shows_close_form_only_for_the_author_or_a_developer() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -200,10 +200,10 @@ async fn pull_detail_shows_close_form_only_for_the_author_or_a_developer() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
 
     // Anonymous viewer: no close form.
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -215,22 +215,22 @@ async fn pull_detail_shows_close_form_only_for_the_author_or_a_developer() {
     )
     .await
     .unwrap();
-    assert!(!html.contains(r#"action="/_pulls/close""#));
+    assert!(!html.contains(r#"action="/_merges/close""#));
     assert!(html.contains("add world"), "{html}");
     assert!(html.contains("no comments yet"));
     // Anonymous viewer: no comment form either.
-    assert!(!html.contains(r#"action="/_pulls/comment""#));
+    assert!(!html.contains(r#"action="/_merges/comment""#));
 }
 
 #[tokio::test]
-async fn pull_detail_shows_existing_comments() {
+async fn merge_detail_shows_existing_comments() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -238,12 +238,12 @@ async fn pull_detail_shows_existing_comments() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
-    pull_request::add_comment(&ctx, &target, 1, "bob", "looks good to me", Locale::En)
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::add_comment(&ctx, &target, 1, "bob", "looks good to me", Locale::En)
         .await
         .unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -268,7 +268,7 @@ async fn a_line_comment_renders_in_the_diff_and_leaves_the_thread_alone() {
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -276,10 +276,10 @@ async fn a_line_comment_renders_in_the_diff_and_leaves_the_thread_alone() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
     // `init_repo_with_branches`'s feature commit adds "world" as f.txt's
     // second line.
-    pull_request::add_line_comment(
+    merge_request::add_line_comment(
         &ctx,
         &target,
         1,
@@ -295,7 +295,7 @@ async fn a_line_comment_renders_in_the_diff_and_leaves_the_thread_alone() {
     .await
     .unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -321,7 +321,7 @@ async fn an_unplaceable_line_comment_falls_back_to_the_thread() {
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -329,8 +329,8 @@ async fn an_unplaceable_line_comment_falls_back_to_the_thread() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
-    pull_request::add_line_comment(
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::add_line_comment(
         &ctx,
         &target,
         1,
@@ -346,7 +346,7 @@ async fn an_unplaceable_line_comment_falls_back_to_the_thread() {
     .await
     .unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -366,14 +366,14 @@ async fn an_unplaceable_line_comment_falls_back_to_the_thread() {
 }
 
 #[tokio::test]
-async fn pull_detail_shows_reviews_and_their_collapsed_state() {
+async fn merge_detail_shows_reviews_and_their_collapsed_state() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -381,9 +381,9 @@ async fn pull_detail_shows_reviews_and_their_collapsed_state() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -397,12 +397,12 @@ async fn pull_detail_shows_reviews_and_their_collapsed_state() {
     .unwrap();
     assert!(html.contains("no reviews yet"));
     // Anonymous viewer: no review form.
-    assert!(!html.contains(r#"action="/_pulls/review""#));
+    assert!(!html.contains(r#"action="/_merges/review""#));
 
-    pull_request::add_review(&ctx, &target, 1, "bob", ReviewVerdict::Approved, "lgtm", Locale::En)
+    merge_request::add_review(&ctx, &target, 1, "bob", ReviewVerdict::Approved, "lgtm", Locale::En)
         .await
         .unwrap();
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -428,14 +428,14 @@ fn an_unrecognized_verdict_falls_back_to_the_neutral_one() {
 }
 
 #[tokio::test]
-async fn pull_detail_hides_the_merge_button_from_an_anonymous_viewer() {
+async fn merge_detail_hides_the_merge_button_from_an_anonymous_viewer() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -443,9 +443,9 @@ async fn pull_detail_hides_the_merge_button_from_an_anonymous_viewer() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -457,19 +457,19 @@ async fn pull_detail_hides_the_merge_button_from_an_anonymous_viewer() {
     )
     .await
     .unwrap();
-    assert!(!html.contains(r#"action="/_pulls/merge""#));
+    assert!(!html.contains(r#"action="/_merges/merge""#));
 }
 
 #[tokio::test]
-async fn pull_detail_shows_merge_info_once_merged() {
+async fn merge_detail_shows_merge_info_once_merged() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
-    // `pull_request::merge` opens the target's own mirror, unlike
-    // `diff`/`render_pull_detail`'s caller-supplied `git_dir` — placed
+    // `merge_request::merge` opens the target's own mirror, unlike
+    // `diff`/`render_merge_detail`'s caller-supplied `git_dir` — placed
     // exactly where `AppContext::open_mirror` would put it, with a
     // manifest that matches (same technique
-    // `domain::pull_request::tests::init_target_mirror` uses).
+    // `domain::merge_request::tests::init_target_mirror` uses).
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
     init_mirror_with_branches(&git_dir);
     let (main_sha, feature_sha) = (
@@ -487,7 +487,7 @@ async fn pull_detail_shows_merge_info_once_merged() {
     manifest.refs.insert("refs/heads/feature".to_string(), feature_sha);
     target.remote.put_manifest(&manifest, None).await.unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -495,12 +495,12 @@ async fn pull_detail_shows_merge_info_once_merged() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
-    pull_request::merge(&ctx, &target, 1, "carol", MergeStrategy::Merge, Locale::En)
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::merge(&ctx, &target, 1, "carol", MergeStrategy::Merge, Locale::En)
         .await
         .unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -513,11 +513,11 @@ async fn pull_detail_shows_merge_info_once_merged() {
     .await
     .unwrap();
     assert!(html.contains("carol"), "{html}");
-    assert!(!html.contains(r#"action="/_pulls/merge""#));
+    assert!(!html.contains(r#"action="/_merges/merge""#));
 }
 
 #[tokio::test]
-async fn pull_detail_shows_labels_assignees_and_requested_reviewers() {
+async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
@@ -556,7 +556,7 @@ async fn pull_detail_shows_labels_assignees_and_requested_reviewers() {
         .unwrap();
     }
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -564,12 +564,12 @@ async fn pull_detail_shows_labels_assignees_and_requested_reviewers() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
-    pull_request::edit_metadata(
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::edit_metadata(
         &ctx,
         &target,
         1,
-        pull_request::PrMetadataEdit {
+        merge_request::MrMetadataEdit {
             title: "Add widget",
             description: "d",
             labels_csv: "bug",
@@ -581,7 +581,7 @@ async fn pull_detail_shows_labels_assignees_and_requested_reviewers() {
     .await
     .unwrap();
 
-    let html = render_pull_detail(
+    let html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -599,14 +599,14 @@ async fn pull_detail_shows_labels_assignees_and_requested_reviewers() {
 }
 
 #[tokio::test]
-async fn pull_detail_shows_draft_badge_and_hides_it_once_ready() {
+async fn merge_detail_shows_draft_badge_and_hides_it_once_ready() {
     let dir = tempfile::tempdir().unwrap();
     let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -614,10 +614,10 @@ async fn pull_detail_shows_draft_badge_and_hides_it_once_ready() {
         description: "d",
         author: "alice",
     };
-    pull_request::create(&ctx, &target, new, Locale::En).await.unwrap();
-    pull_request::mark_draft(&ctx, &target, 1, Locale::En).await.unwrap();
+    merge_request::create(&ctx, &target, new, Locale::En).await.unwrap();
+    merge_request::mark_draft(&ctx, &target, 1, Locale::En).await.unwrap();
 
-    let draft_html = render_pull_detail(
+    let draft_html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",
@@ -631,8 +631,8 @@ async fn pull_detail_shows_draft_badge_and_hides_it_once_ready() {
     .unwrap();
     assert!(draft_html.contains("draft"), "{draft_html}");
 
-    pull_request::mark_ready(&ctx, &target, 1, Locale::En).await.unwrap();
-    let ready_html = render_pull_detail(
+    merge_request::mark_ready(&ctx, &target, 1, Locale::En).await.unwrap();
+    let ready_html = render_merge_detail(
         &ctx,
         &target,
         "team/proj",

@@ -1,13 +1,13 @@
 //! `ForgeApi`: one shared trait, one thin adapter per external forge
 //! (GitHub/GitLab/Codeberg) — Track B of `docs/external-mirror-concept.md`.
 //! Same "one shared shape, several thin adapters" pattern
-//! `storage::pull_requests::PrDetail` already established for core's
-//! own PR-proxy: the sync engine (`mirror::external`'s PR-sync pass, still
+//! `storage::merge_requests::MrDetail` already established for core's
+//! own MR-proxy: the sync engine (`mirror::external`'s MR-sync pass, still
 //! to land) only ever talks to `dyn ForgeApi`, never to a specific
 //! provider's REST shape directly.
 //!
 //! GitHub was built and validated against a real account first, its own
-//! trait shape and anti-loop bookkeeping (`mirror::external::pr_sync`)
+//! trait shape and anti-loop bookkeeping (`mirror::external::mr_sync`)
 //! proven before GitLab/Codeberg followed as thin impls of the same trait
 //! (CLAUDE.md's no-speculative-abstraction rule: validate against one real
 //! target before multiplying it by three).
@@ -61,12 +61,12 @@ pub(crate) fn check_path_segment(kind: &str, value: &str) -> Result<()> {
 }
 
 /// A pull/merge request as the external side represents it — deliberately
-/// flatter than `PullRequestMeta` (no local `source_repo` uid, no
+/// flatter than `MergeRequestMeta` (no local `source_repo` uid, no
 /// `description` markdown-vs-plain distinction): this is only ever compared
-/// against `ExternalPrLink`/mapped into a local `PullRequestMeta`, never
+/// against `ExternalPrLink`/mapped into a local `MergeRequestMeta`, never
 /// stored verbatim.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RemotePr {
+pub struct RemoteMr {
     pub number: u64,
     pub title: String,
     pub body: String,
@@ -77,7 +77,7 @@ pub struct RemotePr {
     /// fork-qualified ref would be meaningless here.
     pub source_branch: String,
     pub target_branch: String,
-    pub state: RemotePrState,
+    pub state: RemoteMrState,
     pub author: String,
     pub created_at: String,
     pub updated_at: String,
@@ -87,7 +87,7 @@ pub struct RemotePr {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RemotePrState {
+pub enum RemoteMrState {
     #[default]
     Open,
     Closed,
@@ -106,7 +106,7 @@ pub struct RemoteComment {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct NewRemotePr {
+pub struct NewRemoteMr {
     pub title: String,
     pub body: String,
     pub head: String,
@@ -118,34 +118,34 @@ pub struct NewRemotePr {
 /// caller uses for an unrotated token, so a caller only ever has to name
 /// what actually changed.
 #[derive(Debug, Clone, Default)]
-pub struct PrPatch {
+pub struct MrPatch {
     pub title: Option<String>,
     pub body: Option<String>,
-    pub state: Option<RemotePrState>,
+    pub state: Option<RemoteMrState>,
 }
 
-/// One external forge's PR/MR + comment API, reduced to exactly what
-/// `mirror::external`'s PR-sync pass needs — never a general-purpose
+/// One external forge's MR/MR + comment API, reduced to exactly what
+/// `mirror::external`'s MR-sync pass needs — never a general-purpose
 /// provider SDK. `Send + Sync` so a `Box<dyn ForgeApi>` can cross an
 /// `.await` inside the sync loop's own concurrency (same bound
 /// `s3db::Backend` already carries for the same reason).
 #[async_trait::async_trait]
 pub trait ForgeApi: Send + Sync {
-    /// Every PR updated at-or-after `since` (an RFC 3339 timestamp, the
-    /// provider's own `updated_at`), or every PR at all if `since` is
-    /// `None` — a mirror's very first PR-sync tick has no cursor yet. Newest
+    /// Every MR updated at-or-after `since` (an RFC 3339 timestamp, the
+    /// provider's own `updated_at`), or every MR at all if `since` is
+    /// `None` — a mirror's very first MR-sync tick has no cursor yet. Newest
     /// first, so `since`-less callers can find the first entry outside
     /// their window without necessarily paging through everything (a given
     /// impl remains free to just fetch one page if that's already enough).
-    async fn list_pull_requests(&self, since: Option<&str>) -> Result<Vec<RemotePr>>;
-    async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>>;
-    async fn create_pull_request(&self, new: NewRemotePr) -> Result<RemotePr>;
-    async fn update_pull_request(&self, number: u64, patch: PrPatch) -> Result<()>;
-    /// `Ok(RemotePr)` with `state: Merged` and `merge_commit_sha` set on
+    async fn list_merge_requests(&self, since: Option<&str>) -> Result<Vec<RemoteMr>>;
+    async fn get_merge_request(&self, number: u64) -> Result<Option<RemoteMr>>;
+    async fn create_merge_request(&self, new: NewRemoteMr) -> Result<RemoteMr>;
+    async fn update_merge_request(&self, number: u64, patch: MrPatch) -> Result<()>;
+    /// `Ok(RemoteMr)` with `state: Merged` and `merge_commit_sha` set on
     /// success — the sync engine needs that sha immediately to call
-    /// `domain::pull_request::mark_merged_externally`, not on a follow-up
-    /// `get_pull_request`.
-    async fn merge_pull_request(&self, number: u64) -> Result<RemotePr>;
+    /// `domain::merge_request::mark_merged_externally`, not on a follow-up
+    /// `get_merge_request`.
+    async fn accept_merge_request(&self, number: u64) -> Result<RemoteMr>;
     async fn list_comments(&self, number: u64) -> Result<Vec<RemoteComment>>;
     /// Returns the newly created comment (with its provider-assigned `id`)
     /// so the caller can seed `synced_remote_comment_ids` with it

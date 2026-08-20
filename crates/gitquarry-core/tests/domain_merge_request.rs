@@ -1,11 +1,11 @@
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::domain::pull_request::*;
+use gitquarry_core::domain::merge_request::*;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::local::LocalBackend;
-use gitquarry_core::storage::pull_requests::{
-    CommentAnchor, DiffSide, MergeStrategy, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
+use gitquarry_core::storage::merge_requests::{
+    CommentAnchor, DiffSide, MergeRequestMeta, MergeStrategy, MrReview, MrStatus, ReviewVerdict,
 };
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
@@ -99,7 +99,7 @@ async fn create_rejects_a_nonexistent_branch() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -118,7 +118,7 @@ async fn create_then_get_roundtrips_and_numbers_increment() {
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
 
-    let new = |title: &'static str| NewPullRequest {
+    let new = |title: &'static str| NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -137,7 +137,7 @@ async fn create_then_get_roundtrips_and_numbers_increment() {
 
     let fetched = get(&ctx, &target, 1).await.unwrap().unwrap();
     assert_eq!(fetched.title, "First");
-    assert_eq!(fetched.status, PrStatus::Open);
+    assert_eq!(fetched.status, MrStatus::Open);
 }
 
 #[tokio::test]
@@ -148,7 +148,7 @@ async fn list_returns_newest_first_and_filters_by_status() {
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
 
-    let new = |title: &'static str| NewPullRequest {
+    let new = |title: &'static str| NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -165,10 +165,10 @@ async fn list_returns_newest_first_and_filters_by_status() {
     close(&ctx, &target, 1, gitquarry_i18n::Locale::Es).await.unwrap();
 
     let all = list(&ctx, &target, None).await.unwrap();
-    assert_eq!(all.iter().map(|pr| pr.number).collect::<Vec<_>>(), vec![2, 1]);
+    assert_eq!(all.iter().map(|mr| mr.number).collect::<Vec<_>>(), vec![2, 1]);
 
-    let open = list(&ctx, &target, Some(PrStatus::Open)).await.unwrap();
-    assert_eq!(open.iter().map(|pr| pr.number).collect::<Vec<_>>(), vec![2]);
+    let open = list(&ctx, &target, Some(MrStatus::Open)).await.unwrap();
+    assert_eq!(open.iter().map(|mr| mr.number).collect::<Vec<_>>(), vec![2]);
 }
 
 #[tokio::test]
@@ -178,7 +178,7 @@ async fn close_then_reopen_roundtrips_and_rejects_wrong_transitions() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -188,23 +188,23 @@ async fn close_then_reopen_roundtrips_and_rejects_wrong_transitions() {
     };
     create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
 
-    // Can't reopen an already-open PR.
+    // Can't reopen an already-open MR.
     assert!(reopen(&ctx, &target, 1, gitquarry_i18n::Locale::Es).await.is_err());
 
     assert_eq!(
         close(&ctx, &target, 1, gitquarry_i18n::Locale::Es).await.unwrap(),
         Cas::Ok
     );
-    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, PrStatus::Closed);
+    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, MrStatus::Closed);
 
-    // Can't close an already-closed PR.
+    // Can't close an already-closed MR.
     assert!(close(&ctx, &target, 1, gitquarry_i18n::Locale::Es).await.is_err());
 
     assert_eq!(
         reopen(&ctx, &target, 1, gitquarry_i18n::Locale::Es).await.unwrap(),
         Cas::Ok
     );
-    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, PrStatus::Open);
+    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, MrStatus::Open);
 }
 
 #[tokio::test]
@@ -234,7 +234,7 @@ async fn add_comment_then_list_comments_roundtrips() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -259,13 +259,13 @@ async fn add_comment_then_list_comments_roundtrips() {
     );
 }
 
-/// Creates PR #1 on `target`, authored by `alice`, from a manifest-only
-/// `feature` -> `main` pair — enough for anything that only needs the PR
+/// Creates MR #1 on `target`, authored by `alice`, from a manifest-only
+/// `feature` -> `main` pair — enough for anything that only needs the MR
 /// to exist, not a real git tree behind it.
-async fn create_pr_authored_by_alice(ctx: &AppContext, target: &ResolvedRepo) {
+async fn create_mr_authored_by_alice(ctx: &AppContext, target: &ResolvedRepo) {
     put_branch(target, "main", &"a".repeat(40)).await;
     put_branch(target, "feature", &"b".repeat(40)).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -281,7 +281,7 @@ async fn add_line_comment_rejects_a_malformed_anchor() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
-    create_pr_authored_by_alice(&ctx, &target).await;
+    create_mr_authored_by_alice(&ctx, &target).await;
 
     let anchor = |path: &str, line| CommentAnchor {
         path: path.to_string(),
@@ -315,7 +315,7 @@ async fn a_line_comment_lands_on_the_same_thread_as_a_plain_one() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
-    create_pr_authored_by_alice(&ctx, &target).await;
+    create_mr_authored_by_alice(&ctx, &target).await;
 
     add_comment(&ctx, &target, 1, "bob", "plain", gitquarry_i18n::Locale::Es)
         .await
@@ -363,11 +363,11 @@ async fn add_review_rejects_a_nonexistent_number() {
 }
 
 #[tokio::test]
-async fn an_author_may_comment_on_but_never_approve_their_own_pr() {
+async fn an_author_may_comment_on_but_never_approve_their_own_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
-    create_pr_authored_by_alice(&ctx, &target).await;
+    create_mr_authored_by_alice(&ctx, &target).await;
 
     for verdict in [ReviewVerdict::Approved, ReviewVerdict::ChangesRequested] {
         assert!(
@@ -396,7 +396,7 @@ async fn add_review_then_list_reviews_roundtrips_chronologically() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
-    create_pr_authored_by_alice(&ctx, &target).await;
+    create_mr_authored_by_alice(&ctx, &target).await;
 
     assert!(list_reviews(&ctx, &target, 1).await.unwrap().is_empty());
     add_review(
@@ -432,7 +432,7 @@ async fn add_review_then_list_reviews_roundtrips_chronologically() {
 
 #[test]
 fn review_summary_keeps_only_each_reviewers_latest_verdict() {
-    let review = |author: &str, verdict| PrReview {
+    let review = |author: &str, verdict| MrReview {
         author: author.to_string(),
         verdict,
         ..Default::default()
@@ -450,7 +450,7 @@ fn review_summary_keeps_only_each_reviewers_latest_verdict() {
 
 #[test]
 fn a_later_neutral_review_drops_that_reviewer_from_both_sides() {
-    let review = |author: &str, verdict| PrReview {
+    let review = |author: &str, verdict| MrReview {
         author: author.to_string(),
         verdict,
         ..Default::default()
@@ -465,7 +465,7 @@ fn a_later_neutral_review_drops_that_reviewer_from_both_sides() {
 /// A real bare repo with `main` and a `feature` branch one commit ahead —
 /// `diff` shells real `git diff`/`git log` against this, unlike the
 /// manifest-only fake shas the other tests above write (which only need
-/// to satisfy `branch_exists`'s existence check at PR-creation time).
+/// to satisfy `branch_exists`'s existence check at MR-creation time).
 fn init_repo_with_branches(root: &std::path::Path) -> std::path::PathBuf {
     let git_dir = root.join("bare.git");
     let _ = init_mirror_with_branches(&git_dir);
@@ -730,7 +730,7 @@ async fn diff_returns_the_commits_and_the_diff_between_branches() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     let git_dir = init_repo_with_branches(dir.path());
-    let pr = PullRequestMeta {
+    let mr = MergeRequestMeta {
         number: 1,
         source_repo: target.uid.clone(),
         source_branch: "feature".to_string(),
@@ -738,15 +738,15 @@ async fn diff_returns_the_commits_and_the_diff_between_branches() {
         ..Default::default()
     };
 
-    let d = diff(&ctx, &target, &git_dir, &pr).await.unwrap();
+    let d = diff(&ctx, &target, &git_dir, &mr).await.unwrap();
     assert_eq!(d.commits.len(), 1);
     assert_eq!(d.commits[0].subject, "add world");
     assert!(d.diff.contains("world"), "{}", d.diff);
 }
 
-/// A cross-fork pull request whose fork has no such branch — the fork was
+/// A cross-fork merge request whose fork has no such branch — the fork was
 /// deleted, or never pushed it. Renders as an empty diff rather than
-/// failing: this is a read view, and a 500 there hides the pull request's
+/// failing: this is a read view, and a 500 there hides the merge request's
 /// own title, description and discussion behind a data problem the reader
 /// can do nothing about.
 #[tokio::test]
@@ -758,20 +758,20 @@ async fn diff_is_empty_when_the_forks_branch_doesnt_exist() {
     // `AppContext::open_mirror` creates an empty bare repo on demand for
     // a uid it's never seen — this fork has no `feature` branch at all.
     let fork_uid = Uid::from("team/fork".to_string());
-    let pr = PullRequestMeta {
+    let mr = MergeRequestMeta {
         number: 1,
         source_repo: fork_uid,
         source_branch: "feature".to_string(),
         target_branch: "main".to_string(),
         ..Default::default()
     };
-    let d = diff(&ctx, &target, &git_dir, &pr).await.unwrap();
+    let d = diff(&ctx, &target, &git_dir, &mr).await.unwrap();
     assert!(d.diff.is_empty());
     assert!(d.commits.is_empty());
 }
 
 #[tokio::test]
-async fn diff_supports_a_cross_fork_pr() {
+async fn diff_supports_a_cross_fork_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
@@ -843,7 +843,7 @@ async fn diff_supports_a_cross_fork_pr() {
     fork_manifest.refs.insert("refs/heads/feature".to_string(), fork_sha);
     fork_remote.put_manifest(&fork_manifest, None).await.unwrap();
 
-    let pr = PullRequestMeta {
+    let mr = MergeRequestMeta {
         number: 1,
         source_repo: fork_uid,
         source_branch: "feature".to_string(),
@@ -851,21 +851,21 @@ async fn diff_supports_a_cross_fork_pr() {
         ..Default::default()
     };
 
-    let d = diff(&ctx, &target, &target_git_dir, &pr).await.unwrap();
+    let d = diff(&ctx, &target, &target_git_dir, &mr).await.unwrap();
     assert_eq!(d.commits.len(), 1);
     assert_eq!(d.commits[0].subject, "fork commit");
     assert!(d.diff.contains("from the fork"), "{}", d.diff);
 }
 
 #[tokio::test]
-async fn create_rejects_a_cross_repo_pr_when_source_isnt_a_fork_of_the_target() {
+async fn create_rejects_a_cross_repo_mr_when_source_isnt_a_fork_of_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
 
     // An unrelated repo (never forked from `target`) with its own
-    // matching branch — `create` must still refuse it as a PR source.
+    // matching branch — `create` must still refuse it as an MR source.
     let other_uid = Uid::from("team/other".to_string());
     let other_remote = ctx.remote_for_uid(&other_uid);
     let mut other_manifest = Manifest::default();
@@ -883,7 +883,7 @@ async fn create_rejects_a_cross_repo_pr_when_source_isnt_a_fork_of_the_target() 
     .await
     .unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &other_uid,
         source_branch: "feature",
         target_branch: "main",
@@ -916,10 +916,10 @@ async fn init_target_mirror(ctx: &AppContext, target: &ResolvedRepo, conflicting
     (main_sha, feature_sha)
 }
 
-/// A merged pull request whose source branch was deleted afterwards — the
+/// A merged merge request whose source branch was deleted afterwards — the
 /// merge form's own "delete branch" checkbox does exactly that — must still
-/// render. `diff` resolves the head by *branch name* for a same-repo PR, so
-/// once the branch is gone every `git diff base...head` behind the pull
+/// render. `diff` resolves the head by *branch name* for a same-repo MR, so
+/// once the branch is gone every `git diff base...head` behind the merge
 /// request page failed, and the page 500'd.
 #[tokio::test]
 async fn diff_survives_a_source_branch_deleted_after_the_merge() {
@@ -927,7 +927,7 @@ async fn diff_survives_a_source_branch_deleted_after_the_merge() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -959,18 +959,18 @@ async fn diff_survives_a_source_branch_deleted_after_the_merge() {
     manifest.refs.remove("refs/heads/feature");
     target.remote.put_manifest(&manifest, etag.as_deref()).await.unwrap();
 
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
-    let d = diff(&ctx, &target, &git_dir, &pr)
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let d = diff(&ctx, &target, &git_dir, &mr)
         .await
-        .expect("a merged pull request must still render after its branch is deleted");
-    // The merge commit preserves what the pull request landed, so the diff
+        .expect("a merged merge request must still render after its branch is deleted");
+    // The merge commit preserves what the merge request landed, so the diff
     // is still the real thing rather than a blank stand-in.
     assert!(d.diff.contains("f.txt"), "{}", d.diff);
 }
 
 /// The last-resort case: closed *without* merging, and the branch deleted
 /// afterwards. Nothing survives to reconstruct a diff from, so the page
-/// renders with an empty one rather than failing — a closed pull request's
+/// renders with an empty one rather than failing — a closed merge request's
 /// title, description and discussion are still worth reading.
 #[tokio::test]
 async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
@@ -978,7 +978,7 @@ async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -999,8 +999,8 @@ async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
             .success()
     );
 
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
-    let d = diff(&ctx, &target, &git_dir, &pr).await.unwrap();
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let d = diff(&ctx, &target, &git_dir, &mr).await.unwrap();
     assert!(d.diff.is_empty());
     assert!(d.commits.is_empty());
 }
@@ -1016,7 +1016,7 @@ async fn fast_forward_moves_the_branch_without_creating_a_commit() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     let (_main_sha, feature_sha) = init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1056,7 +1056,7 @@ async fn fast_forward_refuses_a_diverged_branch() {
     // The conflicting fixture's two branches each carry their own commit,
     // so neither is an ancestor of the other.
     init_target_mirror(&ctx, &target, true).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1090,7 +1090,7 @@ async fn fast_forwardable_tracks_whether_the_branches_diverged() {
         let ctx = test_ctx(dir.path());
         let target = test_target(dir.path());
         init_target_mirror(&ctx, &target, conflicting).await;
-        let new = NewPullRequest {
+        let new = NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -1099,10 +1099,10 @@ async fn fast_forwardable_tracks_whether_the_branches_diverged() {
             author: "alice",
         };
         create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
-        let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+        let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
         let git_dir = ctx.mirrors_root.join(target.uid.as_str());
 
-        let can = fast_forwardable(&ctx, &target, &git_dir, &pr).await.unwrap();
+        let can = fast_forwardable(&ctx, &target, &git_dir, &mr).await.unwrap();
         assert_eq!(can, expected, "conflicting={conflicting}");
     }
 }
@@ -1118,7 +1118,7 @@ async fn a_merge_commit_is_signed_by_the_instance_and_authored_by_the_merger() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1178,7 +1178,7 @@ async fn a_merge_commit_reads_back_as_signed_by_the_instance() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1247,12 +1247,12 @@ async fn merge_rejects_a_nonexistent_number() {
 }
 
 #[tokio::test]
-async fn merge_rejects_a_pr_thats_not_open() {
+async fn merge_rejects_a_mr_thats_not_open() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1278,12 +1278,12 @@ async fn merge_rejects_a_pr_thats_not_open() {
 }
 
 #[tokio::test]
-async fn merge_succeeds_cleanly_and_updates_the_manifest_and_pr_status() {
+async fn merge_succeeds_cleanly_and_updates_the_manifest_and_mr_status() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     let (main_sha, _feature_sha) = init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1312,13 +1312,13 @@ async fn merge_succeeds_cleanly_and_updates_the_manifest_and_pr_status() {
     let (manifest, _etag) = target.remote.get_manifest().await.unwrap();
     assert_eq!(manifest.refs.get("refs/heads/main"), Some(&merge_sha));
 
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
-    assert_eq!(pr.status, PrStatus::Merged);
-    assert_eq!(pr.merge_commit_sha, Some(merge_sha));
-    assert_eq!(pr.merged_by, Some("bob".to_string()));
-    assert!(pr.merged_at.is_some());
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    assert_eq!(mr.status, MrStatus::Merged);
+    assert_eq!(mr.merge_commit_sha, Some(merge_sha));
+    assert_eq!(mr.merged_by, Some("bob".to_string()));
+    assert!(mr.merged_at.is_some());
 
-    // Merging an already-merged PR is rejected, same as any other
+    // Merging an already-merged MR is rejected, same as any other
     // non-`Open` transition.
     assert!(
         merge(
@@ -1353,7 +1353,7 @@ async fn merge_rejects_until_a_required_reviewer_approves() {
     .await
     .unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1411,7 +1411,7 @@ async fn merge_never_requires_the_prs_own_author_to_approve_themselves() {
     init_target_mirror(&ctx, &target, false).await;
 
     let (mut config, etag) = target.remote.get_repo_config().await.unwrap();
-    // The PR's own author -- structurally can never self-approve
+    // The MR's own author -- structurally can never self-approve
     // (`add_review` blocks it), so this must never block the merge.
     config.required_reviewers.insert("alice".to_string());
     gitquarry_core::storage::settings::put_repo_config(
@@ -1424,7 +1424,7 @@ async fn merge_never_requires_the_prs_own_author_to_approve_themselves() {
     .await
     .unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1461,7 +1461,7 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
     manifest.refs.insert("refs/heads/feature".to_string(), feature_sha);
     target.remote.put_manifest(&manifest, None).await.unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1472,7 +1472,7 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
     create(&ctx, &target, new, gitquarry_i18n::Locale::En).await.unwrap();
 
     // No `RepoConfig::required_reviewers` at all -- purely CODEOWNERS
-    // (`f.txt @dave`) naming a required approver for the one path this PR
+    // (`f.txt @dave`) naming a required approver for the one path this MR
     // touches.
     match merge(
         &ctx,
@@ -1515,7 +1515,7 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
     ));
 }
 
-/// The read-only probe the pull-request page renders its conflict notice
+/// The read-only probe the merge-request page renders its conflict notice
 /// from: same verdict `merge` reaches, without writing anything or needing
 /// merge permission — the reader seeing "this won't merge" is usually not
 /// the person who can merge it.
@@ -1525,7 +1525,7 @@ async fn conflicts_reports_the_same_paths_a_merge_attempt_would() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, true).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1534,22 +1534,22 @@ async fn conflicts_reports_the_same_paths_a_merge_attempt_would() {
         author: "alice",
     };
     create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
     let mirror = ctx.open_mirror(&target).await.unwrap();
 
-    let paths = conflicts(&ctx, &target, &mirror.path, &pr).await.unwrap();
+    let paths = conflicts(&ctx, &target, &mirror.path, &mr).await.unwrap();
     assert_eq!(paths, Some(vec!["f.txt".to_string()]));
 }
 
-/// A pull request that merges cleanly reports no conflicts at all, so the
-/// notice never shows on a healthy PR.
+/// A merge request that merges cleanly reports no conflicts at all, so the
+/// notice never shows on a healthy MR.
 #[tokio::test]
 async fn conflicts_is_none_when_the_branches_merge_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1558,10 +1558,10 @@ async fn conflicts_is_none_when_the_branches_merge_cleanly() {
         author: "alice",
     };
     create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
     let mirror = ctx.open_mirror(&target).await.unwrap();
 
-    assert_eq!(conflicts(&ctx, &target, &mirror.path, &pr).await.unwrap(), None);
+    assert_eq!(conflicts(&ctx, &target, &mirror.path, &mr).await.unwrap(), None);
 }
 
 #[tokio::test]
@@ -1570,7 +1570,7 @@ async fn merge_reports_conflicts_without_mutating_anything() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     let (main_sha, _feature_sha) = init_target_mirror(&ctx, &target, true).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1596,11 +1596,11 @@ async fn merge_reports_conflicts_without_mutating_anything() {
     }
 
     // Nothing was written: the target branch still points at its
-    // pre-merge sha, and the PR is still Open.
+    // pre-merge sha, and the MR is still Open.
     let (manifest, _etag) = target.remote.get_manifest().await.unwrap();
     assert_eq!(manifest.refs.get("refs/heads/main"), Some(&main_sha));
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
-    assert_eq!(pr.status, PrStatus::Open);
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    assert_eq!(mr.status, MrStatus::Open);
 }
 
 #[tokio::test]
@@ -1615,7 +1615,7 @@ async fn merge_with_squash_strategy_makes_a_single_parent_commit_with_a_combined
     manifest.refs.insert("refs/heads/feature".to_string(), f2_sha.clone());
     target.remote.put_manifest(&manifest, None).await.unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1661,7 +1661,7 @@ async fn merge_with_squash_strategy_makes_a_single_parent_commit_with_a_combined
 
     let (manifest, _etag) = target.remote.get_manifest().await.unwrap();
     assert_eq!(manifest.refs.get("refs/heads/main"), Some(&squash_sha));
-    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, PrStatus::Merged);
+    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, MrStatus::Merged);
 }
 
 #[tokio::test]
@@ -1676,7 +1676,7 @@ async fn merge_with_rebase_strategy_replays_each_commit_linearly_and_keeps_its_a
     manifest.refs.insert("refs/heads/feature".to_string(), f2_sha.clone());
     target.remote.put_manifest(&manifest, None).await.unwrap();
 
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1724,7 +1724,7 @@ async fn merge_with_rebase_strategy_replays_each_commit_linearly_and_keeps_its_a
 
     let (manifest, _etag) = target.remote.get_manifest().await.unwrap();
     assert_eq!(manifest.refs.get("refs/heads/main"), Some(&new_tip));
-    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, PrStatus::Merged);
+    assert_eq!(get(&ctx, &target, 1).await.unwrap().unwrap().status, MrStatus::Merged);
 }
 
 #[tokio::test]
@@ -1733,7 +1733,7 @@ async fn mark_merged_externally_records_status_without_touching_git() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1747,10 +1747,10 @@ async fn mark_merged_externally_records_status_without_touching_git() {
         .await
         .unwrap();
 
-    let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
-    assert_eq!(pr.status, PrStatus::Merged);
-    assert_eq!(pr.merge_commit_sha.as_deref(), Some("deadbeef"));
-    assert_eq!(pr.merged_by.as_deref(), Some("carol"));
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    assert_eq!(mr.status, MrStatus::Merged);
+    assert_eq!(mr.merge_commit_sha.as_deref(), Some("deadbeef"));
+    assert_eq!(mr.merged_by.as_deref(), Some("carol"));
 }
 
 #[tokio::test]
@@ -1759,7 +1759,7 @@ async fn mark_merged_externally_is_idempotent_once_already_merged() {
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let new = NewPullRequest {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1790,11 +1790,11 @@ async fn mark_merged_externally_rejects_a_nonexistent_number() {
 }
 
 /// Assumes `main`/`feature` already exist on `target` — either via
-/// [`put_branch`] (a metadata-only PR, no real mirror) or
+/// [`put_branch`] (a metadata-only MR, no real mirror) or
 /// [`init_target_mirror`] (a real mirror, needed for anything that
 /// actually merges).
-async fn create_test_pr(ctx: &AppContext, target: &ResolvedRepo) -> PullRequestMeta {
-    let new = NewPullRequest {
+async fn create_test_mr(ctx: &AppContext, target: &ResolvedRepo) -> MergeRequestMeta {
+    let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
         target_branch: "main",
@@ -1812,13 +1812,13 @@ async fn edit_metadata_rejects_an_unknown_label() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
+    let mr = create_test_mr(&ctx, &target).await;
 
     let result = edit_metadata(
         &ctx,
         &target,
-        pr.number,
-        PrMetadataEdit {
+        mr.number,
+        MrMetadataEdit {
             title: "t",
             description: "d",
             labels_csv: "nonexistent",
@@ -1838,13 +1838,13 @@ async fn edit_metadata_rejects_an_unknown_assignee() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
+    let mr = create_test_mr(&ctx, &target).await;
 
     let result = edit_metadata(
         &ctx,
         &target,
-        pr.number,
-        PrMetadataEdit {
+        mr.number,
+        MrMetadataEdit {
             title: "t",
             description: "d",
             labels_csv: "",
@@ -1864,13 +1864,13 @@ async fn edit_metadata_rejects_an_unknown_reviewer() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
+    let mr = create_test_mr(&ctx, &target).await;
 
     let result = edit_metadata(
         &ctx,
         &target,
-        pr.number,
-        PrMetadataEdit {
+        mr.number,
+        MrMetadataEdit {
             title: "t",
             description: "d",
             labels_csv: "",
@@ -1893,13 +1893,13 @@ async fn edit_metadata_updates_labels_assignees_and_reviewers() {
     seed_user(&ctx, "carol").await;
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
+    let mr = create_test_mr(&ctx, &target).await;
 
     let cas = edit_metadata(
         &ctx,
         &target,
-        pr.number,
-        PrMetadataEdit {
+        mr.number,
+        MrMetadataEdit {
             title: "t",
             description: "d",
             labels_csv: "bug",
@@ -1912,7 +1912,7 @@ async fn edit_metadata_updates_labels_assignees_and_reviewers() {
     .unwrap();
     assert_eq!(cas, Cas::Ok);
 
-    let updated = get(&ctx, &target, pr.number).await.unwrap().unwrap();
+    let updated = get(&ctx, &target, mr.number).await.unwrap().unwrap();
     assert_eq!(updated.labels, vec!["bug".to_string()]);
     assert_eq!(updated.assignees, vec!["bob".to_string()]);
     assert_eq!(updated.requested_reviewers, vec!["carol".to_string()]);
@@ -1925,48 +1925,48 @@ async fn mark_draft_then_mark_ready_roundtrips_and_rejects_wrong_transitions() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
-    assert!(!pr.is_draft);
+    let mr = create_test_mr(&ctx, &target).await;
+    assert!(!mr.is_draft);
 
-    // Can't mark ready a PR that's already not a draft.
+    // Can't mark ready an MR that's already not a draft.
     assert!(
-        mark_ready(&ctx, &target, pr.number, gitquarry_i18n::Locale::En)
+        mark_ready(&ctx, &target, mr.number, gitquarry_i18n::Locale::En)
             .await
             .is_err()
     );
 
     assert_eq!(
-        mark_draft(&ctx, &target, pr.number, gitquarry_i18n::Locale::En)
+        mark_draft(&ctx, &target, mr.number, gitquarry_i18n::Locale::En)
             .await
             .unwrap(),
         Cas::Ok
     );
-    assert!(get(&ctx, &target, pr.number).await.unwrap().unwrap().is_draft);
+    assert!(get(&ctx, &target, mr.number).await.unwrap().unwrap().is_draft);
 
-    // Can't mark draft a PR that's already a draft.
+    // Can't mark draft an MR that's already a draft.
     assert!(
-        mark_draft(&ctx, &target, pr.number, gitquarry_i18n::Locale::En)
+        mark_draft(&ctx, &target, mr.number, gitquarry_i18n::Locale::En)
             .await
             .is_err()
     );
 
     assert_eq!(
-        mark_ready(&ctx, &target, pr.number, gitquarry_i18n::Locale::En)
+        mark_ready(&ctx, &target, mr.number, gitquarry_i18n::Locale::En)
             .await
             .unwrap(),
         Cas::Ok
     );
-    assert!(!get(&ctx, &target, pr.number).await.unwrap().unwrap().is_draft);
+    assert!(!get(&ctx, &target, mr.number).await.unwrap().unwrap().is_draft);
 }
 
 #[tokio::test]
-async fn merge_rejects_a_draft_pr() {
+async fn merge_rejects_a_draft_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let pr = create_test_pr(&ctx, &target).await;
-    mark_draft(&ctx, &target, pr.number, gitquarry_i18n::Locale::En)
+    let mr = create_test_mr(&ctx, &target).await;
+    mark_draft(&ctx, &target, mr.number, gitquarry_i18n::Locale::En)
         .await
         .unwrap();
 
@@ -1974,7 +1974,7 @@ async fn merge_rejects_a_draft_pr() {
         merge(
             &ctx,
             &target,
-            pr.number,
+            mr.number,
             "bob",
             MergeStrategy::Merge,
             gitquarry_i18n::Locale::En
@@ -1985,16 +1985,16 @@ async fn merge_rejects_a_draft_pr() {
 }
 
 #[tokio::test]
-async fn merge_rejects_a_pr_with_pending_changes_requested() {
+async fn merge_rejects_a_mr_with_pending_changes_requested() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     let target = test_target(dir.path());
     init_target_mirror(&ctx, &target, false).await;
-    let pr = create_test_pr(&ctx, &target).await;
+    let mr = create_test_mr(&ctx, &target).await;
     add_review(
         &ctx,
         &target,
-        pr.number,
+        mr.number,
         "bob",
         ReviewVerdict::ChangesRequested,
         "please fix this",
@@ -2007,7 +2007,7 @@ async fn merge_rejects_a_pr_with_pending_changes_requested() {
         merge(
             &ctx,
             &target,
-            pr.number,
+            mr.number,
             "carol",
             MergeStrategy::Merge,
             gitquarry_i18n::Locale::En
@@ -2022,7 +2022,7 @@ async fn merge_rejects_a_pr_with_pending_changes_requested() {
     add_review(
         &ctx,
         &target,
-        pr.number,
+        mr.number,
         "bob",
         ReviewVerdict::Approved,
         "actually fine",
@@ -2034,7 +2034,7 @@ async fn merge_rejects_a_pr_with_pending_changes_requested() {
         merge(
             &ctx,
             &target,
-            pr.number,
+            mr.number,
             "carol",
             MergeStrategy::Merge,
             gitquarry_i18n::Locale::En
@@ -2051,17 +2051,17 @@ async fn edit_comment_updates_the_body_but_rejects_a_non_author() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
-    add_comment(&ctx, &target, pr.number, "alice", "first", gitquarry_i18n::Locale::En)
+    let mr = create_test_mr(&ctx, &target).await;
+    add_comment(&ctx, &target, mr.number, "alice", "first", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
-    let (comment_id, _) = &list_comments(&ctx, &target, pr.number).await.unwrap()[0];
+    let (comment_id, _) = &list_comments(&ctx, &target, mr.number).await.unwrap()[0];
 
     assert!(
         edit_comment(
             &ctx,
             &target,
-            pr.number,
+            mr.number,
             comment_id,
             "bob",
             "hijacked",
@@ -2075,7 +2075,7 @@ async fn edit_comment_updates_the_body_but_rejects_a_non_author() {
         edit_comment(
             &ctx,
             &target,
-            pr.number,
+            mr.number,
             comment_id,
             "alice",
             "edited",
@@ -2085,7 +2085,7 @@ async fn edit_comment_updates_the_body_but_rejects_a_non_author() {
         .unwrap(),
         Cas::Ok
     );
-    let comments = list_comments(&ctx, &target, pr.number).await.unwrap();
+    let comments = list_comments(&ctx, &target, mr.number).await.unwrap();
     assert_eq!(comments[0].1.body, "edited");
 }
 
@@ -2096,17 +2096,17 @@ async fn delete_comment_removes_it_but_rejects_a_non_author() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
-    add_comment(&ctx, &target, pr.number, "alice", "first", gitquarry_i18n::Locale::En)
+    let mr = create_test_mr(&ctx, &target).await;
+    add_comment(&ctx, &target, mr.number, "alice", "first", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
-    let (comment_id, _) = &list_comments(&ctx, &target, pr.number).await.unwrap()[0];
+    let (comment_id, _) = &list_comments(&ctx, &target, mr.number).await.unwrap()[0];
 
     assert!(
         delete_comment(
             &ctx,
             &target,
-            pr.number,
+            mr.number,
             comment_id,
             "bob",
             false,
@@ -2119,7 +2119,7 @@ async fn delete_comment_removes_it_but_rejects_a_non_author() {
     delete_comment(
         &ctx,
         &target,
-        pr.number,
+        mr.number,
         comment_id,
         "alice",
         false,
@@ -2127,7 +2127,7 @@ async fn delete_comment_removes_it_but_rejects_a_non_author() {
     )
     .await
     .unwrap();
-    assert!(list_comments(&ctx, &target, pr.number).await.unwrap().is_empty());
+    assert!(list_comments(&ctx, &target, mr.number).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -2137,17 +2137,17 @@ async fn delete_comment_allows_a_moderator_to_remove_someone_elses() {
     let target = test_target(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
-    let pr = create_test_pr(&ctx, &target).await;
-    add_comment(&ctx, &target, pr.number, "alice", "first", gitquarry_i18n::Locale::En)
+    let mr = create_test_mr(&ctx, &target).await;
+    add_comment(&ctx, &target, mr.number, "alice", "first", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
-    let (comment_id, _) = &list_comments(&ctx, &target, pr.number).await.unwrap()[0];
+    let (comment_id, _) = &list_comments(&ctx, &target, mr.number).await.unwrap()[0];
 
     // Not the author, but the caller vouches `bob` is Developer+ on the repo.
     delete_comment(
         &ctx,
         &target,
-        pr.number,
+        mr.number,
         comment_id,
         "bob",
         true,
@@ -2155,7 +2155,7 @@ async fn delete_comment_allows_a_moderator_to_remove_someone_elses() {
     )
     .await
     .unwrap();
-    assert!(list_comments(&ctx, &target, pr.number).await.unwrap().is_empty());
+    assert!(list_comments(&ctx, &target, mr.number).await.unwrap().is_empty());
 }
 
 /// `feature`'s tip carries a subject and a body, so a submit that leaves
@@ -2226,10 +2226,10 @@ async fn create_falls_back_to_the_tip_commits_subject_and_body() {
     )
     .await;
 
-    let pr = create(
+    let mr = create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -2241,8 +2241,8 @@ async fn create_falls_back_to_the_tip_commits_subject_and_body() {
     )
     .await
     .unwrap();
-    assert_eq!(pr.title, "add the widget");
-    assert_eq!(pr.description, "Because the old one broke.\nSecond line.");
+    assert_eq!(mr.title, "add the widget");
+    assert_eq!(mr.description, "Because the old one broke.\nSecond line.");
 }
 
 /// Only the blank field is filled in — a submitted title still wins.
@@ -2253,10 +2253,10 @@ async fn create_keeps_whatever_the_submitter_actually_typed() {
     let target = test_target(dir.path());
     target_with_message(&ctx, &target, "add the widget", "commit body").await;
 
-    let pr = create(
+    let mr = create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -2268,12 +2268,12 @@ async fn create_keeps_whatever_the_submitter_actually_typed() {
     )
     .await
     .unwrap();
-    assert_eq!(pr.title, "my own title");
-    assert_eq!(pr.description, "commit body");
+    assert_eq!(mr.title, "my own title");
+    assert_eq!(mr.description, "commit body");
 }
 
 /// A tip commit with no body leaves the description empty — an empty
-/// description is an ordinary PR, unlike an empty title.
+/// description is an ordinary MR, unlike an empty title.
 #[tokio::test]
 async fn create_leaves_the_description_empty_when_the_commit_has_no_body() {
     let dir = tempfile::tempdir().unwrap();
@@ -2281,10 +2281,10 @@ async fn create_leaves_the_description_empty_when_the_commit_has_no_body() {
     let target = test_target(dir.path());
     target_with_message(&ctx, &target, "just a subject", "").await;
 
-    let pr = create(
+    let mr = create(
         &ctx,
         &target,
-        NewPullRequest {
+        NewMergeRequest {
             source_repo: &target.uid,
             source_branch: "feature",
             target_branch: "main",
@@ -2296,6 +2296,6 @@ async fn create_leaves_the_description_empty_when_the_commit_has_no_body() {
     )
     .await
     .unwrap();
-    assert_eq!(pr.title, "just a subject");
-    assert_eq!(pr.description, "");
+    assert_eq!(mr.title, "just a subject");
+    assert_eq!(mr.description, "");
 }

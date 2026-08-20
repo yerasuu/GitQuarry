@@ -1,5 +1,5 @@
 //! Thin `AppContext`-level wrapper over [`crate::access`] — same `domain`/
-//! `web` boundary as `gitquarry_core::domain::pull_request`: transport-agnostic,
+//! `web` boundary as `gitquarry_core::domain::merge_request`: transport-agnostic,
 //! `anyhow::Result`, no CSRF/session/audit concerns (those stay in
 //! `webui::repo_settings::mirrors`).
 

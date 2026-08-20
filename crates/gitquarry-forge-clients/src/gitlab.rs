@@ -4,7 +4,7 @@
 //! [`super::ForgeApi`] shape `github.rs` already validated against a real
 //! account.
 
-use super::{ForgeApi, NewRemotePr, PrPatch, RemoteComment, RemotePr, RemotePrState};
+use super::{ForgeApi, MrPatch, NewRemoteMr, RemoteComment, RemoteMr, RemoteMrState};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use std::time::Duration;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// One request's page size, and how many pages a list call will walk
 /// before giving up. Unpaginated single-page listings silently truncated
-/// every PR thread past the first page — a repo's comment history is
+/// every MR thread past the first page — a repo's comment history is
 /// exactly the kind of thing that outgrows one page and then quietly
 /// stops syncing. The page cap is the backstop against a pathological
 /// thread pinning a sync tick forever; hitting it logs rather than
@@ -140,7 +140,7 @@ pub struct GlMergeRequest {
     description: Option<String>,
     /// `"opened"` | `"closed"` | `"merged"` | `"locked"` — `"locked"` never
     /// shows up for a plain unprotected project, folded into `Open` here if
-    /// it ever does rather than adding a fourth [`RemotePrState`] variant
+    /// it ever does rather than adding a fourth [`RemoteMrState`] variant
     /// only GitLab has.
     #[cfg(any(test, feature = "test-util"))]
     pub state: String,
@@ -192,23 +192,23 @@ pub struct GlMergeRequest {
     sha: Option<String>,
 }
 
-impl From<GlMergeRequest> for RemotePr {
+impl From<GlMergeRequest> for RemoteMr {
     fn from(mr: GlMergeRequest) -> Self {
         let state = match mr.state.as_str() {
-            "merged" => RemotePrState::Merged,
-            "closed" => RemotePrState::Closed,
-            _ => RemotePrState::Open,
+            "merged" => RemoteMrState::Merged,
+            "closed" => RemoteMrState::Closed,
+            _ => RemoteMrState::Open,
         };
         // GitLab's dedicated `merge_commit_sha` is only ever populated for a
         // "merge commit" strategy merge; a fast-forward/squash merge leaves
         // it `null` and reports the real resulting sha in `sha` instead —
         // falling back to that keeps `mark_merged_externally` from ever
-        // recording a `None` merge sha for a PR GitLab itself considers
+        // recording a `None` merge sha for an MR GitLab itself considers
         // cleanly merged.
         let merge_commit_sha = mr
             .merge_commit_sha
-            .or(if state == RemotePrState::Merged { mr.sha } else { None });
-        RemotePr {
+            .or(if state == RemoteMrState::Merged { mr.sha } else { None });
+        RemoteMr {
             number: mr.iid,
             title: mr.title,
             body: mr.description.unwrap_or_default(),
@@ -287,7 +287,7 @@ async fn ok_json<T: for<'de> Deserialize<'de>>(resp: reqwest::Response, url: &st
 
 #[async_trait::async_trait]
 impl ForgeApi for GitLabForge {
-    async fn list_pull_requests(&self, since: Option<&str>) -> Result<Vec<RemotePr>> {
+    async fn list_merge_requests(&self, since: Option<&str>) -> Result<Vec<RemoteMr>> {
         // Same "no server-side `since`, sort newest-updated-first and cut
         // client-side" shape as `github.rs` — GitLab's `updated_after`
         // filter exists but its semantics (inclusive/exclusive, timezone
@@ -308,8 +308,8 @@ impl ForgeApi for GitLabForge {
             let before = out.len();
             out.extend(
                 mrs.into_iter()
-                    .map(RemotePr::from)
-                    .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since)),
+                    .map(RemoteMr::from)
+                    .take_while(|mr| since.is_none_or(|since| mr.updated_at.as_str() > since)),
             );
             let crossed_cursor = out.len() - before < PER_PAGE;
             if last_page || crossed_cursor {
@@ -320,7 +320,7 @@ impl ForgeApi for GitLabForge {
         Ok(out)
     }
 
-    async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>> {
+    async fn get_merge_request(&self, number: u64) -> Result<Option<RemoteMr>> {
         let url = self.mrs_url(&format!("/{number}"));
         let resp = self
             .request(reqwest::Method::GET, &url)
@@ -333,7 +333,7 @@ impl ForgeApi for GitLabForge {
         Ok(Some(ok_json::<GlMergeRequest>(resp, &url).await?.into()))
     }
 
-    async fn create_pull_request(&self, new: NewRemotePr) -> Result<RemotePr> {
+    async fn create_merge_request(&self, new: NewRemoteMr) -> Result<RemoteMr> {
         let url = self.mrs_url("");
         let resp = self
             .request(reqwest::Method::POST, &url)
@@ -349,14 +349,14 @@ impl ForgeApi for GitLabForge {
         Ok(ok_json::<GlMergeRequest>(resp, &url).await?.into())
     }
 
-    async fn update_pull_request(&self, number: u64, patch: PrPatch) -> Result<()> {
+    async fn update_merge_request(&self, number: u64, patch: MrPatch) -> Result<()> {
         let url = self.mrs_url(&format!("/{number}"));
         // GitLab's PUT never takes `Merged` as a `state_event` either — same
         // "use the dedicated merge endpoint" split as GitHub's PATCH.
         let state_event = match patch.state {
-            Some(RemotePrState::Open) => Some("reopen"),
-            Some(RemotePrState::Closed) => Some("close"),
-            Some(RemotePrState::Merged) | None => None,
+            Some(RemoteMrState::Open) => Some("reopen"),
+            Some(RemoteMrState::Closed) => Some("close"),
+            Some(RemoteMrState::Merged) | None => None,
         };
         let resp = self
             .request(reqwest::Method::PUT, &url)
@@ -376,7 +376,7 @@ impl ForgeApi for GitLabForge {
         Ok(())
     }
 
-    async fn merge_pull_request(&self, number: u64) -> Result<RemotePr> {
+    async fn accept_merge_request(&self, number: u64) -> Result<RemoteMr> {
         let url = self.mrs_url(&format!("/{number}/merge"));
         let resp = self
             .request(reqwest::Method::PUT, &url)
@@ -392,7 +392,7 @@ impl ForgeApi for GitLabForge {
         // GitLab's merge response is the full updated MR object — but
         // re-fetching anyway keeps this path identical to `github.rs` and
         // immune to any field GitLab's merge response happens to omit.
-        self.get_pull_request(number)
+        self.get_merge_request(number)
             .await?
             .with_context(|| format!("MR !{number} vanished right after merging"))
     }

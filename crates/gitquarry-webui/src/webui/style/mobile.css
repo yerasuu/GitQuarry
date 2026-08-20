@@ -50,7 +50,7 @@
      otherwise, well under 24px tall at this breakpoint. */
   table.tabs td.tabs-right button { min-height: 36px; padding: var(--pad-y) var(--pad-x-sm); }
   /* Every tab row (`page_chrome::tab_links`: the main tabs bar, the project
-     sub-nav, the issues/pulls status filter) turns into a plain stacked
+     sub-nav, the issues/merges status filter) turns into a plain stacked
      vertical list down here instead of a horizontal-scroll strip — no
      separate gesture (scroll sideways) just for these. `.tabs-list a`'s
      `display: block` alone gets the short rows (sub-nav's 4, the status

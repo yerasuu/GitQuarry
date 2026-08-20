@@ -1,7 +1,7 @@
 //! [`ExternalMirror`] CRUD — one entity per repo-scoped push/pull mirror
 //! against a non-gitquarry forge (GitHub/GitLab/Codeberg), see
 //! `docs/external-mirror-concept.md`. Hand-built collection, not
-//! `#[derive(Entity)]`: same reason as `gitquarry_core::storage::pull_requests`
+//! `#[derive(Entity)]`: same reason as `gitquarry_core::storage::merge_requests`
 //! — the path needs the *target* repo's `Uid` at runtime, and
 //! `#[entity(collection = "...")]` only accepts a compile-time literal.
 //!
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// How many CAS-conflict retries [`update_last_synced`] attempts before
-/// giving up — same bound `storage::pull_requests::next_pr_number` uses for
+/// giving up — same bound `storage::merge_requests::next_mr_number` uses for
 /// its own CAS retry loop.
 const UPDATE_MAX_RETRIES: u32 = 8;
 
@@ -132,15 +132,15 @@ pub struct ExternalMirror {
     /// is visible.
     #[serde(default)]
     pub last_error: Option<String>,
-    /// Track B, opt-in and off by default: bidirectional PR/MR sync against
+    /// Track B, opt-in and off by default: bidirectional MR/MR sync against
     /// this same mirror's `remote_url`/`token` — no separate credential.
     /// Every `ExternalMirrorProvider` except `Other` has a real
-    /// `forge::ForgeApi` impl (`crate::pr_sync::build_forge`); `Other` is a
+    /// `forge::ForgeApi` impl (`crate::mr_sync::build_forge`); `Other` is a
     /// UI label for "some git host", not a specific REST API to target, so
     /// turning this on for one fails loudly on the next sync tick rather
     /// than silently doing nothing.
     #[serde(default)]
-    pub sync_pull_requests: bool,
+    pub sync_merge_requests: bool,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -170,7 +170,7 @@ fn mirrors_collection(uid: &Uid) -> Collection {
 /// CAS) one mirror. Two paths, not an upsert like
 /// `PeerCredential::set_peer_credential`'s unconditional overwrite: the web
 /// UI needs a stable identity per mirror across edits, so an edit must go
-/// through the same CAS discipline as `storage::pull_requests::put_pull_request`
+/// through the same CAS discipline as `storage::merge_requests::put_merge_request`
 /// rather than silently clobbering concurrent changes.
 pub async fn set_external_mirror(
     backend: &dyn Backend,
@@ -233,11 +233,11 @@ pub async fn delete_external_mirror(backend: &dyn Backend, cipher: &Cipher, uid:
     mirrors_collection(uid).delete(backend, cipher, mirror_id).await;
 }
 
-/// Links one local `gitquarry_core::storage::pull_requests::PullRequestMeta`
+/// Links one local `gitquarry_core::storage::merge_requests::MergeRequestMeta`
 /// to its counterpart on `mirror_id`'s external forge — Track B, keyed by
 /// `local_number` (scoped under one specific mirror, not the whole repo: a
 /// repo can have several `ExternalMirror`s, each with independent,
-/// unrelated PR sync).
+/// unrelated MR sync).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExternalPrLink {
     #[serde(default)]
@@ -255,35 +255,35 @@ pub struct ExternalPrLink {
     /// export", it never stops the same local comment from being exported
     /// again on the next tick (nothing about exporting it changes `origin`,
     /// nor should it — it's still genuinely local). Keyed by
-    /// `storage::pull_requests::list_pr_comments_with_keys`' own per-comment
+    /// `storage::merge_requests::list_mr_comments_with_keys`' own per-comment
     /// key, the only stable per-comment identity this codebase has.
     #[serde(default)]
     pub synced_local_comment_keys: std::collections::BTreeSet<String>,
-    /// The provider's own PR `updated_at` as of the last successful sync —
-    /// both this mirror's `list_pull_requests(since)` cursor for future
+    /// The provider's own MR `updated_at` as of the last successful sync —
+    /// both this mirror's `list_merge_requests(since)` cursor for future
     /// ticks, and the last-write-wins baseline for the title/description/
     /// open-closed field sync.
     #[serde(default)]
     pub remote_updated_cursor: String,
 }
 
-fn pr_links_collection(uid: &Uid, mirror_id: &str) -> Collection {
-    Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/mirrors/{mirror_id}/pr-links"))
+fn mr_links_collection(uid: &Uid, mirror_id: &str) -> Collection {
+    Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/mirrors/{mirror_id}/mr-links"))
 }
 
-pub async fn get_pr_link(
+pub async fn get_mr_link(
     backend: &dyn Backend,
     cipher: &Cipher,
     uid: &Uid,
     mirror_id: &str,
     local_number: u64,
 ) -> Result<(Option<ExternalPrLink>, Option<String>)> {
-    pr_links_collection(uid, mirror_id)
+    mr_links_collection(uid, mirror_id)
         .get(backend, cipher, &local_number.to_string())
         .await
 }
 
-pub async fn put_pr_link(
+pub async fn put_mr_link(
     backend: &dyn Backend,
     cipher: &Cipher,
     uid: &Uid,
@@ -291,24 +291,24 @@ pub async fn put_pr_link(
     link: &ExternalPrLink,
     expected_etag: Option<&str>,
 ) -> Result<Cas> {
-    pr_links_collection(uid, mirror_id)
+    mr_links_collection(uid, mirror_id)
         .put(backend, cipher, &link.local_number.to_string(), link, expected_etag)
         .await
 }
 
-/// CAS get/modify/put retry loop over one PR link — the write half of a
-/// [`crate::pr_sync`] pass, which accumulates anti-loop bookkeeping
+/// CAS get/modify/put retry loop over one MR link — the write half of a
+/// [`crate::mr_sync`] pass, which accumulates anti-loop bookkeeping
 /// (`synced_local_comment_keys`, `synced_remote_comment_ids`, the cursor)
 /// as it goes and has to land *all* of it or export the same comments
 /// again on the next tick.
 ///
-/// A plain [`put_pr_link`] with the etag read at the start of that pass
+/// A plain [`put_mr_link`] with the etag read at the start of that pass
 /// dropped the whole set on a conflict, silently: the caller unwrapped the
 /// `Result` and threw the `Cas` away. Re-reading and re-applying is also
 /// the only correct merge here — every field this touches is either a set
 /// insertion or a monotonic cursor, so applying it to whatever landed
 /// meanwhile loses nothing.
-pub async fn merge_pr_link(
+pub async fn merge_mr_link(
     backend: &dyn Backend,
     cipher: &Cipher,
     uid: &Uid,
@@ -316,12 +316,12 @@ pub async fn merge_pr_link(
     local_number: u64,
     apply: impl Fn(&mut ExternalPrLink),
 ) -> Result<()> {
-    let collection = pr_links_collection(uid, mirror_id);
+    let collection = mr_links_collection(uid, mirror_id);
     let key = local_number.to_string();
     for attempt in 1..=UPDATE_MAX_RETRIES {
         let (link, etag) = collection.get::<ExternalPrLink>(backend, cipher, &key).await?;
         let Some(mut link) = link else {
-            bail!("no such PR link: #{local_number} on mirror {mirror_id}");
+            bail!("no such MR link: #{local_number} on mirror {mirror_id}");
         };
         apply(&mut link);
         match collection.put(backend, cipher, &key, &link, etag.as_deref()).await? {
@@ -334,20 +334,20 @@ pub async fn merge_pr_link(
         }
     }
     bail!(
-        "too many CAS conflicts updating PR link #{local_number} on mirror '{mirror_id}' (giving up after {UPDATE_MAX_RETRIES} attempts)"
+        "too many CAS conflicts updating MR link #{local_number} on mirror '{mirror_id}' (giving up after {UPDATE_MAX_RETRIES} attempts)"
     )
 }
 
-/// Every PR link under this one mirror. Link count follows PR count on a
+/// Every MR link under this one mirror. Link count follows MR count on a
 /// mirrored repo — small enough in practice for the same "fan out a tiny
 /// GET per entry" tradeoff [`list_external_mirrors`] already makes.
-pub async fn list_pr_links(
+pub async fn list_mr_links(
     backend: &dyn Backend,
     cipher: &Cipher,
     uid: &Uid,
     mirror_id: &str,
 ) -> Result<Vec<ExternalPrLink>> {
-    let collection = pr_links_collection(uid, mirror_id);
+    let collection = mr_links_collection(uid, mirror_id);
     let ids = collection.list_names(backend).await?;
     let mut links = Vec::with_capacity(ids.len());
     for id in ids {

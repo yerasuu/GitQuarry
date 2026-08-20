@@ -27,9 +27,9 @@ pub mod components;
 pub(crate) mod components;
 pub(crate) mod log;
 #[cfg(any(test, feature = "test-util"))]
-pub mod pulls;
+pub mod merges;
 #[cfg(not(any(test, feature = "test-util")))]
-pub(crate) mod pulls;
+pub(crate) mod merges;
 #[cfg(any(test, feature = "test-util"))]
 pub mod refs;
 #[cfg(not(any(test, feature = "test-util")))]
@@ -68,7 +68,7 @@ use compare::render_compare;
 pub use log::render_log;
 #[cfg(not(any(test, feature = "test-util")))]
 use log::render_log;
-use pulls::{NewPullFormValues, render_new_pull_form, render_pull_detail, render_pulls_list};
+use merges::{NewMergeFormValues, render_merge_detail, render_merges_list, render_new_merge_form};
 #[cfg(any(test, feature = "test-util"))]
 pub use refs::render_refs;
 #[cfg(not(any(test, feature = "test-util")))]
@@ -450,7 +450,7 @@ pub(crate) async fn handler_repo(
             gitquarry_core::auth::access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
         let (manifest, _etag) = resolved.remote.get_manifest().await?;
         let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
-        let pr_links_by_mirror = repo_settings::fetch_pr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
+        let mr_links_by_mirror = repo_settings::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
         let body = repo_settings::render_settings_page(
             &name,
             &config,
@@ -463,7 +463,7 @@ pub(crate) async fn handler_repo(
                 manifest: &manifest,
                 granted: &granted,
                 mirrors: &mirrors_list,
-                pr_links: &pr_links_by_mirror,
+                mr_links: &mr_links_by_mirror,
             },
             repo_settings::PageChrome {
                 csrf: &crate::webui::csrf_field(&headers),
@@ -558,11 +558,11 @@ pub(crate) async fn handler_repo(
 }
 
 /// Reads `filename` from the repo's default branch tree, if any — the
-/// pre-fill source for `new_issue`/`new_pull`'s body/description textarea
-/// (`ISSUE_TEMPLATE.md`/`PULL_REQUEST_TEMPLATE.md`, GitHub's own file
+/// pre-fill source for `new_issue`/`new_merge`'s body/description textarea
+/// (`ISSUE_TEMPLATE.md`/`MERGE_REQUEST_TEMPLATE.md`, GitHub's own file
 /// names and root-level-only location). `None` for a missing file, a repo
 /// with no default branch yet, or any git error — this is a convenience,
-/// never something worth failing the new-issue/new-PR page render over.
+/// never something worth failing the new-issue/new-MR page render over.
 async fn read_repo_template(
     resolved: &gitquarry_core::app::ResolvedRepo,
     mirror_path: &std::path::Path,
@@ -602,7 +602,7 @@ async fn render_repo_view(
         "about" | "activity" => "about",
         "summary" => "summary",
         "releases" | "release" => "releases",
-        "pulls" | "pull" | "new_pull" => "pulls",
+        "merges" | "merge" | "new_merge" => "merges",
         _ => "tree", // tree, blob, blame
     };
     let density = effective_density(ctx, headers).await;
@@ -694,27 +694,27 @@ async fn render_repo_view(
             let tag = require_tag(params, locale)?;
             render_release_detail(ctx, &resolved, &name, tag, headers, locale).await?
         }
-        "pulls" => {
+        "merges" => {
             let status = params.get("status").map(String::as_str).unwrap_or("open");
             let q = params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
             if let Some(q) = q {
                 validate::validate_query(q).map_err(AppError::bad_request)?;
             }
-            render_pulls_list(ctx, &resolved, &name, status, q, headers, locale).await?
+            render_merges_list(ctx, &resolved, &name, status, q, headers, locale).await?
         }
-        "pull" => {
+        "merge" => {
             let number = require_number(params, locale)?;
-            render_pull_detail(ctx, &resolved, &name, &mirror.path, number, params, headers, locale).await?
+            render_merge_detail(ctx, &resolved, &name, &mirror.path, number, params, headers, locale).await?
         }
-        "new_pull" => {
+        "new_merge" => {
             let refs = git::list_refs(&mirror.path).await?;
             let ref_names: Vec<&str> = refs.iter().filter_map(|r| r.strip_prefix("refs/heads/")).collect();
-            let template = read_repo_template(&resolved, &mirror.path, "PULL_REQUEST_TEMPLATE.md").await;
-            render_new_pull_form(
+            let template = read_repo_template(&resolved, &mirror.path, "MERGE_REQUEST_TEMPLATE.md").await;
+            render_new_merge_form(
                 &name,
                 &ref_names,
                 template.as_deref(),
-                NewPullFormValues {
+                NewMergeFormValues {
                     source_repo: "",
                     source_branch: "",
                     target_branch: "",

@@ -83,7 +83,7 @@ pub struct AppContext {
     /// Clone/fetch flood tracker for `git::http`'s `info/refs`/`upload-pack`
     /// handlers — see [`GitRateLimiter`].
     pub git_rate_limiter: GitRateLimiter,
-    /// Fan-out point for domain state changes (push, PR, issue, release) —
+    /// Fan-out point for domain state changes (push, MR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,
     /// `None` unless `gitquarry-server` wired one in at startup — see

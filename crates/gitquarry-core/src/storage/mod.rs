@@ -2,7 +2,7 @@ pub mod audit;
 pub mod commit_sig;
 pub mod entities;
 pub mod lfs_locks;
-pub mod pull_requests;
+pub mod merge_requests;
 pub mod remote;
 pub mod search_index;
 pub mod settings;

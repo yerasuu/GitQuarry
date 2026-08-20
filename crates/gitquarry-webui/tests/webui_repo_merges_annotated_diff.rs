@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
-use gitquarry_core::storage::pull_requests::{CommentAnchor, DiffSide, PrComment};
+use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MrComment};
 use gitquarry_i18n::Locale;
-use gitquarry_webui::webui::repo::pulls::annotated_diff::*;
+use gitquarry_webui::webui::repo::merges::annotated_diff::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -32,7 +32,7 @@ fn view<'a>(
 /// order as the comments they belong to -- `render` indexes into this by
 /// position, so a test that got the order wrong would silently show the
 /// wrong body under a line.
-fn bodies(comments: &[(String, PrComment)]) -> Vec<String> {
+fn bodies(comments: &[(String, MrComment)]) -> Vec<String> {
     comments
         .iter()
         .map(|(_, comment)| gitquarry_webui::webui::markdown::render(&comment.body))
@@ -66,10 +66,10 @@ fn view_as_moderator<'a>(bodies: &'a [String], viewer: Option<&'a str>, headers:
     }
 }
 
-fn anchored(id: &str, path: &str, side: DiffSide, line: u32, body: &str) -> (String, PrComment) {
+fn anchored(id: &str, path: &str, side: DiffSide, line: u32, body: &str) -> (String, MrComment) {
     (
         id.to_string(),
-        PrComment {
+        MrComment {
             author: "bob".to_string(),
             body: body.to_string(),
             anchor: Some(CommentAnchor {
@@ -198,7 +198,7 @@ fn the_form_expands_only_on_the_active_anchor() {
     };
     let out = render(DIFF, &[], &view(&[], true, Some(&active), &HeaderMap::new()));
     let html = out.markup.into_string();
-    assert_eq!(html.matches(r#"action="/_pulls/comment""#).count(), 1);
+    assert_eq!(html.matches(r#"action="/_merges/comment""#).count(), 1);
     // The form's hidden fields carry the anchor back to the handler.
     assert!(html.contains(r#"name="anchor_side" value="new""#), "{html}");
     assert!(html.contains(r#"name="anchor_line" value="4""#), "{html}");
@@ -216,11 +216,11 @@ fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
     .markup
     .into_string();
     assert!(
-        !as_someone_else.contains(r#"action="/_pulls/comment/edit""#),
+        !as_someone_else.contains(r#"action="/_merges/comment/edit""#),
         "{as_someone_else}"
     );
     assert!(
-        !as_someone_else.contains(r#"action="/_pulls/comment/delete""#),
+        !as_someone_else.contains(r#"action="/_merges/comment/delete""#),
         "{as_someone_else}"
     );
 
@@ -232,11 +232,11 @@ fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
     .markup
     .into_string();
     assert!(
-        as_the_author.contains(r#"action="/_pulls/comment/edit""#),
+        as_the_author.contains(r#"action="/_merges/comment/edit""#),
         "{as_the_author}"
     );
     assert!(
-        as_the_author.contains(r#"action="/_pulls/comment/delete""#),
+        as_the_author.contains(r#"action="/_merges/comment/delete""#),
         "{as_the_author}"
     );
 }
@@ -253,11 +253,11 @@ fn a_moderator_can_delete_someone_elses_placed_comment_but_not_edit_it() {
     .markup
     .into_string();
     assert!(
-        !as_moderator.contains(r#"action="/_pulls/comment/edit""#),
+        !as_moderator.contains(r#"action="/_merges/comment/edit""#),
         "{as_moderator}"
     );
     assert!(
-        as_moderator.contains(r#"action="/_pulls/comment/delete""#),
+        as_moderator.contains(r#"action="/_merges/comment/delete""#),
         "{as_moderator}"
     );
 }

@@ -2,14 +2,14 @@ use crate::uid::Uid;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PrStatus {
+pub enum MrStatus {
     #[default]
     Open,
     Closed,
     Merged,
 }
 
-/// How a PR's commits land on its target branch. `Squash`/`Rebase` both
+/// How an MR's commits land on its target branch. `Squash`/`Rebase` both
 /// still run the same conflict check ([`Squash`] via a normal 3-way merge
 /// tree, [`Rebase`] per source commit) — a conflict aborts the same way
 /// regardless of strategy, nothing is written until the whole thing is
@@ -38,7 +38,7 @@ pub enum MergeStrategy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PullRequestMeta {
+pub struct MergeRequestMeta {
     #[serde(default)]
     pub number: u64,
     #[serde(default)]
@@ -47,7 +47,7 @@ pub struct PullRequestMeta {
     /// are.
     #[serde(default)]
     pub description: String,
-    /// Equal to the owning repo's own uid for a same-repo PR; a different
+    /// Equal to the owning repo's own uid for a same-repo MR; a different
     /// uid (a fork's) for a cross-fork one.
     #[serde(default)]
     pub source_repo: Uid,
@@ -56,7 +56,7 @@ pub struct PullRequestMeta {
     #[serde(default)]
     pub target_branch: String,
     #[serde(default)]
-    pub status: PrStatus,
+    pub status: MrStatus,
     #[serde(default)]
     pub author: String,
     #[serde(default)]
@@ -69,16 +69,16 @@ pub struct PullRequestMeta {
     pub merged_by: Option<String>,
     #[serde(default)]
     pub merge_commit_sha: Option<String>,
-    /// A draft PR can't be merged (`domain::pull_request::merge` in
-    /// `gitquarry-core` bails) until `domain::pull_request::mark_ready`
+    /// A draft MR can't be merged (`domain::merge_request::merge` in
+    /// `gitquarry-core` bails) until `domain::merge_request::mark_ready`
     /// flips this back — same "opened but not ready to land" signal
-    /// GitHub's own draft PRs give, scoped down to just the merge-blocking
+    /// GitHub's own draft MRs give, scoped down to just the merge-blocking
     /// bit, no CI-status integration.
     #[serde(default)]
     pub is_draft: bool,
     /// Label names, same free-text-then-validate-against-`RepoConfig.labels`
     /// convention an issue's own labels field already uses — same repo-wide
-    /// vocabulary, shared between issues and PRs rather than each having
+    /// vocabulary, shared between issues and MRs rather than each having
     /// its own.
     #[serde(default)]
     pub labels: Vec<String>,
@@ -87,7 +87,7 @@ pub struct PullRequestMeta {
     /// this codebase follows.
     #[serde(default)]
     pub assignees: Vec<String>,
-    /// Usernames asked to review this PR — distinct from [`PrReview`],
+    /// Usernames asked to review this MR — distinct from [`MrReview`],
     /// which is a review someone actually submitted. Purely a to-do-list
     /// signal: nothing here gates who's *allowed* to submit a review.
     #[serde(default)]
@@ -107,7 +107,7 @@ pub enum DiffSide {
 
 /// Where in a diff a comment hangs. Deliberately positional (path + side +
 /// line), not content-addressed: it points at the diff as rendered for the
-/// PR's *current* head, so a comment whose line no longer appears in that
+/// MR's *current* head, so a comment whose line no longer appears in that
 /// diff falls back to the flat thread rather than pretending to still mark
 /// a spot that moved.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,7 +123,7 @@ pub struct CommentAnchor {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrComment {
+pub struct MrComment {
     #[serde(default)]
     pub author: String,
     /// Markdown, rendered the same way a release's notes / a repo's README
@@ -149,7 +149,7 @@ pub struct PrComment {
     pub anchor: Option<CommentAnchor>,
 }
 
-/// A reviewer's verdict on a PR. `Comment` is the neutral one — a review
+/// A reviewer's verdict on an MR. `Comment` is the neutral one — a review
 /// body without a position either way, the same escape hatch GitHub's own
 /// review form offers when a reviewer wants to weigh in without blocking or
 /// blessing the change.
@@ -161,17 +161,17 @@ pub enum ReviewVerdict {
     Commented,
 }
 
-/// One submitted review. Distinct from a [`PrComment`]: a comment is just
+/// One submitted review. Distinct from a [`MrComment`]: a comment is just
 /// thread chatter, a review carries a [`ReviewVerdict`] that counts toward
-/// the PR's review state. A reviewer can submit several over a PR's life —
-/// only their latest one counts (see `domain::pull_request::review_summary`).
+/// the MR's review state. A reviewer can submit several over an MR's life —
+/// only their latest one counts (see `domain::merge_request::review_summary`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrReview {
+pub struct MrReview {
     #[serde(default)]
     pub author: String,
     #[serde(default)]
     pub verdict: ReviewVerdict,
-    /// Markdown, rendered the same way a [`PrComment`]'s body is. May be
+    /// Markdown, rendered the same way a [`MrComment`]'s body is. May be
     /// empty: a bare approval with nothing to say is a normal review.
     #[serde(default)]
     pub body: String,

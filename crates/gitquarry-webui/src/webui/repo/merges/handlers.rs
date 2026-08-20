@@ -1,4 +1,4 @@
-//! The `/_pulls*` mutation handlers the views in [`super`] POST to.
+//! The `/_merges*` mutation handlers the views in [`super`] POST to.
 //! Top-level routes, not nested under the repo's own `/{*repo}` path — see
 //! [`super`]'s own doc comment on why.
 
@@ -15,19 +15,19 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::entities::{Permission, User};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
-use gitquarry_core::storage::pull_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
+use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
 use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
 
 /// Resolves `repo` and checks the caller can actually see it — creating a
-/// PR needs only view access (see `domain::pull_request`'s own doc comment
+/// MR needs only view access (see `domain::merge_request`'s own doc comment
 /// on the `Reporter` bar), not `Developer`, but it does need *that*.
 /// Checked here rather than inherited: these are top-level routes, not
 /// nested under the repo's own `/{*repo}` path (see [`super`]'s doc
 /// comment), so `handler_repo`'s own [`can_view_repo`] gate never runs in
-/// front of them — without this, any session could open a PR against, or
+/// front of them — without this, any session could open an MR against, or
 /// comment on, a private repo it has no grant on. Close/reopen check the
-/// PR's own author-or-`Developer` bar on top of this, via
+/// MR's own author-or-`Developer` bar on top of this, via
 /// [`require_manage_permission`] below.
 ///
 /// A rejection is 404, not 403, matching every read path's own choice
@@ -58,7 +58,7 @@ async fn resolve_target(
 
 /// `Err` if `number` doesn't exist, or `me` is neither its author nor
 /// `Developer`+ on `repo_name` — the actual state-transition rules
-/// (`domain::pull_request::transition`) are checked again regardless, this
+/// (`domain::merge_request::transition`) are checked again regardless, this
 /// only gates *who* may attempt the transition at all.
 async fn require_manage_permission(
     ctx: &AppContext,
@@ -68,13 +68,13 @@ async fn require_manage_permission(
     number: u64,
     locale: Locale,
 ) -> Result<(), AppError> {
-    let Some(pr) = domain::pull_request::get(ctx, target, number).await? else {
+    let Some(mr) = domain::merge_request::get(ctx, target, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::pull_request_not_found(locale, number)
+            gitquarry_i18n::shared::merge_request_not_found(locale, number)
         )));
     };
-    if pr.author == me.username {
+    if mr.author == me.username {
         return Ok(());
     }
     let perm =
@@ -90,10 +90,10 @@ async fn require_manage_permission(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct NewPullForm {
+pub(crate) struct NewMergeForm {
     repo: String,
     /// Full name (`owner/name`) of the fork to propose merging from — blank
-    /// means "this repo itself" (a same-repo PR). `domain::pull_request::create`
+    /// means "this repo itself" (a same-repo MR). `domain::merge_request::create`
     /// is the actual gate on whether it's allowed (must be a fork of `repo`);
     /// this only resolves the name to a uid.
     #[serde(default)]
@@ -113,7 +113,7 @@ pub(crate) struct NewPullForm {
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<NewPullForm>,
+    Form(form): Form<NewMergeForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
@@ -131,11 +131,11 @@ pub(crate) async fn handler_create_post(
     macro_rules! fail {
         ($msg:expr) => {{
             let topnav = login::topnav(&ctx, &headers).await;
-            let body = super::render_new_pull_form(
+            let body = super::render_new_merge_form(
                 &name,
                 &[],
                 None,
-                super::NewPullFormValues {
+                super::NewMergeFormValues {
                     source_repo: &form.source_repo,
                     source_branch: &form.source_branch,
                     target_branch: &form.target_branch,
@@ -148,7 +148,7 @@ pub(crate) async fn handler_create_post(
             )
             .into_string();
             return Ok(Html(layout(
-                "new pull request",
+                "new merge request",
                 "",
                 &body,
                 &topnav,
@@ -176,7 +176,7 @@ pub(crate) async fn handler_create_post(
         fail!(e.to_string());
     }
 
-    let new = domain::pull_request::NewPullRequest {
+    let new = domain::merge_request::NewMergeRequest {
         source_repo: &source_uid,
         source_branch,
         target_branch,
@@ -184,8 +184,8 @@ pub(crate) async fn handler_create_post(
         description: &form.description,
         author: &me.username,
     };
-    let pr = match domain::pull_request::create(&ctx, &resolved, new, locale).await {
-        Ok(pr) => pr,
+    let mr = match domain::merge_request::create(&ctx, &resolved, new, locale).await {
+        Ok(mr) => mr,
         Err(e) => fail!(e.to_string()),
     };
 
@@ -193,21 +193,21 @@ pub(crate) async fn handler_create_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.create",
-        &format!("{name}#{}", pr.number),
+        "merge_request.create",
+        &format!("{name}#{}", mr.number),
         None,
     )
     .await;
 
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(pr.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(mr.number).to_string()).into_response())
 }
 
-/// Async (`data-async`/`data-async-target="#pr-actions"`, see `ASYNC_HEADER`'s
-/// own doc comment) response for close/reopen/merge: the `#pr-actions`
-/// fragment reflecting whatever the PR's state is *now* (re-fetched, not
+/// Async (`data-async`/`data-async-target="#mr-actions"`, see `ASYNC_HEADER`'s
+/// own doc comment) response for close/reopen/merge: the `#mr-actions`
+/// fragment reflecting whatever the MR's state is *now* (re-fetched, not
 /// assumed from the request that just mutated it), instead of the usual
-/// redirect back to the PR page.
-async fn async_pr_actions_response(
+/// redirect back to the MR page.
+async fn async_mr_actions_response(
     ctx: &AppContext,
     headers: &HeaderMap,
     resolved: &ResolvedRepo,
@@ -215,27 +215,27 @@ async fn async_pr_actions_response(
     number: u64,
     locale: Locale,
 ) -> Result<Response, AppError> {
-    let Some(pr) = domain::pull_request::get(ctx, resolved, number).await? else {
+    let Some(mr) = domain::merge_request::get(ctx, resolved, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::pull_request_not_found(locale, number)
+            gitquarry_i18n::shared::merge_request_not_found(locale, number)
         )));
     };
-    let can_manage = super::can_manage(ctx, headers, repo_name, &pr.author).await?;
+    let can_manage = super::can_manage(ctx, headers, repo_name, &mr.author).await?;
     let can_merge = super::can_merge(ctx, headers, repo_name).await?;
-    let is_same_repo = pr.source_repo == resolved.uid;
+    let is_same_repo = mr.source_repo == resolved.uid;
     // Re-probed rather than carried over from the page that rendered the
     // form: this fragment is swapped in *after* an action landed, and the
     // one that most obviously changes the answer is the merge itself.
-    let fast_forwardable = if pr.status == gitquarry_core::storage::pull_requests::PrStatus::Open && can_merge {
+    let fast_forwardable = if mr.status == gitquarry_core::storage::merge_requests::MrStatus::Open && can_merge {
         let mirror = ctx.open_mirror(resolved).await?;
-        domain::pull_request::fast_forwardable(ctx, resolved, &mirror.path, &pr).await?
+        domain::merge_request::fast_forwardable(ctx, resolved, &mirror.path, &mr).await?
     } else {
         false
     };
     Ok(Html(
-        super::render_pr_actions(
-            &pr,
+        super::render_mr_actions(
+            &mr,
             can_manage,
             can_merge,
             is_same_repo,
@@ -250,7 +250,7 @@ async fn async_pr_actions_response(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct PullActionForm {
+pub(crate) struct MergeActionForm {
     repo: String,
     number: u64,
     #[serde(default)]
@@ -260,7 +260,7 @@ pub(crate) struct PullActionForm {
 pub(crate) async fn handler_close_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<PullActionForm>,
+    Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
@@ -271,7 +271,7 @@ pub(crate) async fn handler_close_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
-    let cas = domain::pull_request::close(&ctx, &resolved, form.number, locale)
+    let cas = domain::merge_request::close(&ctx, &resolved, form.number, locale)
         .await
         .map_err(AppError::bad_request)?;
     if cas == Cas::Conflict {
@@ -285,21 +285,21 @@ pub(crate) async fn handler_close_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.close",
+        "merge_request.close",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
     if headers.contains_key(ASYNC_HEADER) {
-        return async_pr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
+        return async_mr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
     }
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 pub(crate) async fn handler_reopen_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<PullActionForm>,
+    Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
@@ -310,7 +310,7 @@ pub(crate) async fn handler_reopen_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
-    let cas = domain::pull_request::reopen(&ctx, &resolved, form.number, locale)
+    let cas = domain::merge_request::reopen(&ctx, &resolved, form.number, locale)
         .await
         .map_err(AppError::bad_request)?;
     if cas == Cas::Conflict {
@@ -324,15 +324,15 @@ pub(crate) async fn handler_reopen_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.reopen",
+        "merge_request.reopen",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
     if headers.contains_key(ASYNC_HEADER) {
-        return async_pr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
+        return async_mr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
     }
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -393,10 +393,10 @@ pub(crate) async fn handler_comment_post(
     let body = form.body.trim();
     match parse_anchor(&form)? {
         Some(anchor) => {
-            domain::pull_request::add_line_comment(&ctx, &resolved, form.number, &me.username, body, anchor, locale)
+            domain::merge_request::add_line_comment(&ctx, &resolved, form.number, &me.username, body, anchor, locale)
                 .await
         }
-        None => domain::pull_request::add_comment(&ctx, &resolved, form.number, &me.username, body, locale).await,
+        None => domain::merge_request::add_comment(&ctx, &resolved, form.number, &me.username, body, locale).await,
     }
     .map_err(AppError::bad_request)?;
 
@@ -404,12 +404,12 @@ pub(crate) async fn handler_comment_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.comment",
+        "merge_request.comment",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -423,7 +423,7 @@ pub(crate) struct EditPrCommentForm {
     csrf: String,
 }
 
-/// No permission check beyond login here — `domain::pull_request::edit_comment`
+/// No permission check beyond login here — `domain::merge_request::edit_comment`
 /// itself bails unless `me` is the comment's own author, no `Developer`+
 /// override (same bar `issues::handlers::handler_comment_edit_post` has).
 pub(crate) async fn handler_comment_edit_post(
@@ -439,7 +439,7 @@ pub(crate) async fn handler_comment_edit_post(
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
 
-    let cas = domain::pull_request::edit_comment(
+    let cas = domain::merge_request::edit_comment(
         &ctx,
         &resolved,
         form.number,
@@ -461,12 +461,12 @@ pub(crate) async fn handler_comment_edit_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.comment.edit",
+        "merge_request.comment.edit",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -479,7 +479,7 @@ pub(crate) struct DeletePrCommentForm {
 }
 
 /// Author-only, unless `me` is `Developer`+ on the repo — same moderation
-/// override `domain::pull_request::delete_comment`'s `is_moderator` param
+/// override `domain::merge_request::delete_comment`'s `is_moderator` param
 /// grants (see [`handler_comment_edit_post`], which stays strictly
 /// author-only).
 pub(crate) async fn handler_comment_delete_post(
@@ -499,7 +499,7 @@ pub(crate) async fn handler_comment_delete_post(
             .await?;
     let is_moderator = perm >= Some(Permission::Developer);
 
-    domain::pull_request::delete_comment(
+    domain::merge_request::delete_comment(
         &ctx,
         &resolved,
         form.number,
@@ -515,12 +515,12 @@ pub(crate) async fn handler_comment_delete_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.comment.delete",
+        "merge_request.comment.delete",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -558,7 +558,7 @@ fn parse_verdict_impl(raw: &str) -> ReviewVerdict {
 
 /// No permission check beyond login, same bar as [`handler_comment_post`] —
 /// a review is a signal, not a write to the repo. The one rule
-/// (`domain::pull_request::add_review`: no approving your own PR) lives in
+/// (`domain::merge_request::add_review`: no approving your own MR) lives in
 /// the domain layer, checked there regardless of what this form offered.
 pub(crate) async fn handler_review_post(
     State(ctx): State_,
@@ -574,7 +574,7 @@ pub(crate) async fn handler_review_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
 
     let verdict = parse_verdict(form.verdict.trim());
-    domain::pull_request::add_review(
+    domain::merge_request::add_review(
         &ctx,
         &resolved,
         form.number,
@@ -590,17 +590,17 @@ pub(crate) async fn handler_review_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.review",
+        "merge_request.review",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 /// `Err` if `me` isn't at least `Developer` on `repo_name` — unlike
 /// [`require_manage_permission`] (close/reopen: author-or-`Developer`),
-/// merging is `Developer`+ only, no author exemption: opening a PR needs
+/// merging is `Developer`+ only, no author exemption: opening an MR needs
 /// only view access, but landing it on the target branch is a write to
 /// that branch, same bar every other write to this repo already has.
 async fn require_developer_permission(
@@ -653,25 +653,25 @@ pub(crate) async fn handler_merge_post(
     // Fetched before merging (not after — `merge` doesn't touch
     // `source_repo`/`source_branch`, but reading it now means one fewer
     // storage round-trip either way) so the branch-delete below has
-    // something to act on. Only a same-repo PR's source branch is ever
-    // eligible — a cross-fork PR's source branch lives on a different
+    // something to act on. Only a same-repo MR's source branch is ever
+    // eligible — a cross-fork MR's source branch lives on a different
     // repo entirely, out of scope for this checkbox.
-    let source_branch = domain::pull_request::get(&ctx, &resolved, form.number)
+    let source_branch = domain::merge_request::get(&ctx, &resolved, form.number)
         .await
         .map_err(AppError::bad_request)?
-        .filter(|pr| pr.source_repo == resolved.uid)
-        .map(|pr| pr.source_branch);
+        .filter(|mr| mr.source_repo == resolved.uid)
+        .map(|mr| mr.source_branch);
 
-    match domain::pull_request::merge(&ctx, &resolved, form.number, &me.username, form.strategy, locale)
+    match domain::merge_request::merge(&ctx, &resolved, form.number, &me.username, form.strategy, locale)
         .await
         .map_err(AppError::bad_request)?
     {
-        domain::pull_request::MergeOutcome::Merged(sha) => {
+        domain::merge_request::MergeOutcome::Merged(sha) => {
             gitquarry_core::storage::audit::record(
                 ctx.backend().as_ref(),
                 &ctx.cipher,
                 &me.username,
-                "pull_request.merge",
+                "merge_request.merge",
                 &format!("{name}#{}", form.number),
                 Some(sha),
             )
@@ -686,18 +686,18 @@ pub(crate) async fn handler_merge_post(
                 let _ = domain::repo::delete_branch(&resolved, &branch, locale).await;
             }
         }
-        domain::pull_request::MergeOutcome::Conflict(_) => {
-            // Back to the PR, which now renders the conflicting files and
-            // how to resolve them (`pulls::render_conflict_notice`) — the
+        domain::merge_request::MergeOutcome::Conflict(_) => {
+            // Back to the MR, which now renders the conflicting files and
+            // how to resolve them (`merges::render_conflict_notice`) — the
             // `400` this used to return put that same list on a page the
             // reader had to leave, and losing it on reload.
-            return Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response());
+            return Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response());
         }
     }
     if headers.contains_key(ASYNC_HEADER) {
-        return async_pr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
+        return async_mr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
     }
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -718,10 +718,10 @@ pub(crate) struct EditPrMetadataForm {
     csrf: String,
 }
 
-/// Same author-or-`Developer` bar as close/reopen — editing a PR's
+/// Same author-or-`Developer` bar as close/reopen — editing an MR's
 /// title/description/labels/assignees/reviewers is metadata management,
 /// not a write to the repo itself, but still not something a bare
-/// `Reporter` viewer should be able to do to someone else's PR.
+/// `Reporter` viewer should be able to do to someone else's MR.
 pub(crate) async fn handler_edit_metadata_post(
     State(ctx): State_,
     headers: HeaderMap,
@@ -736,11 +736,11 @@ pub(crate) async fn handler_edit_metadata_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
-    let cas = domain::pull_request::edit_metadata(
+    let cas = domain::merge_request::edit_metadata(
         &ctx,
         &resolved,
         form.number,
-        domain::pull_request::PrMetadataEdit {
+        domain::merge_request::MrMetadataEdit {
             title: &form.title,
             description: &form.description,
             labels_csv: &form.labels,
@@ -762,18 +762,18 @@ pub(crate) async fn handler_edit_metadata_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.edit_metadata",
+        "merge_request.edit_metadata",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 pub(crate) async fn handler_mark_draft_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<PullActionForm>,
+    Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
@@ -784,7 +784,7 @@ pub(crate) async fn handler_mark_draft_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
-    let cas = domain::pull_request::mark_draft(&ctx, &resolved, form.number, locale)
+    let cas = domain::merge_request::mark_draft(&ctx, &resolved, form.number, locale)
         .await
         .map_err(AppError::bad_request)?;
     if cas == Cas::Conflict {
@@ -798,21 +798,21 @@ pub(crate) async fn handler_mark_draft_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.mark_draft",
+        "merge_request.mark_draft",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
     if headers.contains_key(ASYNC_HEADER) {
-        return async_pr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
+        return async_mr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
     }
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 pub(crate) async fn handler_mark_ready_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<PullActionForm>,
+    Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
@@ -823,7 +823,7 @@ pub(crate) async fn handler_mark_ready_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
-    let cas = domain::pull_request::mark_ready(&ctx, &resolved, form.number, locale)
+    let cas = domain::merge_request::mark_ready(&ctx, &resolved, form.number, locale)
         .await
         .map_err(AppError::bad_request)?;
     if cas == Cas::Conflict {
@@ -837,15 +837,15 @@ pub(crate) async fn handler_mark_ready_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        "pull_request.mark_ready",
+        "merge_request.mark_ready",
         &format!("{name}#{}", form.number),
         None,
     )
     .await;
     if headers.contains_key(ASYNC_HEADER) {
-        return async_pr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
+        return async_mr_actions_response(&ctx, &headers, &resolved, &name, form.number, locale).await;
     }
-    Ok(Redirect::to(&repo_link(&name, "pull", "").number(form.number).to_string()).into_response())
+    Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -857,15 +857,15 @@ pub(crate) struct BulkPrActionForm {
     #[serde(default)]
     numbers: Vec<u64>,
     /// `"close"` or `"reopen"` — anything else is rejected up front, before
-    /// touching any PR.
+    /// touching any MR.
     action: String,
     #[serde(default)]
     csrf: String,
 }
 
-/// Best-effort per PR, same tolerance `issues::handlers::handler_bulk_post`
-/// already accepts: one already-merged or already-in-that-state PR in the
-/// selection doesn't abort the rest of the batch (`domain::pull_request::close`/
+/// Best-effort per MR, same tolerance `issues::handlers::handler_bulk_post`
+/// already accepts: one already-merged or already-in-that-state MR in the
+/// selection doesn't abort the rest of the batch (`domain::merge_request::close`/
 /// `reopen` just errors for that one number, which this loop ignores).
 pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
@@ -890,9 +890,9 @@ pub(crate) async fn handler_bulk_post(
     let mut applied = 0usize;
     for number in &form.numbers {
         let result = if form.action == "close" {
-            domain::pull_request::close(&ctx, &resolved, *number, locale).await
+            domain::merge_request::close(&ctx, &resolved, *number, locale).await
         } else {
-            domain::pull_request::reopen(&ctx, &resolved, *number, locale).await
+            domain::merge_request::reopen(&ctx, &resolved, *number, locale).await
         };
         if result.is_ok() {
             applied += 1;
@@ -903,10 +903,10 @@ pub(crate) async fn handler_bulk_post(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &me.username,
-        &format!("pull_request.bulk_{}", form.action),
+        &format!("merge_request.bulk_{}", form.action),
         &name,
-        Some(format!("{applied}/{} pull request(s)", form.numbers.len())),
+        Some(format!("{applied}/{} merge request(s)", form.numbers.len())),
     )
     .await;
-    Ok(Redirect::to(&format!("/{}?view=pulls", url_encode(&name))).into_response())
+    Ok(Redirect::to(&format!("/{}?view=merges", url_encode(&name))).into_response())
 }

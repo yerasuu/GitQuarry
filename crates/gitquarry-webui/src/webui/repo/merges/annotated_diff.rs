@@ -1,4 +1,4 @@
-//! The PR view's unified diff, rendered with line numbers, its
+//! The MR view's unified diff, rendered with line numbers, its
 //! line-anchored comments woven in under the lines they mark, and a
 //! per-line link that reopens the page with the "comment on this line"
 //! form expanded there.
@@ -10,9 +10,9 @@
 
 use crate::webui::{csrf_field, repo_link, url_encode};
 use axum::http::HeaderMap;
-use gitquarry_core::storage::pull_requests::{CommentAnchor, DiffSide, PrComment};
+use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MrComment};
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_pulls as t;
+use gitquarry_i18n::web::repo_merges as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashSet;
 
@@ -236,11 +236,11 @@ pub(super) fn active_anchor(params: &std::collections::HashMap<String, String>) 
     })
 }
 
-/// Link that reopens this PR with the comment form expanded on `anchor`.
+/// Link that reopens this MR with the comment form expanded on `anchor`.
 fn comment_link(repo_name: &str, number: u64, anchor: &CommentAnchor) -> String {
     format!(
         "{}&anchor_path={}&anchor_side={}&anchor_line={}",
-        repo_link(repo_name, "pull", "").number(number),
+        repo_link(repo_name, "merge", "").number(number),
         url_encode(&anchor.path),
         side_param(anchor.side),
         anchor.line,
@@ -252,7 +252,7 @@ fn comment_link(repo_name: &str, number: u64, anchor: &CommentAnchor) -> String 
 #[allow(clippy::too_many_arguments)]
 fn comment_row(
     comment_id: &str,
-    comment: &PrComment,
+    comment: &MrComment,
     body_html: &str,
     repo_name: &str,
     number: u64,
@@ -268,7 +268,7 @@ fn comment_row(
                 p class="muted" { strong { (comment.author) } " — " (comment.created_at) }
                 div class="readme plain" { (maud::PreEscaped(body_html)) }
                 (super::super::components::comment_edit_delete_controls(
-                    "/_pulls",
+                    "/_merges",
                     repo_name,
                     number,
                     comment_id,
@@ -287,7 +287,7 @@ fn form_row(repo_name: &str, number: u64, anchor: &CommentAnchor, headers: &Head
     html! {
         tr class="diff-comment" {
             td colspan="3" {
-                form method="post" action="/_pulls/comment" {
+                form method="post" action="/_merges/comment" {
                     (PreEscaped(csrf_field(headers)))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="number" value=(number);
@@ -326,7 +326,7 @@ pub struct View<'a> {
     pub viewer: Option<&'a str>,
     /// Whether the viewer is `Developer`+ on this repo — lets them delete
     /// (never edit) someone else's comment, same override
-    /// `domain::pull_request::delete_comment`'s `is_moderator` param grants.
+    /// `domain::merge_request::delete_comment`'s `is_moderator` param grants.
     pub can_moderate: bool,
     pub headers: &'a HeaderMap,
     pub locale: Locale,
@@ -352,24 +352,24 @@ pub(super) struct View<'a> {
     pub(super) viewer: Option<&'a str>,
     /// Whether the viewer is `Developer`+ on this repo — lets them delete
     /// (never edit) someone else's comment, same override
-    /// `domain::pull_request::delete_comment`'s `is_moderator` param grants.
+    /// `domain::merge_request::delete_comment`'s `is_moderator` param grants.
     pub(super) can_moderate: bool,
     pub(super) headers: &'a HeaderMap,
     pub(super) locale: Locale,
 }
 
-/// `comments` is the PR's whole thread (each paired with its storage key,
-/// see `domain::pull_request::list_comments`'s own doc comment), in order;
+/// `comments` is the MR's whole thread (each paired with its storage key,
+/// see `domain::merge_request::list_comments`'s own doc comment), in order;
 /// only the anchored ones land in the diff, and each is matched to at most
 /// one line (the first occurrence of that path+side+line — a diff can
 /// repeat a path only across separate `diff --git` sections, which don't
 /// share line numbers).
 #[cfg(any(test, feature = "test-util"))]
-pub fn render(diff: &str, comments: &[(String, PrComment)], view: &View<'_>) -> Annotated {
+pub fn render(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
     render_impl(diff, comments, view)
 }
 #[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn render(diff: &str, comments: &[(String, PrComment)], view: &View<'_>) -> Annotated {
+pub(super) fn render(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
     render_impl(diff, comments, view)
 }
 
@@ -383,7 +383,7 @@ fn advance(counter: &mut i32) -> i32 {
     *counter
 }
 
-fn render_impl(diff: &str, comments: &[(String, PrComment)], view: &View<'_>) -> Annotated {
+fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
     let rows = parse(diff);
     let mut placed = HashSet::new();
     // Bumped on each `Row::Hunk` so every `Row::Line` up to the next one can

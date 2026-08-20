@@ -1,5 +1,5 @@
 use gitquarry_forge_clients::codeberg::*;
-use gitquarry_forge_clients::{RemotePr, RemotePrState};
+use gitquarry_forge_clients::{RemoteMr, RemoteMrState};
 
 #[test]
 fn parses_owner_repo_and_derives_the_api_base_from_the_host() {
@@ -48,7 +48,7 @@ fn maps_merged_flag_over_open_closed_state() {
         }),
         merge_commit_sha: Some("deadbeef".to_string()),
     };
-    let pr: RemotePr = merged.into();
-    assert_eq!(pr.state, RemotePrState::Merged);
-    assert_eq!(pr.merged_by.as_deref(), Some("bob"));
+    let mr: RemoteMr = merged.into();
+    assert_eq!(mr.state, RemoteMrState::Merged);
+    assert_eq!(mr.merged_by.as_deref(), Some("bob"));
 }

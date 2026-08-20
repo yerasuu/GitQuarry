@@ -91,7 +91,7 @@ table.tabs { width: 100%; background: var(--surface-3); border-bottom: 1px solid
              margin-bottom: 0.5rem; overflow-x: auto; }
 /* A second (or third) `.tabs`-styled row stacked directly under another one
    -- `page_chrome::project_subnav` under the main tabs bar, and the
-   open/closed/all status filter (`issues`/`pulls`) under that -- reads as
+   open/closed/all status filter (`issues`/`merges`) under that -- reads as
    one continuous nav block instead of several separately-floating bars:
    pulls the seam in against the row above's own `margin-bottom` rather
    than letting both add up. */
@@ -181,7 +181,7 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .settings-section > h3 { margin-top: 0; }
 .settings-section > :last-child { margin-bottom: 0; }
 /* Labelled control: label above, optional hint below. The `div.field`
-   markup existed in `/_settings` and the pull-request forms long before
+   markup existed in `/_settings` and the merge-request forms long before
    this rule did — with no CSS at all it was an unstyled block, which is why
    every other form reached for placeholder-only inputs instead. Capped
    width because a full-bleed text input on a wide screen is harder to scan,
@@ -226,7 +226,7 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    name/description/meta (stars, primary language dot, topics) stacked the
    way Codeberg/Forgejo's dashboard lists repos, reusing `.decoration`
    (topics) and `.lang-swatch` (language dot) unmodified. */
-/* Conflicting-file list on a pull request that can't fast-forward, plus
+/* Conflicting-file list on a merge request that can't fast-forward, plus
    the collapsed how-to under it. A plain list, not a table: it is one
    column of paths and nothing else, and it sits directly under the warning
    alert that introduces it. */
@@ -362,7 +362,7 @@ table.diff-split { width: 100%; border-collapse: collapse; background: var(--cod
                    font-size: var(--fs-sm); }
 table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre; vertical-align: top; width: 50%; }
 table.diff-split td:first-child:not([colspan]) { border-right: 1px solid var(--code-border); }
-/* The PR view's unified diff: same monospace slab as `.diff-split`, but with
+/* The MR view's unified diff: same monospace slab as `.diff-split`, but with
    old/new line-number gutters and comment rows spliced between the lines. */
 table.diff-annotated { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
                        border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
@@ -605,6 +605,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .license-text { white-space: pre-wrap; overflow-x: auto; font-size: 0.85em; }
 
 /* Same markdown styling as a README, without the rule and gap that
-   separate that one from the file listing above it -- a PR body and each
+   separate that one from the file listing above it -- an MR body and each
    comment are already inside their own block. */
 .readme.plain { border-top: none; padding-top: 0; margin-top: 0.3em; }

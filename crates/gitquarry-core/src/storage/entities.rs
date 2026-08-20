@@ -181,12 +181,12 @@ pub struct RepoConfig {
     #[serde(default)]
     pub lfs_bytes: u64,
     /// Usernames who must have approved (their latest review verdict is
-    /// `ReviewVerdict::Approved`) before `domain::pull_request::merge` lets
-    /// a PR land — on top of, never instead of, whatever a `CODEOWNERS`
+    /// `ReviewVerdict::Approved`) before `domain::merge_request::merge` lets
+    /// an MR land — on top of, never instead of, whatever a `CODEOWNERS`
     /// file at the target branch's root additionally requires for the
-    /// specific paths a PR touches (see
-    /// `domain::pull_request::missing_required_reviewers`). Empty means no
-    /// repo-wide requirement (the default): a PR just needs no pending
+    /// specific paths an MR touches (see
+    /// `domain::merge_request::missing_required_reviewers`). Empty means no
+    /// repo-wide requirement (the default): an MR just needs no pending
     /// `ChangesRequested`, same as before this field existed.
     #[serde(default)]
     pub required_reviewers: std::collections::BTreeSet<String>,
