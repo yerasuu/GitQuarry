@@ -98,3 +98,12 @@ msg!(conflicts_howto_summary() {
     Locale::Es => "como resolverlo en local",
     Locale::En => "how to resolve it locally",
 });
+
+msg!(merge_strategy_fast_forward_option() {
+    Locale::Es => "avanzar sin commit (fast-forward)",
+    Locale::En => "fast-forward (no new commit)",
+});
+msg!(merge_strategy_fast_forward_unavailable() {
+    Locale::Es => "- no disponible, la rama ha divergido",
+    Locale::En => "- unavailable, the branch has diverged",
+});

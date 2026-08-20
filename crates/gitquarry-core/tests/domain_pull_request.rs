@@ -1004,6 +1004,108 @@ async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
     assert!(d.commits.is_empty());
 }
 
+/// Fast-forward lands the author's own commits untouched: no new object is
+/// created, so the target branch ends up pointing at the exact sha the
+/// source branch already had. That is the whole reason the strategy exists
+/// — a commit the server builds can only ever carry the server's own
+/// signature, never the author's.
+#[tokio::test]
+async fn fast_forward_moves_the_branch_without_creating_a_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    let (_main_sha, feature_sha) = init_target_mirror(&ctx, &target, false).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let outcome = merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::FastForward,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap();
+
+    match outcome {
+        MergeOutcome::Merged(sha) => assert_eq!(sha, feature_sha, "a new commit was created"),
+        MergeOutcome::Conflict(paths) => panic!("fast-forward can't conflict, got: {paths:?}"),
+    }
+    let (manifest, _etag) = target.remote.get_manifest().await.unwrap();
+    assert_eq!(manifest.refs.get("refs/heads/main"), Some(&feature_sha));
+}
+
+/// Once the branches diverge there is no pointer move that expresses the
+/// merge, so this refuses with a message naming the other three strategies
+/// rather than quietly building the commit it promised not to.
+#[tokio::test]
+async fn fast_forward_refuses_a_diverged_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    // The conflicting fixture's two branches each carry their own commit,
+    // so neither is an ancestor of the other.
+    init_target_mirror(&ctx, &target, true).await;
+    let new = NewPullRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let err = match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::FastForward,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a diverged branch must not fast-forward"),
+    };
+    assert!(err.contains("diverged"), "{err}");
+}
+
+/// The probe the merge form disables its own option from.
+#[tokio::test]
+async fn fast_forwardable_tracks_whether_the_branches_diverged() {
+    for (conflicting, expected) in [(false, true), (true, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let target = test_target(dir.path());
+        init_target_mirror(&ctx, &target, conflicting).await;
+        let new = NewPullRequest {
+            source_repo: &target.uid,
+            source_branch: "feature",
+            target_branch: "main",
+            title: "t",
+            description: "d",
+            author: "alice",
+        };
+        create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+        let pr = get(&ctx, &target, 1).await.unwrap().unwrap();
+        let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+
+        let can = fast_forwardable(&ctx, &target, &git_dir, &pr).await.unwrap();
+        assert_eq!(can, expected, "conflicting={conflicting}");
+    }
+}
+
 #[tokio::test]
 async fn merge_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();

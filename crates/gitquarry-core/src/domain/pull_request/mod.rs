@@ -754,6 +754,29 @@ pub async fn conflicts(
     }
 }
 
+/// Whether this pull request could be merged by moving the target branch
+/// alone — the target is still an ancestor of the source, nothing diverged.
+/// Read-only, and tolerant like [`conflicts`] of a branch that has since
+/// gone: a probe that only decorates a page must never fail the page.
+pub async fn fast_forwardable(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    git_dir: &std::path::Path,
+    pr: &PullRequestMeta,
+) -> Result<bool> {
+    let Ok(head_ref) = fetch_source_ref(ctx, target, git_dir, pr).await else {
+        return Ok(false);
+    };
+    let (manifest, _etag) = target.remote.get_manifest().await?;
+    let Some(target_sha) = manifest.refs.get(&format!("refs/heads/{}", pr.target_branch)).cloned() else {
+        return Ok(false);
+    };
+    let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
+        return Ok(false);
+    };
+    Ok(git::is_ancestor(git_dir, &target_sha, &head_sha).await.unwrap_or(false))
+}
+
 pub enum MergeOutcome {
     Merged(String),
     Conflict(Vec<String>),
@@ -788,6 +811,10 @@ async fn merge_commit(
     let merge_date = git_date_now();
     let merger_ident = (merger.0, merger.1, merge_date.as_str());
     match strategy {
+        // Handled entirely by [`merge`] before it ever gets here: a
+        // fast-forward creates no commit, so there is nothing for this
+        // function — whose only job is building one — to do.
+        MergeStrategy::FastForward => Ok(MergeOutcome::Merged(head_sha.to_string())),
         MergeStrategy::Merge => {
             let tree = match git::merge_tree(git_dir, target_sha, head_sha, None).await? {
                 git::MergeTreeOutcome::Conflicted(paths) => return Ok(MergeOutcome::Conflict(paths)),
@@ -965,19 +992,34 @@ pub async fn merge(
         );
     }
 
-    let (merger_name, merger_email) = merger_identity(ctx, merged_by).await?;
-    let merge_sha = match merge_commit(
-        git_dir,
-        &pr,
-        &target_sha,
-        &head_sha,
-        strategy,
-        (&merger_name, &merger_email),
-    )
-    .await?
-    {
-        MergeOutcome::Conflict(paths) => return Ok(MergeOutcome::Conflict(paths)),
-        MergeOutcome::Merged(sha) => sha,
+    // Fast-forward builds nothing, so it needs no merger identity to stamp
+    // and can't conflict: the branch moves to commits that already exist,
+    // exactly as their author wrote — and signed — them. Everything below
+    // (packing the new objects, the manifest CAS, the metadata update) is
+    // identical either way, which is why this only picks the sha.
+    let merge_sha = if strategy == MergeStrategy::FastForward {
+        if !git::is_ancestor(git_dir, &target_sha, &head_sha).await? {
+            bail!(
+                "{}",
+                gitquarry_i18n::shared::pull_request_not_fast_forwardable(locale, &pr.target_branch)
+            );
+        }
+        head_sha.clone()
+    } else {
+        let (merger_name, merger_email) = merger_identity(ctx, merged_by).await?;
+        match merge_commit(
+            git_dir,
+            &pr,
+            &target_sha,
+            &head_sha,
+            strategy,
+            (&merger_name, &merger_email),
+        )
+        .await?
+        {
+            MergeOutcome::Conflict(paths) => return Ok(MergeOutcome::Conflict(paths)),
+            MergeOutcome::Merged(sha) => sha,
+        }
     };
 
     let scratch = git::scratch_dir(git_dir)?;

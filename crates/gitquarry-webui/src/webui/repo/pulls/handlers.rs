@@ -224,12 +224,22 @@ async fn async_pr_actions_response(
     let can_manage = super::can_manage(ctx, headers, repo_name, &pr.author).await?;
     let can_merge = super::can_merge(ctx, headers, repo_name).await?;
     let is_same_repo = pr.source_repo == resolved.uid;
+    // Re-probed rather than carried over from the page that rendered the
+    // form: this fragment is swapped in *after* an action landed, and the
+    // one that most obviously changes the answer is the merge itself.
+    let fast_forwardable = if pr.status == gitquarry_core::storage::pull_requests::PrStatus::Open && can_merge {
+        let mirror = ctx.open_mirror(resolved).await?;
+        domain::pull_request::fast_forwardable(ctx, resolved, &mirror.path, &pr).await?
+    } else {
+        false
+    };
     Ok(Html(
         super::render_pr_actions(
             &pr,
             can_manage,
             can_merge,
             is_same_repo,
+            fast_forwardable,
             repo_name,
             &csrf_field(headers),
             locale,
