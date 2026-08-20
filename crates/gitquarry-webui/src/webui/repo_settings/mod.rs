@@ -110,6 +110,13 @@ enum FlashOutcome {
 fn needs_owner_tier(form: &RepoConfForm) -> bool {
     match form.action.as_str() {
         "delete_repo" | "restore_repo" | "move_repo" => true,
+        // A mirror ships this repo's contents to a third party and stores a
+        // credential for it — the same ownership-level decision as handing
+        // the repo to someone else, not an everyday setting like a
+        // description or a protected branch. `sync_mirror_now` is in here
+        // too: it's the one action that reaches the external side
+        // immediately, without waiting for a sweep.
+        "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => true,
         "set_perm" => matches!(form.perm.as_str(), "maintainer" | "owner"),
         _ => false,
     }
