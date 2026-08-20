@@ -11,6 +11,15 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// One request's page size, and how many pages a list call will walk
+/// before giving up. Unpaginated single-page listings silently truncated
+/// every PR thread past the first page — a repo's comment history is
+/// exactly the kind of thing that outgrows one page and then quietly
+/// stops syncing. The page cap is the backstop against a pathological
+/// thread pinning a sync tick forever; hitting it logs rather than
+/// pretending the listing was complete.
+const PER_PAGE: usize = 50;
+const MAX_PAGES: u32 = 20;
 
 pub struct CodebergForge {
     /// `https://<host>/api/v1`.
@@ -204,18 +213,29 @@ impl ForgeApi for CodebergForge {
     async fn list_pull_requests(&self, since: Option<&str>) -> Result<Vec<RemotePr>> {
         // Same "no true server-side `since`, sort newest-updated-first and
         // cut client-side" shape as `github.rs`/`gitlab.rs`.
-        let url = self.pulls_url("?state=all&sort=recentupdate&limit=50");
-        let resp = self
-            .request(reqwest::Method::GET, &url)
-            .send()
-            .await
-            .with_context(|| format!("couldn't reach {url}"))?;
-        let prs: Vec<GtPullRequest> = ok_json(resp, &url).await?;
-        Ok(prs
-            .into_iter()
-            .map(RemotePr::from)
-            .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since))
-            .collect())
+        let mut out = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = self.pulls_url(&format!("?state=all&sort=recentupdate&limit={PER_PAGE}&page={page}"));
+            let resp = self
+                .request(reqwest::Method::GET, &url)
+                .send()
+                .await
+                .with_context(|| format!("couldn't reach {url}"))?;
+            let prs: Vec<GtPullRequest> = ok_json(resp, &url).await?;
+            let last_page = prs.len() < PER_PAGE;
+            let before = out.len();
+            out.extend(
+                prs.into_iter()
+                    .map(RemotePr::from)
+                    .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since)),
+            );
+            let crossed_cursor = out.len() - before < PER_PAGE;
+            if last_page || crossed_cursor {
+                return Ok(out);
+            }
+        }
+        eprintln!("gitquarry: warning: stopped listing Gitea PRs after {MAX_PAGES} pages, older ones not synced");
+        Ok(out)
     }
 
     async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>> {
@@ -297,14 +317,25 @@ impl ForgeApi for CodebergForge {
     async fn list_comments(&self, number: u64) -> Result<Vec<RemoteComment>> {
         // Gitea/Codeberg models PR comments as issue comments too, same as
         // GitHub.
-        let url = self.issues_url(&format!("/{number}/comments"));
-        let resp = self
-            .request(reqwest::Method::GET, &url)
-            .send()
-            .await
-            .with_context(|| format!("couldn't reach {url}"))?;
-        let comments: Vec<GtComment> = ok_json(resp, &url).await?;
-        Ok(comments.into_iter().map(RemoteComment::from).collect())
+        let mut out = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = self.issues_url(&format!("/{number}/comments?limit={PER_PAGE}&page={page}"));
+            let resp = self
+                .request(reqwest::Method::GET, &url)
+                .send()
+                .await
+                .with_context(|| format!("couldn't reach {url}"))?;
+            let comments: Vec<GtComment> = ok_json(resp, &url).await?;
+            let last_page = comments.len() < PER_PAGE;
+            out.extend(comments.into_iter().map(RemoteComment::from));
+            if last_page {
+                return Ok(out);
+            }
+        }
+        eprintln!(
+            "gitquarry: warning: stopped listing comments on Gitea PR #{number} after {MAX_PAGES} pages, the rest wasn't imported"
+        );
+        Ok(out)
     }
 
     async fn add_comment(&self, number: u64, body: &str) -> Result<RemoteComment> {

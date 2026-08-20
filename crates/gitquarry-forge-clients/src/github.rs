@@ -13,6 +13,15 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// every other outbound call this codebase makes (loopback IPC
 /// instances, which don't gate on it), this one's mandatory.
 const USER_AGENT: &str = "gitquarry";
+/// One request's page size, and how many pages a list call will walk
+/// before giving up. Unpaginated single-page listings silently truncated
+/// every PR thread past the first page — a repo's comment history is
+/// exactly the kind of thing that outgrows one page and then quietly
+/// stops syncing. The page cap is the backstop against a pathological
+/// thread pinning a sync tick forever; hitting it logs rather than
+/// pretending the listing was complete.
+const PER_PAGE: usize = 100;
+const MAX_PAGES: u32 = 20;
 
 pub struct GitHubForge {
     owner: String,
@@ -200,20 +209,35 @@ impl ForgeApi for GitHubForge {
     async fn list_pull_requests(&self, since: Option<&str>) -> Result<Vec<RemotePr>> {
         // GitHub's `/pulls` list has no `since` filter of its own (unlike
         // `/issues`, which does) — sorted newest-updated-first instead, so a
-        // cursor'd caller can stop consuming as soon as it crosses `since`
-        // without paging through the whole history every tick.
-        let url = self.pulls_url("?state=all&sort=updated&direction=desc&per_page=100");
-        let resp = self
-            .request(reqwest::Method::GET, &url)
-            .send()
-            .await
-            .with_context(|| format!("couldn't reach {url}"))?;
-        let prs: Vec<GhPullRequest> = ok_json(resp, &url).await?;
-        Ok(prs
-            .into_iter()
-            .map(RemotePr::from)
-            .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since))
-            .collect())
+        // cursor'd caller stops consuming as soon as it crosses `since`
+        // instead of paging through the whole history every tick. Without a
+        // cursor (a mirror's first tick) it does page, or the repo's older
+        // PRs would never be discovered at all.
+        let mut out = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = self.pulls_url(&format!(
+                "?state=all&sort=updated&direction=desc&per_page={PER_PAGE}&page={page}"
+            ));
+            let resp = self
+                .request(reqwest::Method::GET, &url)
+                .send()
+                .await
+                .with_context(|| format!("couldn't reach {url}"))?;
+            let prs: Vec<GhPullRequest> = ok_json(resp, &url).await?;
+            let last_page = prs.len() < PER_PAGE;
+            let before = out.len();
+            out.extend(
+                prs.into_iter()
+                    .map(RemotePr::from)
+                    .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since)),
+            );
+            let crossed_cursor = out.len() - before < PER_PAGE;
+            if last_page || crossed_cursor {
+                return Ok(out);
+            }
+        }
+        eprintln!("gitquarry: warning: stopped listing GitHub PRs after {MAX_PAGES} pages, older ones not synced");
+        Ok(out)
     }
 
     async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>> {
@@ -300,14 +324,25 @@ impl ForgeApi for GitHubForge {
     async fn list_comments(&self, number: u64) -> Result<Vec<RemoteComment>> {
         // GitHub models PR comments as issue comments — a PR *is* an issue
         // under the hood, same numbering.
-        let url = self.issues_url(&format!("/{number}/comments?per_page=100"));
-        let resp = self
-            .request(reqwest::Method::GET, &url)
-            .send()
-            .await
-            .with_context(|| format!("couldn't reach {url}"))?;
-        let comments: Vec<GhComment> = ok_json(resp, &url).await?;
-        Ok(comments.into_iter().map(RemoteComment::from).collect())
+        let mut out = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = self.issues_url(&format!("/{number}/comments?per_page={PER_PAGE}&page={page}"));
+            let resp = self
+                .request(reqwest::Method::GET, &url)
+                .send()
+                .await
+                .with_context(|| format!("couldn't reach {url}"))?;
+            let comments: Vec<GhComment> = ok_json(resp, &url).await?;
+            let last_page = comments.len() < PER_PAGE;
+            out.extend(comments.into_iter().map(RemoteComment::from));
+            if last_page {
+                return Ok(out);
+            }
+        }
+        eprintln!(
+            "gitquarry: warning: stopped listing comments on GitHub PR #{number} after {MAX_PAGES} pages, the rest wasn't imported"
+        );
+        Ok(out)
     }
 
     async fn add_comment(&self, number: u64, body: &str) -> Result<RemoteComment> {

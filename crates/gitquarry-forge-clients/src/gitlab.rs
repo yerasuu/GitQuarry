@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// One request's page size, and how many pages a list call will walk
+/// before giving up. Unpaginated single-page listings silently truncated
+/// every PR thread past the first page — a repo's comment history is
+/// exactly the kind of thing that outgrows one page and then quietly
+/// stops syncing. The page cap is the backstop against a pathological
+/// thread pinning a sync tick forever; hitting it logs rather than
+/// pretending the listing was complete.
+const PER_PAGE: usize = 100;
+const MAX_PAGES: u32 = 20;
 
 pub struct GitLabForge {
     /// `https://<host>/api/v4`.
@@ -276,18 +285,31 @@ impl ForgeApi for GitLabForge {
         // filter exists but its semantics (inclusive/exclusive, timezone
         // handling) aren't worth trusting over a plain string comparison
         // this codebase already controls end to end.
-        let url = self.mrs_url("?state=all&order_by=updated_at&sort=desc&per_page=100");
-        let resp = self
-            .request(reqwest::Method::GET, &url)
-            .send()
-            .await
-            .with_context(|| format!("couldn't reach {url}"))?;
-        let mrs: Vec<GlMergeRequest> = ok_json(resp, &url).await?;
-        Ok(mrs
-            .into_iter()
-            .map(RemotePr::from)
-            .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since))
-            .collect())
+        let mut out = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = self.mrs_url(&format!(
+                "?state=all&order_by=updated_at&sort=desc&per_page={PER_PAGE}&page={page}"
+            ));
+            let resp = self
+                .request(reqwest::Method::GET, &url)
+                .send()
+                .await
+                .with_context(|| format!("couldn't reach {url}"))?;
+            let mrs: Vec<GlMergeRequest> = ok_json(resp, &url).await?;
+            let last_page = mrs.len() < PER_PAGE;
+            let before = out.len();
+            out.extend(
+                mrs.into_iter()
+                    .map(RemotePr::from)
+                    .take_while(|pr| since.is_none_or(|since| pr.updated_at.as_str() > since)),
+            );
+            let crossed_cursor = out.len() - before < PER_PAGE;
+            if last_page || crossed_cursor {
+                return Ok(out);
+            }
+        }
+        eprintln!("gitquarry: warning: stopped listing GitLab MRs after {MAX_PAGES} pages, older ones not synced");
+        Ok(out)
     }
 
     async fn get_pull_request(&self, number: u64) -> Result<Option<RemotePr>> {
@@ -368,30 +390,39 @@ impl ForgeApi for GitLabForge {
     }
 
     async fn list_comments(&self, number: u64) -> Result<Vec<RemoteComment>> {
-        let url = format!(
-            "{}/projects/{}/merge_requests/{number}/notes?per_page=100",
-            self.api_base, self.project_path
-        );
-        let resp = self
-            .request(reqwest::Method::GET, &url)
-            .send()
-            .await
-            .with_context(|| format!("couldn't reach {url}"))?;
-        let notes: Vec<GlNote> = ok_json(resp, &url).await?;
-        // GitLab mixes real comments with system notes ("changed the
-        // description", "marked as ready", ...) in the same list, flagged
-        // by `system` — importing those as if they were comments would spam
-        // the local thread with noise nobody wrote.
-        Ok(notes
-            .into_iter()
-            .filter(|n| !n.system)
-            .map(|n| RemoteComment {
+        let mut out = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = format!(
+                "{}/projects/{}/merge_requests/{number}/notes?per_page={PER_PAGE}&page={page}",
+                self.api_base, self.project_path
+            );
+            let resp = self
+                .request(reqwest::Method::GET, &url)
+                .send()
+                .await
+                .with_context(|| format!("couldn't reach {url}"))?;
+            let notes: Vec<GlNote> = ok_json(resp, &url).await?;
+            let last_page = notes.len() < PER_PAGE;
+            // GitLab mixes real comments with system notes ("changed the
+            // description", "marked as ready", ...) in the same list,
+            // flagged by `system` — importing those as if they were
+            // comments would spam the local thread with noise nobody wrote.
+            // Filtered after the page-size check, so a page full of system
+            // notes still advances to the next one.
+            out.extend(notes.into_iter().filter(|n| !n.system).map(|n| RemoteComment {
                 id: n.id,
                 author: n.author.username,
                 body: n.body,
                 created_at: n.created_at,
-            })
-            .collect())
+            }));
+            if last_page {
+                return Ok(out);
+            }
+        }
+        eprintln!(
+            "gitquarry: warning: stopped listing notes on GitLab MR !{number} after {MAX_PAGES} pages, the rest wasn't imported"
+        );
+        Ok(out)
     }
 
     async fn add_comment(&self, number: u64, body: &str) -> Result<RemoteComment> {
