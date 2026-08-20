@@ -515,12 +515,17 @@ pub(crate) async fn handler_login_local(
 /// live pending cookie (expired, or navigated here directly) this just sends
 /// the browser back to the start rather than showing a dead-end form.
 pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
-    if get_cookie(&headers, PENDING_TOTP_COOKIE).is_none() {
+    let Some(pending) = get_cookie(&headers, PENDING_TOTP_COOKIE) else {
         return Ok(Redirect::to("/_login").into_response());
-    }
+    };
+    // Anchored on the pending cookie rather than the session, same shape
+    // `/_login` uses with `LOGIN_CSRF_COOKIE`: this step finishes the very
+    // login flow that token exists to protect, and no session exists yet.
+    let csrf = crate::webui::csrf_token(&pending);
     let locale = effective_locale(&ctx, &headers).await;
     let body = html! {
         form method="post" action="/_login_totp" {
+            input type="hidden" name="csrf" value=(csrf);
             div class="field" {
                 label { (crate::auth::i18n::login::code_label(locale)) }
                 input name="code" size="10" autofocus;
@@ -544,6 +549,8 @@ pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMa
 #[derive(Deserialize)]
 pub(crate) struct TotpLoginForm {
     code: String,
+    #[serde(default)]
+    csrf: String,
 }
 
 /// `POST /_login_totp`: verifies `code` against the pending cookie's
@@ -561,6 +568,10 @@ pub(crate) async fn handler_login_totp_post(
     Form(form): Form<TotpLoginForm>,
 ) -> Result<Response, AppError> {
     let locale = effective_locale(&ctx, &headers).await;
+    // Same reasoning as `/_login`'s own check, one step later in the same
+    // flow: a cross-site form that completes someone else's second factor
+    // lands them inside an account they didn't choose.
+    crate::webui::require_csrf_for(&headers, PENDING_TOTP_COOKIE, &form.csrf)?;
     let raw = get_cookie(&headers, PENDING_TOTP_COOKIE)
         .context(gitquarry_i18n::shared::no_totp_login_in_progress(locale))
         .map_err(AppError::bad_request)?;
