@@ -4,7 +4,7 @@
 //! `webui::repo_settings::mirrors`).
 
 use crate::access::{self, ExternalMirror};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::{Cas, uid::Uid};
 
@@ -68,6 +68,6 @@ pub async fn delete(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<()> 
 async fn refresh_mirrors_enabled_index(ctx: &AppContext, uid: &Uid) -> Result<()> {
     let any_enabled = list(ctx, uid).await?.iter().any(|m| m.enabled);
     gitquarry_core::storage::settings::set_mirrors_enabled_index(ctx.backend().as_ref(), &ctx.cipher, uid, any_enabled)
-        .await;
-    Ok(())
+        .await
+        .context("recording this repo in the enabled-mirrors index (nothing would sync without it)")
 }

@@ -334,14 +334,30 @@ fn mirrors_enabled_index() -> Collection {
 /// via [`list_repos_with_enabled_mirrors`] — without depending on the crate
 /// that owns the mirror CRUD/validation surface. The write side lives in
 /// that crate, which calls this after every create/update/delete.
-pub async fn set_mirrors_enabled_index(backend: &dyn Backend, cipher: &Cipher, repo_uid: &Uid, enabled: bool) {
+/// `Err` only on the enable side, and on purpose: this index is the *only*
+/// thing that tells either sync path a repo has a mirror at all
+/// (`has_enabled_mirror`, `list_repos_with_enabled_mirrors`), so a lost
+/// write there leaves a mirror that looks configured and never syncs, with
+/// nothing anywhere saying why. The caller propagates it so the settings
+/// tab can. A lost *disable* stays silent, matching the "hint, not a fact"
+/// doctrine — a stale entry only costs the sweep one wasted lookup, since
+/// it re-reads the repo's real mirrors before syncing anything.
+pub async fn set_mirrors_enabled_index(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    repo_uid: &Uid,
+    enabled: bool,
+) -> Result<()> {
     if enabled {
-        let _ = mirrors_enabled_index()
+        // `Cas::Conflict` means an entry is already there, which is exactly
+        // the state being asked for — not a failure.
+        mirrors_enabled_index()
             .put(backend, cipher, repo_uid.as_str(), &(), None)
-            .await;
+            .await?;
     } else {
         mirrors_enabled_index().delete(backend, cipher, repo_uid.as_str()).await;
     }
+    Ok(())
 }
 
 /// `true` if [`set_mirrors_enabled_index`] last recorded this repo as having
