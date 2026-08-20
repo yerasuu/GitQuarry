@@ -39,7 +39,7 @@ pub(crate) fn account_avatar(username: &str, avatar_content_type: Option<&str>, 
     match avatar_content_type {
         Some(_) => html! {
             img src=(format!("/_avatar/{}", crate::webui::url_encode(username))) width=(size_px) height=(size_px)
-                class="avatar" alt="" style="border-radius:50%;object-fit:cover;";
+                class="avatar" alt="";
         },
         None => identicon_impl(username, size_px),
     }

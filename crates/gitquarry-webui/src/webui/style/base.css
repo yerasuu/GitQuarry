@@ -429,11 +429,20 @@ table.diff-annotated tr.diff-comment td { white-space: normal; padding: var(--pa
    text-size toggle scales them too) instead of their own fixed pixel
    attrs, colored by whatever text color they're dropped into. */
 .icon { width: 1em; height: 1em; vertical-align: -0.15em; flex-shrink: 0; }
-/* `web::identicon`'s per-user SVGs — square with soft corners (not a full
-   circle, stays closer to this project's flat/square aesthetic than a
-   photo-style avatar would), sized per call site via the `width`/`height`
-   attrs already on the element rather than a fixed class size. */
-.avatar { border-radius: 3px; vertical-align: middle; margin-right: 0.4em; flex-shrink: 0; }
+/* `web::identicon`'s per-user SVGs *and* uploaded photos — square with soft
+   corners (not a full circle, stays closer to this project's flat/square
+   aesthetic than a photo-style avatar would), sized per call site via the
+   `width`/`height` attrs already on the element rather than a fixed class
+   size. The uploaded half used to carry `border-radius:50%` inline, so the
+   two shapes disagreed: a photo came out round and a generated identicon
+   square, on the very same row.
+   A percentage radius rather than a fixed `3px`: the same rule has to look
+   right from a 14px table row to a 48px settings page, and a fixed radius
+   reads as a sharp square at the large end and an almost-circle at the
+   small one. `object-fit` matters only for the uploaded half — an identicon
+   is always square — but costs nothing on an SVG and keeps one rule for
+   both. */
+.avatar { border-radius: 22%; object-fit: cover; vertical-align: middle; margin-right: 0.4em; flex-shrink: 0; }
 .bar-row td { padding: 0.15em 0.5em; }
 /* Repo summary's language bar: one stacked row of same-line segments
    (unlike `.bar-row`'s independent bar-per-row), each segment's width/hue

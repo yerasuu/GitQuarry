@@ -195,8 +195,8 @@ async fn avatars_for(
 fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &AvatarMatches) -> Markup {
     html! {
         @match avatars.get(sha) {
-            Some((user, _)) => (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 16)),
-            None => (crate::webui::identicon::identicon(author_name, 16)),
+            Some((user, _)) => (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 14)),
+            None => (crate::webui::identicon::identicon(author_name, 14)),
         }
         " " (author_name)
         (signature_indicator(
