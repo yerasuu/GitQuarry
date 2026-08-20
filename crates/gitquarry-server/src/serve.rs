@@ -267,6 +267,11 @@ pub async fn run(rest: &[String]) -> Result<()> {
         mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook::default())),
     });
 
+    // Before either server accepts a connection: an instance with no login
+    // method yet keeps its admin pages closed, and this is the only place
+    // the token that opens them is ever shown.
+    gitquarry_webui::webui::bootstrap::print_hint(&ctx, &web_bind).await;
+
     // Detached, not part of the `select!` below: a sweep failure logs and
     // retries next tick, it must never take ssh:///web down with it.
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));

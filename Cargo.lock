@@ -1921,6 +1921,7 @@ dependencies = [
  "maud",
  "openidconnect",
  "pulldown-cmark",
+ "rand 0.10.2",
  "reqwest 0.13.4",
  "s3db",
  "serde",

@@ -140,7 +140,20 @@ async fn require_repo_authority(
 ) -> Result<Option<Response>, AppError> {
     let login_configured = login::login_enforced(ctx).await;
     if !login_configured {
-        return Ok(None);
+        // Same first-boot handling as `settings::web::require_admin`: the
+        // startup token, exchanged at `/_bootstrap`, is what stands in for
+        // the session that can't exist yet.
+        if crate::webui::bootstrap::holds_grant(ctx, headers) {
+            return Ok(None);
+        }
+        let locale = effective_locale(ctx, headers).await;
+        return Ok(Some(
+            AppError::forbidden(anyhow::anyhow!(
+                "{}",
+                gitquarry_i18n::shared::bootstrap_grant_required(locale)
+            ))
+            .into_response(),
+        ));
     }
     let Some(user) = login::current_user(ctx, headers).await else {
         return Ok(Some(
