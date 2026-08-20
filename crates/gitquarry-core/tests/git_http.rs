@@ -160,7 +160,7 @@ fn basic_auth_header(username: &str, password: &str) -> HeaderMap {
 }
 
 #[tokio::test]
-async fn authorize_locks_out_a_username_after_too_many_wrong_passwords_over_http() {
+async fn authorize_slows_a_username_down_after_too_many_wrong_passwords_over_http() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     gitquarry_core::auth::domain::user::create(
@@ -197,8 +197,10 @@ async fn authorize_locks_out_a_username_after_too_many_wrong_passwords_over_http
         ));
     }
 
-    // Locked out now -- even the *correct* password is rejected without a
-    // fresh Argon2 check.
+    // Past the cap the account is *slowed*, never locked: the person who
+    // actually knows the password still gets in, so the counter can't be
+    // turned into a denial of service against them.
+    assert!(!ctx.login_attempts.penalty("alice").is_zero());
     let right = basic_auth_header("alice", "correct-password");
     assert!(matches!(
         authorize(
@@ -211,12 +213,12 @@ async fn authorize_locks_out_a_username_after_too_many_wrong_passwords_over_http
         )
         .await
         .unwrap(),
-        Authz::Denied(Denial::Unauthorized)
+        Authz::Allowed(_)
     ));
 }
 
 #[tokio::test]
-async fn authorize_clears_the_lockout_counter_on_a_correct_password() {
+async fn authorize_clears_the_failure_counter_on_a_correct_password() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     gitquarry_core::auth::domain::user::create(

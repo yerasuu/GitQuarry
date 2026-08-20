@@ -40,7 +40,6 @@ use openidconnect::core::CoreAuthenticationFlow;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope, TokenResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const FLOW_COOKIE: &str = "oidc-flow";
@@ -59,18 +58,10 @@ const LOGIN_CSRF_TTL_SECS: i64 = 600;
 /// round trip.
 const PENDING_TOTP_TTL_SECS: i64 = 300;
 
-/// A real Argon2id hash nothing will ever match, computed once per process.
-/// [`handler_login_local`] verifies against this when the submitted username
-/// doesn't match any user, so a nonexistent username costs the same Argon2
-/// work as a wrong password for a real one — no timing signal either way.
-#[cfg(any(test, feature = "test-util"))]
-pub static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
-    password::hash_password("dummy-password-for-constant-time-login-checks").expect("hashing the dummy login password")
-});
-#[cfg(not(any(test, feature = "test-util")))]
-static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
-    password::hash_password("dummy-password-for-constant-time-login-checks").expect("hashing the dummy login password")
-});
+/// Re-exported so this module's own call sites (and its tests) keep naming
+/// it locally — the value itself is shared with git-smart-HTTP's Basic auth,
+/// see [`password::DUMMY_HASH`].
+pub use gitquarry_auth_crypto::password::DUMMY_HASH;
 
 /// What survives the redirect to the IdP and back: the CSRF/nonce/PKCE
 /// values `openidconnect` generated for this attempt, plus where to send
@@ -404,28 +395,12 @@ pub(crate) async fn handler_login_local(
     let csrf = get_cookie(&headers, LOGIN_CSRF_COOKIE)
         .map(|value| crate::webui::csrf_token(&value))
         .unwrap_or_default();
-    if ctx.login_attempts.is_locked(&form.username) {
-        let body = login_form(
-            locale,
-            &form.return_to,
-            &form.username,
-            Some(&gitquarry_i18n::shared::too_many_failed_attempts(locale)),
-            &csrf,
-        )
-        .into_string();
-        return Ok((
-            axum::http::StatusCode::BAD_REQUEST,
-            Html(layout(
-                "login",
-                "",
-                &body,
-                "",
-                effective_theme(&ctx, &headers).await,
-                effective_density(&ctx, &headers).await,
-                locale,
-            )),
-        )
-            .into_response());
+    // Piled-up failures slow this username's attempts down rather than
+    // locking it: a lockout keyed on a name anyone can type is a denial of
+    // service against that name's real owner. See `LoginAttempts::penalty`.
+    let penalty = ctx.login_attempts.penalty(&form.username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
 
     let user = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, &form.username)
@@ -592,11 +567,9 @@ pub(crate) async fn handler_login_totp_post(
         )));
     }
 
-    if ctx.login_attempts.is_locked(&pending.username) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::too_many_failed_attempts(locale)
-        )));
+    let penalty = ctx.login_attempts.penalty(&pending.username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
 
     let user = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, &pending.username)

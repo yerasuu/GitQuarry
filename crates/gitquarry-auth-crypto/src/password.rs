@@ -9,6 +9,7 @@ use anyhow::Result;
 use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use std::sync::LazyLock;
 
 pub fn hash_password(password: &str) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);
@@ -27,3 +28,13 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
     };
     Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
 }
+
+/// A real Argon2id hash nothing will ever match, computed once per process.
+/// Verify against this when the submitted username resolves to no account
+/// (or to one with no password set): a nonexistent name then costs the same
+/// Argon2 work as a wrong password for a real one, so response time stops
+/// answering "does this account exist". Both login surfaces — the web form
+/// and git-smart-HTTP's Basic auth — share this one value.
+pub static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
+    hash_password("dummy-password-for-constant-time-login-checks").expect("hashing the dummy login password")
+});

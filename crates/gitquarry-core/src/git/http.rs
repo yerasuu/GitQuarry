@@ -612,19 +612,25 @@ async fn authenticate(
     if let Some(cred) = resolve_local_pat(ctx, &username, repo_uid).await? {
         return Ok(Some(cred));
     }
-    if ctx.login_attempts.is_locked(&username) {
-        return Ok(None);
+    // Repeated failures slow this name down instead of locking it — see
+    // `LoginAttempts::penalty`.
+    let penalty = ctx.login_attempts.penalty(&username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
-    let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
+    let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
         .await?
-        .0
-    else {
-        return Ok(None);
-    };
-    let Some(hash) = &user.password_hash else {
-        return Ok(None);
-    };
-    if password::verify_password(&password, hash) {
+        .0;
+    // Verified against a real-but-unmatchable hash when the username is
+    // unknown, so "no such user" and "wrong password" cost the same Argon2
+    // work — the same equalisation `auth::web::login` does on its own form.
+    let matched = password::verify_password(
+        &password,
+        user.as_ref()
+            .and_then(|u| u.password_hash.as_deref())
+            .unwrap_or(password::DUMMY_HASH.as_str()),
+    );
+    if let Some(user) = user.filter(|u| u.password_hash.is_some() && matched) {
         ctx.login_attempts.clear(&username);
         return Ok(Some(Credential::Password(Box::new(user))));
     }
