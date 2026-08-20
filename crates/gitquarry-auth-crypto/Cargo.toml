@@ -1,6 +1,6 @@
 [package]
 name = "gitquarry-auth-crypto"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Self-contained auth primitives (password hashing, TOTP, OIDC client discovery) with no dependency on gitquarry-core"

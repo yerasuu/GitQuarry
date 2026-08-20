@@ -1,6 +1,6 @@
 [package]
 name = "gitquarry-webui"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Read-only web UI (plus settings/search/auth pages) for gitquarry-core"

@@ -1,6 +1,6 @@
 [package]
 name = "gitquarry-domain"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Product-facing functionality (release CRUD, operator maintenance commands) that needs gitquarry-core's kernel but that the kernel never needs back"

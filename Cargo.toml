@@ -16,3 +16,10 @@ members = [
 # see docs/webui-crate-split-concept.md). `gitquarry-core` itself is
 # lib-only, no bin target.
 resolver = "2"
+
+# The one place the release number lives. Cargo can't read it from a file of
+# its own -- manifests have no include -- so this table is the `.version`:
+# every member inherits it with `version.workspace = true`, and a bump is a
+# one-line change instead of eight that can silently disagree.
+[workspace.package]
+version = "0.2.0"

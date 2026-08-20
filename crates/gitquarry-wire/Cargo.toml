@@ -1,6 +1,6 @@
 [package]
 name = "gitquarry-wire"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Plain serde DTOs shared across gitquarry-core/gitquarry-federation process and peer-to-peer boundaries"
