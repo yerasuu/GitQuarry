@@ -20,7 +20,7 @@ async-trait = "0.1.91"
 # Storage engine, direct dep only for the stale-transaction recovery sweep
 # in serve.rs (`s3db::txn::recover_stale`) -- see gitquarry-core/Cargo.toml
 # for why this is a git dependency pinned by tag.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.2", features = ["streaming"] }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.3", features = ["streaming"] }
 
 tokio = { version = "1.53.1", features = [
     "rt-multi-thread",

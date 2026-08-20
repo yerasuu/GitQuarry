@@ -17,7 +17,7 @@ gitquarry-wire = { path = "../gitquarry-wire" }
 # Storage engine, direct dep for `s3db::RequestCache` (the per-request
 # read cache `webui::request_cache_middleware` scopes) -- see
 # gitquarry-core/Cargo.toml for why this is a git dependency pinned by tag.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.2", features = ["streaming"] }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.3", features = ["streaming"] }
 
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 futures = "0.3.33"
