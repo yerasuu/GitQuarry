@@ -268,6 +268,41 @@ async fn create_local_pr_from_remote(
     Ok(pr.number)
 }
 
+/// Writes one comment's anti-loop bookkeeping through immediately, instead
+/// of waiting for the end-of-pass merge. Best-effort: the comment itself
+/// already landed either way, and the end-of-pass merge is still there to
+/// catch what this couldn't write — this exists to shrink the window where
+/// a dropped future costs a duplicate, not to be the only writer.
+async fn record_synced_comment(
+    ctx: &AppContext,
+    uid: &gitquarry_core::storage::uid::Uid,
+    mirror: &ExternalMirror,
+    local_number: u64,
+    local_key: Option<&str>,
+    remote_id: u64,
+) {
+    let outcome = access::merge_pr_link(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        uid,
+        &mirror.id,
+        local_number,
+        |stored| {
+            if let Some(key) = local_key {
+                stored.synced_local_comment_keys.insert(key.to_string());
+            }
+            stored.synced_remote_comment_ids.insert(remote_id);
+        },
+    )
+    .await;
+    if let Err(e) = outcome {
+        eprintln!(
+            "gitquarry: warning: a comment on PR #{local_number} synced with mirror '{}' but recording it failed, it may be synced twice: {e:#}",
+            mirror.label
+        );
+    }
+}
+
 /// Syncs one already-linked PR: merge propagation (its own dedicated forge
 /// endpoint, never a plain field patch), then — only if neither side just
 /// merged this tick — ordinary title/description/open-closed last-write-wins
@@ -391,6 +426,14 @@ pub async fn sync_one_linked_pr(
             Ok(remote_comment) => {
                 link.synced_local_comment_keys.insert(key.clone());
                 link.synced_remote_comment_ids.insert(remote_comment.id);
+                // Persisted here, not only in the merge at the end of this
+                // function: the comment is already on the external forge,
+                // and this future can be dropped at any await — the
+                // pre-serve sync runs it under a 5s timeout, and a forge
+                // call is exactly what that timeout tends to land on.
+                // Losing the key would mean posting this same comment
+                // again on the next tick.
+                record_synced_comment(ctx, uid, mirror, local_number, Some(key), remote_comment.id).await;
             }
             Err(e) => eprintln!(
                 "gitquarry: warning: couldn't export a comment on PR #{local_number} to mirror '{}': {e:#}",
@@ -429,6 +472,10 @@ pub async fn sync_one_linked_pr(
             continue;
         }
         link.synced_remote_comment_ids.insert(rc.id);
+        // Same cancellation window as the export side above, mirrored: the
+        // comment is already in local storage, so losing its id would
+        // import a second copy next tick.
+        record_synced_comment(ctx, uid, mirror, local_number, None, rc.id).await;
     }
 
     // Merged rather than written over `link_etag`: everything this pass
