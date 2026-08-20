@@ -42,6 +42,8 @@ on a per-release versioning scheme.
 - Per-language byte-size bar on the repo summary page.
 - HTML rendering migrated from ad hoc string templates to a typed templating
   engine (maud) across the entire UI.
+- Site footer carrying the copyright, the licence and the running version,
+  linking to the changelog the binary itself was built from (`/_changelog`).
 
 ## Internationalization
 
