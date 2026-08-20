@@ -99,9 +99,10 @@ pub async fn sync_pull_requests_once_with(
     let links = access::list_pr_links(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id).await?;
     let cursor = links
         .iter()
-        .map(|l| l.remote_updated_cursor.clone())
+        .map(|l| l.remote_updated_cursor.as_str())
         .filter(|c| !c.is_empty())
-        .max();
+        .reduce(crate::stamp::max)
+        .map(str::to_string);
 
     let mut linked_by_external: HashMap<u64, u64> = links.iter().map(|l| (l.external_number, l.local_number)).collect();
     let mut linked_locals: HashSet<u64> = links.iter().map(|l| l.local_number).collect();
@@ -274,8 +275,11 @@ pub async fn sync_one_linked_pr(
             );
         }
     } else {
-        let remote_is_newer = remote_pr.updated_at.as_str() > link.remote_updated_cursor.as_str();
-        let local_is_newer = local_pr.updated_at.as_str() > link.remote_updated_cursor.as_str();
+        // Parsed instants, not raw strings: the two sides don't agree on
+        // sub-second precision or on how UTC is spelled (see
+        // [`crate::stamp`]).
+        let remote_is_newer = crate::stamp::later(&remote_pr.updated_at, &link.remote_updated_cursor);
+        let local_is_newer = crate::stamp::later(&local_pr.updated_at, &link.remote_updated_cursor);
         if remote_is_newer && allows_pull {
             local_pr.title = remote_pr.title.clone();
             local_pr.description = remote_pr.body.clone();
@@ -324,7 +328,7 @@ pub async fn sync_one_linked_pr(
             }
         }
     }
-    link.remote_updated_cursor = std::cmp::max(link.remote_updated_cursor.clone(), remote_pr.updated_at.clone());
+    link.remote_updated_cursor = crate::stamp::max(&link.remote_updated_cursor, &remote_pr.updated_at).to_string();
 
     // Outbound: local comments never yet exported, and never something
     // imported from this same mirror in the first place. A line comment

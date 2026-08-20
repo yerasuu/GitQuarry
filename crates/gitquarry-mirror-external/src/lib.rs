@@ -20,4 +20,5 @@ pub mod git_remote;
 pub mod pr_sync;
 #[cfg(not(any(test, feature = "test-util")))]
 mod pr_sync;
+pub mod stamp;
 pub mod validate;
