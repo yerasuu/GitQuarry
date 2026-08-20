@@ -366,14 +366,26 @@ async fn plan_ref_sync_impl(
 /// for a real push, with the same CAS-conflict retry loop for a concurrent
 /// write (a real push landing on this ref at the same moment) racing this
 /// one.
-async fn persist_pulled_ref_to_s3(resolved: &ResolvedRepo, bare_repo: &Path, ref_name: &str, sha: &str) -> Result<()> {
+async fn persist_pulled_ref_to_s3(
+    ctx: &AppContext,
+    resolved: &ResolvedRepo,
+    bare_repo: &Path,
+    ref_name: &str,
+    sha: &str,
+) -> Result<()> {
     for attempt in 1..=MANIFEST_CAS_MAX_RETRIES {
         let (manifest, etag) = resolved.remote.get_manifest().await?;
         let have_tips: Vec<String> = manifest.refs.values().cloned().collect();
         let scratch = gitquarry_core::git::scratch_dir(bare_repo)?;
+        let mut uploaded_bytes: u64 = 0;
         if let Some(pack) =
             gitquarry_core::git::pack_objects_for_push(bare_repo, sha, &have_tips, scratch.path()).await?
         {
+            // Best-effort size read, same tolerance the pre-receive hook's
+            // own accounting has.
+            if let Ok(meta) = tokio::fs::metadata(&pack.pack_path).await {
+                uploaded_bytes = meta.len();
+            }
             resolved
                 .remote
                 .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
@@ -385,7 +397,23 @@ async fn persist_pulled_ref_to_s3(resolved: &ResolvedRepo, bare_repo: &Path, ref
             new_manifest.head = Some(ref_name.to_string());
         }
         match resolved.remote.put_manifest(&new_manifest, etag.as_deref()).await? {
-            Cas::Ok => return Ok(()),
+            Cas::Ok => {
+                // Counted exactly like a push's own packs
+                // (`mirror::hook::run_pre_receive_hook`): without this the
+                // owner's quota never grows from mirrored data, so the
+                // quota check `mirror::policy` applies to a pull could
+                // never trip no matter how much arrives that way.
+                if uploaded_bytes > 0 {
+                    gitquarry_core::storage::settings::bump_pack_bytes(
+                        ctx.backend().as_ref(),
+                        &ctx.cipher,
+                        &resolved.uid,
+                        uploaded_bytes,
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
             Cas::Conflict if attempt < MANIFEST_CAS_MAX_RETRIES => {
                 gitquarry_core::storage::cas_retry_backoff(attempt).await;
                 continue;
@@ -518,7 +546,7 @@ pub async fn sync_mirror_once(
                     // already gone through the prefetch above (a pull means
                     // the two sides differ, which is exactly its trigger).
                     gitquarry_core::git::update_ref(bare_repo, &ref_name, &sha).await?;
-                    persist_pulled_ref_to_s3(resolved, bare_repo, &ref_name, &sha).await?;
+                    persist_pulled_ref_to_s3(ctx, resolved, bare_repo, &ref_name, &sha).await?;
                     report.pulled += 1;
                     Ok(sha)
                 }

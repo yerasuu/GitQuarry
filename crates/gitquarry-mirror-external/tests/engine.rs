@@ -544,6 +544,15 @@ async fn sync_mirror_once_pulls_a_new_ref_from_the_external_target() {
     let (manifest, _etag) = source.remote.get_manifest().await.unwrap();
     assert_eq!(manifest.refs.get("refs/heads/main"), Some(&sha));
 
+    // Pulled packs count toward the owner's storage total exactly like a
+    // push's do — otherwise the quota check on the pull path can never
+    // trip, however much arrives through the mirror.
+    let (config, _) = source.remote.get_repo_config().await.unwrap();
+    assert!(
+        config.pack_bytes > 0,
+        "the pulled pack wasn't counted toward the repo's stored bytes"
+    );
+
     // Reproduces the regression directly: re-opening the mirror (what
     // every subsequent request against this repo does) must not lose
     // what was just pulled.
