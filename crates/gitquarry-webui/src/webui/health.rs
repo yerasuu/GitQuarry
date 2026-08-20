@@ -44,6 +44,12 @@ pub(crate) async fn handler_metrics(State(ctx): State_) -> impl IntoResponse {
     )
 }
 
+/// Deliberately carries no version or build label: this endpoint is
+/// unauthenticated (a scraper has no session to present), and the running
+/// version is the one piece here that is purely reconnaissance value to
+/// somebody shopping for a known bug. Counters stay — an operator who
+/// considers even those sensitive can restrict the path at the proxy.
+///
 /// The actual exposition-format text, split out from [`handler_metrics`] so
 /// it's testable without an `AppContext`/live request — same "handler stays
 /// thin, the render fn is the unit under test" split [`super::audit`]'s own
@@ -54,19 +60,15 @@ pub fn render_metrics(uptime_secs: f64, locked_out: usize, git_rate_limited: usi
 # HELP gitquarry_up Always 1 while the process is answering HTTP requests.
 # TYPE gitquarry_up gauge
 gitquarry_up 1
-# HELP gitquarry_build_info Build metadata, value always 1.
-# TYPE gitquarry_build_info gauge
-gitquarry_build_info{{version=\"{version}\"}} 1
 # HELP gitquarry_uptime_seconds Seconds since this process started.
 # TYPE gitquarry_uptime_seconds counter
 gitquarry_uptime_seconds {uptime_secs}
-# HELP gitquarry_login_lockouts_active Usernames currently locked out of password login.
-# TYPE gitquarry_login_lockouts_active gauge
-gitquarry_login_lockouts_active {locked_out}
+# HELP gitquarry_login_penalised_active Usernames currently serving a password-login delay.
+# TYPE gitquarry_login_penalised_active gauge
+gitquarry_login_penalised_active {locked_out}
 # HELP gitquarry_git_rate_limited_active IPs/usernames currently at the git clone/fetch rate limit ceiling.
 # TYPE gitquarry_git_rate_limited_active gauge
 gitquarry_git_rate_limited_active {git_rate_limited}
-",
-        version = env!("CARGO_PKG_VERSION"),
+"
     )
 }
