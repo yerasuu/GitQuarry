@@ -489,8 +489,15 @@ pub async fn sync_mirror_once(
     // required signatures, blob ceiling, owner quota) has to be applied
     // here or not at all. Loaded once per sweep, and only for a mirror
     // that can actually pull: a push-only one never writes anything local.
+    // Kept as a `Result`, not `?`-ed: a config or manifest read failing is
+    // a reason to refuse *pulls* (they're what needs the policy), never a
+    // reason to abandon this mirror's pushes along with them.
     let gate = match mirror.direction.allows_pull() {
-        true => Some(gitquarry_core::mirror::policy::InboundGate::load(ctx, resolved).await?),
+        true => Some(
+            gitquarry_core::mirror::policy::InboundGate::load(ctx, resolved)
+                .await
+                .map_err(|e| format!("{e:#}")),
+        ),
         false => None,
     };
     let is_branch_or_tag = |name: &&String| name.starts_with("refs/heads/") || name.starts_with("refs/tags/");
@@ -547,10 +554,17 @@ pub async fn sync_mirror_once(
             }
             Some(RefAction::Pull(sha)) => {
                 async {
-                    if let Some(gate) = &gate
-                        && let Some(reason) = gate.check(ctx, bare_repo, &ref_name, local_sha, &sha).await?
-                    {
-                        bail!("refused by this repo's own policy: {reason}");
+                    match &gate {
+                        Some(Ok(gate)) => {
+                            if let Some(reason) = gate.check(ctx, bare_repo, &ref_name, local_sha, &sha).await? {
+                                bail!("refused by this repo's own policy: {reason}");
+                            }
+                        }
+                        Some(Err(e)) => bail!("couldn't read this repo's own policy, refusing the pull: {e}"),
+                        // Unreachable: a mirror that can't pull never plans
+                        // one. Refusing rather than assuming keeps that an
+                        // invariant instead of a comment.
+                        None => bail!("a mirror that can't pull tried to"),
                     }
                     // No fetch here: every path that reaches a `Pull` has
                     // already gone through the prefetch above (a pull means
