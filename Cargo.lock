@@ -1860,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-forge-clients"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1885,7 +1885,7 @@ version = "0.2.0"
 
 [[package]]
 name = "gitquarry-mirror-external"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",

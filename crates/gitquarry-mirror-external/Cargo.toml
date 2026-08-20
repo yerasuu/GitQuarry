@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-mirror-external"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "External-forge ref/PR mirror sync (GitHub/GitLab/Codeberg) -- a library, not its own process; gitquarry-server wires it into AppContext::mirror_sync at startup, since gitquarry-core can't depend on it directly (this crate depends on core)"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 gitquarry-core = { path = "../gitquarry-core" }

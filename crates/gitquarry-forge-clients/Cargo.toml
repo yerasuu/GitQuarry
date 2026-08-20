@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-forge-clients"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "ForgeApi trait plus thin REST adapters for GitHub/GitLab/Codeberg, used by gitquarry-core's external-mirror PR sync"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 async-trait = "0.1.91"
