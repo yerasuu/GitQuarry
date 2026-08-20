@@ -19,10 +19,6 @@ use axum::response::{Html, IntoResponse, Response};
 /// build instead of quietly shipping a page describing an older one.
 const RELEASE_NOTES: &str = include_str!(concat!("../../../../tag-changelog/v", env!("CARGO_PKG_VERSION"), ".md"));
 
-/// The whole feature list by area, which the release notes deliberately
-/// don't repeat -- see `tag-changelog/README.md` for the split.
-const CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
-
 pub(crate) async fn handler_changelog_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let locale = effective_locale(&ctx, &headers).await;
     let topnav = crate::auth::web::login::topnav(&ctx, &headers).await;
@@ -34,7 +30,6 @@ pub(crate) async fn handler_changelog_get(State(ctx): State_, headers: HeaderMap
         // `readme`, not a class of its own: every markdown style in the
         // sheet is scoped under it, and this is the same kind of content.
         div class="readme" { (maud::PreEscaped(super::markdown::render(RELEASE_NOTES))) }
-        div class="readme" { (maud::PreEscaped(super::markdown::render(CHANGELOG))) }
     }
     .into_string();
     Ok(Html(layout(
