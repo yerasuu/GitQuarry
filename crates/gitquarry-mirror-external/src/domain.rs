@@ -12,6 +12,7 @@ use gitquarry_core::storage::{Cas, uid::Uid};
 /// carried is overwritten, so this can never be talked into overwriting an
 /// existing one. Editing is [`update`]'s job, with an etag.
 pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: ExternalMirror) -> Result<ExternalMirror> {
+    check_host_allowed(ctx, &mirror.remote_url).await?;
     mirror.id = access::generate_mirror_id();
     match access::set_external_mirror(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror, None).await? {
         Cas::Ok => {
@@ -27,6 +28,7 @@ pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: ExternalMirror) -> 
 /// so the web layer can render the shared "edited concurrently, reload and
 /// retry" flash instead of a generic error page.
 pub async fn update(ctx: &AppContext, uid: &Uid, mirror: &ExternalMirror, expected_etag: &str) -> Result<Cas> {
+    check_host_allowed(ctx, &mirror.remote_url).await?;
     match access::set_external_mirror(ctx.backend().as_ref(), &ctx.cipher, uid, mirror, Some(expected_etag)).await? {
         Cas::Ok => {
             refresh_mirrors_enabled_index(ctx, uid).await?;
@@ -55,6 +57,20 @@ pub async fn list_with_etags(ctx: &AppContext, uid: &Uid) -> Result<Vec<(Externa
 pub async fn delete(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<()> {
     access::delete_external_mirror(ctx.backend().as_ref(), &ctx.cipher, uid, mirror_id).await;
     refresh_mirrors_enabled_index(ctx, uid).await
+}
+
+/// Refuses a `remote_url` whose host the instance doesn't allow
+/// (`ServerSettings::mirror_allowed_hosts` — see its doc comment for why
+/// this is an instance-level policy and not a repo one).
+///
+/// The save edge. `crate::engine::sync_mirror_once` checks the same thing
+/// again before it syncs, so an admin narrowing the list afterwards takes
+/// effect on already-stored mirrors too, instead of only on the next one
+/// somebody creates.
+async fn check_host_allowed(ctx: &AppContext, remote_url: &str) -> Result<()> {
+    let (settings, _etag) =
+        gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+    crate::validate::check_host_allowed(remote_url, &settings.mirror_allowed_hosts)
 }
 
 /// Re-derives `.conf/index/mirrors-enabled/<uid>` from this repo's *actual*

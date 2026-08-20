@@ -65,3 +65,46 @@ fn validate_mirror_url_still_allows_internal_forges() {
     assert!(validate_mirror_url("http://git.internal.example/o/r.git").is_ok());
     assert!(validate_mirror_url("https://github.com/o/r.git").is_ok());
 }
+
+#[test]
+fn a_url_with_no_host_is_refused() {
+    // Would otherwise slip past the host allowlist by having no host to
+    // match against.
+    assert!(validate_mirror_url("https:///acme/demo.git").is_err());
+    assert!(validate_mirror_url("https://github.com/acme/demo.git").is_ok());
+}
+
+#[test]
+fn the_host_allowlist_starts_shut() {
+    let nothing_allowed: Vec<String> = Vec::new();
+    assert!(check_host_allowed("https://github.com/a/b.git", &nothing_allowed).is_err());
+}
+
+#[test]
+fn an_exact_host_matches_regardless_of_port_or_case() {
+    let allowed = vec!["github.com".to_string()];
+    assert!(check_host_allowed("https://github.com/a/b.git", &allowed).is_ok());
+    assert!(check_host_allowed("https://GitHub.com/a/b.git", &allowed).is_ok());
+    assert!(check_host_allowed("https://github.com:8443/a/b.git", &allowed).is_ok());
+    // A host that merely ends with it isn't it.
+    assert!(check_host_allowed("https://evil-github.com/a/b.git", &allowed).is_err());
+    assert!(check_host_allowed("https://github.com.evil.test/a/b.git", &allowed).is_err());
+}
+
+#[test]
+fn a_wildcard_covers_subdomains_but_not_the_zone_itself() {
+    let allowed = vec!["*.example.com".to_string()];
+    assert!(check_host_allowed("https://git.example.com/a/b.git", &allowed).is_ok());
+    assert!(check_host_allowed("https://deep.git.example.com/a/b.git", &allowed).is_ok());
+    // The wildcard says "a delegated subdomain", not the zone apex — an
+    // operator who means both writes both.
+    assert!(check_host_allowed("https://example.com/a/b.git", &allowed).is_err());
+    assert!(check_host_allowed("https://notexample.com/a/b.git", &allowed).is_err());
+}
+
+#[test]
+fn a_plain_local_path_isnt_subject_to_the_allowlist() {
+    // No `scheme://` at all: `validate_mirror_url` already refuses to store
+    // one, and it names a path rather than any egress.
+    assert!(check_host_allowed("/srv/git/repo.git", &[]).is_ok());
+}

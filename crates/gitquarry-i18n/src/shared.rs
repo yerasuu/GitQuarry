@@ -5,6 +5,16 @@
 use super::{Locale, msg};
 
 msg!(
+    /// A mirror's `remote_url` points at a host the instance doesn't allow
+    /// external mirrors to target. Names the settings page rather than just
+    /// refusing: the fix is an admin's, not the person who hit this.
+    mirror_host_not_allowed(host: &str) {
+        Locale::Es => "el host {host} no esta permitido para mirrors externos — un admin tiene que agregarlo en /_settings.",
+        Locale::En => "host {host} isn't allowed for external mirrors — an admin has to add it in /_settings.",
+    }
+);
+
+msg!(
     /// One entry of the instance's external-mirror host allowlist doesn't
     /// look like a host at all. Shared because both edges reject it: the
     /// settings form that stores the list, and the mirror save that

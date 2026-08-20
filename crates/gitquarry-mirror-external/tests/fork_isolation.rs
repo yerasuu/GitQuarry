@@ -49,6 +49,15 @@ async fn a_fork_doesnt_inherit_the_sources_mirror_credential() {
         .unwrap()
         .unwrap();
 
+    // Nothing is mirrorable until the instance allows the host.
+    let (mut settings, etag) = gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+        .await
+        .unwrap();
+    settings.mirror_allowed_hosts.push("github.com".to_string());
+    gitquarry_core::storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher)
+        .await
+        .unwrap();
+
     domain::create(
         &ctx,
         &source.uid,

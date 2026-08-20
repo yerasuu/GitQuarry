@@ -24,6 +24,12 @@ pub fn validate_mirror_url(url: &str) -> Result<()> {
         bail!("invalid mirror URL (control or whitespace characters)");
     }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        // `https:///path` — a URL with no host at all. Nothing can be
+        // reached through it, and it would slip past the host allowlist
+        // (`check_host_allowed`) by having no host to match.
+        bail!("invalid mirror URL (no host): {url}");
+    }
     // No userinfo. `engine::credentialed_url` builds its own
     // `scheme://x-access-token:<token>@<rest>` at sync time by splicing the
     // token in front of whatever follows the scheme — a URL that already
@@ -98,6 +104,62 @@ pub fn validate_mirror_label(label: &str) -> Result<()> {
     }
     if label.contains(|c: char| c.is_control()) {
         bail!("invalid mirror label (control characters)");
+    }
+    Ok(())
+}
+
+/// Host part of an already-[`validate_mirror_url`]-checked URL, lowercased
+/// and without any port — what [`check_host_allowed`] matches against.
+/// `None` when the string carries no `scheme://` at all.
+pub fn mirror_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, rest)| rest)?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = match authority.strip_prefix('[') {
+        // `[v6]:port` — the brackets belong to the authority, not the host.
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => authority.rsplit_once(':').map_or(authority, |(h, _)| h),
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// Refuses a `remote_url` whose host the instance doesn't allow an external
+/// mirror to target (`ServerSettings::mirror_allowed_hosts`).
+///
+/// An empty list allows nothing, deliberately: configuring a mirror makes
+/// *the server* open connections to a host of the configurer's choosing,
+/// from the server's own network position, so it stays shut until an
+/// instance admin opens it host by host.
+///
+/// Matching is on the *name*, never on a resolved address. The ref sync
+/// shells out to `git`, which resolves inside its own process — an
+/// address-range check here would be a TOCTOU with DNS rebinding on the far
+/// side of it, i.e. the appearance of a control rather than one.
+///
+/// `*.example.com` matches a subdomain of `example.com` at any depth and
+/// not `example.com` itself: a wildcard is a statement about a delegated
+/// zone, and an operator who means both writes both.
+///
+/// A string with no `scheme://` is left alone — [`validate_mirror_url`]
+/// already refuses to store one, so the only way to hold one is to write it
+/// into the bucket directly, and it names a local path rather than any
+/// egress. A `scheme://` with no host is refused like any other host that
+/// isn't on the list.
+pub fn check_host_allowed(remote_url: &str, allowed: &[String]) -> Result<()> {
+    if !remote_url.contains("://") {
+        return Ok(());
+    }
+    let host = mirror_host(remote_url).unwrap_or_default();
+    let matched = allowed.iter().any(|pattern| match pattern.strip_prefix("*.") {
+        Some(zone) => {
+            host.len() > zone.len() + 1 && host.ends_with(zone) && host.as_bytes()[host.len() - zone.len() - 1] == b'.'
+        }
+        None => host == *pattern,
+    });
+    if !matched {
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::mirror_host_not_allowed(gitquarry_i18n::Locale::DEFAULT, &host)
+        );
     }
     Ok(())
 }

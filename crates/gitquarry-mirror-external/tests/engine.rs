@@ -34,6 +34,19 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
     }
 }
 
+/// The instance's external-mirror host allowlist starts empty — nothing is
+/// allowed until an admin opens a host — so any test that stores a mirror
+/// has to make the same call the settings page does first.
+async fn allow_mirror_host(ctx: &AppContext, host: &str) {
+    let (mut settings, etag) = gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+        .await
+        .unwrap();
+    settings.mirror_allowed_hosts.push(host.to_string());
+    gitquarry_core::storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher)
+        .await
+        .unwrap();
+}
+
 /// A tiny real bare repo with `a` (root commit) as the parent of both
 /// `b` and `c` (sibling children, so `b`/`c` are mutually non-ancestor —
 /// a genuine divergence) — everything [`plan_ref_sync`]'s test cases
@@ -461,6 +474,7 @@ async fn sync_mirror_once_pushes_a_changed_local_ref_to_the_external_target() {
     // bare repo above: `sync_mirror_once` takes whatever `ExternalMirror`
     // it's handed and never re-validates/re-fetches it, so this only
     // swaps what the *push itself* targets, not what got persisted.
+    allow_mirror_host(&ctx, "example.invalid").await;
     let mut mirror = domain::create(
         &ctx,
         &source.uid,
@@ -511,6 +525,7 @@ async fn sync_mirror_once_pulls_a_new_ref_from_the_external_target() {
         ctx.open_mirror(&source).await.unwrap();
     }
 
+    allow_mirror_host(&ctx, "example.invalid").await;
     let mut mirror = domain::create(
         &ctx,
         &source.uid,
@@ -639,6 +654,7 @@ async fn sync_mirror_once_marks_a_genuine_divergence_without_forcing_either_side
         ctx.open_mirror(&source).await.unwrap();
     }
 
+    allow_mirror_host(&ctx, "example.invalid").await;
     let mut mirror = domain::create(
         &ctx,
         &source.uid,
@@ -693,6 +709,7 @@ async fn sync_one_mirror_now_surfaces_a_real_failure_instead_of_swallowing_it() 
         ctx.open_mirror(&source).await.unwrap();
     }
 
+    allow_mirror_host(&ctx, "example.invalid").await;
     let mirror = domain::create(
         &ctx,
         &source.uid,
@@ -799,6 +816,7 @@ async fn sync_mirror_once_refuses_a_pull_that_violates_the_repos_own_policy() {
     .await
     .unwrap();
 
+    allow_mirror_host(&ctx, "example.invalid").await;
     let mut mirror = domain::create(
         &ctx,
         &source.uid,
@@ -864,6 +882,7 @@ async fn a_deleted_repo_stops_being_mirrored_outward() {
     {
         ctx.open_mirror(&source).await.unwrap();
     }
+    allow_mirror_host(&ctx, "example.invalid").await;
     let mut mirror = domain::create(
         &ctx,
         &source.uid,
