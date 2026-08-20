@@ -163,6 +163,16 @@ pub(super) async fn save_mirror(
             })
         }
         "delete_mirror" => {
+            // Same 404 the edit and sync paths give for an unknown id: a
+            // plain `Ok` here reported "mirror removed." for a mirror that
+            // was never there (a double-submitted delete, a stale page).
+            if domain::get(ctx, &resolved.uid, &form.mirror_id)
+                .await
+                .map_err(AppError::from)?
+                .is_none()
+            {
+                return Err(AppError::not_found(anyhow::anyhow!("no such mirror")));
+            }
             domain::delete(ctx, &resolved.uid, &form.mirror_id)
                 .await
                 .map_err(AppError::from)?;
