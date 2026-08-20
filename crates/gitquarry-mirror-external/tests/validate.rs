@@ -36,9 +36,9 @@ fn mirror_label_rejects_too_long_and_control_chars() {
 
 #[test]
 fn validate_mirror_url_rejects_credentials_in_the_url() {
-    // `engine::credentialed_url` splices the stored token in as userinfo at
-    // sync time; a URL that already carries one would decide for itself
-    // which host ends up receiving that token.
+    // The sync path hands this URL to `git` verbatim; a stored `user:pass@`
+    // would be a second credential of the stored value's choosing, sent to
+    // a host of its choosing.
     assert!(validate_mirror_url("https://attacker@github.com/o/r.git").is_err());
     assert!(validate_mirror_url("https://user:pass@github.com/o/r.git").is_err());
     // A `@` past the authority is just part of the path, and fine.

@@ -45,6 +45,62 @@ async fn run(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
+/// Env var the credential helper below reads the token out of. The token
+/// must never reach `git`'s argv: `/proc/<pid>/cmdline` is world-readable,
+/// so every local account on the box could read a mirror's forge token for
+/// as long as a sync ran. An environment is readable only by the same uid
+/// (and root), which is the actual improvement here — the helper *script*
+/// still shows up in argv, but it carries no secret.
+const TOKEN_ENV: &str = "GITQUARRY_MIRROR_TOKEN";
+
+/// `git` flags that make it answer its own credential prompt from
+/// [`TOKEN_ENV`] instead of asking anybody. The empty `credential.helper=`
+/// first wipes whatever the system/global config might have configured, so
+/// only this one runs.
+fn credential_args() -> [&'static OsStr; 6] {
+    [
+        OsStr::new("-c"),
+        OsStr::new("credential.helper="),
+        OsStr::new("-c"),
+        OsStr::new(
+            "credential.helper=!f() { echo username=x-access-token; echo \"password=$GITQUARRY_MIRROR_TOKEN\"; }; f",
+        ),
+        OsStr::new("-c"),
+        OsStr::new("credential.interactive=false"),
+    ]
+}
+
+/// [`run`] with a forge token attached out of band — see [`TOKEN_ENV`].
+/// `url` stays the plain `https://host/owner/repo` the mirror stored, so
+/// neither argv nor an error string can leak the credential.
+async fn run_authed(git_dir: Option<&Path>, token: &str, args: &[&OsStr]) -> Result<Vec<u8>> {
+    let mut full: Vec<&OsStr> = credential_args().to_vec();
+    full.extend_from_slice(args);
+    let mut cmd = Command::new("git");
+    if let Some(dir) = git_dir {
+        cmd.env("GIT_DIR", dir);
+    }
+    cmd.env(TOKEN_ENV, token);
+    // Belt and braces with `credential.interactive=false`: without this a
+    // forge that rejects the token can leave git waiting on a terminal
+    // that isn't there, burning the whole `GIT_OP_TIMEOUT` every tick.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.args(&full);
+    cmd.kill_on_drop(true);
+    let out = tokio::time::timeout(GIT_OP_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_elapsed| anyhow::anyhow!("git {} timed out after {GIT_OP_TIMEOUT:?}", describe(args)))?
+        .with_context(|| format!("couldn't run git {}", describe(args)))?;
+    if !out.status.success() {
+        bail!(
+            "git {} failed: {}",
+            describe(args),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(out.stdout)
+}
+
 async fn run_text(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<String> {
     let out = run(git_dir, args).await?;
     Ok(String::from_utf8_lossy(&out).trim().to_string())
@@ -88,11 +144,13 @@ pub async fn list_refs_with_sha(git_dir: &Path) -> Result<std::collections::Hash
 /// `fatal: invalid refspec 'refs/tags/<x>^{}'` on every tick, for every
 /// repo carrying a single annotated tag.
 ///
-/// `url` may carry an embedded token (`https://x-access-token:<token>@...`)
-/// — any `Err` is redacted with [`redact_url`] before it reaches the caller.
-pub async fn ls_remote_refs(url: &str) -> Result<std::collections::HashMap<String, String>> {
-    let out = run_text(
+/// `token` reaches `git` through [`TOKEN_ENV`], never through `url` or
+/// argv. `Err` still goes through [`redact_url`]: a remote can echo a URL
+/// of its own choosing back at us in an error line.
+pub async fn ls_remote_refs(url: &str, token: &str) -> Result<std::collections::HashMap<String, String>> {
+    let raw = run_authed(
         None,
+        token,
         &[
             OsStr::new("ls-remote"),
             OsStr::new("--refs"),
@@ -102,6 +160,7 @@ pub async fn ls_remote_refs(url: &str) -> Result<std::collections::HashMap<Strin
     )
     .await
     .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;
+    let out = String::from_utf8_lossy(&raw).trim().to_string();
     let mut refs = std::collections::HashMap::new();
     for line in out.lines() {
         if let Some((sha, name)) = line.split_once('\t') {
@@ -114,12 +173,11 @@ pub async fn ls_remote_refs(url: &str) -> Result<std::collections::HashMap<Strin
 /// `git push` against `url`, which does its own wire negotiation — no pack
 /// building here, unlike the pre-receive hook's push-to-S3 path.
 ///
-/// Same credential-redaction requirement as [`ls_remote_refs`]: `url` may
-/// carry an embedded token.
-pub async fn push_to_remote_url(bare_repo: &Path, url: &str, refspecs: &[String]) -> Result<()> {
+/// Same out-of-band credential as [`ls_remote_refs`].
+pub async fn push_to_remote_url(bare_repo: &Path, url: &str, token: &str, refspecs: &[String]) -> Result<()> {
     let mut args: Vec<&OsStr> = vec![OsStr::new("push"), OsStr::new("--end-of-options"), OsStr::new(url)];
     args.extend(refspecs.iter().map(OsStr::new));
-    run(Some(bare_repo), &args)
+    run_authed(Some(bare_repo), token, &args)
         .await
         .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;
     Ok(())
@@ -136,10 +194,11 @@ pub async fn push_to_remote_url(bare_repo: &Path, url: &str, refspecs: &[String]
 /// source-only refspec just populates objects, `update_ref` after is an
 /// explicit, separate step.
 ///
-/// Same credential-redaction requirement as [`push_to_remote_url`].
-pub async fn fetch_ref_from_remote_url(bare_repo: &Path, url: &str, ref_name: &str) -> Result<()> {
-    run(
+/// Same out-of-band credential as [`push_to_remote_url`].
+pub async fn fetch_ref_from_remote_url(bare_repo: &Path, url: &str, token: &str, ref_name: &str) -> Result<()> {
+    run_authed(
         Some(bare_repo),
+        token,
         &[
             OsStr::new("fetch"),
             OsStr::new("--end-of-options"),

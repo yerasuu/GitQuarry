@@ -286,18 +286,6 @@ async fn plan_ref_sync_respects_push_only_and_pull_only_directions() {
     );
 }
 
-#[test]
-fn credentialed_url_embeds_token_as_userinfo() {
-    assert_eq!(
-        credentialed_url("https://github.com/acme/demo.git", "ghp_abc"),
-        "https://x-access-token:ghp_abc@github.com/acme/demo.git"
-    );
-    assert_eq!(
-        credentialed_url("http://gitea.internal/acme/demo", "tok123"),
-        "http://x-access-token:tok123@gitea.internal/acme/demo"
-    );
-}
-
 /// A plain (non-`gitquarry`) bare repo with one commit already on
 /// `refs/heads/main` — the "external forge already has something"
 /// half of a pull/divergence fixture.

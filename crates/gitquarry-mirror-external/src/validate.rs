@@ -30,13 +30,10 @@ pub fn validate_mirror_url(url: &str) -> Result<()> {
         // (`check_host_allowed`) by having no host to match.
         bail!("invalid mirror URL (no host): {url}");
     }
-    // No userinfo. `engine::credentialed_url` builds its own
-    // `scheme://x-access-token:<token>@<rest>` at sync time by splicing the
-    // token in front of whatever follows the scheme — a URL that already
-    // carries a `user:pass@` there produces two userinfo segments and lets
-    // the stored value decide which host actually receives the credential.
-    // `validate_mirror_token` rejects `@`/`:`/`/` in the token for the same
-    // reason; this closes the other half.
+    // No userinfo. The sync path hands `git` the credential through its
+    // environment (`git_remote::TOKEN_ENV`) and this URL verbatim, so a
+    // `user:pass@` stored here would be a second, attacker-chosen
+    // credential travelling to a host of the stored value's choosing.
     if authority.contains('@') {
         bail!("invalid mirror URL (credentials in the URL are not accepted): {url}");
     }
@@ -76,14 +73,11 @@ fn is_link_local(authority: &str) -> bool {
 /// Validates an [`crate::access::ExternalMirror`]'s stored provider token
 /// before it's saved — opaque, minted by the external forge, so there's
 /// nothing about its shape to check beyond "not empty, not unbounded, no
-/// control characters". Also rejects `@`/`:`/`/`: the sync path embeds this
-/// token unescaped into a URL's userinfo segment
-/// (`engine::credentialed_url`) to build the push/fetch credential — none
-/// of GitHub/GitLab/Codeberg's own token formats ever contain these, so
-/// rejecting them here (rather than percent-encoding at use time) keeps
-/// that URL-building code simple while still closing off a token value that
-/// could otherwise smuggle in a different host or hijack the credential
-/// boundary.
+/// control characters". Also rejects `@`/`:`/`/`: none of
+/// GitHub/GitLab/Codeberg's own token formats contain these, and keeping
+/// the value shaped like a bare secret means it stays safe to hand to
+/// `git`'s credential helper (and to the forge clients' `Authorization`
+/// header) without any escaping question ever arising.
 pub fn validate_mirror_token(token: &str) -> Result<()> {
     if token.trim().is_empty() || token.len() > MAX_MIRROR_TOKEN_LEN {
         bail!("empty or too-long mirror token (max {MAX_MIRROR_TOKEN_LEN})");
