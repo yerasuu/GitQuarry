@@ -145,13 +145,21 @@ pub async fn sync_pull_requests_once_with(
                     remote_updated_cursor: created.updated_at,
                     ..Default::default()
                 };
-                if let Err(e) =
-                    access::put_pr_link(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, &link, None).await
-                {
-                    eprintln!(
+                // A `Cas::Conflict` matters as much as an `Err` here and
+                // used to be dropped on the floor: with no link stored,
+                // the next pass sees this local PR as unlinked and creates
+                // a *second* one on the external side.
+                match access::put_pr_link(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, &link, None).await {
+                    Ok(Cas::Ok) => {}
+                    Ok(Cas::Conflict) => eprintln!(
+                        "gitquarry: warning: created PR #{} on mirror '{}' but a link for it already existed — \
+                         it won't be synced, remove the stale link to recover",
+                        pr.number, mirror.label
+                    ),
+                    Err(e) => eprintln!(
                         "gitquarry: warning: created PR #{} on mirror '{}' but couldn't persist its link: {e:#}",
                         pr.number, mirror.label
-                    );
+                    ),
                 }
                 linked_by_external.insert(created.number, pr.number);
                 linked_locals.insert(pr.number);
@@ -212,7 +220,12 @@ async fn create_local_pr_from_remote(
         remote_updated_cursor: remote_pr.updated_at.clone(),
         ..Default::default()
     };
-    access::put_pr_link(
+    // The `Cas` is checked, not discarded: a conflict means the local PR
+    // exists but nothing records which external one it mirrors, and the
+    // next pass would import that same external PR all over again. Loud
+    // beats silent — the caller logs it and the operator sees one stray
+    // local PR instead of a new one every tick.
+    if access::put_pr_link(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &resolved.uid,
@@ -220,7 +233,15 @@ async fn create_local_pr_from_remote(
         &link,
         None,
     )
-    .await?;
+    .await?
+        == Cas::Conflict
+    {
+        bail!(
+            "local PR #{} was created for external #{} but a link for it already existed",
+            pr.number,
+            remote_pr.number
+        );
+    }
     Ok(pr.number)
 }
 
@@ -240,7 +261,7 @@ pub async fn sync_one_linked_pr(
     local_number: u64,
 ) -> Result<()> {
     let uid = &resolved.uid;
-    let (Some(mut link), link_etag) =
+    let (Some(mut link), _link_etag) =
         access::get_pr_link(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, local_number).await?
     else {
         bail!("missing PR link for local #{local_number}");
@@ -387,13 +408,27 @@ pub async fn sync_one_linked_pr(
         link.synced_remote_comment_ids.insert(rc.id);
     }
 
-    access::put_pr_link(
+    // Merged rather than written over `link_etag`: everything this pass
+    // accumulated is set insertions and a monotonic cursor, so re-applying
+    // it on top of whatever landed meanwhile is both correct and the only
+    // way a lost race doesn't cost the anti-loop bookkeeping (and with it
+    // a second copy of every comment on the next tick).
+    access::merge_pr_link(
         ctx.backend().as_ref(),
         &ctx.cipher,
         uid,
         &mirror.id,
-        &link,
-        link_etag.as_deref(),
+        local_number,
+        |stored| {
+            stored
+                .synced_local_comment_keys
+                .extend(link.synced_local_comment_keys.iter().cloned());
+            stored
+                .synced_remote_comment_ids
+                .extend(link.synced_remote_comment_ids.iter());
+            stored.remote_updated_cursor =
+                crate::stamp::max(&stored.remote_updated_cursor, &link.remote_updated_cursor).to_string();
+        },
     )
     .await?;
     Ok(())

@@ -588,3 +588,79 @@ async fn a_push_only_mirror_never_imports_a_remote_pr() {
         .unwrap();
     assert!(local_prs.is_empty(), "a push-only mirror imported a remote PR");
 }
+
+/// The anti-loop bookkeeping has to survive a lost CAS race on the link:
+/// dropping it (what unwrapping the `Cas` away used to do) means every
+/// comment gets exported a second time on the next pass.
+#[tokio::test]
+async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    put_branch(&target, "main", &"a".repeat(40)).await;
+    put_branch(&target, "feature", &"b".repeat(40)).await;
+    let mirror = test_mirror();
+
+    let pr = pull_request::create(
+        &ctx,
+        &target,
+        NewPullRequest {
+            source_repo: &target.uid,
+            source_branch: "feature",
+            target_branch: "main",
+            title: "local",
+            description: "body",
+            author: "alice",
+        },
+        gitquarry_i18n::Locale::DEFAULT,
+    )
+    .await
+    .unwrap();
+    pull_requests::add_pr_comment(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        &target.uid,
+        pr.number,
+        &PrComment {
+            author: "alice".to_string(),
+            body: "mine to export".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let forge = FakeForge::default();
+    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+        .await
+        .unwrap();
+    assert_eq!(forge.comments.lock().unwrap().values().flatten().count(), 1);
+
+    // Someone else writes the link between the two passes, invalidating the
+    // etag the next pass would have used.
+    let (mut stored, etag) = access::get_pr_link(ctx.backend().as_ref(), &ctx.cipher, &target.uid, "m1", pr.number)
+        .await
+        .unwrap();
+    let mut stored = stored.take().unwrap();
+    stored.remote_updated_cursor = "2024-01-02T00:00:00Z".to_string();
+    access::put_pr_link(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        &target.uid,
+        "m1",
+        &stored,
+        etag.as_deref(),
+    )
+    .await
+    .unwrap();
+
+    sync_pull_requests_once_with(&ctx, &target, &mirror, &forge)
+        .await
+        .unwrap();
+    assert_eq!(
+        forge.comments.lock().unwrap().values().flatten().count(),
+        1,
+        "the comment was exported twice"
+    );
+}

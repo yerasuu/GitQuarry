@@ -273,6 +273,48 @@ pub async fn put_pr_link(
         .await
 }
 
+/// CAS get/modify/put retry loop over one PR link — the write half of a
+/// [`crate::pr_sync`] pass, which accumulates anti-loop bookkeeping
+/// (`synced_local_comment_keys`, `synced_remote_comment_ids`, the cursor)
+/// as it goes and has to land *all* of it or export the same comments
+/// again on the next tick.
+///
+/// A plain [`put_pr_link`] with the etag read at the start of that pass
+/// dropped the whole set on a conflict, silently: the caller unwrapped the
+/// `Result` and threw the `Cas` away. Re-reading and re-applying is also
+/// the only correct merge here — every field this touches is either a set
+/// insertion or a monotonic cursor, so applying it to whatever landed
+/// meanwhile loses nothing.
+pub async fn merge_pr_link(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    mirror_id: &str,
+    local_number: u64,
+    apply: impl Fn(&mut ExternalPrLink),
+) -> Result<()> {
+    let collection = pr_links_collection(uid, mirror_id);
+    let key = local_number.to_string();
+    for attempt in 1..=UPDATE_MAX_RETRIES {
+        let (link, etag) = collection.get::<ExternalPrLink>(backend, cipher, &key).await?;
+        let Some(mut link) = link else {
+            bail!("no such PR link: #{local_number} on mirror {mirror_id}");
+        };
+        apply(&mut link);
+        match collection.put(backend, cipher, &key, &link, etag.as_deref()).await? {
+            Cas::Ok => return Ok(()),
+            Cas::Conflict if attempt < UPDATE_MAX_RETRIES => {
+                gitquarry_core::storage::cas_retry_backoff(attempt).await;
+                continue;
+            }
+            Cas::Conflict => break,
+        }
+    }
+    bail!(
+        "too many CAS conflicts updating PR link #{local_number} on mirror '{mirror_id}' (giving up after {UPDATE_MAX_RETRIES} attempts)"
+    )
+}
+
 /// Every PR link under this one mirror. Link count follows PR count on a
 /// mirrored repo — small enough in practice for the same "fan out a tiny
 /// GET per entry" tradeoff [`list_external_mirrors`] already makes.
