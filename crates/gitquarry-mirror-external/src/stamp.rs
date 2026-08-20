@@ -26,7 +26,11 @@ pub fn to_unix(stamp: &str) -> Option<i64> {
     }
     let days = days_from_civil(year, month as u32, day as u32);
     let utc = days * 86_400 + hour * 3600 + minute * 60 + second;
-    Some(utc - offset_seconds(&stamp[19..])?)
+    // `get`, never `stamp[19..]`: byte 19 can land inside a multi-byte
+    // character in a malformed stamp, and slicing there panics — inside a
+    // `tokio::spawn`ed sync loop, which would take the whole periodic sync
+    // down for the life of the process.
+    Some(utc - offset_seconds(stamp.get(19..)?)?)
 }
 
 /// `true` if `a` names a strictly later instant than `b`.

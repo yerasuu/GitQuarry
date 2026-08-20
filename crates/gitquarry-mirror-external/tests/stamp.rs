@@ -13,6 +13,10 @@ fn reads_every_shape_the_three_providers_and_this_codebase_produce() {
     // Not a stamp at all.
     assert_eq!(to_unix(""), None);
     assert_eq!(to_unix("yesterday"), None);
+    // A multi-byte character straddling the zone offset used to panic on a
+    // slice at that byte, killing the whole periodic sync task.
+    assert_eq!(to_unix("2024-03-01T12:34:5é"), None);
+    assert_eq!(to_unix("2024-03-01T12:34:56é00"), None);
 }
 
 #[test]
