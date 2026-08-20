@@ -27,6 +27,7 @@ pub mod http;
 pub mod lfs;
 #[cfg(not(any(test, feature = "test-util")))]
 mod lfs;
+pub mod signing;
 pub mod ssh;
 
 use anyhow::{Context, Result, bail};
@@ -314,8 +315,33 @@ pub async fn commit_tree(
     message: &str,
     author: (&str, &str, &str),
     committer: (&str, &str, &str),
+    signing_key: Option<&Path>,
 ) -> Result<String> {
-    let mut args: Vec<&OsStr> = vec![OsStr::new("commit-tree"), OsStr::new(tree)];
+    // `-c` before the subcommand, not repo config: the mirror is a
+    // disposable cache (`mirror::gc` evicts it), so anything written into
+    // its own config would have to be re-established on every re-clone.
+    // These three only ever apply to this one invocation.
+    // `-c name=value` is one argument, not two: split across a pair, git
+    // reads the path as the subcommand and reports it as an unknown one.
+    // `user.signingkey` takes the *path* to the private key for SSH
+    // signing; git shells out to `ssh-keygen -Y sign` with it.
+    let signing_setting = signing_key.map(|p| {
+        let mut arg = std::ffi::OsString::from("user.signingkey=");
+        arg.push(p);
+        arg
+    });
+    let mut args: Vec<&OsStr> = Vec::new();
+    if let Some(setting) = signing_setting.as_ref() {
+        args.push(OsStr::new("-c"));
+        args.push(OsStr::new("gpg.format=ssh"));
+        args.push(OsStr::new("-c"));
+        args.push(setting);
+    }
+    args.push(OsStr::new("commit-tree"));
+    if signing_setting.is_some() {
+        args.push(OsStr::new("-S"));
+    }
+    args.push(OsStr::new(tree));
     for parent in parents {
         args.push(OsStr::new("-p"));
         args.push(OsStr::new(parent));

@@ -395,6 +395,12 @@ impl AppContext {
         }
         let guard = self.locks.lock(key).await;
         crate::mirror::ensure_bare_repo(&path, &self.exe_path).await?;
+        // Best-effort: without it, commits this instance signed show as
+        // unsigned rather than verified. That's a worse-looking page, never
+        // a broken repository, and must not stop a clone or a push.
+        if let Err(e) = install_instance_allowed_signers(self, &path).await {
+            eprintln!("warning: couldn't teach the mirror this instance's signing key: {e:#}");
+        }
         crate::mirror::sync_bare_repo_from_s3(remote, &path).await?;
         // Marks this mirror as just-queried so the periodic sweep
         // (`crate::mirror::gc`) doesn't evict it as stale. Best-effort: a failure
@@ -420,6 +426,15 @@ impl AppContext {
             _guard: guard,
         })
     }
+}
+
+/// Wires [`crate::git::signing::install_allowed_signers`] up with the key
+/// this bucket owns — split out of [`AppContext::open_mirror_common`] only
+/// so its error can be logged and swallowed there without burying the
+/// happy path in a nested match.
+async fn install_instance_allowed_signers(ctx: &AppContext, bare_repo: &std::path::Path) -> Result<()> {
+    let key = crate::git::signing::load_or_create(ctx.backend().as_ref(), &ctx.cipher).await?;
+    crate::git::signing::install_allowed_signers(bare_repo, &key).await
 }
 
 /// Default mirrors path for a bucket, under the user's cache dir.

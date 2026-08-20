@@ -807,9 +807,24 @@ async fn merge_commit(
     head_sha: &str,
     strategy: MergeStrategy,
     merger: (&str, &str),
+    signing_key: Option<&std::path::Path>,
 ) -> Result<MergeOutcome> {
     let merge_date = git_date_now();
     let merger_ident = (merger.0, merger.1, merge_date.as_str());
+    // Author stays whoever asked for the merge; committer becomes the
+    // instance whenever it signs. Git checks an SSH signature against the
+    // allowed-signers principal for the *committer* address, so a signed
+    // commit has to be committed by the identity that owns the key — the
+    // same author/committer split GitHub's own web-made commits use.
+    let committer_ident = if signing_key.is_some() {
+        (
+            git::signing::INSTANCE_NAME,
+            git::signing::INSTANCE_EMAIL,
+            merge_date.as_str(),
+        )
+    } else {
+        merger_ident
+    };
     match strategy {
         // Handled entirely by [`merge`] before it ever gets here: a
         // fast-forward creates no commit, so there is nothing for this
@@ -830,7 +845,8 @@ async fn merge_commit(
                 &[target_sha, head_sha],
                 &message,
                 merger_ident,
-                merger_ident,
+                committer_ident,
+                signing_key,
             )
             .await?;
             Ok(MergeOutcome::Merged(sha))
@@ -847,7 +863,16 @@ async fn merge_commit(
             for commit in &commits {
                 message.push_str(&format!("\n* {}", commit.subject));
             }
-            let sha = git::commit_tree(git_dir, &tree, &[target_sha], &message, merger_ident, merger_ident).await?;
+            let sha = git::commit_tree(
+                git_dir,
+                &tree,
+                &[target_sha],
+                &message,
+                merger_ident,
+                committer_ident,
+                signing_key,
+            )
+            .await?;
             Ok(MergeOutcome::Merged(sha))
         }
         MergeStrategy::Rebase => {
@@ -872,7 +897,8 @@ async fn merge_commit(
                     &[&new_tip],
                     &commit.message,
                     (&commit.author_name, &commit.author_email, &commit.author_date),
-                    merger_ident,
+                    committer_ident,
+                    signing_key,
                 )
                 .await?;
             }
@@ -992,11 +1018,12 @@ pub async fn merge(
         );
     }
 
-    // Fast-forward builds nothing, so it needs no merger identity to stamp
-    // and can't conflict: the branch moves to commits that already exist,
-    // exactly as their author wrote — and signed — them. Everything below
-    // (packing the new objects, the manifest CAS, the metadata update) is
-    // identical either way, which is why this only picks the sha.
+    // Fast-forward builds nothing, so it needs no merger identity to stamp,
+    // no signing key, and can't conflict: the branch moves to commits that
+    // already exist, exactly as their author wrote — and signed — them.
+    // Everything below (packing the new objects, the manifest CAS, the
+    // metadata update) is identical either way, which is why this only
+    // picks the sha.
     let merge_sha = if strategy == MergeStrategy::FastForward {
         if !git::is_ancestor(git_dir, &target_sha, &head_sha).await? {
             bail!(
@@ -1007,6 +1034,11 @@ pub async fn merge(
         head_sha.clone()
     } else {
         let (merger_name, merger_email) = merger_identity(ctx, merged_by).await?;
+        // Loaded (and, the very first time, generated) only on the path
+        // that actually builds a commit: a deploy that only ever
+        // fast-forwards never mints a key at all.
+        let key = git::signing::load_or_create(backend.as_ref(), &ctx.cipher).await?;
+        let key_file = key.to_temp_file()?;
         match merge_commit(
             git_dir,
             &pr,
@@ -1014,6 +1046,7 @@ pub async fn merge(
             &head_sha,
             strategy,
             (&merger_name, &merger_email),
+            Some(key_file.path()),
         )
         .await?
         {

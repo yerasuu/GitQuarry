@@ -37,10 +37,17 @@ pub async fn render_commit(
     Ok(html! {
         h3 {
             "commit " code { (validate::short_sha(&info.sha)) }
-            @if let Some(username) = &verified_by {
-                " " span class="badge ok" { "verified signature (" (username) ")" }
-            } @else {
-                (signature_badge(signature))
+            @match &verified_by {
+                Some(gitquarry_core::domain::commit_signature::CommitSigner::User(username)) => {
+                    " " span class="badge ok" { "verified signature (" (username) ")" }
+                }
+                // Deliberately not the same badge: this attests that this
+                // server built the commit, never that the author stands
+                // behind it — only their own key says that.
+                Some(gitquarry_core::domain::commit_signature::CommitSigner::Instance) => {
+                    " " span class="badge accent" title="built and signed by this instance" { "signed by this instance" }
+                }
+                None => (signature_badge(signature)),
             }
         }
         table class="commit-meta" {

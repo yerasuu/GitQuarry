@@ -302,12 +302,17 @@ async fn check_signed_commits(
             )
             .await?;
             let authorized = match &signer {
-                Some(username) => {
+                Some(crate::domain::commit_signature::CommitSigner::User(username)) => {
                     let perm =
                         access::effective_permission_for(backend.as_ref(), cipher, username, repo_full_name).await?;
                     perm >= Some(crate::auth::entities::Permission::Developer)
                 }
-                None => false,
+                // An instance signature attests that this server built the
+                // commit, not that a person with push access stands behind
+                // it — which is precisely what this setting demands. It also
+                // can't legitimately arrive over a push: the instance's own
+                // commits go straight into the manifest.
+                Some(crate::domain::commit_signature::CommitSigner::Instance) | None => false,
             };
             if !authorized {
                 let short = update.refname.rsplit('/').next().unwrap_or(&update.refname);
