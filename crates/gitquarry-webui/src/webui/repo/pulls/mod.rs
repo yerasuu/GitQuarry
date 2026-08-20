@@ -112,6 +112,7 @@ fn render_pr_actions(
     can_manage: bool,
     can_merge: bool,
     is_same_repo: bool,
+    fast_forwardable: bool,
     repo_name: &str,
     csrf_html: &str,
     locale: Locale,
@@ -171,6 +172,14 @@ fn render_pr_actions(
                         option value="Merge" { (t::merge_strategy_merge_option(locale)) }
                         option value="Squash" { (t::merge_strategy_squash_option(locale)) }
                         option value="Rebase" { (t::merge_strategy_rebase_option(locale)) }
+                        // Disabled rather than hidden when the branches have
+                        // diverged: an option that silently disappears reads
+                        // as "this forge can't do that", where a greyed one
+                        // says "not for this pull request, right now".
+                        option value="FastForward" disabled[!fast_forwardable] {
+                            (t::merge_strategy_fast_forward_option(locale))
+                            @if !fast_forwardable { " " (t::merge_strategy_fast_forward_unavailable(locale)) }
+                        }
                     }
                     @if is_same_repo {
                         label {
@@ -610,6 +619,14 @@ async fn render_pull_detail_impl(
         .map(|l| (l.name.as_str(), l.color.as_str()))
         .collect();
     let d = domain::pull_request::diff(ctx, target, git_dir, &pr).await?;
+    // Only for an open PR anyone may merge: on a closed one the whole merge
+    // form is absent, so the probe would be a `git merge-base` spawn for an
+    // answer nothing renders.
+    let fast_forwardable = if pr.status == PrStatus::Open && can_merge {
+        domain::pull_request::fast_forwardable(ctx, target, git_dir, &pr).await?
+    } else {
+        false
+    };
     // Only for an open PR: a merged or closed one has nothing left to
     // merge, so the probe would be a `git merge-tree` spawn per render for
     // an answer nobody can act on.
@@ -709,6 +726,7 @@ async fn render_pull_detail_impl(
             can_manage,
             can_merge,
             pr.source_repo == target.uid,
+            fast_forwardable,
             repo_name,
             &csrf_field(headers),
             locale,
