@@ -24,9 +24,23 @@
 //! `.readme .markdown-alert-*` in `base.css`.
 
 use super::highlight;
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, html};
+use std::collections::HashMap;
 
 pub fn render(markdown: &str) -> String {
+    render_with_mentions(markdown, &HashMap::new())
+}
+
+/// Same, plus `#123` mentions turned into links. `mentions` maps a number
+/// to its href; a number missing from it stays plain text rather than
+/// becoming a dead link, so the caller decides what exists by what it puts
+/// in the map.
+///
+/// The substitution happens on the parsed event stream, not on the source
+/// text, because only the parser knows what is prose: a `#123` inside a
+/// fenced block or a backtick span is code and must survive verbatim, and
+/// one inside an existing link would nest an `<a>` in an `<a>`.
+pub fn render_with_mentions(markdown: &str, mentions: &HashMap<u64, String>) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
@@ -34,9 +48,98 @@ pub fn render(markdown: &str) -> String {
         | Options::ENABLE_GFM;
     let parser = Parser::new_ext(markdown, options);
     let events = highlight_code_blocks(parser);
+    let events = link_mentions(events, mentions);
     let mut out = String::new();
     html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Rewrites `#123` inside prose text events into link events. Inline code
+/// arrives as `Event::Code` and is never touched; a fenced or indented
+/// block's contents arrive as `Event::Text` *between* the code-block tags,
+/// which is what `depth` tracks.
+fn link_mentions<'a>(events: Vec<Event<'a>>, mentions: &HashMap<u64, String>) -> Vec<Event<'a>> {
+    if mentions.is_empty() {
+        return events;
+    }
+    let mut out = Vec::with_capacity(events.len());
+    let mut in_code = 0usize;
+    let mut in_link = 0usize;
+    for event in events {
+        match &event {
+            Event::Start(Tag::CodeBlock(_)) => in_code += 1,
+            Event::End(TagEnd::CodeBlock) => in_code = in_code.saturating_sub(1),
+            Event::Start(Tag::Link { .. }) => in_link += 1,
+            Event::End(TagEnd::Link) => in_link = in_link.saturating_sub(1),
+            _ => {}
+        }
+        match event {
+            Event::Text(text) if in_code == 0 && in_link == 0 => {
+                push_linked_text(&mut out, &text, mentions);
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn push_linked_text<'a>(out: &mut Vec<Event<'a>>, text: &str, mentions: &HashMap<u64, String>) {
+    let spans = scan_number_mentions(text);
+    if spans.is_empty() {
+        out.push(Event::Text(CowStr::from(text.to_string())));
+        return;
+    }
+    let mut last = 0;
+    for (span, number) in &spans {
+        let Some(href) = mentions.get(number) else {
+            continue;
+        };
+        if span.start > last {
+            out.push(Event::Text(CowStr::from(text[last..span.start].to_string())));
+        }
+        out.push(Event::Start(Tag::Link {
+            link_type: LinkType::Inline,
+            dest_url: CowStr::from(href.clone()),
+            title: CowStr::Borrowed(""),
+            id: CowStr::Borrowed(""),
+        }));
+        out.push(Event::Text(CowStr::from(text[span.clone()].to_string())));
+        out.push(Event::End(TagEnd::Link));
+        last = span.end;
+    }
+    if last < text.len() {
+        out.push(Event::Text(CowStr::from(text[last..].to_string())));
+    }
+}
+
+/// Byte spans of every `#<digits>` in `text`, with the number parsed. A `#`
+/// glued to the end of a word (`abc#1`) is not a mention -- it is far more
+/// often part of an identifier or a URL fragment than a reference.
+pub(crate) fn scan_number_mentions(text: &str) -> Vec<(std::ops::Range<usize>, u64)> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#'
+            && i.checked_sub(1)
+                .map(|p| bytes[p])
+                .is_none_or(|b| !b.is_ascii_alphanumeric())
+        {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1 {
+                if let Ok(number) = text[i + 1..j].parse::<u64>() {
+                    spans.push((i..j, number));
+                }
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    spans
 }
 
 /// Buffers a fenced code block's text between its `Start`/`End` events (they

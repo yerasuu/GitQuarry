@@ -601,62 +601,28 @@ pub(super) fn side_by_side_diff(diff: &str) -> Markup {
     }
 }
 
-/// Byte-range spans of `#123`-shaped mentions in `text`, each with its
-/// parsed number — a manual scan rather than pulling in `regex` for one
-/// pattern, same reasoning `git::redact_url` gives for its own `://` scan.
-/// A `#` only starts a span when not immediately preceded by an
-/// alphanumeric char, so a real anchor-ish fragment like `foo#1` still
-/// counts (word boundaries only matter *before* the `#`) while something
-/// like `a1#2` doesn't accidentally split mid-token.
-fn scan_number_mentions(text: &str) -> Vec<(std::ops::Range<usize>, u64)> {
-    let bytes = text.as_bytes();
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'#'
-            && i.checked_sub(1)
-                .map(|p| bytes[p])
-                .is_none_or(|b| !b.is_ascii_alphanumeric())
-        {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j > i + 1 {
-                if let Ok(number) = text[i + 1..j].parse::<u64>() {
-                    spans.push((i..j, number));
-                }
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    spans
-}
-
-/// Renders `text` HTML-escaped, with every `#123` mention that resolves to
-/// a real PR on `target` turned into a link. A number that resolves to
-/// nothing is left as plain escaped text, not a dead link.
+/// Every `#123` in `text` that names a real pull request on `target`,
+/// mapped to its link. What isn't in the map isn't linked, which is how a
+/// mention of a number that doesn't exist stays plain text instead of
+/// becoming a dead link.
 ///
-/// Used for a PR's own description and flat-thread comments — not the
-/// annotated inline diff comments, which go through a different render
-/// path ([`super::pulls::annotated_diff`]) this doesn't touch.
-pub(crate) async fn link_number_mentions(
+/// Separate from the rendering so the substitution can happen inside
+/// [`crate::webui::markdown::render_with_mentions`], on the parsed event
+/// stream: only the parser knows whether a given `#123` is prose or the
+/// contents of a code fence. Resolving here scans the raw text, so a number
+/// that only ever appears in code costs one lookup and is then never used.
+pub(crate) async fn resolve_number_mentions(
     ctx: &AppContext,
     target: &ResolvedRepo,
     repo_name: &str,
     text: &str,
-) -> String {
-    let spans = scan_number_mentions(text);
-    if spans.is_empty() {
-        return esc(text);
-    }
-
+) -> std::collections::HashMap<u64, String> {
+    let spans = crate::webui::markdown::scan_number_mentions(text);
     let mut numbers: Vec<u64> = spans.iter().map(|(_, n)| *n).collect();
     numbers.sort_unstable();
     numbers.dedup();
-    let mut resolved: std::collections::HashMap<u64, &'static str> = std::collections::HashMap::new();
+
+    let mut resolved = std::collections::HashMap::new();
     for number in numbers {
         if domain::pull_request::get(ctx, target, number)
             .await
@@ -664,25 +630,10 @@ pub(crate) async fn link_number_mentions(
             .flatten()
             .is_some()
         {
-            resolved.insert(number, "pull");
+            resolved.insert(number, repo_link(repo_name, "pull", "").number(number).to_string());
         }
     }
-
-    let mut out = String::with_capacity(text.len());
-    let mut last = 0;
-    for (span, number) in &spans {
-        out.push_str(&esc(&text[last..span.start]));
-        match resolved.get(number) {
-            Some(view) => {
-                let href = repo_link(repo_name, view, "").number(*number).to_string();
-                out.push_str(&format!(r#"<a href="{}">#{number}</a>"#, esc(&href)));
-            }
-            None => out.push_str(&esc(&text[span.clone()])),
-        }
-        last = span.end;
-    }
-    out.push_str(&esc(&text[last..]));
-    out
+    resolved
 }
 
 /// Inline edit (a collapsed `<details>`, native zero-JS toggle) + delete

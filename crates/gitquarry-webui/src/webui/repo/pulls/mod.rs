@@ -218,8 +218,22 @@ fn verdict_label(verdict: ReviewVerdict, locale: Locale) -> String {
 /// options offered depend on whether the viewer authored the PR: an author
 /// can only leave a neutral review (`domain::pull_request::add_review`
 /// rejects anything else regardless of what this form offered).
+/// One PR body -- a description, a thread comment, a review, an inline
+/// diff note -- as HTML. They are all the same kind of untrusted markdown
+/// written by the same people in the same box, so they go through the same
+/// two steps: resolve the `#123` mentions, then render.
+async fn render_body(ctx: &AppContext, target: &ResolvedRepo, repo_name: &str, body: &str) -> String {
+    let mentions = super::components::resolve_number_mentions(ctx, target, repo_name, body).await;
+    crate::webui::markdown::render_with_mentions(body, &mentions)
+}
+
+/// `bodies` holds one pre-rendered body per entry of `reviews`, in the same
+/// order -- rendering one is async (it resolves `#123` mentions against
+/// storage) and this isn't.
+#[allow(clippy::too_many_arguments)]
 fn render_reviews(
     reviews: &[PrReview],
+    bodies: &[String],
     repo_name: &str,
     number: u64,
     viewer: Option<&str>,
@@ -241,13 +255,13 @@ fn render_reviews(
         @if reviews.is_empty() {
             p class="muted" { (t::no_reviews_hint(locale)) }
         }
-        @for review in reviews {
+        @for (i, review) in reviews.iter().enumerate() {
             div class="commit-meta" {
                 p class="muted" {
                     strong { (review.author) } " " (verdict_label(review.verdict, locale)) " — " (review.created_at)
                 }
                 @if !review.body.is_empty() {
-                    p { (review.body) }
+                    div class="readme plain" { (PreEscaped(&bodies[i])) }
                 }
             }
         }
@@ -646,12 +660,22 @@ async fn render_pull_detail_impl(
     // Only the unified view can place a comment on a line (see
     // `annotated_diff`'s own doc comment) — in the split view every anchored
     // comment stays unplaced and shows up in the flat thread below instead.
+    // Rendered up front, and for the whole comment list rather than just the
+    // anchored ones: which comments the diff actually places is decided
+    // inside `annotated_diff::render`, and it indexes into this by the same
+    // position, so the two have to line up one-for-one.
+    let mut comment_bodies = Vec::with_capacity(comments.len());
+    for (_id, comment) in &comments {
+        comment_bodies.push(render_body(ctx, target, repo_name, &comment.body).await);
+    }
+
     let active_anchor = annotated_diff::active_anchor(params);
     let annotated = match diff_view {
         DiffView::Unified => Some(annotated_diff::render(
             &d.diff,
             &comments,
             &annotated_diff::View {
+                comment_bodies: &comment_bodies,
                 repo_name,
                 number: pr.number,
                 can_comment: logged_in,
@@ -665,12 +689,16 @@ async fn render_pull_detail_impl(
         DiffView::Split => None,
     };
     let placed = annotated.as_ref().map(|a| &a.placed);
-    let thread: Vec<_> = comments
+    // Kept as indexes, not just the pairs: `comment_bodies` is keyed by
+    // position in `comments`, so this is what lets the flat thread reuse the
+    // bodies already rendered above instead of rendering them a second time.
+    let thread_indexes: Vec<usize> = comments
         .iter()
         .enumerate()
         .filter(|(index, _)| !placed.is_some_and(|placed| placed.contains(index)))
-        .map(|(_, pair)| pair)
+        .map(|(index, _)| index)
         .collect();
+    let thread: Vec<_> = thread_indexes.iter().map(|&index| &comments[index]).collect();
 
     // A cross-fork PR's source branch lives on a different repo — resolve
     // that repo's current display name (best-effort: a deleted fork just
@@ -689,10 +717,14 @@ async fn render_pull_detail_impl(
         };
         format!("{repo_label}:{}", pr.source_branch)
     };
-    let description_html = super::components::link_number_mentions(ctx, target, repo_name, &pr.description).await;
-    let mut thread_htmls = Vec::with_capacity(thread.len());
-    for (_id, comment) in &thread {
-        thread_htmls.push(super::components::link_number_mentions(ctx, target, repo_name, &comment.body).await);
+    let description_html = render_body(ctx, target, repo_name, &pr.description).await;
+    let thread_htmls: Vec<String> = thread_indexes
+        .iter()
+        .map(|&index| comment_bodies[index].clone())
+        .collect();
+    let mut review_htmls = Vec::with_capacity(reviews.len());
+    for review in &reviews {
+        review_htmls.push(render_body(ctx, target, repo_name, &review.body).await);
     }
 
     Ok(html! {
@@ -716,7 +748,7 @@ async fn render_pull_detail_impl(
             p class="muted" { (t::reviewers_label(locale)) ": " (pr.requested_reviewers.join(", ")) }
         }
         @if !pr.description.is_empty() {
-            p { (PreEscaped(&description_html)) }
+            div class="readme plain" { (PreEscaped(&description_html)) }
         }
         @if let Some(paths) = &conflicts {
             (render_conflict_notice(repo_name, &pr, paths, locale))
@@ -776,7 +808,7 @@ async fn render_pull_detail_impl(
             None => div class="scroll-x full-bleed" { (side_by_side_diff(&d.diff)) },
         }
 
-        (render_reviews(&reviews, repo_name, pr.number, viewer.as_deref(), &pr.author, headers, locale))
+        (render_reviews(&reviews, &review_htmls, repo_name, pr.number, viewer.as_deref(), &pr.author, headers, locale))
 
         h4 { (t::comments_heading(locale)) }
         @if thread.is_empty() {
@@ -790,7 +822,7 @@ async fn render_pull_detail_impl(
                         " — " (t::line_comment_prefix(locale)) code { (anchor.path) ":" (anchor.line) }
                     }
                 }
-                p { (PreEscaped(&thread_htmls[i])) }
+                div class="readme plain" { (PreEscaped(&thread_htmls[i])) }
                 @let is_comment_author = viewer.as_deref() == Some(comment.author.as_str());
                 (super::components::comment_edit_delete_controls(
                     "/_pulls",

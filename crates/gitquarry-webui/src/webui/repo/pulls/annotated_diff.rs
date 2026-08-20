@@ -247,10 +247,13 @@ fn comment_link(repo_name: &str, number: u64, anchor: &CommentAnchor) -> String 
     )
 }
 
+/// `body_html` is the comment's body already rendered -- see
+/// `View::comment_bodies`.
 #[allow(clippy::too_many_arguments)]
 fn comment_row(
     comment_id: &str,
     comment: &PrComment,
+    body_html: &str,
     repo_name: &str,
     number: u64,
     viewer: Option<&str>,
@@ -263,7 +266,7 @@ fn comment_row(
         tr class="diff-comment" {
             td colspan="3" {
                 p class="muted" { strong { (comment.author) } " — " (comment.created_at) }
-                p { (comment.body) }
+                div class="readme plain" { (maud::PreEscaped(body_html)) }
                 (super::super::components::comment_edit_delete_controls(
                     "/_pulls",
                     repo_name,
@@ -304,6 +307,12 @@ fn form_row(repo_name: &str, number: u64, anchor: &CommentAnchor, headers: &Head
 /// `domain::release::NewAsset` uses for the same reason.
 #[cfg(any(test, feature = "test-util"))]
 pub struct View<'a> {
+    /// Each comment's body already rendered to HTML, indexed the same way
+    /// as `render`'s `comments` argument. Rendering one resolves `#123`
+    /// mentions against storage and so is async, which this render path
+    /// isn't; an index with no entry falls back to an empty body rather
+    /// than panicking on a caller that got the lengths wrong.
+    pub comment_bodies: &'a [String],
     pub repo_name: &'a str,
     pub number: u64,
     /// Whether to offer the per-line "comment here" link at all.
@@ -324,6 +333,12 @@ pub struct View<'a> {
 }
 #[cfg(not(any(test, feature = "test-util")))]
 pub(super) struct View<'a> {
+    /// Each comment's body already rendered to HTML, indexed the same way
+    /// as `render`'s `comments` argument. Rendering one resolves `#123`
+    /// mentions against storage and so is async, which this render path
+    /// isn't; an index with no entry falls back to an empty body rather
+    /// than panicking on a caller that got the lengths wrong.
+    pub(super) comment_bodies: &'a [String],
     pub(super) repo_name: &'a str,
     pub(super) number: u64,
     /// Whether to offer the per-line "comment here" link at all.
@@ -406,7 +421,7 @@ fn render_impl(diff: &str, comments: &[(String, PrComment)], view: &View<'_>) ->
                         }
                         @for (index, (comment_id, comment)) in comments.iter().enumerate() {
                             @if comment.anchor.as_ref() == Some(anchor) && placed.insert(index) {
-                                (comment_row(comment_id, comment, view.repo_name, view.number, view.viewer, view.can_moderate, view.headers, view.locale))
+                                (comment_row(comment_id, comment, view.comment_bodies.get(index).map_or("", String::as_str), view.repo_name, view.number, view.viewer, view.can_moderate, view.headers, view.locale))
                             }
                         }
                         @if view.active == Some(anchor) {
