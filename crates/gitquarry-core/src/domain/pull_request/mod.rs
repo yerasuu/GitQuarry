@@ -464,6 +464,7 @@ async fn add_comment_anchored(
         body: body.to_string(),
         created_at: now_stamp(),
         anchor,
+        ..Default::default()
     };
     pull_requests::add_pr_comment(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number, &comment).await
 }

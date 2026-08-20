@@ -11,6 +11,7 @@ gitquarry-core = { path = "../gitquarry-core" }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 gitquarry-domain = { path = "../gitquarry-domain" }
+gitquarry-mirror-external = { path = "../gitquarry-mirror-external" }
 gitquarry-webui = { path = "../gitquarry-webui" }
 
 # dyn-dispatch for gitquarry_core::mirror::MirrorSyncHook (mirror_sync.rs)

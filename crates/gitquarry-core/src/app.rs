@@ -86,6 +86,11 @@ pub struct AppContext {
     /// Fan-out point for domain state changes (push, PR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,
+    /// `None` unless `gitquarry-server` wired one in at startup — see
+    /// [`crate::mirror::MirrorSyncHook`]'s own doc comment for why this is
+    /// a trait object rather than a direct dependency on
+    /// `gitquarry-mirror-external`.
+    pub mirror_sync: Option<Arc<dyn crate::mirror::MirrorSyncHook>>,
 }
 
 /// Local mirror ready to use, with the repo's lock held. While this exists,

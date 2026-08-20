@@ -320,3 +320,67 @@ pub async fn list_deleted_repo_uids(backend: &dyn Backend) -> Result<Vec<Uid>> {
         .map(Uid::from)
         .collect())
 }
+
+fn mirrors_enabled_index() -> Collection {
+    Collection::new_owned(format!("{}/mirrors-enabled", super::INDEX_PREFIX))
+}
+
+/// Keeps `.conf/index/mirrors-enabled/<repo-uid>.json` in sync with whether
+/// this repo currently has at least one enabled external mirror — same
+/// "hint, not a fact" doctrine as [`set_visible_index`]. Relocated here from
+/// `mirror::external::access` (see `docs/mirror-external-extraction-concept.md`)
+/// so `mirror::hook`'s pre-receive path can answer "does this repo have any
+/// enabled mirror" — the same question the periodic sync tick already asks
+/// via [`list_repos_with_enabled_mirrors`] — without depending on the crate
+/// that owns the mirror CRUD/validation surface. The write side lives in
+/// that crate, which calls this after every create/update/delete.
+/// `Err` only on the enable side, and on purpose: this index is the *only*
+/// thing that tells either sync path a repo has a mirror at all
+/// (`has_enabled_mirror`, `list_repos_with_enabled_mirrors`), so a lost
+/// write there leaves a mirror that looks configured and never syncs, with
+/// nothing anywhere saying why. The caller propagates it so the settings
+/// tab can. A lost *disable* stays silent, matching the "hint, not a fact"
+/// doctrine — a stale entry only costs the sweep one wasted lookup, since
+/// it re-reads the repo's real mirrors before syncing anything.
+pub async fn set_mirrors_enabled_index(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    repo_uid: &Uid,
+    enabled: bool,
+) -> Result<()> {
+    if enabled {
+        // `Cas::Conflict` means an entry is already there, which is exactly
+        // the state being asked for — not a failure.
+        mirrors_enabled_index()
+            .put(backend, cipher, repo_uid.as_str(), &(), None)
+            .await?;
+    } else {
+        mirrors_enabled_index().delete(backend, cipher, repo_uid.as_str()).await;
+    }
+    Ok(())
+}
+
+/// `true` if [`set_mirrors_enabled_index`] last recorded this repo as having
+/// an enabled mirror — a single indexed lookup `mirror::hook` uses instead
+/// of listing and decrypting the repo's whole mirrors collection just to
+/// check one bool.
+pub async fn has_enabled_mirror(backend: &dyn Backend, cipher: &Cipher, repo_uid: &Uid) -> bool {
+    mirrors_enabled_index()
+        .get::<()>(backend, cipher, repo_uid.as_str())
+        .await
+        .is_ok_and(|(entry, _)| entry.is_some())
+}
+
+/// Every repo uid currently indexed as having at least one enabled external
+/// mirror — same "hint, not a fact" doctrine as [`list_visible_repo_uids`]:
+/// the periodic sync tick re-fetches and re-filters each repo's actual
+/// mirrors before syncing anything, so a stale entry here just costs one
+/// wasted lookup, never a wrong sync.
+pub async fn list_repos_with_enabled_mirrors(backend: &dyn Backend) -> Result<Vec<Uid>> {
+    Ok(mirrors_enabled_index()
+        .list_names(backend)
+        .await?
+        .into_iter()
+        .map(Uid::from)
+        .collect())
+}

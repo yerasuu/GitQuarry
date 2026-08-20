@@ -2,9 +2,9 @@
 
 Git remote over S3. Rust. Only ssh:// and git-smart-HTTP are publicly supported for push/pull, plus a read-only web browsing UI over the same server. No git:// daemon, no direct S3 remote helper: both were dropped, not kept opt-in.
 
-One binary: `gitquarry` (`crates/gitquarry-server`), built on `gitquarry-core` (ssh/git-smart-HTTP/domain/storage) plus `gitquarry-webui` (browsing UI, login/settings/search). `develop`/`master` are the stable core deployment and carry nothing else.
+One binary: `gitquarry` (`crates/gitquarry-server`), built on `gitquarry-core` (ssh/git-smart-HTTP/domain/storage) plus `gitquarry-webui` (browsing UI, login/settings/search) and `gitquarry-mirror-external` (external forge mirroring). `develop`/`master` are the stable core deployment and carry nothing else.
 
-Optional modules live on their own branches, each a snapshot of the last state where that module still built, to be reintegrated one at a time: `feature/cicd` (gitquarry-ci + SDKs), `feature/federation` (peer discovery/gossip, remote browse/fork, PR-proxy, fine-grained tokens), `feature/artifacts` (package registry), `feature/tracker` (issues/board/milestones), `feature/mirror` (external GitHub/GitLab/Codeberg mirroring). The commit that removed each one from `develop` is the exact recipe for putting it back.
+Optional modules live on their own branches, each a snapshot of the last state where that module still built, to be reintegrated one at a time: `feature/cicd` (gitquarry-ci + SDKs), `feature/federation` (peer discovery/gossip, remote browse/fork, PR-proxy, fine-grained tokens), `feature/artifacts` (package registry), `feature/tracker` (issues/board/milestones). The commit that removed each one from `develop` is the exact recipe for putting it back. External GitHub/GitLab/Codeberg mirroring (`gitquarry-mirror-external` + `gitquarry-forge-clients`) is reintegrated and back on `develop`.
 
 ## Config
 

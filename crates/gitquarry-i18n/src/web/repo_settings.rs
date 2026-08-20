@@ -165,3 +165,62 @@ msg!(add_access_heading() { Locale::Es => "agregar acceso", Locale::En => "add a
 msg!(username_placeholder() { Locale::Es => "usuario", Locale::En => "username" });
 msg!(add_button() { Locale::Es => "agregar", Locale::En => "add" });
 msg!(permissions_heading() { Locale::Es => "permisos por usuario", Locale::En => "per-user permissions" });
+
+msg!(mirrors_heading() { Locale::Es => "espejos externos", Locale::En => "external mirrors" });
+msg!(mirrors_prose() {
+    Locale::Es => "Sincroniza refs (ramas/tags) con un repo en GitHub, GitLab o Codeberg via git plano — sin API de proveedor, solo push/pull por https con un token embebido en la URL. Barrido periodico, mas \"sincronizar ahora\" por mirror.",
+    Locale::En => "Syncs refs (branches/tags) with a repo on GitHub, GitLab, or Codeberg over plain git — no provider API, just push/pull over https with a token embedded in the URL. Periodic sweep, plus a per-mirror \"sync now\".",
+});
+msg!(no_mirrors_hint() { Locale::Es => "(sin espejos configurados todavia)", Locale::En => "(no mirrors configured yet)" });
+msg!(mirror_table_header_label() { Locale::Es => "etiqueta", Locale::En => "label" });
+msg!(mirror_table_header_provider() { Locale::Es => "proveedor", Locale::En => "provider" });
+msg!(mirror_table_header_direction() { Locale::Es => "direccion", Locale::En => "direction" });
+msg!(mirror_table_header_status() { Locale::Es => "estado por ref", Locale::En => "status by ref" });
+msg!(mirror_table_header_actions() { Locale::Es => "acciones", Locale::En => "actions" });
+msg!(mirror_field_label_url() { Locale::Es => "url remota", Locale::En => "remote url" });
+msg!(mirror_url_placeholder() { Locale::Es => "https://github.com/duenio/repo.git", Locale::En => "https://github.com/owner/repo.git" });
+msg!(mirror_field_label_token() { Locale::Es => "token", Locale::En => "token" });
+msg!(mirror_token_placeholder_new() { Locale::Es => "token de acceso personal", Locale::En => "personal access token" });
+msg!(mirror_token_placeholder_unchanged() {
+    Locale::Es => "sin cambios (dejar en blanco)",
+    Locale::En => "unchanged (leave blank)",
+});
+msg!(mirror_field_label_label() { Locale::Es => "etiqueta", Locale::En => "label" });
+msg!(mirror_label_placeholder() { Locale::Es => "backup en github", Locale::En => "github backup" });
+msg!(mirror_field_label_enabled() { Locale::Es => "habilitado", Locale::En => "enabled" });
+msg!(direction_push_only_option() { Locale::Es => "solo push", Locale::En => "push only" });
+msg!(direction_pull_only_option() { Locale::Es => "solo pull", Locale::En => "pull only" });
+msg!(direction_bidirectional_option() { Locale::Es => "bidireccional", Locale::En => "bidirectional" });
+msg!(direction_push_only_label() { Locale::Es => "push", Locale::En => "push" });
+msg!(direction_pull_only_label() { Locale::Es => "pull", Locale::En => "pull" });
+msg!(direction_bidirectional_label() { Locale::Es => "push+pull", Locale::En => "push+pull" });
+msg!(ref_status_in_sync() { Locale::Es => "al dia", Locale::En => "in sync" });
+msg!(ref_status_diverged() { Locale::Es => "divergido", Locale::En => "diverged" });
+msg!(ref_status_error() { Locale::Es => "error", Locale::En => "error" });
+msg!(mirror_last_error() { Locale::Es => "sync fallido", Locale::En => "sync failed" });
+msg!(add_mirror_heading() { Locale::Es => "agregar espejo", Locale::En => "add mirror" });
+msg!(sync_now_button() { Locale::Es => "sincronizar ahora", Locale::En => "sync now" });
+msg!(delete_mirror_button() { Locale::Es => "eliminar", Locale::En => "delete" });
+msg!(delete_mirror_confirm() {
+    Locale::Es => "eliminar este espejo? esta accion no se puede deshacer.",
+    Locale::En => "delete this mirror? this cannot be undone.",
+});
+msg!(add_mirror_button() { Locale::Es => "agregar espejo", Locale::En => "add mirror" });
+msg!(save_mirror_button() { Locale::Es => "guardar espejo", Locale::En => "save mirror" });
+msg!(mirror_token_shown_once_prefix() {
+    Locale::Es => "Token guardado para \"",
+    Locale::En => "Token saved for \"",
+});
+msg!(mirror_token_shown_once_suffix() {
+    Locale::Es => "\" — se muestra una sola vez, guardalo ahora:",
+    Locale::En => "\" — shown only once, save it now:",
+});
+msg!(mirror_field_label_sync_pull_requests() {
+    Locale::Es => "sincronizar pull requests",
+    Locale::En => "sync pull requests",
+});
+msg!(linked_prs_heading() { Locale::Es => "pull requests vinculadas", Locale::En => "linked pull requests" });
+msg!(no_linked_prs_hint() { Locale::Es => "(sin pull requests vinculadas todavia)", Locale::En => "(no linked pull requests yet)" });
+msg!(pr_link_table_header_local() { Locale::Es => "local", Locale::En => "local" });
+msg!(pr_link_table_header_external() { Locale::Es => "externa", Locale::En => "external" });
+msg!(pr_link_table_header_cursor() { Locale::Es => "ultimo sync", Locale::En => "last synced" });

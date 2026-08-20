@@ -103,6 +103,24 @@ on a per-release versioning scheme.
   turning the merge button into an error page.
 - A merged pull request still renders after its source branch is deleted.
 
+## External mirroring
+
+- Mirror a repo to GitHub, GitLab or Codeberg — push, pull or both — with
+  per-ref status on the repo's settings tab. Only real fast-forwards sync;
+  a genuine divergence is reported and never forced, and a branch deleted
+  on one side is not re-created from the other.
+- What a mirror pulls in passes the same checks a push does: protected
+  branches and tags, required signatures, the LFS blob ceiling and the
+  owner's storage quota.
+- Optional two-way pull request sync per mirror — title, description,
+  open/closed state, merges and comments — with the bookkeeping that keeps
+  a comment from echoing between the two sides.
+- An instance-wide host allowlist decides where a mirror may point. The
+  forges with a built-in client are always allowed; a self-hosted GitLab or
+  Gitea is added in the instance settings.
+- Configuring or hand-syncing a mirror needs the repo's owner tier and is
+  recorded in the audit log.
+
 ## Releases & assets
 
 - Releases: create, edit, and delete releases with notes; list/detail views;

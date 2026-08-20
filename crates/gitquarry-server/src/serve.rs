@@ -264,12 +264,14 @@ pub async fn run(rest: &[String]) -> Result<()> {
         git_rate_limiter: Default::default(),
         allow_push_create,
         events: Default::default(),
+        mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook::default())),
     });
 
     // Detached, not part of the `select!` below: a sweep failure logs and
     // retries next tick, it must never take ssh:///web down with it.
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
+    tokio::spawn(gitquarry_mirror_external::engine::run_periodic_sync(Arc::clone(&ctx)));
     // The two servers are infinite loops: if either returns, it's an error
     // and there's no point serving just the other. `shutdown_signal`
     // resolving is not an error: it's how `docker stop`/`podman stop` (SIGTERM)

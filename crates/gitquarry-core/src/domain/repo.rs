@@ -290,7 +290,42 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
     }
     storage::settings::set_visible_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     storage::settings::set_deleted_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
+    // `delete_all` above took the repo's own `mirrors/` objects with it, but
+    // this index lives outside the repo prefix: left behind, it makes the
+    // external-mirror sweep resolve and list a uid that no longer exists,
+    // once per tick, forever — one leaked entry per purged repo.
+    let _ =
+        storage::settings::set_mirrors_enabled_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     access::clear_repo_permission_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid).await?;
+    Ok(())
+}
+
+/// Collections a repo duplication (`fork`/`create_from_template`, both
+/// built on `Remote::copy_all_to`, which copies every key it finds) must
+/// strip from the destination.
+///
+/// `mirrors/` is the security-relevant one: an `ExternalMirror` holds a
+/// *usable* forge credential (reversible by necessity — the sync loop
+/// re-authenticates with it on every tick), so inheriting it would hand
+/// whoever forked a public repo both the ability to push that repo's refs
+/// to the original owner's GitHub and — by repointing `remote_url` at a
+/// host they control, which needs no token to do since a blank token field
+/// means "keep the stored one" — the credential itself.
+///
+/// `pulls/` and `lfs-locks/` aren't credentials, just wrong: a fork
+/// starting life with the upstream's pull requests, review threads and
+/// held LFS locks isn't what a fork is, and no forge behaves that way.
+const NOT_INHERITED_BY_A_COPY: [&str; 3] = ["mirrors/", "pulls/", "lfs-locks/"];
+
+/// Strips [`NOT_INHERITED_BY_A_COPY`] from a freshly copied repo. Runs
+/// *after* the copy rather than filtering inside `copy_all_to`: that
+/// primitive's contract is "every object, re-encrypted under the
+/// destination's key", and which collections a *duplication* should carry
+/// is a domain decision, not a storage one.
+async fn strip_uninheritable(dest: &ResolvedRepo) -> Result<()> {
+    for sub_prefix in NOT_INHERITED_BY_A_COPY {
+        dest.remote.delete_under(sub_prefix).await?;
+    }
     Ok(())
 }
 
@@ -321,6 +356,7 @@ pub async fn fork(
     if !dest.remote.exists().await? {
         bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
     }
+    strip_uninheritable(&dest).await?;
 
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
@@ -436,6 +472,10 @@ pub async fn create_from_template(
     if !dest.remote.exists().await? {
         bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
     }
+    // A template is *published* to be copied by other people, so inheriting
+    // the template author's mirror credential here would be worse than in
+    // `fork`, not better.
+    strip_uninheritable(&dest).await?;
 
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
