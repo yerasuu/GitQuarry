@@ -4201,7 +4201,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "s3db"
 version = "0.4.0"
-source = "git+https://git.yerasuu.com/yerasuu/s3db?tag=v0.4.0#171694da515d2b97f07ed7e81c56edc76709c3ca"
+source = "git+https://git.yerasuu.com/yerasuu/s3db?tag=v0.4.1#ac142ed863314f0799c0f263077a4e53d00c809f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4233,7 +4233,7 @@ dependencies = [
 [[package]]
 name = "s3db-crypto"
 version = "0.4.0"
-source = "git+https://git.yerasuu.com/yerasuu/s3db?tag=v0.4.0#171694da515d2b97f07ed7e81c56edc76709c3ca"
+source = "git+https://git.yerasuu.com/yerasuu/s3db?tag=v0.4.1#ac142ed863314f0799c0f263077a4e53d00c809f"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4249,7 +4249,7 @@ dependencies = [
 [[package]]
 name = "s3db-macros"
 version = "0.4.0"
-source = "git+https://git.yerasuu.com/yerasuu/s3db?tag=v0.4.0#171694da515d2b97f07ed7e81c56edc76709c3ca"
+source = "git+https://git.yerasuu.com/yerasuu/s3db?tag=v0.4.1#ac142ed863314f0799c0f263077a4e53d00c809f"
 dependencies = [
  "proc-macro2",
  "quote",
