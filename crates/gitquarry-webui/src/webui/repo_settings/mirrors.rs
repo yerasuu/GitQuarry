@@ -7,7 +7,7 @@
 //! table of its `ExternalPrLink`s.
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, non_empty, repo_link};
+use crate::webui::{AppError, non_empty, repo_link, settings_section};
 use anyhow::Result;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::Cas;
@@ -348,10 +348,12 @@ pub fn render_mirrors_section(
 ) -> Markup {
     use gitquarry_i18n::web::repo_settings as t;
     let action_url = repo_link(repo_name, "settings", "").to_string();
+    // The `id` sits on a wrapper outside the card rather than on the card
+    // itself: `settings_section` takes no `id`, and the async swap replaces
+    // this whole element (see `data-async-target` below).
     html! {
         div id="mirrors-section" {
-        h3 { (t::mirrors_heading(locale)) }
-        p class="muted" { (t::mirrors_prose(locale)) }
+        (settings_section(&t::mirrors_heading(locale), Some(&t::mirrors_prose(locale)), html! {
         @if let Some((mirror_id, token)) = pending_token {
             @let label = mirrors.iter().find(|(m, _)| &m.id == mirror_id).map_or("", |(m, _)| m.label.as_str());
             p class="flash flash-ok" {
@@ -425,6 +427,7 @@ pub fn render_mirrors_section(
         }
         h4 { (t::add_mirror_heading(locale)) }
         (render_mirror_form(repo_name, None, csrf, locale))
+        }))
         }
     }
 }
