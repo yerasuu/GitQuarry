@@ -10,7 +10,15 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::path::Path;
+use std::time::Duration;
 use tokio::process::Command;
+
+/// Hard bound on one `git` call against an external forge. Nothing here is
+/// interactive, and every one of these runs while the repo's own lock is
+/// held (`AppContext::open_mirror`), so a forge that accepts the connection
+/// and then stalls forever would otherwise pin that lock — and with it
+/// every clone/push of the repo — for as long as the process lives.
+const GIT_OP_TIMEOUT: Duration = Duration::from_secs(300);
 
 async fn run(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<Vec<u8>> {
     let mut cmd = Command::new("git");
@@ -18,9 +26,14 @@ async fn run(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<Vec<u8>> {
         cmd.env("GIT_DIR", dir);
     }
     cmd.args(args);
-    let out = cmd
-        .output()
+    // Without this a dropped future (the pre-serve sync's own timeout, a
+    // cancelled request) leaves the child running detached — still writing
+    // into the bare repo after the repo lock the caller held is already
+    // gone, racing whoever takes it next.
+    cmd.kill_on_drop(true);
+    let out = tokio::time::timeout(GIT_OP_TIMEOUT, cmd.output())
         .await
+        .map_err(|_elapsed| anyhow::anyhow!("git {} timed out after {GIT_OP_TIMEOUT:?}", describe(args)))?
         .with_context(|| format!("couldn't run git {}", describe(args)))?;
     if !out.status.success() {
         bail!(
