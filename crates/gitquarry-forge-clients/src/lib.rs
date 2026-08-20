@@ -16,7 +16,25 @@ pub mod codeberg;
 pub mod github;
 pub mod gitlab;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+
+/// Every adapter here splices a repo's owner/name straight into a REST
+/// path, unescaped. Forge account and repository names are already limited
+/// to this alphabet on all three providers, so anything outside it can't
+/// name a real repo — but it *can* smuggle a `?`, `#` or `/` into the URL
+/// and turn the request into one against a different endpoint. Rejected at
+/// construction instead of escaped at every use site, same call
+/// `mirror-external`'s `validate_mirror_token` already makes for the token.
+pub(crate) fn check_path_segment(kind: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        bail!("invalid {kind} in mirror url: {value:?}");
+    }
+    Ok(())
+}
 
 /// A pull/merge request as the external side represents it — deliberately
 /// flatter than `PullRequestMeta` (no local `source_repo` uid, no

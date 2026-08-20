@@ -7,7 +7,12 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const API_BASE: &str = "https://api.github.com";
+/// github.com's API lives on its own host; every GitHub Enterprise Server
+/// instance serves it under `/api/v3` on the same host as the repos. Which
+/// one applies is decided by the mirror's own URL — a hardcoded
+/// `api.github.com` sent an Enterprise mirror's token to github.com and
+/// asked it about a repo path that only exists on the private instance.
+const DOTCOM_API_BASE: &str = "https://api.github.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// GitHub rejects requests with no `User-Agent` outright (403) — unlike
 /// every other outbound call this codebase makes (loopback IPC
@@ -24,6 +29,7 @@ const PER_PAGE: usize = 100;
 const MAX_PAGES: u32 = 20;
 
 pub struct GitHubForge {
+    api_base: String,
     owner: String,
     repo: String,
     token: String,
@@ -37,11 +43,14 @@ impl GitHubForge {
     /// the path, not re-validate the whole URL shape.
     pub fn new(remote_url: &str, token: &str) -> Result<Self> {
         let (owner, repo) = parse_owner_repo(remote_url)?;
+        super::check_path_segment("repository owner", &owner)?;
+        super::check_path_segment("repository name", &repo)?;
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
             .context("building the GitHub HTTP client")?;
         Ok(GitHubForge {
+            api_base: api_base_for(remote_url),
             owner,
             repo,
             token: token.to_string(),
@@ -50,11 +59,11 @@ impl GitHubForge {
     }
 
     fn pulls_url(&self, suffix: &str) -> String {
-        format!("{API_BASE}/repos/{}/{}/pulls{suffix}", self.owner, self.repo)
+        format!("{}/repos/{}/{}/pulls{suffix}", self.api_base, self.owner, self.repo)
     }
 
     fn issues_url(&self, suffix: &str) -> String {
-        format!("{API_BASE}/repos/{}/{}/issues{suffix}", self.owner, self.repo)
+        format!("{}/repos/{}/{}/issues{suffix}", self.api_base, self.owner, self.repo)
     }
 
     fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
@@ -64,6 +73,19 @@ impl GitHubForge {
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("User-Agent", USER_AGENT)
+    }
+}
+
+/// [`DOTCOM_API_BASE`] for a `github.com` URL, `<scheme>://<host>/api/v3`
+/// for anything else (a GitHub Enterprise Server instance).
+// `pub` for the same reason `parse_owner_repo` below is.
+pub fn api_base_for(remote_url: &str) -> String {
+    let rest = remote_url.split_once("://").map_or(remote_url, |(_, rest)| rest);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let scheme = remote_url.split_once("://").map_or("https", |(scheme, _)| scheme);
+    match host.trim_start_matches("www.") {
+        "github.com" => DOTCOM_API_BASE.to_string(),
+        _ => format!("{scheme}://{host}/api/v3"),
     }
 }
 

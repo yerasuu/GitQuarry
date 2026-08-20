@@ -35,6 +35,8 @@ impl CodebergForge {
     /// validated by `validate::validate_mirror_url` at save time.
     pub fn new(remote_url: &str, token: &str) -> Result<Self> {
         let (api_base, owner, repo) = parse_api_base_and_repo(remote_url)?;
+        super::check_path_segment("repository owner", &owner)?;
+        super::check_path_segment("repository name", &repo)?;
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
