@@ -8,7 +8,7 @@ use crate::webui::{
     effective_locale, effective_text_size, esc, github_blob_link, icons, markdown, raw_link, repo_link, topic_badges,
     url_encode,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::access;
@@ -386,7 +386,14 @@ async fn render_readme_from_entries(
 
     let lower = name.to_ascii_lowercase();
     let rendered = if lower.ends_with(".md") || lower.ends_with(".markdown") {
-        markdown::render(text)
+        // Parsing + syntax-highlighting fenced code blocks is synchronous
+        // CPU work (same reasoning as `blob::render_blob`'s own
+        // `spawn_blocking` for a source file) — a large README with a lot
+        // of highlighted code shouldn't stall an async worker thread.
+        let owned_text = text.to_string();
+        tokio::task::spawn_blocking(move || markdown::render(&owned_text))
+            .await
+            .context("readme markdown rendering task panicked")?
     } else {
         format!("<pre>{}</pre>", esc(text))
     };

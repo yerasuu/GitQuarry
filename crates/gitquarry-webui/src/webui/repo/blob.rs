@@ -4,7 +4,7 @@
 
 use super::MAX_BLOB_BYTES;
 use crate::webui::{breadcrumbs, export, github_raw_link, highlight, repo_link};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
 use maud::{PreEscaped, html};
@@ -37,7 +37,14 @@ pub async fn render_blob(bare_repo: &FsPath, repo_name: &str, rev: &str, path: &
     let bytes = git::browse::read_blob(bare_repo, rev, path).await?;
     Ok(match std::str::from_utf8(&bytes) {
         Ok(text) => {
-            let lines = highlight::highlighted_lines(path, text);
+            // syntect highlighting is synchronous CPU work with no async
+            // API, same reasoning as `git::browse::archive_one`'s own
+            // `spawn_blocking` for gzip/zip repacking — a big file shouldn't
+            // stall an async worker thread other requests are scheduled on.
+            let (owned_path, owned_text) = (path.to_string(), text.to_string());
+            let lines = tokio::task::spawn_blocking(move || highlight::highlighted_lines(&owned_path, &owned_text))
+                .await
+                .context("syntax highlighting task panicked")?;
             let blame_link = repo_link(repo_name, "blame", rev).path(path).to_string();
             html! {
                 div class="crumbs-row" {
