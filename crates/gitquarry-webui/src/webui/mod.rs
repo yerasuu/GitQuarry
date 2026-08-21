@@ -499,6 +499,21 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
         axum::http::HeaderName::from_static("referrer-policy"),
         axum::http::HeaderValue::from_static("same-origin"),
     );
+    // Harmless to send even though this process itself only speaks plain
+    // HTTP (`cookies.rs`'s own doc comment) -- a browser only honors HSTS
+    // once it's reached this origin over HTTPS in the first place, which
+    // means a TLS-terminating proxy is already in front, exactly the
+    // deployment this project assumes.
+    headers.insert(
+        axum::http::HeaderName::from_static("strict-transport-security"),
+        axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("permissions-policy"),
+        axum::http::HeaderValue::from_static(
+            "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
+        ),
+    );
     headers.insert(
         axum::http::HeaderName::from_static("content-security-policy"),
         axum::http::HeaderValue::from_static(
