@@ -54,26 +54,57 @@
 // what already works with JS off: nothing here is needed to open or use
 // one, only to auto-close it.
 
-// Server-localized (see `page_chrome::layout`'s `data-error-generic`, built
-// from `gitquarry_i18n::web::chrome::async_request_failed`) so a failed
-// `data-async` submit reports in the page's own language, same idiom as
-// `data-confirm`'s messages. Renders in-place via styler's own toast
-// (top-right, auto-dismissing) instead of a native `alert()` -- a native
-// dialog blocks the main thread and reads as "another window" popping up,
-// exactly what a `data-async` form is meant to avoid by not doing a real
-// page navigation on submit.
-function showErrorToast() {
-  const message = document.body.dataset.errorGeneric || "something went wrong, try again";
+// Renders in-place via styler's own toast (top-right, auto-dismissing)
+// instead of a native `alert()` -- a native dialog blocks the main thread
+// and reads as "another window" popping up, exactly what a `data-async`
+// form is meant to avoid by not doing a real page navigation on submit.
+// `message` defaults to `page_chrome::layout`'s `data-error-generic`
+// (`gitquarry_i18n::web::chrome::async_request_failed`, the same idiom as
+// `data-confirm`'s messages) -- only used when the caller has no more
+// specific text of its own, e.g. a network failure with no response body
+// to read one from at all. Whenever a response body *is* available (see
+// `extractFlashMessage` below), that's the one message this app already
+// writes for "your last action failed" (`webui::error::AppError`'s own
+// `render_flash(Flash::Err(...))`), so the toast says the same thing the
+// inline `.flash-err` banner would have on a plain, non-async submit of
+// the same failure -- one authored message, two delivery mechanisms,
+// instead of a second, generic one invented just for the async path.
+function showErrorToast(message) {
+  const text = message || document.body.dataset.errorGeneric || "something went wrong, try again";
   if (window.Styler && typeof window.Styler.toast === "function") {
-    window.Styler.toast({ message, type: "error" });
+    window.Styler.toast({ message: text, type: "error" });
   } else {
-    console.error("gitquarry:", message);
+    console.error("gitquarry:", text);
+  }
+}
+
+// Pulls the message back out of `flash::render_flash(Flash::Err(...))`'s
+// own markup (`<p class="... flash-err"><span>{message}</span>...`) -- see
+// `AppError::into_response` (`webui/error.rs`), which always renders this
+// on a failed request's body, `data-async` or not. Returns `null` (not the
+// generic fallback) when the body isn't that shape at all, so the caller
+// can tell "no message here" apart from "the message was empty".
+function extractFlashMessage(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const span = template.content.querySelector(".flash-err span");
+  return span ? span.textContent.trim() || null : null;
+}
+
+class AsyncRequestError extends Error {
+  constructor(status, body) {
+    super(`request failed: ${status}`);
+    this.body = body;
   }
 }
 
 function fetchFragment(url, init, onHtml, onError) {
   fetch(url, init)
-    .then((resp) => (resp.ok ? resp.text() : Promise.reject(new Error(`request failed: ${resp.status}`))))
+    .then((resp) =>
+      resp.ok
+        ? resp.text()
+        : resp.text().then((body) => Promise.reject(new AsyncRequestError(resp.status, body))),
+    )
     .then((html) => {
       try {
         onHtml(html);
@@ -90,7 +121,11 @@ function fetchFragment(url, init, onHtml, onError) {
     .catch((err) => {
       console.error("gitquarry: async request failed", err);
       if (onError) {
-        onError(err);
+        // A network failure (offline, DNS, CORS) never reached the server
+        // at all, so there's no `AppError`-authored body to read a message
+        // from -- `onError` gets `null` and its caller falls back to the
+        // generic string.
+        onError(err instanceof AsyncRequestError ? extractFlashMessage(err.body) : null);
       }
     });
 }
@@ -118,7 +153,7 @@ function runLiveSearch(form) {
       }
       target.innerHTML = html;
     },
-    () => showErrorToast(),
+    (message) => showErrorToast(message),
   );
 }
 
@@ -286,7 +321,7 @@ document.addEventListener("submit", (event) => {
     // undo), every optimistic branch here recorded its own prior value, so
     // the honest fix is to put each one back and surface the failure in
     // place, not to bounce the user off the page they were just on.
-    () => {
+    (message) => {
       unlock();
       if (htmlAttr) {
         if (originalHtmlAttrValue === null) {
@@ -318,7 +353,7 @@ document.addEventListener("submit", (event) => {
           form.dataset.optimisticDelta = optimisticDeltaAttr;
         }
       }
-      showErrorToast();
+      showErrorToast(message);
     },
   );
 });
