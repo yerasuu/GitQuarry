@@ -294,6 +294,13 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // the token that opens them is ever shown.
     gitquarry_webui::webui::bootstrap::print_hint(&ctx, &web_bind).await;
 
+    // Detached, same reasoning as the periodic sweep just below: a repo
+    // that was actively in use before a restart shouldn't make its next
+    // request pay for a cold sync, but with many mirrors this can mean
+    // real pack downloads, and startup accepting connections must never
+    // wait on that.
+    tokio::spawn(gc::prewarm_recent_mirrors(Arc::clone(&ctx)));
+
     // Detached, not part of the `select!` below: a sweep failure logs and
     // retries next tick, it must never take ssh:///web down with it.
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));
