@@ -514,7 +514,15 @@ async fn request_cache_middleware(
 ) -> Response {
     let cached: std::sync::Arc<dyn gitquarry_core::storage::Backend> =
         std::sync::Arc::new(s3db::RequestCache::new(std::sync::Arc::clone(&ctx.backend)));
-    gitquarry_core::app::REQUEST_BACKEND.scope(cached, next.run(req)).await
+    // Nested alongside `REQUEST_BACKEND`: `login::CURRENT_USER_MEMO` memoizes
+    // `login::current_user`'s decoded result the same "one request, never
+    // longer" way, see its own doc comment for why that's safe.
+    crate::auth::web::login::CURRENT_USER_MEMO
+        .scope(
+            std::cell::RefCell::new(None),
+            gitquarry_core::app::REQUEST_BACKEND.scope(cached, next.run(req)),
+        )
+        .await
 }
 
 /// Response headers applied to every route, hand-rolled (`from_fn`, no
