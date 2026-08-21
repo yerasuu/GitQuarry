@@ -416,6 +416,12 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             request_cache_middleware,
         ))
         .layer(axum::middleware::from_fn(security_headers))
+        // Every HTML/CSS/JS response this app sends is compressible text
+        // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
+        // page) and none of it is pre-compressed, so this is a straight win
+        // -- picks whichever of br/gzip/zstd the client's `Accept-Encoding`
+        // offers.
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(Arc::clone(&ctx));
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
