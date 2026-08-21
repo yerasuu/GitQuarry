@@ -659,7 +659,7 @@ pub fn layout(
                 script src="/_assets/styler.js" defer {}
                 script src="/_assets/app.js" defer {}
             }
-            body {
+            body data-error-generic=(chrome::async_request_failed(locale)) {
                 a class="skip-link" href="#content" { (chrome::skip_to_content(locale)) }
                 div id="topbar" {
                     div class="inner" {

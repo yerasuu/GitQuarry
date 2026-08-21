@@ -54,6 +54,23 @@
 // what already works with JS off: nothing here is needed to open or use
 // one, only to auto-close it.
 
+// Server-localized (see `page_chrome::layout`'s `data-error-generic`, built
+// from `gitquarry_i18n::web::chrome::async_request_failed`) so a failed
+// `data-async` submit reports in the page's own language, same idiom as
+// `data-confirm`'s messages. Renders in-place via styler's own toast
+// (top-right, auto-dismissing) instead of a native `alert()` -- a native
+// dialog blocks the main thread and reads as "another window" popping up,
+// exactly what a `data-async` form is meant to avoid by not doing a real
+// page navigation on submit.
+function showErrorToast() {
+  const message = document.body.dataset.errorGeneric || "something went wrong, try again";
+  if (window.Styler && typeof window.Styler.toast === "function") {
+    window.Styler.toast({ message, type: "error" });
+  } else {
+    console.error("gitquarry:", message);
+  }
+}
+
 function fetchFragment(url, init, onHtml, onError) {
   fetch(url, init)
     .then((resp) => (resp.ok ? resp.text() : Promise.reject(new Error(`request failed: ${resp.status}`))))
@@ -141,6 +158,7 @@ document.addEventListener("submit", (event) => {
   // swaps the button pair same as any other data-async form.
   const htmlAttr = form.dataset.htmlAttr;
   const pickedValue = event.submitter && event.submitter.value;
+  const originalHtmlAttrValue = htmlAttr ? document.documentElement.getAttribute(htmlAttr) : null;
   if (htmlAttr && pickedValue) {
     document.documentElement.setAttribute(htmlAttr, pickedValue);
   }
@@ -154,6 +172,7 @@ document.addEventListener("submit", (event) => {
   // here (it clears the class), not a missing one.
   const classTarget = form.dataset.classTarget && document.querySelector(form.dataset.classTarget);
   const classValue = form.dataset.classValue;
+  const originalClassName = classTarget ? classTarget.className : null;
   if (classTarget && classValue !== undefined) {
     classTarget.className = classValue;
   }
@@ -170,12 +189,16 @@ document.addEventListener("submit", (event) => {
   // same round trip instead of drifting.
   const toggleLabel = form.dataset.toggleLabel;
   const labelEl = form.querySelector(".btn-label");
+  const originalLabelText = labelEl ? labelEl.textContent : null;
+  const originalToggleLabelAttr = form.dataset.toggleLabel;
   if (toggleLabel && labelEl) {
     form.dataset.toggleLabel = labelEl.textContent;
     labelEl.textContent = toggleLabel;
   }
   const optimisticDelta = Number(form.dataset.optimisticDelta);
   const optimisticEl = form.dataset.optimisticTarget && document.querySelector(form.dataset.optimisticTarget);
+  const originalOptimisticText = optimisticEl ? optimisticEl.textContent : null;
+  const originalOptimisticDeltaAttr = form.dataset.optimisticDelta;
   if (optimisticEl && Number.isFinite(optimisticDelta)) {
     optimisticEl.textContent = String(Number(optimisticEl.textContent) + optimisticDelta);
     form.dataset.optimisticDelta = String(-optimisticDelta);
@@ -210,12 +233,34 @@ document.addEventListener("submit", (event) => {
         extraTarget.replaceWith(extraReplacement);
       }
     },
-    // A failed request leaves every optimistic paint above (label, count,
-    // html/class attribute) stuck in the guessed state with no visible
-    // error -- same risk the drag-and-drop handler below already has one
-    // real fix for: reload to resync from the server instead of trying to
-    // hand-roll a rollback for each optimistic branch.
-    () => window.location.reload(),
+    // A failed request otherwise leaves every optimistic paint above
+    // (label, count, html/class attribute) stuck in the guessed state with
+    // no visible error. Unlike the drag-and-drop handler below (whose
+    // failure fallback is a full reload -- a moved DOM card has no cheap
+    // undo), every optimistic branch here recorded its own prior value, so
+    // the honest fix is to put each one back and surface the failure in
+    // place, not to bounce the user off the page they were just on.
+    () => {
+      if (htmlAttr) {
+        if (originalHtmlAttrValue === null) {
+          document.documentElement.removeAttribute(htmlAttr);
+        } else {
+          document.documentElement.setAttribute(htmlAttr, originalHtmlAttrValue);
+        }
+      }
+      if (classTarget) {
+        classTarget.className = originalClassName;
+      }
+      if (labelEl && originalLabelText !== null) {
+        labelEl.textContent = originalLabelText;
+        form.dataset.toggleLabel = originalToggleLabelAttr;
+      }
+      if (optimisticEl && originalOptimisticText !== null) {
+        optimisticEl.textContent = originalOptimisticText;
+        form.dataset.optimisticDelta = originalOptimisticDeltaAttr;
+      }
+      showErrorToast();
+    },
   );
 });
 

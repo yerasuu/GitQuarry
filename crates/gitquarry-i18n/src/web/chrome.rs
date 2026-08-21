@@ -58,6 +58,18 @@ msg!(archived_notice_detail() {
 });
 msg!(owner_label() { Locale::Es => "propietario", Locale::En => "owner" });
 
+msg!(
+    /// Generic client-side failure toast for `app.js`'s `data-async` forms
+    /// (star/watch, theme/text-size toggles, MR close, etc.) -- read from
+    /// `<body data-error-generic>` (see `page_chrome::layout`) rather than
+    /// hardcoded in JS, same reasoning as `data-confirm`'s messages: it's
+    /// user-facing text and this crate is the only place `Locale` is known.
+    async_request_failed() {
+        Locale::Es => "algo fallo, intenta de nuevo",
+        Locale::En => "something went wrong, try again",
+    }
+);
+
 msg!(limited_visibility_badge() { Locale::Es => "limitado", Locale::En => "limited" });
 msg!(private_visibility_badge() { Locale::Es => "privado", Locale::En => "private" });
 msg!(changelog_nav() { Locale::Es => "changelog", Locale::En => "changelog" });
