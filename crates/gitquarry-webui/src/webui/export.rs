@@ -71,16 +71,35 @@ fn respond(content_type: &str, body: Vec<u8>, disposition: Option<&str>) -> Resp
 /// since `Content-Disposition` doesn't apply to a subresource load.
 const FORCE_DOWNLOAD_TYPES: &[&str] = &["image/svg+xml", "application/pdf"];
 
+/// One `Content-Disposition: attachment` value, with the filename made
+/// safe to sit inside its quoted-string.
+///
+/// A repo name only goes through `validate::sanitize_path`, which rejects
+/// control characters and `..` but not a `"` — so a repo called `a"b` used
+/// to end the quoted string early and let the rest of the name read as
+/// header parameters. Quotes and backslashes become `'`, and anything a
+/// header value can't carry at all is dropped rather than left to make the
+/// whole response fail to build.
+pub fn attachment(filename: &str) -> String {
+    let safe: String = filename
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| if c == '"' || c == '\\' { '\'' } else { c })
+        .collect();
+    let safe = if safe.trim().is_empty() {
+        "file".to_string()
+    } else {
+        safe
+    };
+    format!("attachment; filename=\"{safe}\"")
+}
+
 /// `Content-Disposition` to force on a `plain()` response, if any — see
 /// [`FORCE_DOWNLOAD_TYPES`].
 pub fn raw_disposition(path: &str, content_type: &str) -> Option<String> {
     FORCE_DOWNLOAD_TYPES.contains(&content_type).then(|| {
-        let filename = Path::new(path)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("file")
-            .replace('"', "'");
-        format!("attachment; filename=\"{filename}\"")
+        let filename = Path::new(path).file_name().and_then(|f| f.to_str()).unwrap_or("file");
+        attachment(filename)
     })
 }
 
@@ -109,7 +128,7 @@ pub async fn patch(bare_repo: &Path, sha: &str) -> Result<Response, AppError> {
     Ok(respond(
         "text/plain; charset=utf-8",
         text.into_bytes(),
-        Some(&format!("attachment; filename=\"{filename}\"")),
+        Some(&attachment(&filename)),
     ))
 }
 
@@ -141,11 +160,7 @@ pub async fn snapshot(
     };
     let bytes = git::browse::archive_one(bare_repo, rev, fmt).await?;
     let filename = git::browse::archive_filename(repo_name, rev, fmt);
-    Ok(respond(
-        content_type,
-        bytes,
-        Some(&format!("attachment; filename=\"{filename}\"")),
-    ))
+    Ok(respond(content_type, bytes, Some(&attachment(&filename))))
 }
 
 const ATOM_ENTRY_LIMIT: usize = 20;
@@ -227,10 +242,7 @@ pub(crate) async fn release_asset(
         [
             (header::CONTENT_TYPE, guess_content_type(&filename).to_string()),
             (header::CONTENT_LENGTH, len.to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
-            ),
+            (header::CONTENT_DISPOSITION, attachment(&filename)),
         ],
         Body::from_stream(body_stream),
     )

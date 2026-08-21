@@ -72,7 +72,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             .context("--bucket NAME required (config has more than one bucket)")?,
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
-    let backend = storage::build_backend(&bucket_cfg);
+    let backend = storage::build_backend(&bucket_cfg)?;
     let cipher = Arc::new(
         gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?,
     );

@@ -10,7 +10,7 @@
 //! way, not something a marker type would catch for free without every
 //! call site threading it through.
 //!
-//! Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/PR
+//! Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/MR
 //! reference crosses the core/tracker IPC boundary and needs to be the
 //! identical type on both
 //! sides rather than a lookalike newtype per crate.

@@ -38,7 +38,7 @@ msg!(log_tab() { Locale::Es => "historial", Locale::En => "log" });
 msg!(tree_tab() { Locale::Es => "arbol", Locale::En => "tree" });
 msg!(stats_tab() { Locale::Es => "estadisticas", Locale::En => "stats" });
 msg!(releases_tab() { Locale::Es => "lanzamientos", Locale::En => "releases" });
-msg!(pulls_tab() { Locale::Es => "pull requests", Locale::En => "pull requests" });
+msg!(merges_tab() { Locale::Es => "merge requests", Locale::En => "merge requests" });
 
 msg!(repos_nav() { Locale::Es => "repos", Locale::En => "repos" });
 msg!(new_repo_nav() { Locale::Es => "nuevo repo", Locale::En => "new repo" });

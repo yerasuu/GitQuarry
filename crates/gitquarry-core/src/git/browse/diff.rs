@@ -22,7 +22,7 @@ pub async fn show_commit(git_dir: &Path, sha: &str) -> Result<(CommitInfo, Strin
             // A merge commit has no patch at all under plain `git show`:
             // with more than one parent, git refuses to guess which one to
             // diff against and prints nothing. Every merge — including the
-            // ones this app creates itself when a pull request is merged —
+            // ones this app creates itself when a merge request is merged —
             // therefore rendered as an empty commit page.
             //
             // `-m --first-parent` diffs against the first parent only,

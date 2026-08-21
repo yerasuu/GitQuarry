@@ -59,6 +59,25 @@ pub struct ReleaseFormPrefill {
     pub is_draft: bool,
 }
 
+/// Tag names the create-release form suggests: every git tag in the repo
+/// that doesn't already have a release, sorted.
+///
+/// Both halves matter. A release can only ever name a tag that already
+/// exists — `domain::release::create` refuses anything else — so an
+/// unassisted text field asks the operator to remember exact tag spelling.
+/// And a tag that already has a release is not a candidate: offering it
+/// would only lead to the "this tag already has a release" rejection.
+#[cfg_attr(not(any(test, feature = "test-util")), doc(hidden))]
+pub fn taggable_tags<'a>(refs: impl Iterator<Item = &'a String>, released: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = refs
+        .filter_map(|r| r.strip_prefix("refs/tags/"))
+        .filter(|name| !released.iter().any(|t| t == name))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names
+}
+
 pub async fn render_releases_list(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
@@ -90,6 +109,20 @@ pub async fn render_releases_list_with_prefill(
     }
     releases.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     let locale = effective_locale(ctx, headers).await;
+    // Suggestions for the tag field, the same affordance the new-merge form
+    // gives its branch fields. A release can only ever name a tag that
+    // already exists (`domain::release::create` refuses otherwise), so
+    // without this the one required field is a guess -- and the tags that
+    // already have a release are dropped, since offering those would only
+    // suggest the "this tag already has a release" error.
+    let taggable = if can_write {
+        let (manifest, _etag) = resolved.remote.get_manifest().await?;
+        taggable_tags(manifest.refs.keys(), &tags)
+    } else {
+        // The form these suggestions belong to isn't rendered at all for a
+        // reader, so this is a manifest fetch that would buy nothing.
+        Vec::new()
+    };
 
     Ok(html! {
         div class="table-scroll" {
@@ -141,7 +174,12 @@ pub async fn render_releases_list_with_prefill(
                 input type="hidden" name="repo" value=(repo_name);
                 div class="field" {
                     label { (t::tag_label(locale)) }
-                    input name="tag" size="30" value=(prefill.tag) placeholder=(t::tag_placeholder(locale));
+                    input list="release-tags" name="tag" size="30" value=(prefill.tag) placeholder=(t::tag_placeholder(locale));
+                }
+                datalist id="release-tags" {
+                    @for name in &taggable {
+                        option value=(name) { (name) }
+                    }
                 }
                 div class="field" {
                     label { (t::title_label(locale)) }
@@ -659,22 +697,26 @@ fn encode_hex(bytes: &[u8]) -> String {
 /// `tag`/`csrf`) is read first, the `file` field's bytes are streamed into a
 /// scratch tempfile (hashed and size-counted along the way, capped at
 /// [`MAX_ASSET_UPLOAD_BYTES`]) — never fully buffered in memory. Login/CSRF/
-/// write-permission are only checked *after* the whole body is drained
-/// (multipart fields have to be read in the order the client sent them, and
-/// axum's extractor gives no way to peek `repo`/`csrf` before consuming
-/// `file` if a client sends `file` first); the size cap above is what bounds
-/// the resulting disk-fill exposure from an unauthorized or CSRF-invalid
-/// request in the meantime, not a login gate up front.
+/// A session is required *before* the body is touched: an anonymous client
+/// could otherwise make the server write [`MAX_ASSET_UPLOAD_BYTES`] to disk
+/// per request just by opening one, and the cap bounds a single upload, not
+/// how many an attacker may start. CSRF and the write-permission check stay
+/// after the drain — their inputs (`csrf`, `repo`) are body fields, and
+/// multipart fields can only be read in the order the client sent them.
 pub(crate) async fn handler_upload_asset_post(
     State(ctx): State_,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
-    // Computed before login/CSRF (see this fn's own doc comment on why
-    // those checks wait until after the body drains) — `ctx`/`headers` are
-    // available from the start, so there's no reason for these early
-    // error paths to fall back to a plain default instead.
     let locale = effective_locale(&ctx, &headers).await;
+    // Headers alone answer "is anyone logged in", so this doesn't have to
+    // wait for the body — and it must not: everything below writes the
+    // uploaded bytes to disk. `return_to` is the index rather than the
+    // repo, which is only known once the body has been read.
+    let me = match require_login(&ctx, &headers, "/").await {
+        Ok(u) => u,
+        Err(resp) => return Ok(resp),
+    };
     let mut repo = String::new();
     let mut tag = String::new();
     let mut csrf = String::new();
@@ -749,10 +791,6 @@ pub(crate) async fn handler_upload_asset_post(
         }
     }
 
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
-        Ok(u) => u,
-        Err(resp) => return Ok(resp),
-    };
     require_csrf(&headers, &csrf)?;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 

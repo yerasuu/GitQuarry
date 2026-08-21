@@ -32,6 +32,24 @@ msg!(settings_mirrors_max_size_placeholder() {
     Locale::En => "5G (number + B/K/M/G)",
 });
 
+msg!(settings_external_mirrors_heading() {
+    Locale::Es => "mirrors externos",
+    Locale::En => "external mirrors",
+});
+msg!(settings_mirror_hosts_prose() {
+    Locale::Es => "Hosts adicionales a los que un repo puede espejar, uno por linea o separados por comas. Acepta `*.ejemplo.com`. Para que sirve: configurar un mirror hace que el servidor abra conexiones al host que elija quien lo configure, y esta lista es lo unico que decide a cuales — por eso un forge autohospedado hay que nombrarlo aca.",
+    Locale::En => "Extra hosts a repo may mirror to, one per line or comma-separated. `*.example.com` works. What it's for: configuring a mirror makes the server open connections to whatever host the configurer picks, and this list is the only thing deciding which — so a self-hosted forge has to be named here.",
+});
+msg!(settings_mirror_hosts_builtin_prefix() {
+    Locale::Es => "Siempre permitidos, sin configurar nada: ",
+    Locale::En => "Always allowed, with nothing configured: ",
+});
+msg!(settings_mirror_hosts_builtin_suffix() {
+    Locale::Es => " — los forges que este build sabe hablar.",
+    Locale::En => " — the forges this build knows how to talk to.",
+});
+msg!(settings_mirror_hosts_label() { Locale::Es => "hosts adicionales", Locale::En => "extra hosts" });
+
 msg!(settings_oidc_heading() { Locale::Es => "login OIDC", Locale::En => "OIDC login" });
 // Split around the `code`/`a` elements the paragraph embeds — see
 // `webui::settings::render_settings_form` for how these five stitch back

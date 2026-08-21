@@ -95,7 +95,7 @@ struct HookCtx {
 async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> Result<HookCtx> {
     let cfg = config::Config::load_from(config_path)?;
     let bucket_cfg = cfg.bucket(bucket)?;
-    let backend = crate::storage::build_backend(bucket_cfg);
+    let backend = crate::storage::build_backend(bucket_cfg)?;
     let cipher =
         Arc::new(crate::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?);
     let remote = Remote::new(Arc::clone(&backend), repo_prefix, Arc::clone(&cipher));
@@ -289,32 +289,10 @@ async fn check_signed_commits(
             continue; // deletion, nothing new to check
         }
         for sha in git::new_commit_shas(git_dir, &update.new, have_tips).await? {
-            let Some(info) = git::browse::log(git_dir, &sha, 1, None).await?.into_iter().next() else {
-                continue;
-            };
-            let signer = crate::domain::commit_signature::verified_signer(
-                backend,
-                cipher,
-                git_dir,
-                &info.sha,
-                info.signature_status,
-                &info.author_email,
-            )
-            .await?;
-            let authorized = match &signer {
-                Some(crate::domain::commit_signature::CommitSigner::User(username)) => {
-                    let perm =
-                        access::effective_permission_for(backend.as_ref(), cipher, username, repo_full_name).await?;
-                    perm >= Some(crate::auth::entities::Permission::Developer)
-                }
-                // An instance signature attests that this server built the
-                // commit, not that a person with push access stands behind
-                // it — which is precisely what this setting demands. It also
-                // can't legitimately arrive over a push: the instance's own
-                // commits go straight into the manifest.
-                Some(crate::domain::commit_signature::CommitSigner::Instance) | None => false,
-            };
-            if !authorized {
+            // Shared with the inbound-mirror gate (`super::policy`), which
+            // has to answer this exact question for a ref that never went
+            // through a push at all.
+            if !super::policy::commit_signature_authorized(backend, cipher, git_dir, repo_full_name, &sha).await? {
                 let short = update.refname.rsplit('/').next().unwrap_or(&update.refname);
                 return Ok(Some(format!(
                     "branch '{short}' requires signed commits: {} isn't signed by a registered key with push access.",
@@ -513,6 +491,17 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
                 )
                 .await;
             }
+            // The push itself never triggers an external-mirror sync
+            // directly — this hook process is short-lived (git kills it as
+            // soon as it exits), so it can't hold a long-running task past
+            // its own return the way an in-process `tokio::spawn` inside
+            // the main server can. Whatever's wired into `ctx.mirror_sync`
+            // instead picks this repo up the next time anyone reads or
+            // writes it (`mirror::sync_external_before_serving`, called
+            // from `git::ssh`/`git::http` before every upload-pack/
+            // receive-pack) or on the periodic sweep `gitquarry-server`
+            // spawns in-process at startup — see
+            // `docs/mirror-external-extraction-concept.md`.
             Ok(true)
         }
         Cas::Conflict => {

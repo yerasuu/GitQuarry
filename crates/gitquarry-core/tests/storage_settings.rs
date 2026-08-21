@@ -235,6 +235,26 @@ async fn visible_index_roundtrips_and_clears() {
 }
 
 #[tokio::test]
+async fn mirrors_enabled_index_tracks_set_and_clear_independently_per_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let a = Uid::from("team/a".to_string());
+    let b = Uid::from("team/b".to_string());
+
+    set_mirrors_enabled_index(&backend, &cipher, &a, true).await.unwrap();
+    set_mirrors_enabled_index(&backend, &cipher, &b, true).await.unwrap();
+    assert!(has_enabled_mirror(&backend, &cipher, &a).await);
+    let mut listed = list_repos_with_enabled_mirrors(&backend).await.unwrap();
+    listed.sort();
+    assert_eq!(listed, vec![a.clone(), b.clone()]);
+
+    set_mirrors_enabled_index(&backend, &cipher, &a, false).await.unwrap();
+    assert!(!has_enabled_mirror(&backend, &cipher, &a).await);
+    let listed = list_repos_with_enabled_mirrors(&backend).await.unwrap();
+    assert_eq!(listed, vec![b]);
+}
+
+#[tokio::test]
 async fn release_then_claim_succeeds_under_a_fresh_etag() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());

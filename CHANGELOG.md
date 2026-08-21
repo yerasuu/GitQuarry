@@ -9,7 +9,7 @@ on a per-release versioning scheme.
 
 ## Git hosting & transport
 
-- Commits this server builds for you — a pull request's merge, squash or
+- Commits this server builds for you — a merge request's merge, squash or
   rebase commit — are signed with a key the instance generates and keeps for
   itself. They show as verified, in a colour distinct from a signature made
   by an account's own key: the instance can only attest that it built the
@@ -52,6 +52,12 @@ on a per-release versioning scheme.
 
 ## Auth & permissions
 
+- The admin pages are closed on a fresh instance too. Until a login method
+  exists there is no session to check, so opening them needs a token the
+  process prints at startup, exchanged once at `/_bootstrap`. It dies with
+  the process and stops working the moment the first account has a password.
+- Repeated wrong passwords slow an account's login attempts down rather than
+  locking it, so knowing a username isn't enough to keep its owner out.
 - Account settings reorganized into profile (avatar and email addresses),
   security (password, two-factor, recovery codes) and keys (SSH and GPG),
   instead of one flat page mixing all three. Every settings page now uses
@@ -94,17 +100,37 @@ on a per-release versioning scheme.
 - Repo topics for discoverability.
 - Watched repos alongside starred repos, with a watch button.
 - Public user profile page listing a user's repos.
-- Pull requests can be merged by fast-forward, which creates no commit at
+- Merge requests can be merged by fast-forward, which creates no commit at
   all: what lands is the author's own commits, carrying the author's own
   signatures. Offered alongside merge, squash and rebase, and greyed out
   once the branches have diverged.
-- A pull request that can't merge cleanly says so on its own page, listing
+- A merge request that can't merge cleanly says so on its own page, listing
   the conflicting files and the commands to resolve them locally, instead of
   turning the merge button into an error page.
-- A merged pull request still renders after its source branch is deleted.
+- A merged MR still renders after its source branch is deleted.
+
+## External mirroring
+
+- Mirror a repo to GitHub, GitLab or Codeberg — push, pull or both — with
+  per-ref status on the repo's settings tab. Only real fast-forwards sync;
+  a genuine divergence is reported and never forced, and a branch deleted
+  on one side is not re-created from the other.
+- What a mirror pulls in passes the same checks a push does: protected
+  branches and tags, required signatures, the LFS blob ceiling and the
+  owner's storage quota.
+- Optional two-way merge request sync per mirror — title, description,
+  open/closed state, merges and comments — with the bookkeeping that keeps
+  a comment from echoing between the two sides.
+- An instance-wide host allowlist decides where a mirror may point. The
+  forges with a built-in client are always allowed; a self-hosted GitLab or
+  Gitea is added in the instance settings.
+- Configuring or hand-syncing a mirror needs the repo's owner tier and is
+  recorded in the audit log.
 
 ## Releases & assets
 
+- The create-release form suggests the repo's own tags, minus the ones that
+  already have a release.
 - Releases: create, edit, and delete releases with notes; list/detail views;
   and attach or download binary assets.
 
@@ -137,6 +163,9 @@ on a per-release versioning scheme.
 
 ## Ops & admin tooling
 
+- `trust_forwarded_for` in the config, for a deployment behind a reverse
+  proxy: the anonymous git rate limit keys on the forwarded client address
+  instead of the proxy's own. Off unless the proxy owns that header.
 - `gitquarry fsck` to detect stray objects in a repo.
 - `gitquarry repack` to consolidate a repo's packs.
 - Audit log of admin and repo actions.

@@ -9,7 +9,7 @@
 //     *replaces the form itself* (see `<form data-async>` in `actions.rs`/
 //     `theme_pref.rs`) -- unless the form also has `data-async-target`
 //     (a selector), in which case *that* element gets replaced instead
-//     (see `pulls/mod.rs`'s `#pr-actions`: closing a PR changes the status
+//     (see `merges/mod.rs`'s `#mr-actions`: closing an MR changes the status
 //     line and which button shows next, not just the clicked button's own
 //     label, so more than the form itself has to refresh) -- and/or
 //     `data-async-extra-target` (another selector) for a *second*, disjoint
@@ -42,7 +42,7 @@
 //
 // A fifth: `form[data-confirm="message"]` -- a plain `confirm()` prompt in
 // front of a one-click irreversible action that isn't already behind a
-// type-the-name modal (mirror delete, comment delete, PR merge). Native
+// type-the-name modal (mirror delete, comment delete, MR merge). Native
 // `confirm()` rather than a `styler` modal: these are single table-row/
 // inline buttons, not a whole section worth a modal's own markup.
 //
@@ -90,7 +90,7 @@ document.addEventListener("submit", (event) => {
   }
   // `data-confirm="message"`: a native `confirm()` gate in front of an
   // otherwise one-click irreversible action (mirror delete, comment
-  // delete, PR merge) -- checked first, ahead of the async/live-search
+  // delete, MR merge) -- checked first, ahead of the async/live-search
   // branches below, so declining stops the request before either of
   // those ever sees the submit.
   if (form.hasAttribute("data-confirm") && !window.confirm(form.dataset.confirm)) {

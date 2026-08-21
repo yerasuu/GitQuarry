@@ -566,15 +566,15 @@ fn unknown_view_carries_the_view() {
 }
 
 #[test]
-fn pull_request_not_found_carries_the_number() {
-    assert!(pull_request_not_found(Locale::Es, 42).contains("42"));
+fn merge_request_not_found_carries_the_number() {
+    assert!(merge_request_not_found(Locale::Es, 42).contains("42"));
 }
 
 #[test]
-fn pull_request_wrong_status_differs_by_locale() {
+fn merge_request_wrong_status_differs_by_locale() {
     assert_ne!(
-        pull_request_wrong_status(Locale::Es),
-        pull_request_wrong_status(Locale::En)
+        merge_request_wrong_status(Locale::Es),
+        merge_request_wrong_status(Locale::En)
     );
 }
 #[test]

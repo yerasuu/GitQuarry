@@ -1,9 +1,9 @@
-//! What a PR body — a description, a comment, a review, an inline note —
+//! What an MR body — a description, a comment, a review, an inline note —
 //! survives on its way to the page.
 //!
-//! Two things had to hold at once, and they pull against each other: the
+//! Two things had to hold at once, and they merge against each other: the
 //! body is markdown written by a person, and `#123` in it should reach a
-//! pull request. Substituting the link into the *source text* satisfies the
+//! merge request. Substituting the link into the *source text* satisfies the
 //! second and breaks the first, because a `#123` inside a code fence is not
 //! a mention. So the substitution happens on the parsed event stream, and
 //! these pin the cases that distinguishes.
@@ -12,7 +12,7 @@ use gitquarry_webui::webui::markdown::{render, render_with_mentions};
 use std::collections::HashMap;
 
 fn mentions() -> HashMap<u64, String> {
-    HashMap::from([(7, "/yerasuu/gitquarry/_pulls/7".to_string())])
+    HashMap::from([(7, "/yerasuu/gitquarry/_merges/7".to_string())])
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn a_mention_in_prose_becomes_a_link() {
     let html = render_with_mentions("see #7 for the fix", &mentions());
 
     assert!(
-        html.contains(r#"<a href="/yerasuu/gitquarry/_pulls/7">#7</a>"#),
+        html.contains(r#"<a href="/yerasuu/gitquarry/_merges/7">#7</a>"#),
         "{html}"
     );
 }
@@ -39,7 +39,7 @@ fn a_mention_inside_a_code_fence_stays_literal() {
 /// rather than as text.
 #[test]
 fn a_mention_inside_inline_code_stays_literal() {
-    let html = render_with_mentions("run `deploy --pr #7` first", &mentions());
+    let html = render_with_mentions("run `deploy --mr #7` first", &mentions());
 
     assert!(!html.contains("<a href"), "{html}");
 }

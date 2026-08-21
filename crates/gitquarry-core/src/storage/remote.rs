@@ -266,7 +266,7 @@ impl Remote {
             let plaintext = self.cipher.open(src_key, &sealed)?;
             let resealed = dest
                 .cipher
-                .seal(dest_key, &plaintext, crate::crypto::CompressionStrategy::None);
+                .seal(dest_key, &plaintext, crate::crypto::CompressionStrategy::None)?;
             dest.backend.put_cas(dest_key, resealed, None).await?;
         }
         Ok(())
@@ -282,6 +282,23 @@ impl Remote {
     pub async fn delete_all(&self) -> Result<()> {
         let prefix = self.key("");
         let keys = list_all_keys(self.backend.as_ref(), &prefix).await?;
+        self.backend.delete_many(&keys).await.map(|_| ())
+    }
+
+    /// Deletes every object under one *sub*-prefix of this repo
+    /// (`"mirrors/"`, `"merges/"`, ...) — [`Self::delete_all`] scoped down.
+    ///
+    /// Exists for the duplication paths: [`Self::copy_all_to`] copies every
+    /// key it finds, by design, so anything a copy must NOT inherit has to
+    /// be removed from the destination afterwards — and the caller that
+    /// knows which collections those are (`domain::repo`) has no business
+    /// hand-rolling prefix listing and batch deletes.
+    pub async fn delete_under(&self, sub_prefix: &str) -> Result<()> {
+        let prefix = self.key(sub_prefix);
+        let keys = list_all_keys(self.backend.as_ref(), &prefix).await?;
+        if keys.is_empty() {
+            return Ok(());
+        }
         self.backend.delete_many(&keys).await.map(|_| ())
     }
 

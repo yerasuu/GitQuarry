@@ -3,7 +3,7 @@
 //! Plain `git show` prints no patch at all for a commit with more than one
 //! parent — git won't guess which parent to diff against. Every merge
 //! therefore rendered as an empty commit page, including the ones this app
-//! creates itself every time a pull request is merged.
+//! creates itself every time a merge request is merged.
 
 use gitquarry_core::git::browse::{diffstat, show_commit};
 
@@ -40,7 +40,7 @@ fn repo_with_a_merge() -> (tempfile::TempDir, String) {
     std::fs::write(work.join("from-main.txt"), "main side\n").unwrap();
     run(&["add", "."]);
     run(&["commit", "--quiet", "-m", "main work"]);
-    run(&["merge", "--quiet", "--no-ff", "-m", "Merge pull request #1", "feature"]);
+    run(&["merge", "--quiet", "--no-ff", "-m", "Merge merge request #1", "feature"]);
 
     let sha = String::from_utf8(
         std::process::Command::new("git")
@@ -63,7 +63,7 @@ async fn a_merge_commit_shows_what_it_brought_onto_the_branch() {
 
     let (info, patch) = show_commit(&git_dir, &sha).await.unwrap();
 
-    assert_eq!(info.subject, "Merge pull request #1");
+    assert_eq!(info.subject, "Merge merge request #1");
     assert!(
         patch.contains("from-feature.txt"),
         "a merge commit rendered with no patch at all: {patch:?}"

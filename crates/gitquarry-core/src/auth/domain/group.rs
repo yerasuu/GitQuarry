@@ -37,7 +37,7 @@ pub async fn create(ctx: &AppContext, name: &str, description: Option<String>) -
     };
     let ops = vec![
         TxnOp::create(
-            access::NAMESPACE_INDEX.key(name),
+            access::NAMESPACE_INDEX.key(name)?,
             &access::NamespaceReservation {
                 kind: "group".to_string(),
             },
@@ -56,7 +56,7 @@ pub async fn create(ctx: &AppContext, name: &str, description: Option<String>) -
 /// index entries. A no-op if `name` doesn't exist.
 pub async fn delete(ctx: &AppContext, name: &str) -> Result<()> {
     if let Some(group) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, name).await?.0 {
-        group.release_uid(ctx.backend().as_ref()).await;
+        let _ = group.release_uid(ctx.backend().as_ref()).await;
     }
     access::delete_group_object(ctx.backend().as_ref(), &ctx.cipher, name).await;
     access::release_namespace(ctx.backend().as_ref(), name).await;

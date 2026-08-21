@@ -78,3 +78,16 @@ fn query_rejects_empty_leading_dash_and_control_chars() {
     assert!(validate_query("-i").is_err());
     assert!(validate_query("bad\nquery").is_err());
 }
+
+#[test]
+fn short_sha_never_panics_on_a_multibyte_string() {
+    // Not a sha at all — but a display helper that panics is a request
+    // taken down, so it has to degrade instead.
+    assert_eq!(short_sha("abcdef0123456789"), "abcdef012345");
+    assert_eq!(short_sha("abc"), "abc");
+    assert_eq!(short_sha(""), "");
+    // One ASCII byte then three 4-byte characters: byte 12 lands inside
+    // the last one, which is the case that used to panic.
+    let mixed = "a\u{1F600}\u{1F600}\u{1F600}";
+    assert_eq!(short_sha(mixed), mixed);
+}

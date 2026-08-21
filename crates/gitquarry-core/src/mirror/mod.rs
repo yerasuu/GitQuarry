@@ -14,10 +14,11 @@ pub mod gc;
 pub mod hook;
 #[cfg(not(any(test, feature = "test-util")))]
 mod hook;
+pub mod policy;
 
 pub use hook::run_pre_receive_hook;
 
-use crate::app::{AppContext, Mirror};
+use crate::app::{AppContext, Mirror, ResolvedRepo};
 use crate::git;
 use anyhow::{Context, Result};
 use futures::stream::{self, TryStreamExt};
@@ -29,6 +30,69 @@ use tokio::process::{Child, Command};
 /// all-at-once: a repo with hundreds of small packs (pre-`repack`) shouldn't
 /// open hundreds of simultaneous connections to the storage backend.
 const DOWNLOAD_CONCURRENCY: usize = 8;
+
+/// The hook point `gitquarry-mirror-external`'s sync engine plugs into —
+/// core can't depend on that crate directly (it depends on core, for
+/// `AppContext`/`storage`/`git`; the reverse would cycle), so this trait is
+/// the seam: core defines *where* a sync needs to happen and *when*,
+/// `gitquarry-server` (which already depends on both) wires the real
+/// implementation into [`AppContext::mirror_sync`] at startup. `None` (no
+/// binary/deploy wired it up, or the feature is compiled out) just means
+/// nothing runs here — same "`None` = feature fully off" pattern
+/// `AppContext.tracker` already establishes.
+///
+/// `#[async_trait]`/`dyn`-boxed rather than a generic: core has no concrete
+/// type to name here at all — whether this is wired, and to what, is a
+/// `gitquarry-server`-startup decision core never sees.
+#[async_trait::async_trait]
+pub trait MirrorSyncHook: Send + Sync {
+    /// Called right before serving a clone/fetch (`upload-pack`) — see
+    /// [`sync_external_before_serving`], including why a push is
+    /// deliberately not one of the triggers.
+    /// Implementations must never propagate an error or block
+    /// indefinitely: a slow/unreachable external forge must never turn
+    /// into a hung or failed git operation, the single most
+    /// latency-sensitive path in core (`docs/mirror-external-extraction-concept.md`'s
+    /// "never blocks basic git functions" invariant — enforcing the actual
+    /// bound, e.g. a timeout, is this implementation's job now, not core's).
+    async fn sync_before_serving(&self, ctx: &AppContext, resolved: &ResolvedRepo);
+}
+
+/// Lets `#[derive(Debug)]` on [`AppContext`] cover its
+/// `Option<Arc<dyn MirrorSyncHook>>` field without the trait itself needing
+/// a `Debug` supertrait every implementation would have to satisfy.
+impl std::fmt::Debug for dyn MirrorSyncHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<mirror sync hook>")
+    }
+}
+
+/// Calls [`AppContext::mirror_sync`]'s hook, if any is wired, right before
+/// serving a clone/fetch (`upload-pack`) — both [`crate::git::ssh`] and
+/// [`crate::git::http`] call this immediately before their own
+/// [`AppContext::open_mirror`] call, so a client sees the freshest state the
+/// wired-in sync can produce.
+///
+/// Reads only: a push is deliberately *not* a trigger. Pulling from the
+/// external side and then accepting the push means the pull may have moved
+/// the branch first, leaving the pre-receive hook to reject the client's
+/// push as stale — a sync nobody asked for breaking a valid push. Whatever
+/// the push lands goes out on the next sweep regardless.
+///
+/// Skips entirely (zero overhead, not even the virtual call) when either no
+/// hook is wired at all, or this repo has no enabled external mirror —
+/// checked via the same indexed hint the periodic sweep's own repo
+/// discovery uses, so the overwhelming majority of repos (no external
+/// mirror configured) pay nothing beyond one indexed lookup.
+pub async fn sync_external_before_serving(ctx: &AppContext, resolved: &ResolvedRepo) {
+    let Some(hook) = &ctx.mirror_sync else {
+        return;
+    };
+    if !crate::storage::settings::has_enabled_mirror(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid).await {
+        return;
+    }
+    hook.sync_before_serving(ctx, resolved).await;
+}
 
 /// Creates the local bare mirror if missing and installs the `pre-receive`
 /// hook that syncs every push against S3 (with `exe_path` pointed to by

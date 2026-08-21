@@ -26,7 +26,7 @@ unencrypted.
   settings. Markdown with fenced highlighting and GitHub-style alerts; Atom
   feeds and patch/rawdiff/snapshot exports; light/dark themes; English and
   Spanish. Server-rendered, with JavaScript as progressive enhancement only.
-- **Pull requests** — reviews, inline comments, required reviewers, merge /
+- **Merge requests** — reviews, inline comments, required reviewers, merge /
   squash / rebase / fast-forward, and conflict reports that hand you the
   commands to resolve locally.
 - **Accounts and permissions** — SSH keys, password and OIDC login, TOTP
@@ -142,7 +142,7 @@ separate project consumed as a tag-pinned git dependency.
 `develop` and `master` carry the core only. Optional modules live on their own
 branches, each a snapshot of the last state where the module built, to be
 reintegrated one at a time: `feature/cicd` (CI/CD runner and SDKs),
-`feature/federation` (peer discovery, remote browse/fork, PR proxy),
+`feature/federation` (peer discovery, remote browse/fork, MR proxy),
 `feature/artifacts` (package registry), `feature/tracker` (issues, boards,
 milestones), `feature/mirror` (GitHub/GitLab/Codeberg mirroring).
 

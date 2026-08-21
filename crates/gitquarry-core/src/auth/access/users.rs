@@ -57,7 +57,7 @@ pub async fn get_user(
 }
 
 /// Batched avatar-mime lookup for a set of usernames — what a list view
-/// (`IssueMeta::author`/`PullRequestMeta::author`: denormalized `String`s,
+/// (`IssueMeta::author`/`MergeRequestMeta::author`: denormalized `String`s,
 /// no `User` fetched for them anywhere else today) needs to pick an
 /// uploaded avatar over the identicon fallback per row, without holding a
 /// full `User` per row the way [`super::repo_index::list_repo_permissions`]'s
@@ -137,7 +137,7 @@ pub async fn put_user(backend: &dyn Backend, cipher: &Cipher, user: &User, expec
 /// authoritative step of deleting a user (every lookup path fails closed
 /// immediately, regardless of index-cleanup lag on the entries below).
 pub async fn delete_user_object(backend: &dyn Backend, cipher: &Cipher, username: &str) {
-    User::delete(backend, cipher, username).await;
+    let _ = User::delete(backend, cipher, username).await;
 }
 
 /// Every username with a `.conf/users/<name>.json` object — cheap, key-only

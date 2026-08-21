@@ -211,6 +211,14 @@ pub struct User {
     /// `consume_recovery_code` accepts it — one-time use, never replayable.
     #[serde(default)]
     pub totp_recovery_codes: Vec<String>,
+    /// Highest 30s TOTP step already spent on a login, so the same code
+    /// can't be used twice. A code is valid across its own step and one
+    /// either side (`totp::SKEW_STEPS`), which without this leaves an
+    /// observed code replayable for as long as that window lasts.
+    /// `#[serde(default)]` — `0` for every account stored before this
+    /// existed, which accepts any step from now on and starts tracking.
+    #[serde(default)]
+    pub totp_last_step: u64,
     /// Account-level default locale (`"es"`/`"en"`, or empty for "no
     /// personal pick yet") — see `crate::webui::effective_locale`. Same
     /// "cookie beats account default beats built-in default" precedence as

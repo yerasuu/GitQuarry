@@ -2,7 +2,7 @@ pub mod audit;
 pub mod commit_sig;
 pub mod entities;
 pub mod lfs_locks;
-pub mod pull_requests;
+pub mod merge_requests;
 pub mod remote;
 pub mod search_index;
 pub mod settings;
@@ -32,8 +32,11 @@ pub const INDEX_PREFIX: &str = ".conf/index";
 pub use s3db::{Backend, Cas, get_json, list_all_keys, put_json};
 
 /// Builds the right [`Backend`] for `cfg` — the single place that turns
-/// local `gitquarry.toml` config into a live storage connection.
-pub fn build_backend(cfg: &BucketConfig) -> Arc<dyn Backend> {
+/// local `gitquarry.toml` config into a live storage connection. `Err` for
+/// a driver section the engine can't construct (a malformed endpoint, an
+/// unreadable local path); the caller reports it against the config file it
+/// came from.
+pub fn build_backend(cfg: &BucketConfig) -> anyhow::Result<Arc<dyn Backend>> {
     s3db::build_backend(&cfg.backend)
 }
 

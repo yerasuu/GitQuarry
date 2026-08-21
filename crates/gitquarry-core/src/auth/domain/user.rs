@@ -59,7 +59,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
     };
 
     let mut ops = vec![TxnOp::create(
-        access::NAMESPACE_INDEX.key(username),
+        access::NAMESPACE_INDEX.key(username)?,
         &access::NamespaceReservation {
             kind: "user".to_string(),
         },
@@ -70,7 +70,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         Some(pk) => {
             let fingerprint = access::key_fingerprint(pk)?;
             ops.push(TxnOp::create(
-                access::PUBKEY_INDEX.key(&fingerprint),
+                access::PUBKEY_INDEX.key(&fingerprint)?,
                 &access::UsernamePointer {
                     username: username.to_string(),
                 },
@@ -101,6 +101,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         totp_secret: None,
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
+        totp_last_step: 0,
         locale_default: String::new(),
         storage_quota_bytes: None,
         avatar_content_type: None,
@@ -132,13 +133,13 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
         return Ok(());
     };
     access::delete_user_object(ctx.backend().as_ref(), &ctx.cipher, username).await;
-    user.release_uid(ctx.backend().as_ref()).await;
+    let _ = user.release_uid(ctx.backend().as_ref()).await;
     for pubkey in &user.pubkeys {
         if let Ok(fp) = access::key_fingerprint(pubkey) {
             access::release_pubkey(ctx.backend().as_ref(), &fp).await;
         }
     }
-    user.release_email(ctx.backend().as_ref()).await;
+    let _ = user.release_email(ctx.backend().as_ref()).await;
     access::release_namespace(ctx.backend().as_ref(), username).await;
     if user.password_hash.is_some() {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, -1).await;
@@ -235,11 +236,17 @@ pub async fn set_email(
     match cas {
         // Nothing points at the old address any more.
         Cas::Ok => {
-            previous.release_email(ctx.backend().as_ref()).await;
+            // Best-effort, as it always was: a failed release leaves a
+            // claim pointing at an address nobody uses, which the next
+            // claim self-heals — never a reason to fail the edit that
+            // already committed.
+            let _ = previous.release_email(ctx.backend().as_ref()).await;
             invalidate_cached_signatures(ctx).await;
         }
         // A concurrent edit won; the claim we just took belongs to nobody.
-        Cas::Conflict => user.release_email(ctx.backend().as_ref()).await,
+        Cas::Conflict => {
+            let _ = user.release_email(ctx.backend().as_ref()).await;
+        }
     }
     Ok(cas)
 }
@@ -490,6 +497,12 @@ pub async fn confirm_totp(
     let (plaintext, hashed) = fresh_recovery_codes()?;
     user.totp_enabled = true;
     user.totp_recovery_codes = hashed;
+    // Turning 2FA on is a statement about who may hold this account, so
+    // every session that predates it goes — same reasoning as
+    // [`set_password`]'s own bump. A session issued before enrollment was
+    // established with one factor and would otherwise outlive the decision
+    // to require two.
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     Ok((cas, plaintext))
 }
@@ -540,6 +553,24 @@ pub async fn consume_recovery_code(ctx: &AppContext, username: &str, code: &str)
     Ok(access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok)
 }
 
+/// Records `step` as the newest TOTP step spent by a successful login, so
+/// the same code can't be presented twice inside its validity window.
+/// `Ok(false)` if the stored record moved underneath us (another login
+/// racing this one) or already sits at or past `step` — either way the
+/// caller must treat this attempt as failed rather than issue a session,
+/// which is what makes the check a real one-shot rather than an advisory
+/// note.
+pub async fn record_totp_step(ctx: &AppContext, username: &str, step: u64) -> Result<bool> {
+    let (Some(mut user), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await? else {
+        return Ok(false);
+    };
+    if step <= user.totp_last_step {
+        return Ok(false);
+    }
+    user.totp_last_step = step;
+    Ok(access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok)
+}
+
 /// Disables 2FA and clears the secret plus every recovery code. No re-auth
 /// check happens here — that's the caller's job: `auth::web::security`'s
 /// self-service action checks the account password or a live code before
@@ -551,6 +582,10 @@ pub async fn disable_totp(ctx: &AppContext, username: &str, locale: gitquarry_i1
     user.totp_secret = None;
     user.totp_enabled = false;
     user.totp_recovery_codes = Vec::new();
+    // Also a credential change, and this one is reachable by an admin with
+    // no re-auth at all (the break-glass path above) — all the more reason
+    // for whatever sessions existed to stop counting.
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 

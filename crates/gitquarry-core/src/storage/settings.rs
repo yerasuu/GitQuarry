@@ -52,17 +52,20 @@ pub async fn put_repo_config(
 }
 
 /// One repo-name index entry: which uid currently claims a full repo name
-/// (`namespace/local-name`). The raw name is safe as a literal key segment
-/// without base64 encoding — same reasoning as `auth::access`'s `namespace`
-/// index, since every repo name passing through here already went through
-/// [`crate::validate::sanitize_path`] (no `..`, no control chars, no `\`).
+/// (`namespace/local-name`). Base64, not `Raw`: the name carries the `/`
+/// between namespace and local name, and a raw `/` in an index segment
+/// would relocate the pointer object into a sibling namespace instead of
+/// naming one entry — which is exactly what `s3db`'s own segment check
+/// refuses. `sanitize_path` already rules out `..`, control characters and
+/// `\`; the separator is the one unsafe character left, and encoding is
+/// what keeps it inside a single key segment.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct RepoUidPointer {
     #[serde(default)]
     uid: Uid,
 }
 
-const REPO_NAME_INDEX: SecondaryIndex = SecondaryIndex::new(super::INDEX_PREFIX, "repo-name", Segment::Raw);
+const REPO_NAME_INDEX: SecondaryIndex = SecondaryIndex::new(super::INDEX_PREFIX, "repo-name", Segment::Base64);
 
 /// `None` if nothing currently claims `full_name` — the read side every
 /// existing-repo lookup (browsing, clone, settings, fork's source, star
@@ -109,7 +112,7 @@ pub async fn claim_repo_name(
 /// pointing `full_name` at its new value. A failure here just leaves a
 /// stale hint the next [`claim_repo_name`] conflict self-heals through.
 pub async fn release_repo_name(backend: &dyn Backend, full_name: &str) {
-    REPO_NAME_INDEX.release(backend, full_name).await;
+    let _ = REPO_NAME_INDEX.release(backend, full_name).await;
 }
 
 /// Self-healing repo-name claim: attempts a fresh CAS-create for `uid`; on
@@ -195,7 +198,7 @@ pub async fn remove_owner_index(backend: &dyn Backend, cipher: &Cipher, owner: &
     if owner_uid(owner).is_empty() {
         return;
     }
-    owner_index(owner).delete(backend, cipher, repo_uid.as_str()).await;
+    let _ = owner_index(owner).delete(backend, cipher, repo_uid.as_str()).await;
 }
 
 /// Every repo uid currently indexed under `owner` — a hint, not a fact: a
@@ -274,7 +277,7 @@ pub async fn set_visible_index(backend: &dyn Backend, cipher: &Cipher, repo_uid:
     if visible {
         let _ = visible_index().put(backend, cipher, repo_uid.as_str(), &(), None).await;
     } else {
-        visible_index().delete(backend, cipher, repo_uid.as_str()).await;
+        let _ = visible_index().delete(backend, cipher, repo_uid.as_str()).await;
     }
 }
 
@@ -306,7 +309,7 @@ pub async fn set_deleted_index(backend: &dyn Backend, cipher: &Cipher, repo_uid:
     if deleted {
         let _ = deleted_index().put(backend, cipher, repo_uid.as_str(), &(), None).await;
     } else {
-        deleted_index().delete(backend, cipher, repo_uid.as_str()).await;
+        let _ = deleted_index().delete(backend, cipher, repo_uid.as_str()).await;
     }
 }
 
@@ -314,6 +317,70 @@ pub async fn set_deleted_index(backend: &dyn Backend, cipher: &Cipher, repo_uid:
 /// fact" doctrine as [`list_visible_repo_uids`].
 pub async fn list_deleted_repo_uids(backend: &dyn Backend) -> Result<Vec<Uid>> {
     Ok(deleted_index()
+        .list_names(backend)
+        .await?
+        .into_iter()
+        .map(Uid::from)
+        .collect())
+}
+
+fn mirrors_enabled_index() -> Collection {
+    Collection::new_owned(format!("{}/mirrors-enabled", super::INDEX_PREFIX))
+}
+
+/// Keeps `.conf/index/mirrors-enabled/<repo-uid>.json` in sync with whether
+/// this repo currently has at least one enabled external mirror — same
+/// "hint, not a fact" doctrine as [`set_visible_index`]. Relocated here from
+/// `mirror::external::access` (see `docs/mirror-external-extraction-concept.md`)
+/// so `mirror::hook`'s pre-receive path can answer "does this repo have any
+/// enabled mirror" — the same question the periodic sync tick already asks
+/// via [`list_repos_with_enabled_mirrors`] — without depending on the crate
+/// that owns the mirror CRUD/validation surface. The write side lives in
+/// that crate, which calls this after every create/update/delete.
+/// `Err` only on the enable side, and on purpose: this index is the *only*
+/// thing that tells either sync path a repo has a mirror at all
+/// (`has_enabled_mirror`, `list_repos_with_enabled_mirrors`), so a lost
+/// write there leaves a mirror that looks configured and never syncs, with
+/// nothing anywhere saying why. The caller propagates it so the settings
+/// tab can. A lost *disable* stays silent, matching the "hint, not a fact"
+/// doctrine — a stale entry only costs the sweep one wasted lookup, since
+/// it re-reads the repo's real mirrors before syncing anything.
+pub async fn set_mirrors_enabled_index(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    repo_uid: &Uid,
+    enabled: bool,
+) -> Result<()> {
+    if enabled {
+        // `Cas::Conflict` means an entry is already there, which is exactly
+        // the state being asked for — not a failure.
+        mirrors_enabled_index()
+            .put(backend, cipher, repo_uid.as_str(), &(), None)
+            .await?;
+    } else {
+        let _ = mirrors_enabled_index().delete(backend, cipher, repo_uid.as_str()).await;
+    }
+    Ok(())
+}
+
+/// `true` if [`set_mirrors_enabled_index`] last recorded this repo as having
+/// an enabled mirror — a single indexed lookup `mirror::hook` uses instead
+/// of listing and decrypting the repo's whole mirrors collection just to
+/// check one bool.
+pub async fn has_enabled_mirror(backend: &dyn Backend, cipher: &Cipher, repo_uid: &Uid) -> bool {
+    mirrors_enabled_index()
+        .get::<()>(backend, cipher, repo_uid.as_str())
+        .await
+        .is_ok_and(|(entry, _)| entry.is_some())
+}
+
+/// Every repo uid currently indexed as having at least one enabled external
+/// mirror — same "hint, not a fact" doctrine as [`list_visible_repo_uids`]:
+/// the periodic sync tick re-fetches and re-filters each repo's actual
+/// mirrors before syncing anything, so a stale entry here just costs one
+/// wasted lookup, never a wrong sync.
+pub async fn list_repos_with_enabled_mirrors(backend: &dyn Backend) -> Result<Vec<Uid>> {
+    Ok(mirrors_enabled_index()
         .list_names(backend)
         .await?
         .into_iter()

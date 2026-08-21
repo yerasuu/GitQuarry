@@ -87,45 +87,45 @@ pub fn verify_code(secret_b32: &str, code: &str) -> bool {
     verify_code_at(secret_b32, code, SystemTime::now())
 }
 
+/// Which 30s step `code` matched, if any — [`verify_code`] with the answer
+/// kept instead of thrown away. A caller that persists the last step it
+/// accepted can then refuse to accept the same one twice: a code stays
+/// mathematically valid for its whole ±1-step window, so an observed code
+/// is replayable for up to 90s unless somebody remembers it was used.
+pub fn matching_step(secret_b32: &str, code: &str) -> Option<u64> {
+    matching_step_at(secret_b32, code, SystemTime::now())
+}
+
+#[cfg(any(test, feature = "test-util"))]
+pub fn matching_step_at(secret_b32: &str, code: &str, now: SystemTime) -> Option<u64> {
+    matching_step_impl(secret_b32, code, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn matching_step_at(secret_b32: &str, code: &str, now: SystemTime) -> Option<u64> {
+    matching_step_impl(secret_b32, code, now)
+}
+
+fn matching_step_impl(secret_b32: &str, code: &str, now: SystemTime) -> Option<u64> {
+    if code.len() != DIGITS as usize || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let secret_raw = BASE32_NOPAD.decode(secret_b32.trim_end_matches('=').as_bytes()).ok()?;
+    let elapsed = now.duration_since(UNIX_EPOCH).ok()?;
+    let counter = elapsed.as_secs() / STEP_SECS;
+    let want = code.parse::<u32>().ok()?;
+    (-SKEW_STEPS..=SKEW_STEPS).find_map(|skew| {
+        let c = counter.checked_add_signed(skew)?;
+        (hotp(&secret_raw, c)? == want).then_some(c)
+    })
+}
+
 #[cfg(any(test, feature = "test-util"))]
 pub fn verify_code_at(secret_b32: &str, code: &str, now: SystemTime) -> bool {
-    if code.len() != DIGITS as usize || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let Ok(secret_raw) = BASE32_NOPAD.decode(secret_b32.trim_end_matches('=').as_bytes()) else {
-        return false;
-    };
-    let Ok(elapsed) = now.duration_since(UNIX_EPOCH) else {
-        return false;
-    };
-    let counter = elapsed.as_secs() / STEP_SECS;
-    let Ok(want) = code.parse::<u32>() else { return false };
-    (-SKEW_STEPS..=SKEW_STEPS).any(|skew| {
-        counter
-            .checked_add_signed(skew)
-            .and_then(|c| hotp(&secret_raw, c))
-            .is_some_and(|got| got == want)
-    })
+    matching_step_at(secret_b32, code, now).is_some()
 }
 #[cfg(not(any(test, feature = "test-util")))]
 fn verify_code_at(secret_b32: &str, code: &str, now: SystemTime) -> bool {
-    if code.len() != DIGITS as usize || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let Ok(secret_raw) = BASE32_NOPAD.decode(secret_b32.trim_end_matches('=').as_bytes()) else {
-        return false;
-    };
-    let Ok(elapsed) = now.duration_since(UNIX_EPOCH) else {
-        return false;
-    };
-    let counter = elapsed.as_secs() / STEP_SECS;
-    let Ok(want) = code.parse::<u32>() else { return false };
-    (-SKEW_STEPS..=SKEW_STEPS).any(|skew| {
-        counter
-            .checked_add_signed(skew)
-            .and_then(|c| hotp(&secret_raw, c))
-            .is_some_and(|got| got == want)
-    })
+    matching_step_at(secret_b32, code, now).is_some()
 }
 
 /// Minimal percent-encoding for an `otpauth://` URI's path/query — this

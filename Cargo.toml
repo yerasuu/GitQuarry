@@ -8,6 +8,8 @@ members = [
     "crates/gitquarry-domain",
     "crates/gitquarry-webui",
     "crates/gitquarry-server",
+    "crates/gitquarry-forge-clients",
+    "crates/gitquarry-mirror-external",
 ]
 # No root [package]: this manifest is workspace-only. `cargo build` from
 # here builds every member; `cargo build -p gitquarry` builds just the
@@ -17,14 +19,14 @@ members = [
 # lib-only, no bin target.
 resolver = "2"
 
-# Everything the eight members hold in common. Cargo can't read any of it
+# Everything the ten members hold in common. Cargo can't read any of it
 # from a file of its own -- manifests have no include -- so this table is
 # the `.version`, and the same argument covers the rest: each is a property
-# of the workspace, not of a crate, and repeating it eight times only
-# creates eight chances to disagree. `description` stays per-crate, being
+# of the workspace, not of a crate, and repeating it ten times only
+# creates ten chances to disagree. `description` stays per-crate, being
 # the one field that genuinely differs.
 [workspace.package]
-version = "0.2.0"
+version = "0.4.2"
 edition = "2024"
 # Raising this is a breaking change for anyone building from source, so it
 # moves deliberately and all at once -- never one crate at a time.

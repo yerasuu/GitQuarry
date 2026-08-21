@@ -48,6 +48,27 @@ pub struct ServerSettings {
     /// registered with the IdP is `{this}/_callback`.
     #[serde(default)]
     pub oidc_redirect_base_url: Option<String>,
+    /// Extra hosts an external mirror (`gitquarry-mirror-external`) may
+    /// point at, beyond the ones every build already allows — exact names
+    /// or `*.` patterns.
+    ///
+    /// *Additional*, never a replacement: the public host of each forge
+    /// this build has a client for is always allowed
+    /// (`gitquarry_forge_clients::PUBLIC_FORGE_HOSTS`, unioned in by
+    /// `gitquarry_mirror_external::validate::effective_allowed_hosts`), so a
+    /// stock instance mirrors to GitHub/GitLab/Codeberg with nothing to
+    /// configure and this field only ever names a self-hosted forge the
+    /// instance also trusts.
+    ///
+    /// What it's for: mirroring makes *the server* open connections to a
+    /// host chosen by whoever configures the mirror, from the server's own
+    /// network position. Everything outside the built-in set plus this list
+    /// is refused — which is what keeps that from reaching an internal
+    /// address. Matching is on the name, never on a resolved address: the
+    /// ref sync shells out to `git`, which resolves inside its own process,
+    /// so an address check would be a TOCTOU with DNS rebinding behind it.
+    #[serde(default, alias = "mirror_allowed_hosts")]
+    pub mirror_extra_hosts: Vec<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
@@ -160,12 +181,12 @@ pub struct RepoConfig {
     #[serde(default)]
     pub lfs_bytes: u64,
     /// Usernames who must have approved (their latest review verdict is
-    /// `ReviewVerdict::Approved`) before `domain::pull_request::merge` lets
-    /// a PR land — on top of, never instead of, whatever a `CODEOWNERS`
+    /// `ReviewVerdict::Approved`) before `domain::merge_request::merge` lets
+    /// an MR land — on top of, never instead of, whatever a `CODEOWNERS`
     /// file at the target branch's root additionally requires for the
-    /// specific paths a PR touches (see
-    /// `domain::pull_request::missing_required_reviewers`). Empty means no
-    /// repo-wide requirement (the default): a PR just needs no pending
+    /// specific paths an MR touches (see
+    /// `domain::merge_request::missing_required_reviewers`). Empty means no
+    /// repo-wide requirement (the default): an MR just needs no pending
     /// `ChangesRequested`, same as before this field existed.
     #[serde(default)]
     pub required_reviewers: std::collections::BTreeSet<String>,

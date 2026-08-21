@@ -32,7 +32,7 @@ pub async fn put_group(
 /// Best-effort delete of a group's own object — same authoritative-step
 /// reasoning as [`super::users::delete_user_object`].
 pub async fn delete_group_object(backend: &dyn Backend, cipher: &Cipher, name: &str) {
-    Group::delete(backend, cipher, name).await;
+    let _ = Group::delete(backend, cipher, name).await;
 }
 
 /// [`super::users::list_usernames`], for [`Group`]s.

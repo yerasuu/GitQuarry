@@ -84,5 +84,5 @@ pub async fn claim_secondary_email(
 /// `secondary_emails`, same ordering [`super::pubkey::release_pubkey`]
 /// documents.
 pub async fn release_secondary_email(backend: &dyn Backend, email: &str) {
-    SECONDARY_EMAIL_INDEX.release(backend, email).await;
+    let _ = SECONDARY_EMAIL_INDEX.release(backend, email).await;
 }

@@ -80,12 +80,22 @@ pub struct AppContext {
     /// handler's implicit "first push creates the repo" branch. `false` by
     /// default (see that field's doc comment for why).
     pub allow_push_create: bool,
+    /// `config::Config::trust_forwarded_for` — whether `git::http`'s
+    /// anonymous rate limiter may key on `X-Forwarded-For` instead of the
+    /// socket address. `false` by default; see that field for why it can't
+    /// be on unless a proxy owns the header.
+    pub trust_forwarded_for: bool,
     /// Clone/fetch flood tracker for `git::http`'s `info/refs`/`upload-pack`
     /// handlers — see [`GitRateLimiter`].
     pub git_rate_limiter: GitRateLimiter,
-    /// Fan-out point for domain state changes (push, PR, issue, release) —
+    /// Fan-out point for domain state changes (push, MR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,
+    /// `None` unless `gitquarry-server` wired one in at startup — see
+    /// [`crate::mirror::MirrorSyncHook`]'s own doc comment for why this is
+    /// a trait object rather than a direct dependency on
+    /// `gitquarry-mirror-external`.
+    pub mirror_sync: Option<Arc<dyn crate::mirror::MirrorSyncHook>>,
 }
 
 /// Local mirror ready to use, with the repo's lock held. While this exists,
@@ -141,21 +151,45 @@ pub const LOGIN_MAX_ATTEMPTS: usize = 5;
 #[cfg(not(any(test, feature = "test-util")))]
 const LOGIN_MAX_ATTEMPTS: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// Ceiling on [`LoginAttempts::penalty`]. Long enough that guessing is
+/// hopeless, short enough that a pile of stalled attempts can't be turned
+/// into a connection-exhaustion attack of its own.
+#[cfg(any(test, feature = "test-util"))]
+pub const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
+#[cfg(not(any(test, feature = "test-util")))]
+const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
 
 impl LoginAttempts {
-    /// `true` if `username` has hit [`LOGIN_MAX_ATTEMPTS`] within the
-    /// current window — checked before even running Argon2 on the
-    /// submitted password, so a lockout doesn't cost anything extra.
-    pub fn is_locked(&self, username: &str) -> bool {
+    /// How long a caller must wait before this attempt is even looked at.
+    /// Zero until [`LOGIN_MAX_ATTEMPTS`] failures inside the window, then
+    /// doubling per further failure up to [`LOGIN_MAX_PENALTY`].
+    ///
+    /// Deliberately a delay rather than the flat rejection this used to be.
+    /// A hard lockout keyed on the username alone is a denial of service
+    /// anyone can aim at anyone: five wrong guesses against a name you know
+    /// locked its real owner out for the rest of the window. A delay costs
+    /// a guesser exactly as much (a few attempts per minute is not a brute
+    /// force) while still letting the account's actual owner in.
+    pub fn penalty(&self, username: &str) -> Duration {
         let map = self.inner.lock().expect("login-attempts mutex poisoned");
         let now = Instant::now();
-        map.get(username).is_some_and(|attempts| {
+        let recent = map.get(username).map_or(0, |attempts| {
             attempts
                 .iter()
                 .filter(|t| now.duration_since(**t) < LOGIN_WINDOW)
                 .count()
-                >= LOGIN_MAX_ATTEMPTS
-        })
+        });
+        Self::penalty_for(recent)
+    }
+
+    /// [`penalty`](Self::penalty)'s arithmetic on its own, so the curve is
+    /// testable without a live tracker.
+    pub fn penalty_for(recent_failures: usize) -> Duration {
+        let Some(over) = recent_failures.checked_sub(LOGIN_MAX_ATTEMPTS) else {
+            return Duration::ZERO;
+        };
+        let secs = 1u64.checked_shl(over.min(16) as u32).unwrap_or(u64::MAX);
+        Duration::from_secs(secs).min(LOGIN_MAX_PENALTY)
     }
 
     /// Records one failed attempt, and opportunistically prunes every
@@ -180,7 +214,7 @@ impl LoginAttempts {
             .remove(username);
     }
 
-    /// How many distinct usernames are currently locked out — for
+    /// How many distinct usernames are currently paying a penalty — for
     /// `webui::health`'s `/_metrics` gauge, a cheap operational signal that
     /// something (a brute-force attempt, or just someone repeatedly
     /// mistyping their own password) is actively tripping the limiter.

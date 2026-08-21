@@ -44,8 +44,9 @@ fn dummy_ctx(
             region: None,
             endpoint_url: None,
             access_key_id: "test".to_string(),
-            secret_access_key: "test".to_string(),
+            secret_access_key: "test".to_string().into(),
             path_style: false,
+            allow_insecure_http: false,
         }),
         passphrase: "test".to_string(),
     };
@@ -55,7 +56,7 @@ fn dummy_ctx(
         mirrors_root,
         config_path: PathBuf::new(),
         exe_path: PathBuf::new(),
-        backend: gitquarry_core::storage::build_backend(&cfg),
+        backend: gitquarry_core::storage::build_backend(&cfg).expect("building the test backend"),
         locks: gitquarry_core::app::Locks::default(),
         cipher: Arc::new(
             gitquarry_core::crypto::Cipher::derive("test", &[0u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
@@ -66,7 +67,9 @@ fn dummy_ctx(
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
     }
 }
 
