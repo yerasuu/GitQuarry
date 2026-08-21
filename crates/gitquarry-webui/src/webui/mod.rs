@@ -514,13 +514,22 @@ async fn request_cache_middleware(
 ) -> Response {
     let cached: std::sync::Arc<dyn gitquarry_core::storage::Backend> =
         std::sync::Arc::new(s3db::RequestCache::new(std::sync::Arc::clone(&ctx.backend)));
+    // Computed once, up front, rather than lazily like `CURRENT_USER_MEMO`:
+    // `AppError::into_response` (the one caller that actually needs this
+    // task-local, see its own doc comment) has no `HeaderMap` to resolve it
+    // from later, so it has to already be sitting in scope by the time any
+    // handler further down the stack can fail.
+    let locale = locale_pref::effective_locale(&ctx, req.headers()).await;
     // Nested alongside `REQUEST_BACKEND`: `login::CURRENT_USER_MEMO` memoizes
     // `login::current_user`'s decoded result the same "one request, never
     // longer" way, see its own doc comment for why that's safe.
-    crate::auth::web::login::CURRENT_USER_MEMO
+    locale_pref::CURRENT_LOCALE
         .scope(
-            std::cell::RefCell::new(None),
-            gitquarry_core::app::REQUEST_BACKEND.scope(cached, next.run(req)),
+            locale,
+            crate::auth::web::login::CURRENT_USER_MEMO.scope(
+                std::cell::RefCell::new(None),
+                gitquarry_core::app::REQUEST_BACKEND.scope(cached, next.run(req)),
+            ),
         )
         .await
 }
