@@ -129,6 +129,12 @@ document.addEventListener("submit", (event) => {
     return;
   }
   event.preventDefault();
+  // Guards the failure-rollback below against out-of-order responses: two
+  // rapid submits on the same form (double-clicking a toggle) can resolve
+  // in either order, and reverting an *earlier* click's optimistic guess
+  // after a *later* one already succeeded would silently undo real state.
+  form._gqRequestSeq = (form._gqRequestSeq || 0) + 1;
+  const requestSeq = form._gqRequestSeq;
   // `URLSearchParams`, not a raw `FormData`: `fetch()` serializes a
   // `FormData` body as `multipart/form-data`, but every server handler on
   // the other end of a `data-async` form is `axum::extract::Form<T>`,
@@ -190,7 +196,6 @@ document.addEventListener("submit", (event) => {
   const toggleLabel = form.dataset.toggleLabel;
   const labelEl = form.querySelector(".btn-label");
   const originalLabelText = labelEl ? labelEl.textContent : null;
-  const originalToggleLabelAttr = form.dataset.toggleLabel;
   if (toggleLabel && labelEl) {
     form.dataset.toggleLabel = labelEl.textContent;
     labelEl.textContent = toggleLabel;
@@ -241,6 +246,12 @@ document.addEventListener("submit", (event) => {
     // the honest fix is to put each one back and surface the failure in
     // place, not to bounce the user off the page they were just on.
     () => {
+      // A newer submit on this same form already superseded this one --
+      // its own (later) response already painted the real state, so
+      // reverting to *this* request's stale guess would undo it.
+      if (form._gqRequestSeq !== requestSeq) {
+        return;
+      }
       if (htmlAttr) {
         if (originalHtmlAttrValue === null) {
           document.documentElement.removeAttribute(htmlAttr);
@@ -253,11 +264,23 @@ document.addEventListener("submit", (event) => {
       }
       if (labelEl && originalLabelText !== null) {
         labelEl.textContent = originalLabelText;
-        form.dataset.toggleLabel = originalToggleLabelAttr;
+        // `toggleLabel` is `undefined` when the form never had
+        // `data-toggle-label` set in the first place -- `dataset` coerces
+        // `undefined` to the literal string `"undefined"`, so an absent
+        // original is a `delete`, not an assignment.
+        if (toggleLabel === undefined) {
+          delete form.dataset.toggleLabel;
+        } else {
+          form.dataset.toggleLabel = toggleLabel;
+        }
       }
       if (optimisticEl && originalOptimisticText !== null) {
         optimisticEl.textContent = originalOptimisticText;
-        form.dataset.optimisticDelta = originalOptimisticDeltaAttr;
+        if (originalOptimisticDeltaAttr === undefined) {
+          delete form.dataset.optimisticDelta;
+        } else {
+          form.dataset.optimisticDelta = originalOptimisticDeltaAttr;
+        }
       }
       showErrorToast();
     },
