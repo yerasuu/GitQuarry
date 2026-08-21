@@ -10,6 +10,7 @@
 
 use crate::app::AppContext;
 use anyhow::{Context, Result, bail};
+use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -92,6 +93,60 @@ pub async fn run_periodic_sweep(ctx: Arc<AppContext>) {
             eprintln!("gitquarry: warning: mirror sweep failed: {e:#}");
         }
     }
+}
+
+/// How many mirrors [`prewarm_recent_mirrors`] syncs concurrently. Each sync
+/// can itself download several packs at once
+/// ([`super::DOWNLOAD_CONCURRENCY`]), so this stays modest to keep the
+/// total concurrent transfer count reasonable on a busy instance's first
+/// boot.
+const PREWARM_CONCURRENCY: usize = 4;
+
+/// Re-syncs every mirror still within [`AppContext::mirror_max_age`] of its
+/// last access — the ones [`sweep_once`] would keep, not evict — right
+/// after startup, so a repo someone was actively using before a restart
+/// doesn't make the first request after one pay for a cold sync. Meant to
+/// run detached (`tokio::spawn`, same as [`run_periodic_sweep`]): with many
+/// mirrors this can mean real pack downloads, and startup accepting
+/// connections should never wait on that.
+///
+/// Best-effort per mirror: one repo's sync failing (a transient backend
+/// error, a repo deleted since the marker was last touched) is logged and
+/// skipped, never fatal to the rest of the prewarm.
+pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
+    let mirrors = match list_mirrors(&ctx.mirrors_root).await {
+        Ok(mirrors) => mirrors,
+        Err(e) => {
+            eprintln!("gitquarry: warning: couldn't list mirrors to prewarm, continuing: {e:#}");
+            return;
+        }
+    };
+    let now = SystemTime::now();
+    let recent: Vec<MirrorInfo> = mirrors
+        .into_iter()
+        .filter(|m| now.duration_since(m.last_access).unwrap_or_default() <= ctx.mirror_max_age)
+        .collect();
+    if recent.is_empty() {
+        return;
+    }
+    eprintln!("gitquarry: prewarming {} recently-used mirror(s)", recent.len());
+
+    stream::iter(recent)
+        .for_each_concurrent(Some(PREWARM_CONCURRENCY), |m| {
+            let ctx = Arc::clone(&ctx);
+            async move {
+                // Same per-repo lock `AppContext::open_mirror` takes: a real
+                // request for this repo arriving mid-prewarm just waits its
+                // turn instead of racing this sync, exactly as it would
+                // race a normal open_mirror call from another request.
+                let _guard = ctx.locks.lock(&m.repo_name).await;
+                let remote = ctx.remote_for_uid(&crate::storage::uid::Uid::from(m.repo_name.clone()));
+                if let Err(e) = crate::mirror::sync_bare_repo_from_s3(&remote, &m.path).await {
+                    eprintln!("gitquarry: warning: prewarm sync failed for mirror '{}': {e:#}", m.repo_name);
+                }
+            }
+        })
+        .await;
 }
 
 #[cfg(any(test, feature = "test-util"))]

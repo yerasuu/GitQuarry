@@ -873,15 +873,46 @@ pub(crate) async fn handler_logout(headers: HeaderMap, Form(form): Form<LogoutFo
     Ok(resp)
 }
 
+tokio::task_local! {
+    /// Memoizes [`current_user`]'s result for the rest of the request it
+    /// was first computed in — scoped alongside
+    /// [`gitquarry_core::app::REQUEST_BACKEND`] by
+    /// `webui::request_cache_middleware`. A single page render calls
+    /// `current_user` many times over (a permission check, `topnav`,
+    /// theme/locale/text-size/density prefs, ...); `RequestCache` already
+    /// serves the repeat *raw* read from memory, but every one of those
+    /// calls still paid to decrypt the cookie and deserialize the `User`
+    /// again. This doesn't weaken the "never cached across requests"
+    /// invariant [`current_user`]'s own doc comment describes — the memo
+    /// never outlives the one request that computed it, same as
+    /// `RequestCache` itself.
+    pub(crate) static CURRENT_USER_MEMO: std::cell::RefCell<Option<Option<User>>>;
+}
+
 /// The [`User`] the current request's session cookie resolves to, or `None`
 /// for anything short of a fully valid, unexpired session naming a user
 /// that still exists — never an error. The cookie only proves "this email
 /// was IdP-verified recently" or "this username's password matched at
-/// login time"; the per-entity store (re-read every call, never cached) is
-/// still what actually grants access, so removing a user (or clearing
-/// their `password_hash`) revokes them immediately even with a live
-/// cookie.
+/// login time"; the per-entity store (re-read every call, never cached
+/// *across requests*) is still what actually grants access, so removing a
+/// user (or clearing their `password_hash`) revokes them immediately even
+/// with a live cookie — [`CURRENT_USER_MEMO`] only dedupes repeat calls
+/// within the one request that's already using whatever answer this
+/// function first gave it.
 pub(crate) async fn current_user(ctx: &AppContext, headers: &HeaderMap) -> Option<User> {
+    if let Ok(Some(memoized)) = CURRENT_USER_MEMO.try_with(|cell| cell.borrow().clone()) {
+        return memoized;
+    }
+    let user = current_user_uncached(ctx, headers).await;
+    // `try_with` rather than `with`: outside a request (a background sweep,
+    // a test calling this directly with no scope set up) there's simply
+    // nothing to memoize into, which is fine — it only ever saves a repeat
+    // call within a request that scoped it.
+    let _ = CURRENT_USER_MEMO.try_with(|cell| *cell.borrow_mut() = Some(user.clone()));
+    user
+}
+
+async fn current_user_uncached(ctx: &AppContext, headers: &HeaderMap) -> Option<User> {
     let raw = get_cookie(headers, SESSION_COOKIE)?;
     let sealed = B64.decode(raw).ok()?;
     let plain = ctx.cipher.open(SESSION_COOKIE, &sealed).ok()?;

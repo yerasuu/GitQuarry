@@ -683,6 +683,95 @@ pub async fn list_refs(git_dir: &Path) -> Result<Vec<String>> {
     Ok(out.lines().map(str::to_string).collect())
 }
 
+/// Every ref and the sha it currently points to — same set [`list_refs`]
+/// lists, plus the value [`sync_bare_repo_from_s3`]-style callers need to
+/// tell an already-correct ref apart from one that actually needs writing.
+pub(crate) async fn list_refs_with_oids(git_dir: &Path) -> Result<HashMap<String, String>> {
+    let out = run_text(
+        Some(git_dir),
+        &[
+            OsStr::new("for-each-ref"),
+            OsStr::new("--format=%(refname) %(objectname)"),
+            OsStr::new("refs/"),
+        ],
+    )
+    .await?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(name, sha)| (name.to_string(), sha.to_string()))
+        .collect())
+}
+
+/// Applies every ref create/update/delete from one manifest sync in a
+/// single `git update-ref --stdin` call instead of one subprocess per ref.
+/// [`crate::mirror::sync_bare_repo_from_s3`] runs on every `info/refs` and
+/// `upload-pack` call (not just a push), so a repo with even a modest
+/// number of branches/tags used to pay for that many subprocess spawns on
+/// every single git operation — most of them writing back a value that was
+/// already there, since the old code never compared before writing.
+/// `updates`/`deletes` are expected already filtered down to real changes
+/// (see the call site) — this only handles the "how", not the "whether".
+///
+/// Ref names and shas ride on stdin, not argv, so there's no
+/// `--end-of-options`-style flag-injection concern the way a name starting
+/// with `-` would be for a normal argument; the one thing that matters here
+/// is that neither contains a newline, which would inject an extra
+/// `update-ref` command into the stream — checked explicitly since these
+/// values originate from a stored manifest, not a literal in this process.
+pub(crate) async fn apply_ref_changes(git_dir: &Path, updates: &[(String, String)], deletes: &[String]) -> Result<()> {
+    if updates.is_empty() && deletes.is_empty() {
+        return Ok(());
+    }
+    let mut script = String::new();
+    for (name, sha) in updates {
+        if name.contains('\n') || sha.contains('\n') {
+            bail!("ref update line contains a newline: {name:?} {sha:?}");
+        }
+        script.push_str("update ");
+        script.push_str(name);
+        script.push(' ');
+        script.push_str(sha);
+        script.push('\n');
+    }
+    for name in deletes {
+        if name.contains('\n') {
+            bail!("ref delete line contains a newline: {name:?}");
+        }
+        script.push_str("delete ");
+        script.push_str(name);
+        script.push('\n');
+    }
+
+    let mut child = Command::new("git")
+        .env("GIT_DIR", git_dir)
+        .arg("update-ref")
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("couldn't run git update-ref --stdin")?;
+    let mut stdin = child.stdin.take().context("update-ref --stdin stdin")?;
+    stdin
+        .write_all(script.as_bytes())
+        .await
+        .context("writing ref updates to git update-ref --stdin")?;
+    drop(stdin); // `--stdin` reads until EOF, same reasoning as `cat-file --batch-check` above.
+
+    let out = child
+        .wait_with_output()
+        .await
+        .context("waiting for git update-ref --stdin")?;
+    if !out.status.success() {
+        bail!(
+            "git update-ref --stdin failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 pub async fn update_ref(git_dir: &Path, name: &str, sha: &str) -> Result<()> {
     run(
         Some(git_dir),

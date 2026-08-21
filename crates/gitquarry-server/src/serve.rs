@@ -277,12 +277,29 @@ pub async fn run(rest: &[String]) -> Result<()> {
         trust_forwarded_for,
         events: Default::default(),
         mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook::default())),
+        visible_repo_uids_cache: Default::default(),
     });
+
+    // Warms `ctx.visible_repo_uids_cache` before either server accepts a
+    // connection, so the very first hit on the home page (this deployment's
+    // highest-traffic view) doesn't pay for a cold `list_prefix` — it reads
+    // whatever's already there instead. Best-effort: a failure here just
+    // means the first real request pays for it instead, same as today.
+    if let Err(e) = ctx.visible_repo_uids().await {
+        eprintln!("gitquarry: warning: couldn't warm the visible-repo cache at startup, continuing: {e:#}");
+    }
 
     // Before either server accepts a connection: an instance with no login
     // method yet keeps its admin pages closed, and this is the only place
     // the token that opens them is ever shown.
     gitquarry_webui::webui::bootstrap::print_hint(&ctx, &web_bind).await;
+
+    // Detached, same reasoning as the periodic sweep just below: a repo
+    // that was actively in use before a restart shouldn't make its next
+    // request pay for a cold sync, but with many mirrors this can mean
+    // real pack downloads, and startup accepting connections must never
+    // wait on that.
+    tokio::spawn(gc::prewarm_recent_mirrors(Arc::clone(&ctx)));
 
     // Detached, not part of the `select!` below: a sweep failure logs and
     // retries next tick, it must never take ssh:///web down with it.

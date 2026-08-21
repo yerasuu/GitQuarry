@@ -247,7 +247,10 @@ pub(crate) async fn handler_index(
 /// turned `Private` might still be in it until the next config write
 /// self-heals it), never trusted on its own for a privacy decision.
 async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<Vec<IndexRepo>> {
-    let uids = storage::settings::list_visible_repo_uids(ctx.backend().as_ref()).await?;
+    // Short-TTL-cached (`AppContext::visible_repo_uids`'s own doc comment):
+    // this is a `list_prefix` call, which `CachedBackend` never caches, so
+    // it used to hit the backend fresh on every single index/search render.
+    let uids = ctx.visible_repo_uids().await?;
     let mut set = JoinSet::new();
     for uid in uids {
         let backend = ctx.backend();
