@@ -140,9 +140,42 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Name of the marker file inside a mirror recording the manifest etag it
+/// was last fully synced to — see [`sync_bare_repo_from_s3`]'s fast path.
+const SYNC_MARKER: &str = ".gitquarry-synced-etag";
+
 /// Downloads missing packs and makes the local mirror's refs/HEAD match the
 /// S3 manifest exactly (creates, moves, and deletes as needed).
+///
+/// This runs on every `info/refs`, `upload-pack` *and* every webui page
+/// view of a repo (`AppContext::open_mirror`), not just a push, so for a
+/// repo nobody has pushed to since the last time it was opened, the fast
+/// path below matters more than the batching in the rest of this function:
+/// it skips the S3 `list_pack_names` call (never cached by
+/// `s3db::CachedBackend`, which only caches point `get`s) and the ref diff
+/// entirely, leaving only the manifest `get` -- itself usually a memory hit
+/// off that same cache -- between a browse/clone and local-disk speed.
 pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bare_repo: &Path) -> Result<()> {
+    let (manifest, etag) = remote.get_manifest().await?;
+
+    // Packs are always uploaded before the manifest CAS that references
+    // them (`mirror::hook`'s push path uploads, then calls `put_manifest`),
+    // so an unchanged etag guarantees the packs and refs below are already
+    // exactly what this mirror has. The marker lives as a file *inside*
+    // `bare_repo`, not an in-process cache keyed by uid: `mirror::gc`'s
+    // eviction sweep deletes this whole directory when it evicts a cold
+    // mirror, and it can't do that without taking this file down with it --
+    // an in-process cache disconnected from the mirror's real on-disk state
+    // could otherwise skip a sync into a mirror eviction had just emptied.
+    let marker_path = bare_repo.join(SYNC_MARKER);
+    if let Some(etag) = etag.as_deref() {
+        if let Ok(marker) = tokio::fs::read_to_string(&marker_path).await {
+            if marker.trim() == etag {
+                return Ok(());
+            }
+        }
+    }
+
     let remote_packs = remote.list_pack_names().await?;
     let local_packs = git::local_pack_names(bare_repo).await?;
     let dest_dir = git::objects_pack_dir(bare_repo);
@@ -157,7 +190,6 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
         })
         .await?;
 
-    let (manifest, _etag) = remote.get_manifest().await?;
     // Diffed against the manifest before writing anything, and applied in
     // one batched `git update-ref --stdin` call: this sync runs on every
     // `info/refs` and `upload-pack` (not just a push), so without the diff
@@ -180,6 +212,12 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
         && manifest.refs.contains_key(head)
     {
         git::set_head(bare_repo, head).await?;
+    }
+
+    // Best-effort: a failure to write the marker just means the next call
+    // takes the slow path again instead of wrongly skipping a real sync.
+    if let Some(etag) = &etag {
+        let _ = tokio::fs::write(&marker_path, etag).await;
     }
 
     Ok(())
