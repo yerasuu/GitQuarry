@@ -118,8 +118,17 @@ pub(super) async fn render_about(
             .map(|(source_config, _etag)| source_config.full_name),
         None => None,
     };
-    let readme = render_readme(bare_repo, rev).await?;
-    let sidebar = render_sidebar(ctx, resolved, bare_repo, repo_name, rev, headers, config, languages).await?;
+    // Fetched once and threaded through both calls below: `render_readme`
+    // and `render_sidebar` used to each `ls_tree` the root independently
+    // (and `render_sidebar` did it three more times internally, once per
+    // README/CONTRIBUTING/LICENSE lookup) — four subprocess spawns of the
+    // exact same listing on one page load.
+    let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
+    let readme = render_readme_from_entries(bare_repo, rev, &root_entries).await?;
+    let sidebar = render_sidebar(
+        ctx, resolved, bare_repo, repo_name, rev, headers, config, languages, &root_entries,
+    )
+    .await?;
 
     Ok(html! {
         // `id="about-body"`: `text_size.rs`'s `render_text_size_buttons`
@@ -210,16 +219,15 @@ const LICENSE_NAMES: &[&str] = &[
 ];
 
 /// Name of the root-level blob matching one of `candidates` (case-
-/// insensitive), or `None` if there's no such file at `rev`'s root. Shared
-/// by [`render_readme`] (which then loads and renders it) and
-/// [`render_community_box`] (which only needs to know a CONTRIBUTING file
-/// exists, not render it).
-async fn find_root_entry(bare_repo: &FsPath, rev: &str, candidates: &[&str]) -> Result<Option<String>> {
-    let entries = git::browse::ls_tree(bare_repo, rev, "").await?;
-    Ok(entries
-        .into_iter()
+/// insensitive) among an already-fetched root listing, or `None` if there's
+/// no such file. Pure lookup, no I/O — every caller shares one `ls_tree` of
+/// the root ([`render_about`]'s `root_entries`) instead of each fetching its
+/// own.
+fn find_root_entry(entries: &[git::browse::TreeEntry], candidates: &[&str]) -> Option<String> {
+    entries
+        .iter()
         .find(|e| e.kind == "blob" && candidates.contains(&e.name.to_ascii_lowercase().as_str()))
-        .map(|e| e.name))
+        .map(|e| e.name.clone())
 }
 
 /// Best-effort SPDX-ish identifier for the root license file's content, from
@@ -351,7 +359,19 @@ fn license_kind_from_text(text: &str) -> Option<&'static str> {
 /// text otherwise. `None` if the repo has no README at `rev`'s root, it's too
 /// big, or it isn't valid UTF-8.
 pub async fn render_readme(bare_repo: &FsPath, rev: &str) -> Result<Option<String>> {
-    let Some(name) = find_root_entry(bare_repo, rev, README_NAMES).await? else {
+    let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
+    render_readme_from_entries(bare_repo, rev, &root_entries).await
+}
+
+/// [`render_readme`]'s body, taking an already-fetched root listing so
+/// [`render_about`] can share one `ls_tree` across this and
+/// [`render_sidebar`] instead of each doing their own.
+async fn render_readme_from_entries(
+    bare_repo: &FsPath,
+    rev: &str,
+    root_entries: &[git::browse::TreeEntry],
+) -> Result<Option<String>> {
+    let Some(name) = find_root_entry(root_entries, README_NAMES) else {
         return Ok(None);
     };
 
@@ -404,11 +424,12 @@ pub(crate) fn community_stats_html(config: &RepoConfig, locale: gitquarry_i18n::
 /// (count only, linking to the releases tab — that tab already renders the
 /// full list, no need to duplicate release details here).
 ///
-/// Re-checks README existence itself (a plain `ls_tree` name lookup, not the
-/// full read+render [`render_readme`] already did for the caller) rather
-/// than taking it as one more parameter — keeps this function's arg count
-/// under clippy's `too_many_arguments` threshold without an arbitrary
-/// options-struct just to dodge the lint.
+/// Takes the caller's already-fetched root listing (`root_entries`) rather
+/// than re-`ls_tree`-ing the root itself for each of README/CONTRIBUTING/
+/// LICENSE — a lookup against a slice already in memory adds no argument-
+/// count pressure the way three more scalar fields would, so this still
+/// avoids the arbitrary options-struct [`render_about`]'s own doc comment
+/// reasons about.
 /// `config.fork_count`/`config.star_count` are the caller's already-loaded
 /// `RepoConfig` — see those fields' own doc comments for why neither is a
 /// bucket-wide scan anymore; unlike the old `access.json`-scan version, this
@@ -424,11 +445,12 @@ async fn render_sidebar(
     headers: &HeaderMap,
     config: &RepoConfig,
     languages: &[(String, u64)],
+    root_entries: &[git::browse::TreeEntry],
 ) -> Result<Markup> {
     let locale = effective_locale(ctx, headers).await;
-    let readme_exists = find_root_entry(bare_repo, rev, README_NAMES).await?.is_some();
-    let contributing_name = find_root_entry(bare_repo, rev, CONTRIBUTING_NAMES).await?;
-    let license_name = find_root_entry(bare_repo, rev, LICENSE_NAMES).await?;
+    let readme_exists = find_root_entry(root_entries, README_NAMES).is_some();
+    let contributing_name = find_root_entry(root_entries, CONTRIBUTING_NAMES);
+    let license_name = find_root_entry(root_entries, LICENSE_NAMES);
     let license_kind = match &license_name {
         Some(name) => detect_license_kind(bare_repo, rev, name).await?,
         None => None,
