@@ -705,6 +705,15 @@ async fn diff_endpoints(
     if let Some(head) = head
         && git::browse::resolve_commit(git_dir, &head).await?.is_some()
         && git::browse::resolve_commit(git_dir, &mr.target_branch).await?.is_some()
+        // A merged merge request whose branch outlived the merge is the one
+        // case where the live pair says nothing: the source is now an
+        // ancestor of the target, so `base...head` is empty and the page
+        // claimed a merge that plainly changed things had no changes at
+        // all. Fall through to the merge commit, which still holds them.
+        // Only when it really is contained -- a rebase-merged branch keeps
+        // its original commits, which aren't in the target under those
+        // shas, and comparing them is still the truest answer available.
+        && !git::is_ancestor(git_dir, &head, &mr.target_branch).await.unwrap_or(false)
     {
         return Ok(Some((mr.target_branch.clone(), head)));
     }
