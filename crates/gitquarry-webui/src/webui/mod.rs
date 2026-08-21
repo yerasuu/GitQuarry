@@ -214,16 +214,70 @@ pub(crate) type State_ = axum::extract::State<Arc<AppContext>>;
 /// way a toggle works.
 pub(crate) const ASYNC_HEADER: &str = "x-gq-async";
 
+/// Content baked in at compile time via `include_str!`, so its hash is
+/// stable for the lifetime of the process — a strong `ETag` computed once
+/// lets `static_asset_response` answer with `304 Not Modified` on every
+/// repeat visit instead of re-sending the file, without needing a
+/// content-hashed URL to stay cache-safe across deploys.
+fn asset_etag(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    let digest = Sha256::digest(content.as_bytes());
+    let mut hex = String::with_capacity(digest.len() * 2 + 2);
+    hex.push('"');
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex.push('"');
+    hex
+}
+
+/// Shared response shape for both static JS assets: honors `If-None-Match`
+/// with a `304` (skipping the body entirely), otherwise serves the file with
+/// a year-long `Cache-Control` — safe because a change to the file changes
+/// its `ETag`, so a stale cache never serves stale content, it just costs
+/// one conditional round-trip to notice.
+fn static_asset_response(
+    req_headers: &axum::http::HeaderMap,
+    content_type: &'static str,
+    content: &'static str,
+    etag: &str,
+) -> Response {
+    use axum::response::IntoResponse;
+    if req_headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        == Some(etag)
+    {
+        return (
+            axum::http::StatusCode::NOT_MODIFIED,
+            [(axum::http::header::ETAG, etag.to_string())],
+        )
+            .into_response();
+    }
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, content_type.to_string()),
+            (axum::http::header::ETAG, etag.to_string()),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=31536000".to_string(),
+            ),
+        ],
+        content,
+    )
+        .into_response()
+}
+
 /// `GET /_assets/app.js` — this project's own hand-written client JS (see
 /// `style/app.js`'s own doc comment). Served as an actual same-origin file,
 /// not inlined into `<head>` the way `STYLE` is: `script-src 'self'` (see
 /// [`security_headers`]) allows a same-origin *file*, not inline `<script>`
 /// text, so unlike CSS this can't just be spliced into every page.
-async fn handler_app_js() -> impl axum::response::IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("style/app.js"),
-    )
+async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
+    const CONTENT: &str = include_str!("style/app.js");
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG)
 }
 
 /// `GET /_assets/styler.js` — the pinned `styler` build vendored alongside
@@ -231,11 +285,10 @@ async fn handler_app_js() -> impl axum::response::IntoResponse {
 /// the tag/re-vendor story). Same serving shape as [`handler_app_js`]; a
 /// second same-origin script file needs no CSP change, `script-src 'self'`
 /// already covers it.
-async fn handler_styler_js() -> impl axum::response::IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("style/vendor/styler.js"),
-    )
+async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
+    const CONTENT: &str = include_str!("style/vendor/styler.js");
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG)
 }
 
 pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
