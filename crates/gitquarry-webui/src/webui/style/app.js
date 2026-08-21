@@ -351,7 +351,10 @@ document.addEventListener("click", (event) => {
         btn.disabled = false;
       }, 1200);
     })
-    .catch((err) => console.error("gitquarry: clipboard write failed", err));
+    .catch((err) => {
+      console.error("gitquarry: clipboard write failed", err);
+      showErrorToast();
+    });
 });
 
 // Per-hunk diff collapse (`annotated_diff.rs`'s `.hunk-toggle`). Not
