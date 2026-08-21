@@ -301,6 +301,7 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
     let bucket_cfg = BucketConfig {
         backend: backend_cfg,
         passphrase: form.passphrase.clone(),
+        resilience: Default::default(),
     };
 
     let backend = storage::build_backend(&bucket_cfg)?;

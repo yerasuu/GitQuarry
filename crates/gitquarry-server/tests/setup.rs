@@ -167,6 +167,7 @@ fn s3_prefill() -> Prefill {
                 allow_insecure_http: false,
             }),
             passphrase: "hunter2".to_string(),
+            resilience: Default::default(),
         },
     }
 }

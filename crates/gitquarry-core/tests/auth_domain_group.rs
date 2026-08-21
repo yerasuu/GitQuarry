@@ -32,6 +32,7 @@ fn test_ctx(backend: LocalBackend, cipher: Cipher) -> gitquarry_core::app::AppCo
         trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 

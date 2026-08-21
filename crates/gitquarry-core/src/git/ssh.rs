@@ -41,6 +41,12 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         // Pubkey only: no password or keyboard-interactive, so the client
         // doesn't even offer them.
         methods: MethodSet::from(&[MethodKind::PublicKey][..]),
+        // A clone/push channel is a long burst of packfile bytes, not a
+        // back-and-forth of tiny interactive writes, so there's nothing for
+        // Nagle's algorithm (`nodelay: false` is russh's default) to batch
+        // in exchange for — it only adds latency waiting to coalesce writes
+        // that were already large.
+        nodelay: true,
         ..Default::default()
     });
 
