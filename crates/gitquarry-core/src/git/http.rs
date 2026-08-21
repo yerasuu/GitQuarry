@@ -43,6 +43,13 @@ use tokio::process::Child;
 /// memory before it's even parsed.
 const MAX_LFS_BATCH_BYTES: usize = 8 * 1024 * 1024;
 
+/// `upload-pack`/`receive-pack` request bodies are real pack data, so this
+/// stays generous enough to never trip on a legitimate push/fetch (well past
+/// any real monorepo pack) -- it exists only so a runaway or hostile client
+/// can't make the server buffer an unbounded body into memory before `git`
+/// ever sees a byte of it.
+const MAX_PACK_BODY_BYTES: usize = 16 * 1024 * 1024 * 1024;
+
 #[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -806,7 +813,7 @@ async fn pack_response(
     req: Request,
     actor: Option<&str>,
 ) -> Result<Response> {
-    let body = axum::body::to_bytes(req.into_body(), usize::MAX)
+    let body = axum::body::to_bytes(req.into_body(), MAX_PACK_BODY_BYTES)
         .await
         .context("reading request body")?;
     let child = mirror::spawn_git_subcommand_http(
