@@ -129,6 +129,8 @@ on a per-release versioning scheme.
 
 ## Releases & assets
 
+- The create-release form suggests the repo's own tags, minus the ones that
+  already have a release.
 - Releases: create, edit, and delete releases with notes; list/detail views;
   and attach or download binary assets.
 
