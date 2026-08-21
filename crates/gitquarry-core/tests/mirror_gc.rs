@@ -49,6 +49,7 @@ fn dummy_ctx(
             allow_insecure_http: false,
         }),
         passphrase: "test".to_string(),
+        resilience: Default::default(),
     };
     gitquarry_core::app::AppContext {
         bucket: "test".to_string(),
