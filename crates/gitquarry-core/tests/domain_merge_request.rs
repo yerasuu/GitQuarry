@@ -969,6 +969,61 @@ async fn diff_survives_a_source_branch_deleted_after_the_merge() {
     assert!(d.diff.contains("f.txt"), "{}", d.diff);
 }
 
+/// The far commoner half of the same problem: merged, and the branch kept.
+/// `diff` compared the target branch against the source, and after the
+/// merge the source is an ancestor of the target -- so `base...head` was
+/// empty and every merged merge request rendered as having changed
+/// nothing. The merge commit is what actually holds what it landed.
+#[tokio::test]
+async fn diff_shows_what_a_merge_landed_when_the_branch_outlives_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewMergeRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "t",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+    merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap();
+
+    // No `delete_branch=1` this time: `refs/heads/feature` is still there,
+    // pointing at a commit the target now contains.
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let mr = get(&ctx, &target, 1).await.unwrap().unwrap();
+    // What a sync does, and what makes this the production case: the local
+    // mirror's target branch catches up to the merge. Until it does, the
+    // merge base is still the pre-merge tip and the stale comparison looks
+    // fine -- which is exactly why this went unnoticed.
+    let merge_sha = mr.merge_commit_sha.clone().expect("merged");
+    let status = std::process::Command::new("git")
+        .current_dir(&git_dir)
+        .args(["update-ref", "refs/heads/main", &merge_sha])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let d = diff(&ctx, &target, &git_dir, &mr).await.unwrap();
+    assert!(
+        d.diff.contains("f.txt"),
+        "a merged merge request showed no changes at all: {:?}",
+        d.diff
+    );
+    assert!(!d.commits.is_empty(), "and no commits either");
+}
+
 /// The last-resort case: closed *without* merging, and the branch deleted
 /// afterwards. Nothing survives to reconstruct a diff from, so the page
 /// renders with an empty one rather than failing — a closed merge request's
