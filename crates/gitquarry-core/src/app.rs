@@ -96,7 +96,28 @@ pub struct AppContext {
     /// a trait object rather than a direct dependency on
     /// `gitquarry-mirror-external`.
     pub mirror_sync: Option<Arc<dyn crate::mirror::MirrorSyncHook>>,
+    /// Short-TTL cache for [`Self::visible_repo_uids`] — see that method.
+    pub visible_repo_uids_cache: VisibleRepoUidsCache,
 }
+
+/// Backs [`AppContext::visible_repo_uids`]: the anonymous repo index (the
+/// site's highest-traffic page) lists every visible repo uid on every
+/// render, which is a real `list_prefix` call against the backend —
+/// `s3db::CachedBackend` (wired in by [`crate::storage::build_backend`])
+/// forwards list operations to the driver uncached, it only caches point
+/// `get`s. A few seconds of staleness here is the same "hint, not a fact"
+/// tolerance [`crate::storage::settings::list_visible_repo_uids`]'s own doc
+/// comment already describes — a repo that just turned visible (or private)
+/// shows up a few seconds late either way, self-heals on the next read past
+/// the TTL, and `webui::repo::list_visible_repos` re-checks each uid's real
+/// `RepoConfig::visibility` regardless, so this can never do worse than that
+/// existing lag.
+#[derive(Debug, Default)]
+pub struct VisibleRepoUidsCache {
+    inner: Mutex<Option<(Instant, Vec<Uid>)>>,
+}
+
+const VISIBLE_REPO_UIDS_TTL: Duration = Duration::from_secs(10);
 
 /// Local mirror ready to use, with the repo's lock held. While this exists,
 /// nobody else touches that mirror.
@@ -347,6 +368,27 @@ impl AppContext {
         REQUEST_BACKEND
             .try_with(Arc::clone)
             .unwrap_or_else(|_| Arc::clone(&self.backend))
+    }
+
+    /// Every repo uid currently indexed as visible
+    /// ([`crate::storage::settings::list_visible_repo_uids`]), through a
+    /// short-TTL in-process cache (see [`VisibleRepoUidsCache`]'s own doc
+    /// comment for why that's safe here) instead of a real backend list
+    /// call on every call. `gitquarry-server`'s startup sequence calls this
+    /// once before binding its listeners so the very first request doesn't
+    /// pay for a cold list — see `serve::run`.
+    pub async fn visible_repo_uids(&self) -> Result<Vec<Uid>> {
+        {
+            let cached = self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned");
+            if let Some((fetched_at, uids)) = cached.as_ref() {
+                if fetched_at.elapsed() < VISIBLE_REPO_UIDS_TTL {
+                    return Ok(uids.clone());
+                }
+            }
+        }
+        let uids = crate::storage::settings::list_visible_repo_uids(self.backend().as_ref()).await?;
+        *self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned") = Some((Instant::now(), uids.clone()));
+        Ok(uids)
     }
 
     /// `pub`, not private: `webui::repo_settings::move_repo` (in the

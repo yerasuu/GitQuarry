@@ -34,6 +34,7 @@ fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
         trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
