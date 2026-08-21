@@ -158,16 +158,24 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
         .await?;
 
     let (manifest, _etag) = remote.get_manifest().await?;
-    let local_refs = git::list_refs(bare_repo).await?;
-
-    for (name, sha) in &manifest.refs {
-        git::update_ref(bare_repo, name, sha).await?;
-    }
-    for name in &local_refs {
-        if !manifest.refs.contains_key(name) {
-            git::delete_ref(bare_repo, name).await?;
-        }
-    }
+    // Diffed against the manifest before writing anything, and applied in
+    // one batched `git update-ref --stdin` call: this sync runs on every
+    // `info/refs` and `upload-pack` (not just a push), so without the diff
+    // every one of those would rewrite every ref via its own subprocess
+    // even when nothing had actually changed since the last sync.
+    let local_refs = git::list_refs_with_oids(bare_repo).await?;
+    let updates: Vec<(String, String)> = manifest
+        .refs
+        .iter()
+        .filter(|(name, sha)| local_refs.get(*name).map(String::as_str) != Some(sha.as_str()))
+        .map(|(name, sha)| (name.clone(), sha.clone()))
+        .collect();
+    let deletes: Vec<String> = local_refs
+        .keys()
+        .filter(|name| !manifest.refs.contains_key(*name))
+        .cloned()
+        .collect();
+    git::apply_ref_changes(bare_repo, &updates, &deletes).await?;
     if let Some(head) = &manifest.head
         && manifest.refs.contains_key(head)
     {
