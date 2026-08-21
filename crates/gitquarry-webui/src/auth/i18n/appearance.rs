@@ -30,3 +30,15 @@ msg!(density_description() {
 msg!(density_default_label() { Locale::Es => "por defecto (denso)", Locale::En => "default (dense)" });
 msg!(density_dense_label() { Locale::Es => "denso", Locale::En => "dense" });
 msg!(density_airy_label() { Locale::Es => "espaciado", Locale::En => "airy" });
+
+msg!(locale_heading() { Locale::Es => "idioma", Locale::En => "language" });
+msg!(locale_description() {
+    Locale::Es => "Idioma por defecto para cada pagina — esto es lo que se usa hasta que lo toques.",
+    Locale::En => "Default language for every page — this is what's used until you've touched it.",
+});
+msg!(locale_automatic() { Locale::Es => "automatico (usa el idioma por defecto del sitio)", Locale::En => "automatic (uses the site's built-in default)" });
+// Autonyms, not translations -- a language's own name stays the same in
+// both arms on purpose, same reasoning a `<html lang>` value never gets
+// localized: it's identifying the language itself, not describing it.
+msg!(locale_es() { Locale::Es => "Español", Locale::En => "Español" });
+msg!(locale_en() { Locale::Es => "English", Locale::En => "English" });
