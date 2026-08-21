@@ -48,9 +48,12 @@ SemVer as it reads below 1.0 (§4 plus Cargo's rule: in `0.y.z` the breaking slo
 | `feat`, `fix`, `perf` | `0.y.(z+1)` |
 | only `docs`/`chore`/`style`/`refactor`/`test`/`ci`/`build` | no release |
 
-A breaking change says so in the commit, or the number can't be derived without reading the diff. What breaks differs per repo: `gitquarry` is a server, so its surface is CLI flags, `gitquarry.toml` keys, ssh/HTTP routes and the bucket layout; `s3db` is a library, so it's the exported API and `cargo semver-checks` answers mechanically.
-
-Cutting one: one version for the whole workspace (`[workspace.package]`), never a crate at a time. Write `tag-changelog/vX.Y.Z.md` first — `webui::changelog` pulls it in with `include_str!` on `CARGO_PKG_VERSION`, so a version without notes doesn't compile — then commit the bump separately and tag `vX.Y.Z`, annotated and signed, on `master` after the `develop` -> `master` PR. `CHANGELOG.md` is the other half of the notes and stays grouped by area. An `s3db` repin alone is a `chore` and earns no version.
+- A breaking change says so in the commit, or the number can't be derived without reading the diff.
+- What breaks differs per repo: `gitquarry` is a server (CLI flags, `gitquarry.toml` keys, ssh/HTTP routes, bucket layout); `s3db` is a library (exported API — `cargo semver-checks` answers it).
+- Tag notes are a technical record: terse bullets anchored in code (module, function, route, storage prefix, constant and value), facts read from the tree *at that tag*, no narrative.
+- One version per workspace (`[workspace.package]`), never a crate at a time.
+- Write `tag-changelog/vX.Y.Z.md` first — `webui::changelog` `include_str!`s it by `CARGO_PKG_VERSION`, so a version without notes doesn't compile — then the bump as its own commit, then tag `vX.Y.Z` annotated and signed on `master`, after the `develop` -> `master` PR.
+- `CHANGELOG.md` is the other half of the notes, grouped by area. An `s3db` repin alone is a `chore` and earns no version.
 
 ## Security
 
