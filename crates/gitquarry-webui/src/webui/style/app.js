@@ -54,11 +54,16 @@
 // what already works with JS off: nothing here is needed to open or use
 // one, only to auto-close it.
 
-function fetchFragment(url, init, onHtml) {
+function fetchFragment(url, init, onHtml, onError) {
   fetch(url, init)
     .then((resp) => (resp.ok ? resp.text() : Promise.reject(new Error(`request failed: ${resp.status}`))))
     .then(onHtml)
-    .catch((err) => console.error("gitquarry: async request failed", err));
+    .catch((err) => {
+      console.error("gitquarry: async request failed", err);
+      if (onError) {
+        onError(err);
+      }
+    });
 }
 
 function runLiveSearch(form) {
@@ -185,23 +190,33 @@ document.addEventListener("submit", (event) => {
   // Every other data-async form leaves this attribute unset, so its
   // response is still exactly one element and this branch never runs.
   const extraTargetSelector = form.dataset.asyncExtraTarget;
-  fetchFragment(form.action, { method: form.method || "POST", body, headers: { "X-GQ-Async": "1" } }, (html) => {
-    const template = document.createElement("template");
-    template.innerHTML = html.trim();
-    const replacement = template.content.firstElementChild;
-    if (!replacement) {
-      return;
-    }
-    const extraReplacement = extraTargetSelector ? replacement.nextElementSibling : null;
-    const target = targetSelector ? document.querySelector(targetSelector) : form;
-    if (target) {
-      target.replaceWith(replacement);
-    }
-    const extraTarget = extraTargetSelector ? document.querySelector(extraTargetSelector) : null;
-    if (extraTarget && extraReplacement) {
-      extraTarget.replaceWith(extraReplacement);
-    }
-  });
+  fetchFragment(
+    form.action,
+    { method: form.method || "POST", body, headers: { "X-GQ-Async": "1" } },
+    (html) => {
+      const template = document.createElement("template");
+      template.innerHTML = html.trim();
+      const replacement = template.content.firstElementChild;
+      if (!replacement) {
+        return;
+      }
+      const extraReplacement = extraTargetSelector ? replacement.nextElementSibling : null;
+      const target = targetSelector ? document.querySelector(targetSelector) : form;
+      if (target) {
+        target.replaceWith(replacement);
+      }
+      const extraTarget = extraTargetSelector ? document.querySelector(extraTargetSelector) : null;
+      if (extraTarget && extraReplacement) {
+        extraTarget.replaceWith(extraReplacement);
+      }
+    },
+    // A failed request leaves every optimistic paint above (label, count,
+    // html/class attribute) stuck in the guessed state with no visible
+    // error -- same risk the drag-and-drop handler below already has one
+    // real fix for: reload to resync from the server instead of trying to
+    // hand-roll a rollback for each optimistic branch.
+    () => window.location.reload(),
+  );
 });
 
 document.addEventListener("click", (event) => {
@@ -221,15 +236,18 @@ document.addEventListener("click", (event) => {
   if (!btn) {
     return;
   }
-  navigator.clipboard.writeText(btn.dataset.copy).then(() => {
-    const original = btn.textContent;
-    btn.textContent = btn.dataset.copiedLabel || original;
-    btn.disabled = true;
-    setTimeout(() => {
-      btn.textContent = original;
-      btn.disabled = false;
-    }, 1200);
-  });
+  navigator.clipboard
+    .writeText(btn.dataset.copy)
+    .then(() => {
+      const original = btn.textContent;
+      btn.textContent = btn.dataset.copiedLabel || original;
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 1200);
+    })
+    .catch((err) => console.error("gitquarry: clipboard write failed", err));
 });
 
 // Per-hunk diff collapse (`annotated_diff.rs`'s `.hunk-toggle`). Not
