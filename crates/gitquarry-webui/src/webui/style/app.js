@@ -74,7 +74,19 @@ function showErrorToast() {
 function fetchFragment(url, init, onHtml, onError) {
   fetch(url, init)
     .then((resp) => (resp.ok ? resp.text() : Promise.reject(new Error(`request failed: ${resp.status}`))))
-    .then(onHtml)
+    .then((html) => {
+      try {
+        onHtml(html);
+      } catch (err) {
+        // The request itself succeeded -- the server already applied
+        // whatever it was asked to -- so a bug in *this* callback (an
+        // unexpected fragment shape, a selector that no longer matches)
+        // must not fall into the `catch` below: that one means the request
+        // failed and is what triggers `onError`'s optimistic-UI rollback,
+        // which would be wrong here since nothing needs undoing.
+        console.error("gitquarry: fragment handler failed", err);
+      }
+    })
     .catch((err) => {
       console.error("gitquarry: async request failed", err);
       if (onError) {
@@ -91,9 +103,23 @@ function runLiveSearch(form) {
   }
   const url = new URL(form.action, window.location.href);
   url.searchParams.set(field.name, field.value);
-  fetchFragment(url, { headers: { "X-GQ-Async": "1" } }, (html) => {
-    target.innerHTML = html;
-  });
+  // Typing fast enough sends overlapping GETs; nothing guarantees they
+  // resolve in the order they were sent. `_gqSearchSeq` lives on `target`
+  // itself (not `form`) because that's the node a stale response would
+  // otherwise stomp -- a slower response for an earlier keystroke arriving
+  // after a faster one for a later keystroke is simply dropped.
+  const searchSeq = (target._gqSearchSeq = (target._gqSearchSeq || 0) + 1);
+  fetchFragment(
+    url,
+    { headers: { "X-GQ-Async": "1" } },
+    (html) => {
+      if (target._gqSearchSeq !== searchSeq) {
+        return;
+      }
+      target.innerHTML = html;
+    },
+    () => showErrorToast(),
+  );
 }
 
 let liveSearchTimer = null;
@@ -129,12 +155,6 @@ document.addEventListener("submit", (event) => {
     return;
   }
   event.preventDefault();
-  // Guards the failure-rollback below against out-of-order responses: two
-  // rapid submits on the same form (double-clicking a toggle) can resolve
-  // in either order, and reverting an *earlier* click's optimistic guess
-  // after a *later* one already succeeded would silently undo real state.
-  form._gqRequestSeq = (form._gqRequestSeq || 0) + 1;
-  const requestSeq = form._gqRequestSeq;
   // `URLSearchParams`, not a raw `FormData`: `fetch()` serializes a
   // `FormData` body as `multipart/form-data`, but every server handler on
   // the other end of a `data-async` form is `axum::extract::Form<T>`,
@@ -154,6 +174,42 @@ document.addEventListener("submit", (event) => {
   if (event.submitter && event.submitter.name) {
     body.set(event.submitter.name, event.submitter.value);
   }
+  const htmlAttr = form.dataset.htmlAttr;
+  const pickedValue = event.submitter && event.submitter.value;
+  const classTarget = form.dataset.classTarget && document.querySelector(form.dataset.classTarget);
+  const classValue = form.dataset.classValue;
+  const toggleLabel = form.dataset.toggleLabel;
+  const labelEl = form.querySelector(".btn-label");
+  const optimisticDeltaAttr = form.dataset.optimisticDelta;
+  const optimisticDelta = Number(optimisticDeltaAttr);
+  const optimisticEl = form.dataset.optimisticTarget && document.querySelector(form.dataset.optimisticTarget);
+  const targetSelector = form.dataset.asyncTarget;
+  const extraTargetSelector = form.dataset.asyncExtraTarget;
+  const target = targetSelector ? document.querySelector(targetSelector) : form;
+  const extraTarget = extraTargetSelector ? document.querySelector(extraTargetSelector) : null;
+  // Every node this submit will optimistically paint or eventually swap,
+  // deduplicated. Locked for the round trip so a *different* form reaching
+  // the same node (star + watch both repaint `#community-stats`, the three
+  // text-size buttons all repaint `#about-body`, two MR-action forms both
+  // repaint `#mr-actions`) can't race this one -- and so a double-click on
+  // *this* form's own button can't either, since `form` is always in the
+  // set. Replaces the old per-form `_gqRequestSeq` counter, which only
+  // caught a form racing itself and only guarded the failure path, not
+  // success: a locked node simply refuses a second submit outright, so
+  // there's no "which of two in-flight responses wins" question left to
+  // get half-answered.
+  const lockedNodes = Array.from(new Set([form, target, extraTarget, classTarget, optimisticEl].filter(Boolean)));
+  if (lockedNodes.some((node) => node._gqLocked)) {
+    return;
+  }
+  lockedNodes.forEach((node) => {
+    node._gqLocked = true;
+  });
+  const unlock = () => {
+    lockedNodes.forEach((node) => {
+      node._gqLocked = false;
+    });
+  };
   // `data-html-attr` (theme/density toggles): flip `<html>`'s own attribute
   // the instant the button's clicked -- everything either one affects is
   // plain CSS keyed off that attribute (colors/spacing, and now syntax
@@ -162,8 +218,6 @@ document.addEventListener("submit", (event) => {
   // repaint. The fetch below still persists the pick server-side (the
   // cookie, so it's still picked on the next full page load too) and
   // swaps the button pair same as any other data-async form.
-  const htmlAttr = form.dataset.htmlAttr;
-  const pickedValue = event.submitter && event.submitter.value;
   const originalHtmlAttrValue = htmlAttr ? document.documentElement.getAttribute(htmlAttr) : null;
   if (htmlAttr && pickedValue) {
     document.documentElement.setAttribute(htmlAttr, pickedValue);
@@ -176,8 +230,6 @@ document.addEventListener("submit", (event) => {
   // to piggyback on. `!== undefined`, not a truthiness check: the "medium"
   // size's class is the empty string, which is a real, intentional value
   // here (it clears the class), not a missing one.
-  const classTarget = form.dataset.classTarget && document.querySelector(form.dataset.classTarget);
-  const classValue = form.dataset.classValue;
   const originalClassName = classTarget ? classTarget.className : null;
   if (classTarget && classValue !== undefined) {
     classTarget.className = classValue;
@@ -186,29 +238,20 @@ document.addEventListener("submit", (event) => {
   // (star/watch, see `actions.rs`): same "paint it before the round trip"
   // idea as `data-html-attr` above, for a toggle whose repaint isn't pure
   // CSS -- the button's own label text and a count shown elsewhere on the
-  // page. Flips the `.btn-label` text against its own stored opposite (so
-  // a second click before the first response lands still toggles
-  // correctly) and nudges the count target by `delta`, then negates
-  // `delta` for next time. The real response a moment later still fully
-  // replaces both (`data-async`/`data-async-extra-target`), so a wrong
-  // guess here -- a lost CAS race, another tab -- self-corrects within the
-  // same round trip instead of drifting.
-  const toggleLabel = form.dataset.toggleLabel;
-  const labelEl = form.querySelector(".btn-label");
+  // page. Flips the `.btn-label` text against its own stored opposite and
+  // nudges the count target by `delta`. The lock above already rules out a
+  // second submit touching these same nodes before this one settles, so
+  // there's no concurrent guess to defend against here anymore.
   const originalLabelText = labelEl ? labelEl.textContent : null;
   if (toggleLabel && labelEl) {
-    form.dataset.toggleLabel = labelEl.textContent;
+    form.dataset.toggleLabel = originalLabelText;
     labelEl.textContent = toggleLabel;
   }
-  const optimisticDelta = Number(form.dataset.optimisticDelta);
-  const optimisticEl = form.dataset.optimisticTarget && document.querySelector(form.dataset.optimisticTarget);
   const originalOptimisticText = optimisticEl ? optimisticEl.textContent : null;
-  const originalOptimisticDeltaAttr = form.dataset.optimisticDelta;
   if (optimisticEl && Number.isFinite(optimisticDelta)) {
-    optimisticEl.textContent = String(Number(optimisticEl.textContent) + optimisticDelta);
+    optimisticEl.textContent = String(Number(originalOptimisticText) + optimisticDelta);
     form.dataset.optimisticDelta = String(-optimisticDelta);
   }
-  const targetSelector = form.dataset.asyncTarget;
   // `data-async-extra-target` (star/watch, see `actions.rs`): for a button
   // whose toggle also has to repaint a count shown somewhere else on the
   // page (the sidebar's star/watcher tally, nowhere near the button itself
@@ -217,11 +260,11 @@ document.addEventListener("submit", (event) => {
   // selector, independently of whatever the primary swap above targets.
   // Every other data-async form leaves this attribute unset, so its
   // response is still exactly one element and this branch never runs.
-  const extraTargetSelector = form.dataset.asyncExtraTarget;
   fetchFragment(
     form.action,
     { method: form.method || "POST", body, headers: { "X-GQ-Async": "1" } },
     (html) => {
+      unlock();
       const template = document.createElement("template");
       template.innerHTML = html.trim();
       const replacement = template.content.firstElementChild;
@@ -229,11 +272,9 @@ document.addEventListener("submit", (event) => {
         return;
       }
       const extraReplacement = extraTargetSelector ? replacement.nextElementSibling : null;
-      const target = targetSelector ? document.querySelector(targetSelector) : form;
       if (target) {
         target.replaceWith(replacement);
       }
-      const extraTarget = extraTargetSelector ? document.querySelector(extraTargetSelector) : null;
       if (extraTarget && extraReplacement) {
         extraTarget.replaceWith(extraReplacement);
       }
@@ -246,12 +287,7 @@ document.addEventListener("submit", (event) => {
     // the honest fix is to put each one back and surface the failure in
     // place, not to bounce the user off the page they were just on.
     () => {
-      // A newer submit on this same form already superseded this one --
-      // its own (later) response already painted the real state, so
-      // reverting to *this* request's stale guess would undo it.
-      if (form._gqRequestSeq !== requestSeq) {
-        return;
-      }
+      unlock();
       if (htmlAttr) {
         if (originalHtmlAttrValue === null) {
           document.documentElement.removeAttribute(htmlAttr);
@@ -276,10 +312,10 @@ document.addEventListener("submit", (event) => {
       }
       if (optimisticEl && originalOptimisticText !== null) {
         optimisticEl.textContent = originalOptimisticText;
-        if (originalOptimisticDeltaAttr === undefined) {
+        if (optimisticDeltaAttr === undefined) {
           delete form.dataset.optimisticDelta;
         } else {
-          form.dataset.optimisticDelta = originalOptimisticDeltaAttr;
+          form.dataset.optimisticDelta = optimisticDeltaAttr;
         }
       }
       showErrorToast();
