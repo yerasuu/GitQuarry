@@ -172,6 +172,17 @@ pub(crate) async fn handler_index(
         })
         .collect();
 
+    // Per-card ssh clone hint (cards view only) — same host/port derivation
+    // `summary::render_clone_urls` uses for a single repo's own clone table,
+    // just inlined here instead of reused: that helper renders a whole
+    // `<h3>+table>`, not a bare string, so there's nothing smaller to call.
+    let ssh_host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.split(':').next())
+        .unwrap_or("<host>");
+    let ssh_port = ctx.ssh_bind.rsplit_once(':').map(|(_, p)| p).unwrap_or(&ctx.ssh_bind);
+
     // `#repo-list`'s own inner content, factored out so the async path below
     // (live search-as-you-type, `style/app.js`'s `data-live-search`) can
     // return just this fragment instead of the whole page — same
@@ -193,6 +204,7 @@ pub(crate) async fn handler_index(
                             " " span class="badge" { "archived" }
                         }
                         (maud::PreEscaped(super::topic_badges(&repo.topics)))
+                        code class="clone-url" { "ssh://" (ssh_host) ":" (ssh_port) "/" (repo.name) }
                     }
                     @if let Some(desc) = &repo.description {
                         @if !desc.is_empty() {
@@ -297,7 +309,7 @@ pub(crate) async fn handler_index(
             aside class="repo-sidebar" {
                 @if !recent_activity.is_empty() {
                     div class="card card-pad sidebar-box" {
-                        h4 { "recent activity" }
+                        h4 class="sidebar-box-title" { "recent activity" }
                         ul class="index-activity" {
                             @for e in &recent_activity {
                                 li {
@@ -313,7 +325,7 @@ pub(crate) async fn handler_index(
                 }
                 @if !all_topics.is_empty() {
                     div class="card card-pad sidebar-box" {
-                        h4 { "browse by topic" }
+                        h4 class="sidebar-box-title" { "browse by topic" }
                         div class="index-topics" { (maud::PreEscaped(super::topic_badges(&all_topics))) }
                     }
                 }
