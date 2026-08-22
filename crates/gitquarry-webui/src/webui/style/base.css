@@ -267,6 +267,12 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .controls-row { display: flex; align-items: center; gap: var(--gap); margin-bottom: 0.9rem; flex-wrap: wrap; }
 .controls-row form { display: flex; gap: 0.4em; flex: 1; min-width: 220px; }
 .controls-row form input { flex: 1; }
+/* Same literal size as the search button beside it (`form button`'s own
+   16px/`--pad-y-sm`/`--pad-x-sm`/`--radius-sm`) instead of `.btn`'s own
+   (styler's `--comp-*` sizing) — two buttons on one row read as mismatched
+   otherwise, even though both are "a button". Only size overridden: the
+   accent fill/color stay `.btn`'s own. */
+.controls-row a.btn { font-size: 16px; padding: var(--pad-y-sm) var(--pad-x-sm); border-radius: var(--radius-sm); }
 /* Index page repo listing has two markups always rendered
    (`repo::handler_index`), CSS picking which one shows — same
    `[data-density='airy']`-driven swap `.header-lang`/`.sidebar-lang` above
