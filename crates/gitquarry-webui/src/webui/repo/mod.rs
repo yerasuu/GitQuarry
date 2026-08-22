@@ -284,9 +284,12 @@ pub(crate) async fn handler_index(
         }
         div class="repo-layout" {
             div class="repo-main" {
-                form method="get" action="/" data-async data-live-search="#repo-list" {
-                    input name="q" value=(q) placeholder="search repos or topics";
-                    button type="submit" { "search" }
+                div class="controls-row" {
+                    form method="get" action="/" data-async data-live-search="#repo-list" {
+                        input name="q" value=(q) placeholder="search repos or topics";
+                        button type="submit" { "search" }
+                    }
+                    a class="btn" href="/_new" { "+ new repo" }
                 }
                 p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
                 div id="repo-list" { (results) }

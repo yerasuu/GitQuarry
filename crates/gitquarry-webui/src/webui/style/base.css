@@ -261,6 +261,12 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .stats-strip .stat:last-child { border-right: none; }
 .stats-strip .n { font-weight: bold; font-size: 1.3em; font-variant-numeric: tabular-nums; }
 .stats-strip .l { color: var(--muted); font-size: var(--fs-sm); margin-top: 0.15em; }
+/* The index page's search form + `.btn` "new repo" link, side by side —
+   `.btn`/`button` themselves are styler's own (accent fill), this only
+   supplies the row layout neither has on its own. */
+.controls-row { display: flex; align-items: center; gap: var(--gap); margin-bottom: 0.9rem; flex-wrap: wrap; }
+.controls-row form { display: flex; gap: 0.4em; flex: 1; min-width: 220px; }
+.controls-row form input { flex: 1; }
 /* Index page repo listing has two markups always rendered
    (`repo::handler_index`), CSS picking which one shows — same
    `[data-density='airy']`-driven swap `.header-lang`/`.sidebar-lang` above
