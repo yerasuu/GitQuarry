@@ -241,6 +241,22 @@ pub async fn bump_lfs_bytes(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, d
     let _ = put_repo_config(backend, uid.as_str(), &config, etag.as_deref(), cipher).await;
 }
 
+/// Stamps [`RepoConfig::last_push`] with the current time — see that
+/// field's own doc comment for who calls this and why. Same best-effort
+/// tolerance as [`bump_pack_bytes`]/[`bump_lfs_bytes`]: a lost CAS race here
+/// is invisible to anything but the home page's "updated" stamp.
+pub async fn touch_last_push(backend: &dyn Backend, cipher: &Cipher, uid: &Uid) {
+    let Ok((mut config, etag)) = get_repo_config(backend, uid.as_str(), cipher).await else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    config.last_push = Some(now);
+    let _ = put_repo_config(backend, uid.as_str(), &config, etag.as_deref(), cipher).await;
+}
+
 /// Sum of `pack_bytes + lfs_bytes` across every repo currently indexed
 /// under `owner` — what `auth::access::quota::check` compares against the
 /// owner's own limit. One `RepoConfig` fetch per owned repo (a bounded,

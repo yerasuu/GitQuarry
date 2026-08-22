@@ -126,6 +126,34 @@ struct IndexRepo {
     topics: std::collections::BTreeSet<String>,
     star_count: u32,
     primary_language: Option<String>,
+    last_push: Option<u64>,
+}
+
+/// GitHub/Artifacts-style relative stamp ("2h ago", "3d ago") for
+/// [`IndexRepo::last_push`] — coarse, single-unit buckets rather than a full
+/// duration breakdown, same as every other "updated X ago" UI. Unlocalized
+/// like the rest of this fragment already is (`results`, below, has no
+/// `locale` in scope — see its own doc comment): threading one through just
+/// for this string would be the only i18n on an otherwise-English page.
+fn relative_time_ago(then: u64, now: u64) -> String {
+    let diff = now.saturating_sub(then);
+    if diff < 60 {
+        return "just now".to_string();
+    }
+    let (value, unit) = if diff < 3600 {
+        (diff / 60, "m")
+    } else if diff < 86400 {
+        (diff / 3600, "h")
+    } else if diff < 604_800 {
+        (diff / 86400, "d")
+    } else if diff < 2_629_800 {
+        (diff / 604_800, "w")
+    } else if diff < 31_557_600 {
+        (diff / 2_629_800, "mo")
+    } else {
+        (diff / 31_557_600, "y")
+    };
+    format!("{value}{unit} ago")
 }
 
 pub(crate) async fn handler_index(
@@ -182,6 +210,10 @@ pub(crate) async fn handler_index(
         .and_then(|h| h.split(':').next())
         .unwrap_or("<host>");
     let ssh_port = ctx.ssh_bind.rsplit_once(':').map(|(_, p)| p).unwrap_or(&ctx.ssh_bind);
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     // `#repo-list`'s own inner content, factored out so the async path below
     // (live search-as-you-type, `style/app.js`'s `data-live-search`) can
@@ -211,7 +243,7 @@ pub(crate) async fn handler_index(
                             p class="repo-card-desc" { (desc) }
                         }
                     }
-                    @if repo.star_count > 0 || repo.primary_language.is_some() {
+                    @if repo.star_count > 0 || repo.primary_language.is_some() || repo.last_push.is_some() {
                         div class="repo-card-meta" {
                             @if let Some(lang) = &repo.primary_language {
                                 span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
@@ -219,6 +251,9 @@ pub(crate) async fn handler_index(
                             }
                             @if repo.star_count > 0 {
                                 span { (repo.star_count) " \u{2605}" }
+                            }
+                            @if let Some(last_push) = repo.last_push {
+                                span class="muted" { "updated " (relative_time_ago(last_push, now_unix)) }
                             }
                         }
                     }
@@ -257,6 +292,9 @@ pub(crate) async fn handler_index(
                         }
                         @if repo.star_count > 0 {
                             span { (repo.star_count) " \u{2605}" }
+                        }
+                        @if let Some(last_push) = repo.last_push {
+                            span class="muted" { (relative_time_ago(last_push, now_unix)) }
                         }
                     }
                 }
@@ -393,6 +431,7 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
                 topics: config.topics,
                 star_count: config.star_count,
                 primary_language: config.primary_language,
+                last_push: config.last_push,
             });
         }
     }
