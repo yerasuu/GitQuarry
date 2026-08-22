@@ -82,21 +82,21 @@ fn render_profile_section_impl(
     message: Option<crate::webui::Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use gitquarry_i18n::web::auth_security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         (PreEscaped(crate::webui::render_flash(message, locale)))
 
-        (settings_section(&gitquarry_i18n::web::auth_avatar::heading(locale), Some(&gitquarry_i18n::web::auth_avatar::description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::avatar::heading(locale), Some(&gitquarry_i18n::web::auth::avatar::description(locale)), html! {
             p { (crate::webui::identicon::account_avatar_sized(&user.username, user.avatar_content_type.as_deref(), 48)) }
             form method="post" action="/_account/profile" enctype="multipart/form-data" {
                 (PreEscaped(csrf))
                 input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required;
-                button type="submit" { (gitquarry_i18n::web::auth_avatar::upload_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::avatar::upload_button(locale)) }
             }
             @if user.avatar_content_type.is_some() {
-                form method="post" action="/_account/profile/delete" data-confirm=(gitquarry_i18n::web::auth_avatar::remove_avatar_confirm(locale)) {
+                form method="post" action="/_account/profile/delete" data-confirm=(gitquarry_i18n::web::auth::avatar::remove_avatar_confirm(locale)) {
                     (PreEscaped(csrf))
-                    button type="submit" { (gitquarry_i18n::web::auth_avatar::remove_button(locale)) }
+                    button type="submit" { (gitquarry_i18n::web::auth::avatar::remove_button(locale)) }
                 }
             }
         }))
@@ -126,7 +126,7 @@ fn render_primary_email_section(
     email_self_service: bool,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use gitquarry_i18n::web::auth_security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="primary-email-section" {
             @if email_self_service {
@@ -154,7 +154,7 @@ fn render_primary_email_section(
 /// The secondary-emails table alone, wrapped in a stable `id` so a removal
 /// can swap just this fragment.
 fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use gitquarry_i18n::web::auth_security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="secondary-emails-table" {
             table class="list" {

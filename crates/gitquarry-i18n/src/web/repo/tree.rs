@@ -1,6 +1,6 @@
 //! `webui::repo::tree`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(name_column() { Locale::Es => "nombre", Locale::En => "name" });
 msg!(recent_commits_heading() { Locale::Es => "commits recientes", Locale::En => "recent commits" });

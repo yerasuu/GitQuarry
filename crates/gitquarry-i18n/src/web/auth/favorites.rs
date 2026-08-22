@@ -1,6 +1,6 @@
 //! `webui::auth::web::favorites`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(
     /// `render_favorites_page`'s intro line — same for both the public and

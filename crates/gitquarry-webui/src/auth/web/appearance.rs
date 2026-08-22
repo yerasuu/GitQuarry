@@ -184,55 +184,55 @@ pub fn render_appearance_page(
       div id="appearance-body" {
         (PreEscaped(render_flash(message, locale)))
 
-        (settings_section(&gitquarry_i18n::web::auth_appearance::text_size_heading(locale), Some(&gitquarry_i18n::web::auth_appearance::text_size_description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::appearance::text_size_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::text_size_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_text_size_pref";
                 select name="text_size" {
-                    option value="sm" selected[current == Some(TextSize::Sm)] { (gitquarry_i18n::web::auth_appearance::text_size_small(locale)) }
-                    option value="md" selected[current == Some(TextSize::Md)] { (gitquarry_i18n::web::auth_appearance::text_size_medium(locale)) }
-                    option value="lg" selected[current == Some(TextSize::Lg)] { (gitquarry_i18n::web::auth_appearance::text_size_large(locale)) }
+                    option value="sm" selected[current == Some(TextSize::Sm)] { (gitquarry_i18n::web::auth::appearance::text_size_small(locale)) }
+                    option value="md" selected[current == Some(TextSize::Md)] { (gitquarry_i18n::web::auth::appearance::text_size_medium(locale)) }
+                    option value="lg" selected[current == Some(TextSize::Lg)] { (gitquarry_i18n::web::auth::appearance::text_size_large(locale)) }
                 }
-                button type="submit" { (gitquarry_i18n::web::auth_appearance::save_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
         }))
 
-        (settings_section(&gitquarry_i18n::web::auth_appearance::theme_heading(locale), Some(&gitquarry_i18n::web::auth_appearance::theme_description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::appearance::theme_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::theme_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_theme_pref";
                 select name="theme" {
-                    option value="" selected[user.theme_default.is_empty()] { (gitquarry_i18n::web::auth_appearance::theme_automatic(locale)) }
-                    option value="light" selected[user.theme_default == "light"] { (gitquarry_i18n::web::auth_appearance::theme_light(locale)) }
-                    option value="dark" selected[user.theme_default == "dark"] { (gitquarry_i18n::web::auth_appearance::theme_dark(locale)) }
+                    option value="" selected[user.theme_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::theme_automatic(locale)) }
+                    option value="light" selected[user.theme_default == "light"] { (gitquarry_i18n::web::auth::appearance::theme_light(locale)) }
+                    option value="dark" selected[user.theme_default == "dark"] { (gitquarry_i18n::web::auth::appearance::theme_dark(locale)) }
                 }
-                button type="submit" { (gitquarry_i18n::web::auth_appearance::save_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
         }))
 
-        (settings_section(&gitquarry_i18n::web::auth_appearance::density_heading(locale), Some(&gitquarry_i18n::web::auth_appearance::density_description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::appearance::density_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::density_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_density_pref";
                 select name="density" {
-                    option value="" selected[user.density_default.is_empty()] { (gitquarry_i18n::web::auth_appearance::density_default_label(locale)) }
-                    option value="dense" selected[user.density_default == "dense"] { (gitquarry_i18n::web::auth_appearance::density_dense_label(locale)) }
-                    option value="airy" selected[user.density_default == "airy"] { (gitquarry_i18n::web::auth_appearance::density_airy_label(locale)) }
+                    option value="" selected[user.density_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::density_default_label(locale)) }
+                    option value="dense" selected[user.density_default == "dense"] { (gitquarry_i18n::web::auth::appearance::density_dense_label(locale)) }
+                    option value="airy" selected[user.density_default == "airy"] { (gitquarry_i18n::web::auth::appearance::density_airy_label(locale)) }
                 }
-                button type="submit" { (gitquarry_i18n::web::auth_appearance::save_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
         }))
 
-        (settings_section(&gitquarry_i18n::web::auth_appearance::locale_heading(locale), Some(&gitquarry_i18n::web::auth_appearance::locale_description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::appearance::locale_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::locale_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_locale_pref";
                 select name="locale" {
-                    option value="" selected[user.locale_default.is_empty()] { (gitquarry_i18n::web::auth_appearance::locale_automatic(locale)) }
-                    option value="es" selected[user.locale_default == "es"] { (gitquarry_i18n::web::auth_appearance::locale_es(locale)) }
-                    option value="en" selected[user.locale_default == "en"] { (gitquarry_i18n::web::auth_appearance::locale_en(locale)) }
+                    option value="" selected[user.locale_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::locale_automatic(locale)) }
+                    option value="es" selected[user.locale_default == "es"] { (gitquarry_i18n::web::auth::appearance::locale_es(locale)) }
+                    option value="en" selected[user.locale_default == "en"] { (gitquarry_i18n::web::auth::appearance::locale_en(locale)) }
                 }
-                button type="submit" { (gitquarry_i18n::web::auth_appearance::save_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
         }))
       }

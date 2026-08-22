@@ -1,7 +1,7 @@
 //! `webui::repo::components`'s page copy — shared table headers reused by
 //! summary/tree/log/refs/activity.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(name_column() { Locale::Es => "nombre", Locale::En => "name" });
 msg!(commit_column() { Locale::Es => "commit", Locale::En => "commit" });

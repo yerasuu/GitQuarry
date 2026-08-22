@@ -23,7 +23,7 @@ use gitquarry_core::git;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::validate;
 use gitquarry_domain::release;
-use gitquarry_i18n::web::repo_releases as t;
+use gitquarry_i18n::web::repo::releases as t;
 use maud::{Markup, PreEscaped, html};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;

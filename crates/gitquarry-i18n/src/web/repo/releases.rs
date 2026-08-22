@@ -1,6 +1,6 @@
 //! `webui::repo::releases`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(release_column() { Locale::Es => "lanzamiento", Locale::En => "release" });
 msg!(assets_column() { Locale::Es => "archivos", Locale::En => "assets" });

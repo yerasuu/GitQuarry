@@ -6,33 +6,17 @@
 //! duplicate-collapse leverage the way `shared` had) and a single file would
 //! grow unmanageably large across ~30 page files.
 //!
-//! `auth_*`/`search`/`settings` cover `webui::auth::web`/`webui::search::web`/
-//! `webui::settings::web` the same way; everything lives here regardless of
-//! which crate renders it — no i18n catalog is allowed to live outside this
-//! crate.
+//! [`auth`]/[`repo`] group each crate-side module's pages into their own
+//! subdirectory, mirroring that module's own layout; [`search`]/[`settings`]
+//! stay one flat file since each backs a single page. Everything lives here
+//! regardless of which crate renders it — no i18n catalog is allowed to
+//! live outside this crate.
 
 pub mod audit;
-pub mod auth_appearance;
-pub mod auth_avatar;
-pub mod auth_favorites;
-pub mod auth_groups;
-pub mod auth_login;
-pub mod auth_pat;
-pub mod auth_profile;
-pub mod auth_security;
-pub mod auth_users;
+pub mod auth;
 pub mod chrome;
-pub mod repo_activity;
-pub mod repo_compare;
-pub mod repo_components;
-pub mod repo_log;
-pub mod repo_merges;
+pub mod repo;
 pub mod repo_new;
-pub mod repo_refs;
-pub mod repo_releases;
 pub mod repo_settings;
-pub mod repo_stats;
-pub mod repo_summary;
-pub mod repo_tree;
 pub mod search;
 pub mod settings;

@@ -406,27 +406,27 @@ pub fn render_favorites_page(
       div id="favorites-body" {
         (PreEscaped(render_flash(message, locale)))
 
-        (settings_section(&gitquarry_i18n::web::auth_favorites::visibility_heading(locale), Some(&gitquarry_i18n::web::auth_favorites::visibility_description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::favorites::visibility_heading(locale), Some(&gitquarry_i18n::web::auth::favorites::visibility_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#favorites-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="favorites_action" value="set_visibility";
                 label {
                     input type="checkbox" name="favorites_public" value="1" checked[user.favorites_public];
-                    (gitquarry_i18n::web::auth_favorites::public_checkbox_label(locale))
+                    (gitquarry_i18n::web::auth::favorites::public_checkbox_label(locale))
                 }
-                button type="submit" { (gitquarry_i18n::web::auth_appearance::save_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
         }))
 
-        (settings_section(&gitquarry_i18n::web::auth_favorites::starred_heading(locale), Some(&gitquarry_i18n::web::auth_favorites::starred_intro(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::favorites::starred_heading(locale), Some(&gitquarry_i18n::web::auth::favorites::starred_intro(locale)), html! {
             @if starred.is_empty() {
                 div class="empty-state" {
                     span class="empty-state-icon" { (crate::webui::icons::star()) }
-                    div class="empty-state-title" { (gitquarry_i18n::web::auth_favorites::no_starred_repos_hint(locale)) }
+                    div class="empty-state-title" { (gitquarry_i18n::web::auth::favorites::no_starred_repos_hint(locale)) }
                 }
             } @else {
                 table class="list" {
-                    tr { th { (gitquarry_i18n::web::auth_favorites::repo_column_header(locale)) } th {} }
+                    tr { th { (gitquarry_i18n::web::auth::favorites::repo_column_header(locale)) } th {} }
                     @for (repo, stars) in starred {
                         tr {
                             td {
@@ -454,7 +454,7 @@ pub fn render_favorites_page(
                                     // doc comment.
                                     input type="hidden" name="favorites_action" value="remove_from_list";
                                     input type="hidden" name="repo" value=(repo);
-                                    button type="submit" { (gitquarry_i18n::web::auth_favorites::remove_button_label(locale)) }
+                                    button type="submit" { (gitquarry_i18n::web::auth::favorites::remove_button_label(locale)) }
                                 }
                             }
                         }
@@ -473,16 +473,16 @@ pub fn render_favorites_page(
 pub fn render_public_favorites_page(username: &str, repos: &[(String, u32)], locale: gitquarry_i18n::Locale) -> Markup {
     html! {
         p class="muted" {
-            (gitquarry_i18n::web::auth_favorites::public_favorites_of_prefix(locale)) strong { (username) } "."
+            (gitquarry_i18n::web::auth::favorites::public_favorites_of_prefix(locale)) strong { (username) } "."
         }
         @if repos.is_empty() {
             div class="empty-state" {
                 span class="empty-state-icon" { (crate::webui::icons::star()) }
-                div class="empty-state-title" { (gitquarry_i18n::web::auth_favorites::no_favorites_visible_hint(locale)) }
+                div class="empty-state-title" { (gitquarry_i18n::web::auth::favorites::no_favorites_visible_hint(locale)) }
             }
         } @else {
             table class="list" {
-                tr { th { (gitquarry_i18n::web::auth_favorites::repo_column_header(locale)) } }
+                tr { th { (gitquarry_i18n::web::auth::favorites::repo_column_header(locale)) } }
                 @for (repo, stars) in repos {
                     tr {
                         td {

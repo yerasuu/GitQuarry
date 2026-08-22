@@ -16,7 +16,7 @@ use gitquarry_core::auth::entities::{Group, User};
 use gitquarry_core::git;
 use gitquarry_core::storage;
 use gitquarry_core::storage::entities::RepoConfig;
-use gitquarry_i18n::web::repo_summary as t;
+use gitquarry_i18n::web::repo::summary as t;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 

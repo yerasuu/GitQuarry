@@ -1,6 +1,6 @@
 //! `webui::auth::web::security`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(logged_in_as() { Locale::Es => "Sesión iniciada como ", Locale::En => "Logged in as " });
 msg!(admin_badge() { Locale::Es => "admin", Locale::En => "admin" });

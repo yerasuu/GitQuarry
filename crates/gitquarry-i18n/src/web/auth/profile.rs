@@ -1,6 +1,6 @@
 //! `webui::auth::web::profile`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(no_repos_visible() {
     Locale::Es => "(sin repos visibles)",

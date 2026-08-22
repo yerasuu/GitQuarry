@@ -19,7 +19,7 @@ use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::domain;
 use gitquarry_core::storage::merge_requests::{MrReview, MrStatus, ReviewVerdict};
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_merges as t;
+use gitquarry_i18n::web::repo::merges as t;
 use maud::{Markup, PreEscaped, html};
 
 fn status_label(status: MrStatus, locale: Locale) -> String {

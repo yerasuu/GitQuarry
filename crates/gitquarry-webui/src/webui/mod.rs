@@ -47,7 +47,7 @@
 //!   tokens for git-smart-HTTP clone/push, scoped by explicit repo +
 //!   [`gitquarry_core::auth::entities::Permission`] ceiling; lives entirely
 //!   in [`gitquarry_core::auth::domain::pat`]). All of these (plus their
-//!   [`gitquarry_core::auth::domain`] CRUD and `gitquarry_i18n::web::auth_*`
+//!   [`gitquarry_core::auth::domain`] CRUD and `gitquarry_i18n::web::auth::*`
 //!   copy) live under [`crate::auth`], not here, but are routed from this
 //!   same table.
 //! - [`fork`]: `POST /_fork`, copies a whole repo to a new one under the

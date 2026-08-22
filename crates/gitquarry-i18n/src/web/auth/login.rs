@@ -1,6 +1,6 @@
 //! `webui::auth::web::login`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(username_label() { Locale::Es => "usuario", Locale::En => "username" });
 msg!(password_label() { Locale::Es => "password", Locale::En => "password" });

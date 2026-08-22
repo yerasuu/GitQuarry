@@ -103,7 +103,7 @@ async fn fork_error_page(
                 }
             }
             input name="name" size="20" value=(name);
-            button type="submit" class="btn" { (crate::webui::icons::fork()) " " (gitquarry_i18n::web::repo_summary::fork_button(locale)) }
+            button type="submit" class="btn" { (crate::webui::icons::fork()) " " (gitquarry_i18n::web::repo::summary::fork_button(locale)) }
         }
     }
     .into_string();

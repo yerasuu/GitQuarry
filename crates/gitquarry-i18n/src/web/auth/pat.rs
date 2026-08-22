@@ -1,6 +1,6 @@
 //! `webui::auth::web::pat`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(page_intro() {
     Locale::Es => "Tokens de larga duración para clonar/hacer push por HTTPS con scopes explícitos por repositorio.",

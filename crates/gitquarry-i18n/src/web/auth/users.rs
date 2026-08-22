@@ -1,6 +1,6 @@
 //! `webui::auth::web::users`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 // Intro paragraph, split at every inline `code { ... }` boundary — maud
 // needs each plain-text run between the `code` elements as its own node, so

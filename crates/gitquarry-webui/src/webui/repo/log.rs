@@ -8,7 +8,7 @@ use anyhow::Result;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_log as t;
+use gitquarry_i18n::web::repo::log as t;
 use maud::{PreEscaped, html};
 use std::path::Path as FsPath;
 

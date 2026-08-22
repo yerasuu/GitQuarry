@@ -1,6 +1,6 @@
 //! `webui::repo::summary`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(clone_heading() { Locale::Es => "clonar", Locale::En => "clone" });
 
