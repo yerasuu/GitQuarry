@@ -306,6 +306,16 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .repo-card-desc { color: var(--fg2); margin: 0.3em 0; }
 .repo-card-meta { display: flex; align-items: center; gap: var(--gap); font-size: 0.85em; color: var(--muted); margin-top: 0.4em; }
 .repo-card-meta .lang-swatch { margin-right: 0.15em; }
+/* Topic pills on the index page (cards, the compact table, and the
+   "browse by topic" sidebar box — everywhere `topic_badges` renders inside
+   these three containers) as an outline pill instead of `.badge.accent`'s
+   own filled one. Scoped to these containers rather than restyling
+   `.badge.accent` itself: that class is also `owner`'s permission-tier
+   badge elsewhere (`.decoration-*`'s own doc comment), which should keep
+   its filled weight. */
+.repo-card-title .badge.accent, .rl-topics .badge.accent, .index-topics .badge.accent {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+}
 /* Per-card ssh clone hint, index cards only (`repo::handler_index`).
    Hidden below `760px`: at card width there's no room next to a real repo
    name without wrapping awkwardly. */
