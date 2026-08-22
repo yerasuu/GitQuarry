@@ -86,3 +86,35 @@ fn danger_zone_section_shows_only_its_own_form() {
 fn unrecognized_section_falls_back_to_general() {
     assert_eq!(render("settings_nonexistent"), render("settings"));
 }
+
+/// Regression: the general/topics/labels sub-forms all target
+/// `#repo-settings-body` (see `render_settings_section`'s own doc
+/// comment) — losing that quietly brings back the browser's "confirm
+/// resubmission" dialog on F5. `settings_move`/`settings_danger_zone` are
+/// deliberately excluded: their success path is a real `Redirect` (`move_repo`/
+/// `delete_repo`/`purge_repo`/`restore_repo` in `handler_repo_conf_post`),
+/// and `fetch()` follows a redirect transparently — making those forms
+/// `data-async` would swap the *redirect target's* markup into
+/// `#repo-settings-body` instead of leaving the dialog risk on their own
+/// (rare, already name-confirmed) failure path alone.
+#[test]
+fn every_section_wraps_itself_and_only_the_redirecting_ones_skip_async() {
+    for section in ["settings", "settings_topics", "settings_labels"] {
+        let html = render(section);
+        assert!(
+            html.starts_with(r#"<div id="repo-settings-body">"#),
+            "{section}: {html}"
+        );
+        assert!(
+            html.contains(r##"data-async data-async-target="#repo-settings-body""##),
+            "{section}: {html}"
+        );
+    }
+    for section in ["settings_move", "settings_danger_zone"] {
+        let html = render(section);
+        assert!(
+            !html.contains(r##"data-async-target="#repo-settings-body""##),
+            "{section}: {html}"
+        );
+    }
+}

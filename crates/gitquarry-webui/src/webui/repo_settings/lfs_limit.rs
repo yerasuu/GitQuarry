@@ -50,7 +50,7 @@ pub fn render_lfs_limit_form(
     });
     html! {
         (settings_section(&gitquarry_i18n::web::repo_settings::lfs_limit_heading(locale), Some(&gitquarry_i18n::web::repo_settings::lfs_limit_prose(locale)), html! {
-            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="conf_action" value="set_lfs_max_blob_size";
                 input name="lfs_max_blob_size" value=(current) pattern="[0-9]+[BbKkMmGg]?" title="a number optionally followed by B/K/M/G, e.g. 50M"

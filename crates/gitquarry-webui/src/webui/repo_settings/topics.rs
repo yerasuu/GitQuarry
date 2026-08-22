@@ -53,7 +53,7 @@ pub fn render_topics_form(
     let current = retry.map_or(stored.as_str(), |f| f.topics.as_str());
     html! {
         (settings_section(&gitquarry_i18n::web::repo_settings::topics_heading(locale), Some(&gitquarry_i18n::web::repo_settings::topics_prose(locale)), html! {
-            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="conf_action" value="set_topics";
                 input name="topics" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::topics_placeholder(locale));
