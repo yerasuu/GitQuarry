@@ -304,8 +304,28 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_metrics", get(health::handler_metrics))
         .route("/", get(repo::handler_index))
         .route(
-            "/_settings",
-            get(crate::settings::web::handler_settings_get).post(crate::settings::web::handler_settings_post),
+            "/_settings/footer",
+            get(crate::settings::web::handler_settings_footer_get)
+                .post(crate::settings::web::handler_settings_footer_post),
+        )
+        .route(
+            "/_settings/network",
+            get(crate::settings::web::handler_settings_network_get)
+                .post(crate::settings::web::handler_settings_network_post),
+        )
+        .route(
+            "/_settings/mirrors-cache",
+            get(crate::settings::web::handler_settings_mirrors_cache_get)
+                .post(crate::settings::web::handler_settings_mirrors_cache_post),
+        )
+        .route(
+            "/_settings/external-mirrors",
+            get(crate::settings::web::handler_settings_external_mirrors_get)
+                .post(crate::settings::web::handler_settings_external_mirrors_post),
+        )
+        .route(
+            "/_settings/oidc",
+            get(crate::settings::web::handler_settings_oidc_get).post(crate::settings::web::handler_settings_oidc_post),
         )
         .route(
             "/_users",

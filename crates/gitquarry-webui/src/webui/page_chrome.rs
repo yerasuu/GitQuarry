@@ -170,7 +170,11 @@ fn title_bar(
 pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> String {
     use gitquarry_i18n::web::chrome;
     let tabs: &[(&str, String, String)] = &[
-        ("settings", "/_settings".to_string(), chrome::settings_tab(locale)),
+        (
+            "settings",
+            "/_settings/footer".to_string(),
+            chrome::settings_tab(locale),
+        ),
         ("users", "/_users".to_string(), chrome::users_tab(locale)),
         ("groups", "/_groups".to_string(), chrome::groups_tab(locale)),
         ("audit", "/_audit".to_string(), chrome::audit_tab(locale)),
@@ -722,7 +726,7 @@ pub fn layout(
                             a href="/_groups" { (chrome::groups_tab(locale)) }
                             (maud::PreEscaped(topnav_auth))
                             " · "
-                            a href="/_settings" { (chrome::settings_tab(locale)) }
+                            a href="/_settings/footer" { (chrome::settings_tab(locale)) }
                             " · "
                             (super::theme_pref::render_theme_toggle(theme))
                             " · "
