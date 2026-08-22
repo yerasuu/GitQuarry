@@ -274,7 +274,7 @@ fn render_pat_page_impl(
                         td { (token.expires_at.as_deref().unwrap_or("—")) }
                         td { (token.last_used_at.as_deref().unwrap_or("—")) }
                         td {
-                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#pat-body" {
+                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#pat-body" data-confirm=(t::revoke_confirm(locale, &token.label)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="action" value="revoke";
                                 input type="hidden" name="uid" value=(token.uid.as_str());

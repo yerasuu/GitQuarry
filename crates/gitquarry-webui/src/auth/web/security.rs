@@ -260,7 +260,7 @@ pub fn render_security_page(
 
         (settings_section(&t::password_heading(locale), None, html! {
             p class="muted" { (t::password_purpose_prefix(locale)) code { "/_login" } (t::password_purpose_suffix(locale)) }
-            form method="post" action=(action_url) data-async data-async-target="#security-body" {
+            form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=[has_password.then(|| t::change_password_confirm(locale))] {
                 (PreEscaped(csrf))
                 input type="hidden" name="security_action" value="set_password";
                 // `username` in a hidden field, and `autocomplete` on every
@@ -288,7 +288,7 @@ pub fn render_security_page(
         (settings_section(&t::two_factor_heading(locale), None, html! {
             @if user.totp_enabled {
                 p class="muted" { (t::totp_active_hint(locale)) }
-                form method="post" action=(action_url) data-async data-async-target="#security-body" {
+                form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=(t::disable_totp_confirm(locale)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="security_action" value="disable_totp";
                     (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
@@ -332,7 +332,7 @@ pub fn render_security_page(
                     pre { @for code in codes { (code) "\n" } }
                 }
                 p class="muted" { (t::recovery_codes_remaining_hint(locale, user.totp_recovery_codes.len())) }
-                form method="post" action=(action_url) data-async data-async-target="#security-body" {
+                form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=(t::regenerate_recovery_codes_confirm(locale)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="security_action" value="regenerate_recovery_codes";
                     (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
