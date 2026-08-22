@@ -1,9 +1,10 @@
-//! `?view=activity`: recent commits plus recent repo-scoped events (stars,
-//! forks, settings/permission changes — anything [`gitquarry_core::storage::audit`]
-//! recorded with this repo as `target`) side by side. Same visibility gate
-//! as every other view (`handler_repo` already checked it before
-//! dispatching here) — unlike `/_audit`, this isn't admin-only: it's this
-//! one repo's own activity, not the whole bucket's.
+//! `?view=activity`: recent commits plus recent repo-scoped events (forks,
+//! branch/tag/release/MR lifecycle, settings/permission changes — anything
+//! [`gitquarry_core::storage::audit`] recorded with this repo as `target`,
+//! minus [`LOW_VALUE_ACTIONS`]) side by side. Same visibility gate as every
+//! other view (`handler_repo` already checked it before dispatching here)
+//! — unlike `/_audit`, this isn't admin-only: it's this one repo's own
+//! activity, not the whole bucket's.
 
 use super::components::{commit_avatars, commit_table};
 use anyhow::Result;
@@ -20,6 +21,39 @@ use std::path::Path as FsPath;
 /// point is "what's been happening lately", not a short preview.
 const ACTIVITY_LOG_LIMIT: usize = 30;
 
+/// Excluded from the activity feed as low-value: `repo.star`/`unstar`/
+/// `watch`/`unwatch` are personal-preference toggles that never change the
+/// repo itself, `mirror.sync` is infra rather than human/content activity
+/// (it's also only ever logged for a manual trigger, never the periodic
+/// background job — see `webui::repo_settings::mirrors`'s own call site —
+/// but even a deliberate one is still "an admin poked a sync job", not
+/// "something happened to this repo"), and `merge_request.comment` is
+/// high-volume, low-signal for a quick "what happened here" glance (the MR
+/// itself still shows up via every other `merge_request.*` action). None of
+/// these are dropped from the write path or `/_audit` — only hidden from
+/// this one feed.
+const LOW_VALUE_ACTIONS: &[&str] = &[
+    "repo.star",
+    "repo.unstar",
+    "repo.watch",
+    "repo.unwatch",
+    "mirror.sync",
+    "merge_request.comment",
+];
+
+#[cfg(any(test, feature = "test-util"))]
+pub fn filter_low_value(events: Vec<AuditEntry>) -> Vec<AuditEntry> {
+    filter_low_value_impl(events)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn filter_low_value(events: Vec<AuditEntry>) -> Vec<AuditEntry> {
+    filter_low_value_impl(events)
+}
+fn filter_low_value_impl(mut events: Vec<AuditEntry>) -> Vec<AuditEntry> {
+    events.retain(|e| !LOW_VALUE_ACTIONS.contains(&e.action.as_str()));
+    events
+}
+
 pub(super) async fn render_activity(
     ctx: &AppContext,
     bare_repo: &FsPath,
@@ -29,7 +63,7 @@ pub(super) async fn render_activity(
 ) -> Result<String> {
     let commits = git::browse::log(bare_repo, rev, ACTIVITY_LOG_LIMIT, None).await?;
     let avatars = commit_avatars(ctx, bare_repo, &commits).await;
-    let events = audit::list_recent_for(&ctx.backend(), &ctx.cipher, repo_name).await?;
+    let events = filter_low_value(audit::list_recent_for(&ctx.backend(), &ctx.cipher, repo_name).await?);
 
     Ok(html! {
         h3 { (t::recent_commits_heading(locale)) }

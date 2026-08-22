@@ -545,10 +545,21 @@ pub struct ConfPatch {
 }
 
 /// Re-reads the etag right before writing so a concurrent edit CAS-fails
-/// instead of being silently overwritten.
-pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatch) -> Result<Cas> {
+/// instead of being silently overwritten. The `bool` half of the return is
+/// whether `patch` actually differs from what was already stored — a
+/// resubmit of an unchanged form still writes (same CAS-freshness reasoning
+/// as any other save) but isn't real activity, so `webui::repo_settings`
+/// skips the audit-log entry for it (`activity`'s own repo-activity feed
+/// would otherwise be mostly "saved general settings" noise from people just
+/// reopening and resaving the form).
+pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatch) -> Result<(Cas, bool)> {
     let (current, etag) = resolved.remote.get_repo_config().await?;
     let old_owner = current.owner.clone();
+    let changed = patch.description != current.description
+        || patch.owner != current.owner
+        || patch.visibility != current.visibility
+        || patch.archived != current.archived
+        || patch.is_template != current.is_template;
     let config = RepoConfig {
         description: patch.description,
         owner: patch.owner,
@@ -582,7 +593,7 @@ pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatc
         )
         .await;
     }
-    Ok(cas)
+    Ok((cas, changed))
 }
 
 /// The default branch isn't cosmetic metadata: it's `Manifest::head` (not

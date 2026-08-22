@@ -47,19 +47,21 @@ pub(super) async fn save_conf(
         is_template,
     };
     Ok(match domain::repo::set_conf(ctx, resolved, patch).await? {
-        Cas::Ok => {
-            gitquarry_core::storage::audit::record(
-                ctx.backend().as_ref(),
-                &ctx.cipher,
-                actor,
-                "repo.set_conf",
-                name,
-                Some(format!("archived={archived} is_template={is_template}")),
-            )
-            .await;
+        (Cas::Ok, changed) => {
+            if changed {
+                gitquarry_core::storage::audit::record(
+                    ctx.backend().as_ref(),
+                    &ctx.cipher,
+                    actor,
+                    "repo.set_conf",
+                    name,
+                    Some(format!("archived={archived} is_template={is_template}")),
+                )
+                .await;
+            }
             FlashOutcome::Ok("saved to the bucket.")
         }
-        Cas::Conflict => FlashOutcome::Conflict,
+        (Cas::Conflict, _) => FlashOutcome::Conflict,
     })
 }
 
