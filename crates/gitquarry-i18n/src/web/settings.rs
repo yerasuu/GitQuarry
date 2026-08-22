@@ -1,6 +1,6 @@
-//! `settings::web`'s page copy.
+//! `webui::settings::web`'s page copy.
 
-use gitquarry_i18n::{Locale, msg};
+use super::super::{Locale, msg};
 
 msg!(settings_saved_in_bucket_prefix() {
     Locale::Es => "Guardado en ",

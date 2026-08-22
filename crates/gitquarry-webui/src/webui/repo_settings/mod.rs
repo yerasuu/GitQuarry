@@ -157,7 +157,7 @@ async fn require_repo_authority(
         return Ok(Some(
             AppError::forbidden(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::bootstrap_grant_required(locale)
+                gitquarry_i18n::shared::settings::bootstrap_grant_required(locale)
             ))
             .into_response(),
         ));
@@ -184,7 +184,7 @@ async fn require_repo_authority(
     Ok(Some(
         AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::insufficient_repo_permission(locale)
+            gitquarry_i18n::shared::repo::insufficient_repo_permission(locale)
         ))
         .into_response(),
     ))
@@ -205,7 +205,7 @@ pub(crate) async fn handler_repo_conf_post(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     };
     let users = access::list_all_users(&ctx.backend(), &ctx.cipher).await?;
@@ -217,7 +217,9 @@ pub(crate) async fn handler_repo_conf_post(
 
     let (outcome, pending_mirror_token) = match form.action.as_str() {
         "delete_repo" if form.confirm_name.trim() != name => (
-            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name)),
+            FlashOutcome::Invalid(gitquarry_i18n::shared::repo::type_name_to_confirm_deletion(
+                locale, &name,
+            )),
             None,
         ),
         "delete_repo" => {
@@ -234,7 +236,9 @@ pub(crate) async fn handler_repo_conf_post(
             return Ok(Redirect::to("/").into_response());
         }
         "purge_repo" if form.confirm_name.trim() != name => (
-            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name)),
+            FlashOutcome::Invalid(gitquarry_i18n::shared::repo::type_name_to_confirm_deletion(
+                locale, &name,
+            )),
             None,
         ),
         "purge_repo" => {

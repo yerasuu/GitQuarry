@@ -41,7 +41,7 @@ pub(crate) async fn handler_watch_post(
     let Some(resolved) = ctx.resolve_repo(&repo).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &repo)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &repo)
         )));
     };
     // Same leak-guard `auth::web::favorites`' star toggle applies: only gates
@@ -53,7 +53,7 @@ pub(crate) async fn handler_watch_post(
         if !super::repo::can_view_repo(&ctx, &headers, &repo, config.visibility).await? {
             return Err(AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::repo_not_found(locale, &repo)
+                gitquarry_i18n::shared::repo::repo_not_found(locale, &repo)
             )));
         }
     }

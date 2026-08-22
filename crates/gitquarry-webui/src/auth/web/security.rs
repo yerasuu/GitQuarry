@@ -133,7 +133,7 @@ pub(crate) async fn handler_security_post(
                 fail!(e);
             }
             if form.password != form.password_confirm {
-                fail!(crate::auth::i18n::security::password_mismatch(locale));
+                fail!(gitquarry_i18n::web::auth::security::password_mismatch(locale));
             }
             match domain::user::set_password(&ctx, &me.username, non_empty(form.password.clone()).as_deref(), locale)
                 .await
@@ -189,7 +189,7 @@ pub(crate) async fn handler_security_post(
     let (Some(me), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     let content = render_security_page(
@@ -238,7 +238,7 @@ pub fn render_security_page(
     revealed_recovery_codes: Option<&[String]>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     let action_url = "/_account/security";
     // Only asked for where there is something to re-prove: an account with
     // neither a password nor a TOTP secret (an OIDC-only user setting a

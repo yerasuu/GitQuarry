@@ -1,6 +1,6 @@
 //! `webui::repo::merges`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(number_column() { Locale::Es => "#", Locale::En => "#" });
 msg!(title_column() { Locale::Es => "titulo", Locale::En => "title" });

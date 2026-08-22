@@ -1,6 +1,6 @@
-//! `auth::web::profile`'s page copy.
+//! `webui::auth::web::profile`'s page copy.
 
-use gitquarry_i18n::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(no_repos_visible() {
     Locale::Es => "(sin repos visibles)",

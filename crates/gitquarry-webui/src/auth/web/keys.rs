@@ -7,7 +7,7 @@
 //! commits already pushed) — neither is a way to log in, which is what
 //! `security` is now exclusively about (password, 2FA, recovery codes).
 //!
-//! Copy comes from [`crate::auth::i18n::security`] rather than a catalog of
+//! Copy comes from [`gitquarry_i18n::web::auth::security`] rather than a catalog of
 //! its own: the strings didn't change meaning by moving page, and forking
 //! them would mean two ids for one sentence.
 //!
@@ -168,7 +168,7 @@ pub(crate) async fn handler_keys_post(
     else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::user_not_found(locale, &me.username)
+            gitquarry_i18n::shared::auth::user_not_found(locale, &me.username)
         )));
     };
 
@@ -210,7 +210,7 @@ pub(crate) async fn handler_keys_post(
 /// The SSH key table alone, wrapped in a stable `id` so a removal can swap
 /// just this fragment instead of the whole page.
 fn render_ssh_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="ssh-keys-table" {
             table class="list" {
@@ -242,7 +242,7 @@ fn render_ssh_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
 /// is already stored on `GpgKeyEntry` (see its own doc comment): nothing
 /// here calls into `crate::gpg` at all, this is a plain sync render.
 fn render_gpg_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="gpg-keys-table" {
             table class="list" {
@@ -278,7 +278,7 @@ fn render_keys_page(user: &User, csrf: &str, message: Option<Flash>, locale: git
 }
 
 fn render_keys_page_impl(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     // Only asked for where there is something to re-prove: an account with
     // neither a password nor a TOTP secret has no second factor, and
     // demanding one would lock it out of ever acquiring a key.

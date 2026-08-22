@@ -26,7 +26,7 @@ async fn resolve_visible_repo(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     };
     let (config, _etag) = resolved.remote.get_repo_config().await?;
@@ -35,7 +35,7 @@ async fn resolve_visible_repo(
         // is merely hidden vs. genuinely absent.
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     }
     Ok((name, resolved))
@@ -54,7 +54,7 @@ async fn resolve_mirror_and_default_rev(
     let Some(head) = git::browse::resolve_head(&mirror.path).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_has_no_commits(locale, name)
+            gitquarry_i18n::shared::repo::repo_has_no_commits(locale, name)
         )));
     };
     let default_rev = head.strip_prefix("refs/heads/").unwrap_or(&head).to_string();

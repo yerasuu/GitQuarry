@@ -1,6 +1,6 @@
 //! `webui::repo::compare`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(compare_heading() { Locale::Es => "comparar ", Locale::En => "compare " });
 msg!(no_new_commits() { Locale::Es => "sin commits nuevos.", Locale::En => "no new commits." });

@@ -23,7 +23,7 @@ use gitquarry_core::git;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::validate;
 use gitquarry_domain::release;
-use gitquarry_i18n::web::repo_releases as t;
+use gitquarry_i18n::web::repo::releases as t;
 use maud::{Markup, PreEscaped, html};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -281,7 +281,7 @@ pub async fn render_release_detail(
     if etag.is_none() || (release.is_draft && !can_write) {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::release_not_found(locale, tag)
+            gitquarry_i18n::shared::release::release_not_found(locale, tag)
         )));
     }
 
@@ -375,7 +375,7 @@ async fn require_write_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let perm =
@@ -384,7 +384,7 @@ async fn require_write_target(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok((resolved, name))
@@ -490,7 +490,9 @@ pub(crate) async fn handler_create_post(
         Err(e) => fail!(e.to_string()),
     };
     if cas == Cas::Conflict {
-        fail!(gitquarry_i18n::shared::release_already_exists_for_tag(locale, tag));
+        fail!(gitquarry_i18n::shared::release::release_already_exists_for_tag(
+            locale, tag
+        ));
     }
 
     gitquarry_core::storage::audit::record(
@@ -726,7 +728,7 @@ pub(crate) async fn handler_upload_asset_post(
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_multipart(locale, e)
+            gitquarry_i18n::shared::release::invalid_multipart(locale, e)
         ))
     })? {
         match field.name() {
@@ -763,7 +765,7 @@ pub(crate) async fn handler_upload_asset_post(
                     .map_err(|e| {
                         AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::creating_temp_file(locale, e)
+                            gitquarry_i18n::shared::release::creating_temp_file(locale, e)
                         ))
                     })?
                     .into_temp_path();
@@ -771,13 +773,16 @@ pub(crate) async fn handler_upload_asset_post(
                 let mut hasher = Sha256::new();
                 let mut size: u64 = 0;
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    AppError::bad_request(anyhow::anyhow!("{}", gitquarry_i18n::shared::reading_file(locale, e)))
+                    AppError::bad_request(anyhow::anyhow!(
+                        "{}",
+                        gitquarry_i18n::shared::release::reading_file(locale, e)
+                    ))
                 })? {
                     size += chunk.len() as u64;
                     if size > MAX_ASSET_UPLOAD_BYTES {
                         return Err(AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::asset_too_large(locale, MAX_ASSET_UPLOAD_BYTES)
+                            gitquarry_i18n::shared::release::asset_too_large(locale, MAX_ASSET_UPLOAD_BYTES)
                         )));
                     }
                     hasher.update(&chunk);
@@ -797,7 +802,7 @@ pub(crate) async fn handler_upload_asset_post(
     let (filename, tmp_path, size, sha256) = uploaded.ok_or_else(|| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::missing_file_to_upload(locale)
+            gitquarry_i18n::shared::release::missing_file_to_upload(locale)
         ))
     })?;
     let tag = tag.trim();

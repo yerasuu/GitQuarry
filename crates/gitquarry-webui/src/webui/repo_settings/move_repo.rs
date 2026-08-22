@@ -33,25 +33,30 @@ pub(super) async fn move_repo(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Result<String, String>, AppError> {
     if form.confirm_name.trim() != name {
-        return Ok(Err(gitquarry_i18n::shared::type_name_to_confirm_move(locale, name)));
+        return Ok(Err(gitquarry_i18n::shared::repo::type_name_to_confirm_move(
+            locale, name,
+        )));
     }
     let new_namespace = form.new_namespace.trim();
     let Some(new_owner) = domain::repo::resolve_owner_ref(ctx, new_namespace).await? else {
-        return Ok(Err(gitquarry_i18n::shared::namespace_not_found(locale, new_namespace)));
+        return Ok(Err(gitquarry_i18n::shared::repo::namespace_not_found(
+            locale,
+            new_namespace,
+        )));
     };
     let new_name = match validate::sanitize_path(&format!("{new_namespace}/{}", form.new_local_name)) {
         Ok(new_name) => new_name,
         Err(e) => return Ok(Err(e.to_string())),
     };
     if new_name == name {
-        return Ok(Err(gitquarry_i18n::shared::destination_is_same_repo(locale)));
+        return Ok(Err(gitquarry_i18n::shared::repo::destination_is_same_repo(locale)));
     }
 
     let renamed = match domain::repo::rename(ctx, resolved, name, &new_name, new_owner, locale).await {
         Ok(renamed) => renamed,
         Err(e) => return Ok(Err(e.to_string())),
     };
-    Ok(renamed.ok_or_else(|| gitquarry_i18n::shared::repo_already_exists_at(locale, &new_name)))
+    Ok(renamed.ok_or_else(|| gitquarry_i18n::shared::repo::repo_already_exists_at(locale, &new_name)))
 }
 
 /// Same `<option>` list of existing usernames/groups the owner-transfer

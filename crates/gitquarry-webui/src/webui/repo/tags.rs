@@ -20,7 +20,7 @@ use gitquarry_core::domain;
 use gitquarry_core::git;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::validate;
-use gitquarry_i18n::web::repo_refs as t;
+use gitquarry_i18n::web::repo::refs as t;
 
 /// Resolves `repo` and checks `me` has at least `Write` on it — same gate
 /// and same "the actual mutation stays re-checked here, not just at the
@@ -37,7 +37,7 @@ async fn require_write_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let perm =
@@ -46,7 +46,7 @@ async fn require_write_target(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok((resolved, name))

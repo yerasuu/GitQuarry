@@ -12,8 +12,8 @@ use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::git;
 use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_components as ct;
-use gitquarry_i18n::web::repo_refs as t;
+use gitquarry_i18n::web::repo::components as ct;
+use gitquarry_i18n::web::repo::refs as t;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 

@@ -4,7 +4,7 @@ use super::STATS_LOG_LIMIT;
 use anyhow::Result;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_stats as t;
+use gitquarry_i18n::web::repo::stats as t;
 use maud::{Markup, html};
 use std::collections::BTreeMap;
 use std::path::Path as FsPath;

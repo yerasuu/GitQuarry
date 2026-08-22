@@ -1,6 +1,6 @@
 //! `webui::repo::log`'s page copy.
 
-use super::super::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(search_commit_messages_placeholder() {
     Locale::Es => "buscar en mensajes de commit",

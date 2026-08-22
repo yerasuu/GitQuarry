@@ -169,7 +169,7 @@ pub fn render_profile(
     html! {
         h3 { (identicon::account_avatar(username, avatar_content_type)) (username) }
         @if is_own_profile {
-            p class="muted" { a href="/_account/profile" { (crate::auth::i18n::profile::account_settings_link(locale)) } }
+            p class="muted" { a href="/_account/profile" { (gitquarry_i18n::web::auth::profile::account_settings_link(locale)) } }
         }
         @if let Some(description) = description {
             p class="muted" { (description) }
@@ -182,7 +182,7 @@ pub fn render_profile(
         table class="list" {
             tr { th { "repo" } th { "description" } }
             @if repos.is_empty() {
-                tr { td colspan="2" { em { (crate::auth::i18n::profile::no_repos_visible(locale)) } } }
+                tr { td colspan="2" { em { (gitquarry_i18n::web::auth::profile::no_repos_visible(locale)) } } }
             }
             @for (name, config) in repos {
                 tr {

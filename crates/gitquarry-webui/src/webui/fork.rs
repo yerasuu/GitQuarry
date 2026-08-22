@@ -66,7 +66,7 @@ async fn resolve_dest_owner(
     let Some(group) = group else {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_namespace(locale, namespace)
+            gitquarry_i18n::shared::repo::invalid_namespace(locale, namespace)
         )));
     };
     Ok(OwnerRef::Group(group.uid))
@@ -103,7 +103,7 @@ async fn fork_error_page(
                 }
             }
             input name="name" size="20" value=(name);
-            button type="submit" class="btn" { (crate::webui::icons::fork()) " " (gitquarry_i18n::web::repo_summary::fork_button(locale)) }
+            button type="submit" class="btn" { (crate::webui::icons::fork()) " " (gitquarry_i18n::web::repo::summary::fork_button(locale)) }
         }
     }
     .into_string();
@@ -136,7 +136,7 @@ pub(crate) async fn handler_fork_post(
     let Some(source_resolved) = ctx.resolve_repo(&source).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &source)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &source)
         )));
     };
     let (source_config, _etag) = source_resolved.remote.get_repo_config().await?;
@@ -145,14 +145,14 @@ pub(crate) async fn handler_fork_post(
     if !super::repo::can_view_repo(&ctx, &headers, &source, source_config.visibility).await? {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &source)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &source)
         )));
     }
 
     let dest_owner = match resolve_dest_owner(&ctx, &me, namespace, locale).await {
         Ok(owner) => owner,
         Err(_) => {
-            let msg = gitquarry_i18n::shared::invalid_namespace(locale, namespace);
+            let msg = gitquarry_i18n::shared::repo::invalid_namespace(locale, namespace);
             return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
         }
     };
@@ -161,11 +161,11 @@ pub(crate) async fn handler_fork_post(
         Err(e) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &e.to_string()).await,
     };
     if dest == source {
-        let msg = gitquarry_i18n::shared::destination_is_same_repo(locale);
+        let msg = gitquarry_i18n::shared::repo::destination_is_same_repo(locale);
         return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
     }
     let Some(_dest_resolved) = domain::repo::fork(&ctx, &source_resolved, &dest, dest_owner, locale).await? else {
-        let msg = gitquarry_i18n::shared::repo_already_exists_at(locale, &dest);
+        let msg = gitquarry_i18n::shared::repo::repo_already_exists_at(locale, &dest);
         return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
     };
 

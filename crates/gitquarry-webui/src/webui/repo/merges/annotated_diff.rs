@@ -12,7 +12,7 @@ use crate::webui::{csrf_field, repo_link, url_encode};
 use axum::http::HeaderMap;
 use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MrComment};
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_merges as t;
+use gitquarry_i18n::web::repo::merges as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashSet;
 

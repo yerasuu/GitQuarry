@@ -1,6 +1,6 @@
-//! `auth::web::appearance`'s page copy.
+//! `webui::auth::web::appearance`'s page copy.
 
-use gitquarry_i18n::{Locale, msg};
+use super::super::super::{Locale, msg};
 
 msg!(text_size_heading() { Locale::Es => "tamaño de texto", Locale::En => "text size" });
 msg!(text_size_description() {

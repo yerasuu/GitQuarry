@@ -316,7 +316,7 @@ async fn apply_groups_action(
             if !me.is_admin {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::only_admin_creates_groups(locale)
+                    gitquarry_i18n::shared::auth::only_admin_creates_groups(locale)
                 )));
             }
             let name = form.name.trim();
@@ -325,13 +325,13 @@ async fn apply_groups_action(
                 Ok(cas) => cas,
                 Err(e) => return Ok(Err(e.to_string())),
             };
-            Ok(cas.ok_or_else(|| gitquarry_i18n::shared::name_already_taken(locale, name)))
+            Ok(cas.ok_or_else(|| gitquarry_i18n::shared::auth::name_already_taken(locale, name)))
         }
         "delete_group" => {
             if !me.is_admin {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::only_admin_deletes_groups(locale)
+                    gitquarry_i18n::shared::auth::only_admin_deletes_groups(locale)
                 )));
             }
             domain::group::delete(ctx, &form.name).await?;
@@ -346,12 +346,12 @@ async fn apply_groups_action(
             if !me.is_admin {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::only_admin_sets_storage_quota(locale)
+                    gitquarry_i18n::shared::auth::only_admin_sets_storage_quota(locale)
                 )));
             }
             let (group, etag) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, &form.name).await?;
             let Some(mut group) = group else {
-                return Ok(Err(gitquarry_i18n::shared::group_not_found(locale, &form.name)));
+                return Ok(Err(gitquarry_i18n::shared::auth::group_not_found(locale, &form.name)));
             };
             let raw = form.storage_quota.trim();
             let quota_bytes = if raw.is_empty() {
@@ -376,12 +376,12 @@ async fn apply_groups_action(
             if !access::can_manage_group_for(ctx.backend().as_ref(), &ctx.cipher, &me.username, &form.name).await? {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::you_dont_manage_group(locale, &form.name)
+                    gitquarry_i18n::shared::auth::you_dont_manage_group(locale, &form.name)
                 )));
             }
             let (group, etag) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, &form.name).await?;
             let Some(mut group) = group else {
-                return Ok(Err(gitquarry_i18n::shared::group_not_found(locale, &form.name)));
+                return Ok(Err(gitquarry_i18n::shared::auth::group_not_found(locale, &form.name)));
             };
             if let Err(msg) = apply_group_action(ctx, &mut group, form, locale).await {
                 return Ok(Err(msg));
@@ -458,32 +458,32 @@ pub fn render_groups_page(
     let PageChrome { csrf, message, locale } = chrome;
     html! {
         p class="muted" {
-            (crate::auth::i18n::groups::groups_prose_stored_in(locale)) code { ".conf/groups/<name>.json" }
-            (crate::auth::i18n::groups::groups_prose_inside_bucket(locale)) code { "<group>/<repo>" }
-            (crate::auth::i18n::groups::groups_prose_same_shape_as(locale)) code { "<user>/<repo>" }
-            (crate::auth::i18n::groups::groups_prose_access_via_teams(locale))
+            (gitquarry_i18n::web::auth::groups::groups_prose_stored_in(locale)) code { ".conf/groups/<name>.json" }
+            (gitquarry_i18n::web::auth::groups::groups_prose_inside_bucket(locale)) code { "<group>/<repo>" }
+            (gitquarry_i18n::web::auth::groups::groups_prose_same_shape_as(locale)) code { "<user>/<repo>" }
+            (gitquarry_i18n::web::auth::groups::groups_prose_access_via_teams(locale))
             @for (i, p) in PERMISSION_TIERS.iter().enumerate() {
                 @if i > 0 { "/" }
                 code { (permission_label(*p, locale)) }
             }
-            (crate::auth::i18n::groups::groups_prose_to_members_and_owner(locale))
+            (gitquarry_i18n::web::auth::groups::groups_prose_to_members_and_owner(locale))
         }
         (PreEscaped(render_flash(message, locale)))
         form method="get" action="/_groups" {
-            input name="q" value=(q) placeholder=(crate::auth::i18n::groups::groups_search_placeholder(locale));
-            button type="submit" { (crate::auth::i18n::groups::groups_search_button(locale)) }
+            input name="q" value=(q) placeholder=(gitquarry_i18n::web::auth::groups::groups_search_placeholder(locale));
+            button type="submit" { (gitquarry_i18n::web::auth::groups::groups_search_button(locale)) }
         }
 
         (render_groups_list(viewer, is_admin, groups, names, repo_names, csrf, locale))
 
         @if is_admin {
-            h4 { (crate::auth::i18n::groups::groups_create_heading(locale)) }
+            h4 { (gitquarry_i18n::web::auth::groups::groups_create_heading(locale)) }
             form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_group";
-                input name="name" size="30" placeholder=(crate::auth::i18n::groups::groups_name_placeholder(locale));
-                input name="description" size="40" placeholder=(crate::auth::i18n::groups::groups_description_placeholder(locale));
-                button type="submit" { (crate::auth::i18n::groups::groups_create_button(locale)) }
+                input name="name" size="30" placeholder=(gitquarry_i18n::web::auth::groups::groups_name_placeholder(locale));
+                input name="description" size="40" placeholder=(gitquarry_i18n::web::auth::groups::groups_description_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::auth::groups::groups_create_button(locale)) }
             }
         }
     }
@@ -519,7 +519,7 @@ fn render_groups_list(
     html! {
         div id="groups-list" {
             @if visible.is_empty() {
-                div class="empty-state" { div class="empty-state-title" { (crate::auth::i18n::groups::groups_empty_hint(locale)) } }
+                div class="empty-state" { div class="empty-state-title" { (gitquarry_i18n::web::auth::groups::groups_empty_hint(locale)) } }
             }
             @for group in &visible {
                 (render_group(group, is_admin, names, repo_names, csrf, locale))
@@ -545,8 +545,8 @@ pub fn render_group(
                 input type="hidden" name="group_action" value="set_description";
                 input type="hidden" name="name" value=(group.name);
                 input name="description" value=(group.description.as_deref().unwrap_or("")) size="60"
-                    placeholder=(crate::auth::i18n::groups::groups_description_placeholder(locale));
-                button type="submit" { (crate::auth::i18n::groups::groups_save_button(locale)) }
+                    placeholder=(gitquarry_i18n::web::auth::groups::groups_description_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::auth::groups::groups_save_button(locale)) }
             }
 
             @if is_admin {
@@ -554,23 +554,23 @@ pub fn render_group(
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value="set_storage_quota";
                     input type="hidden" name="name" value=(group.name);
-                    input name="storage_quota" size="12" placeholder=(crate::auth::i18n::users::storage_quota_placeholder(locale));
+                    input name="storage_quota" size="12" placeholder=(gitquarry_i18n::web::auth::users::storage_quota_placeholder(locale));
                     @if let Some(bytes) = group.storage_quota_bytes {
-                        span class="muted" { (crate::auth::i18n::users::storage_quota_current_prefix(locale)) (gitquarry_domain::commands::repack::human_bytes(bytes)) }
+                        span class="muted" { (gitquarry_i18n::web::auth::users::storage_quota_current_prefix(locale)) (gitquarry_domain::commands::repack::human_bytes(bytes)) }
                     }
-                    button type="submit" { (crate::auth::i18n::users::set_storage_quota_button(locale)) }
+                    button type="submit" { (gitquarry_i18n::web::auth::users::set_storage_quota_button(locale)) }
                 }
             }
 
             table class="list" {
                 tr { th { (gitquarry_i18n::web::chrome::owner_label(locale)) } th {} }
                 @if group.owners.is_empty() {
-                    tr { td colspan="2" { em { (crate::auth::i18n::groups::groups_no_owners_hint(locale)) } } }
+                    tr { td colspan="2" { em { (gitquarry_i18n::web::auth::groups::groups_no_owners_hint(locale)) } } }
                 }
                 @for owner in &group.owners {
                     @match resolve_name(names, owner) {
-                        Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf, locale)),
-                        None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
+                        Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &gitquarry_i18n::web::auth::groups::groups_remove_button(locale), csrf, locale)),
+                        None => tr { td { em { (gitquarry_i18n::shared::auth::user_deleted(locale)) } } td {} },
                     }
                 }
             }
@@ -578,36 +578,36 @@ pub fn render_group(
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_owner";
                 input type="hidden" name="name" value=(group.name);
-                input name="username" size="30" placeholder=(crate::auth::i18n::groups::groups_username_placeholder(locale));
-                button type="submit" { (crate::auth::i18n::groups::groups_add_owner_button(locale)) }
+                input name="username" size="30" placeholder=(gitquarry_i18n::web::auth::groups::groups_username_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::auth::groups::groups_add_owner_button(locale)) }
             }
 
             @for team in &group.teams {
                 (render_team(&group.name, team, names, repo_names, csrf, locale))
             }
-            h4 style="border-bottom:none" { (crate::auth::i18n::groups::groups_new_team_heading(locale)) }
+            h4 style="border-bottom:none" { (gitquarry_i18n::web::auth::groups::groups_new_team_heading(locale)) }
             form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_team";
                 input type="hidden" name="name" value=(group.name);
-                input name="team" size="20" placeholder=(crate::auth::i18n::groups::groups_team_name_placeholder(locale));
+                input name="team" size="20" placeholder=(gitquarry_i18n::web::auth::groups::groups_team_name_placeholder(locale));
                 select name="perm" {
-                    option value="guest" { (crate::auth::i18n::groups::groups_permission_guest(locale)) }
-                    option value="reporter" { (crate::auth::i18n::groups::groups_permission_reporter(locale)) }
-                    option value="developer" selected { (crate::auth::i18n::groups::groups_permission_developer(locale)) }
-                    option value="maintainer" { (crate::auth::i18n::groups::groups_permission_maintainer(locale)) }
-                    option value="owner" { (crate::auth::i18n::groups::groups_permission_owner(locale)) }
+                    option value="guest" { (gitquarry_i18n::web::auth::groups::groups_permission_guest(locale)) }
+                    option value="reporter" { (gitquarry_i18n::web::auth::groups::groups_permission_reporter(locale)) }
+                    option value="developer" selected { (gitquarry_i18n::web::auth::groups::groups_permission_developer(locale)) }
+                    option value="maintainer" { (gitquarry_i18n::web::auth::groups::groups_permission_maintainer(locale)) }
+                    option value="owner" { (gitquarry_i18n::web::auth::groups::groups_permission_owner(locale)) }
                 }
-                input name="repos" size="30" placeholder=(crate::auth::i18n::groups::groups_repos_scope_placeholder(locale));
-                button type="submit" { (crate::auth::i18n::groups::groups_create_team_button(locale)) }
+                input name="repos" size="30" placeholder=(gitquarry_i18n::web::auth::groups::groups_repos_scope_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::auth::groups::groups_create_team_button(locale)) }
             }
 
             @if is_admin {
-                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(crate::auth::i18n::groups::groups_delete_group_confirm(locale, &group.name)) {
+                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_delete_group_confirm(locale, &group.name)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value="delete_group";
                     input type="hidden" name="name" value=(group.name);
-                    button type="submit" { (crate::auth::i18n::groups::groups_delete_group_button(locale)) }
+                    button type="submit" { (gitquarry_i18n::web::auth::groups::groups_delete_group_button(locale)) }
                 }
             }
         }
@@ -626,11 +626,11 @@ const PERMISSION_TIERS: [Permission; 5] = [
 
 fn permission_label(perm: Permission, locale: gitquarry_i18n::Locale) -> String {
     match perm {
-        Permission::Guest => crate::auth::i18n::groups::groups_permission_guest(locale),
-        Permission::Reporter => crate::auth::i18n::groups::groups_permission_reporter(locale),
-        Permission::Developer => crate::auth::i18n::groups::groups_permission_developer(locale),
-        Permission::Maintainer => crate::auth::i18n::groups::groups_permission_maintainer(locale),
-        Permission::Owner => crate::auth::i18n::groups::groups_permission_owner(locale),
+        Permission::Guest => gitquarry_i18n::web::auth::groups::groups_permission_guest(locale),
+        Permission::Reporter => gitquarry_i18n::web::auth::groups::groups_permission_reporter(locale),
+        Permission::Developer => gitquarry_i18n::web::auth::groups::groups_permission_developer(locale),
+        Permission::Maintainer => gitquarry_i18n::web::auth::groups::groups_permission_maintainer(locale),
+        Permission::Owner => gitquarry_i18n::web::auth::groups::groups_permission_owner(locale),
     }
 }
 
@@ -645,7 +645,7 @@ pub fn render_team(
     let perm_label = permission_label(team.permission, locale);
     let group_prefix = format!("{group_name}/");
     let scope = match &team.repos {
-        None => crate::auth::i18n::groups::all_group_repos_scope(locale),
+        None => gitquarry_i18n::web::auth::groups::all_group_repos_scope(locale),
         Some(repos) => repos
             .iter()
             .map(|uid| match resolve_name(repo_names, uid) {
@@ -653,26 +653,26 @@ pub fn render_team(
                 // that set it — `strip_prefix` just undoes the
                 // `format!("{group_name}/{local}")` `parse_team_repos` did.
                 Some(full_name) => full_name.strip_prefix(&group_prefix).unwrap_or(full_name).to_string(),
-                None => gitquarry_i18n::shared::repo_deleted(locale),
+                None => gitquarry_i18n::shared::repo::repo_deleted(locale),
             })
             .collect::<Vec<_>>()
             .join(", "),
     };
     html! {
         h4 {
-            (crate::auth::i18n::groups::groups_team_label_prefix(locale)) (team.name) " "
+            (gitquarry_i18n::web::auth::groups::groups_team_label_prefix(locale)) (team.name) " "
             span class=(crate::webui::permission_badge_class(team.permission)) { (perm_label) }
-            span class="muted" { (crate::auth::i18n::groups::groups_scope_in(locale)) (scope) }
+            span class="muted" { (gitquarry_i18n::web::auth::groups::groups_scope_in(locale)) (scope) }
         }
         table class="list" {
-            tr { th { (crate::auth::i18n::groups::groups_member_column(locale)) } th {} }
+            tr { th { (gitquarry_i18n::web::auth::groups::groups_member_column(locale)) } th {} }
             @if team.members.is_empty() {
-                tr { td colspan="2" { em { (crate::auth::i18n::groups::groups_no_members_hint(locale)) } } }
+                tr { td colspan="2" { em { (gitquarry_i18n::web::auth::groups::groups_no_members_hint(locale)) } } }
             }
             @for member in &team.members {
                 @match resolve_name(names, member) {
-                    Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf, locale)),
-                    None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
+                    Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &gitquarry_i18n::web::auth::groups::groups_remove_button(locale), csrf, locale)),
+                    None => tr { td { em { (gitquarry_i18n::shared::auth::user_deleted(locale)) } } td {} },
                 }
             }
         }
@@ -681,15 +681,15 @@ pub fn render_team(
             input type="hidden" name="group_action" value="add_team_member";
             input type="hidden" name="name" value=(group_name);
             input type="hidden" name="team" value=(team.name);
-            input name="username" size="30" placeholder=(crate::auth::i18n::groups::groups_username_placeholder(locale));
-            button type="submit" { (crate::auth::i18n::groups::groups_add_member_button(locale)) }
+            input name="username" size="30" placeholder=(gitquarry_i18n::web::auth::groups::groups_username_placeholder(locale));
+            button type="submit" { (gitquarry_i18n::web::auth::groups::groups_add_member_button(locale)) }
         }
-        form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(crate::auth::i18n::groups::groups_delete_team_confirm(locale, &team.name)) {
+        form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_delete_team_confirm(locale, &team.name)) {
             (PreEscaped(csrf))
             input type="hidden" name="group_action" value="delete_team";
             input type="hidden" name="name" value=(group_name);
             input type="hidden" name="team" value=(team.name);
-            button type="submit" { (crate::auth::i18n::groups::groups_delete_team_button(locale)) }
+            button type="submit" { (gitquarry_i18n::web::auth::groups::groups_delete_team_button(locale)) }
         }
     }
 }
@@ -712,7 +712,7 @@ fn group_action_row(
         tr {
             td { (label) }
             td {
-                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(crate::auth::i18n::groups::groups_remove_member_confirm(locale, label)) {
+                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_remove_member_confirm(locale, label)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value=(action);
                     input type="hidden" name="name" value=(group_name);

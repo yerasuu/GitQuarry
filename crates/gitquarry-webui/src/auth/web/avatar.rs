@@ -82,21 +82,21 @@ fn render_profile_section_impl(
     message: Option<crate::webui::Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         (PreEscaped(crate::webui::render_flash(message, locale)))
 
-        (settings_section(&crate::auth::i18n::avatar::heading(locale), Some(&crate::auth::i18n::avatar::description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::avatar::heading(locale), Some(&gitquarry_i18n::web::auth::avatar::description(locale)), html! {
             p { (crate::webui::identicon::account_avatar_sized(&user.username, user.avatar_content_type.as_deref(), 48)) }
             form method="post" action="/_account/profile" enctype="multipart/form-data" {
                 (PreEscaped(csrf))
                 input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required;
-                button type="submit" { (crate::auth::i18n::avatar::upload_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::avatar::upload_button(locale)) }
             }
             @if user.avatar_content_type.is_some() {
-                form method="post" action="/_account/profile/delete" data-confirm=(crate::auth::i18n::avatar::remove_avatar_confirm(locale)) {
+                form method="post" action="/_account/profile/delete" data-confirm=(gitquarry_i18n::web::auth::avatar::remove_avatar_confirm(locale)) {
                     (PreEscaped(csrf))
-                    button type="submit" { (crate::auth::i18n::avatar::remove_button(locale)) }
+                    button type="submit" { (gitquarry_i18n::web::auth::avatar::remove_button(locale)) }
                 }
             }
         }))
@@ -126,7 +126,7 @@ fn render_primary_email_section(
     email_self_service: bool,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="primary-email-section" {
             @if email_self_service {
@@ -154,7 +154,7 @@ fn render_primary_email_section(
 /// The secondary-emails table alone, wrapped in a stable `id` so a removal
 /// can swap just this fragment.
 fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="secondary-emails-table" {
             table class="list" {
@@ -284,7 +284,7 @@ pub(crate) async fn handler_emails_post(
     else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
@@ -346,7 +346,7 @@ pub(crate) async fn handler_avatar_upload_post(
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_multipart(locale, e)
+            gitquarry_i18n::shared::release::invalid_multipart(locale, e)
         ))
     })? {
         match field.name() {
@@ -359,12 +359,15 @@ pub(crate) async fn handler_avatar_upload_post(
             Some("avatar") => {
                 let mut buf = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    AppError::bad_request(anyhow::anyhow!("{}", gitquarry_i18n::shared::reading_file(locale, e)))
+                    AppError::bad_request(anyhow::anyhow!(
+                        "{}",
+                        gitquarry_i18n::shared::release::reading_file(locale, e)
+                    ))
                 })? {
                     if buf.len() + chunk.len() > MAX_AVATAR_UPLOAD_BYTES {
                         return Err(AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::asset_too_large(locale, MAX_AVATAR_UPLOAD_BYTES as u64)
+                            gitquarry_i18n::shared::release::asset_too_large(locale, MAX_AVATAR_UPLOAD_BYTES as u64)
                         )));
                     }
                     buf.extend_from_slice(&chunk);
@@ -380,7 +383,7 @@ pub(crate) async fn handler_avatar_upload_post(
     let buf = uploaded.ok_or_else(|| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::missing_file_to_upload(locale)
+            gitquarry_i18n::shared::release::missing_file_to_upload(locale)
         ))
     })?;
     let content_type = validate::sniff_avatar_content_type(&buf).map_err(AppError::bad_request)?;
@@ -391,7 +394,7 @@ pub(crate) async fn handler_avatar_upload_post(
         .map_err(|e| {
             AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::creating_temp_file(locale, e)
+                gitquarry_i18n::shared::release::creating_temp_file(locale, e)
             ))
         })?
         .into_temp_path();

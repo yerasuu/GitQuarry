@@ -19,7 +19,7 @@ use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::domain;
 use gitquarry_core::storage::merge_requests::{MrReview, MrStatus, ReviewVerdict};
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_merges as t;
+use gitquarry_i18n::web::repo::merges as t;
 use maud::{Markup, PreEscaped, html};
 
 fn status_label(status: MrStatus, locale: Locale) -> String {
@@ -622,7 +622,7 @@ async fn render_merge_detail_impl(
     let Some(mr) = domain::merge_request::get(ctx, target, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::merge_request_not_found(locale, number)
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
         )));
     };
     let can_manage = can_manage(ctx, headers, repo_name, &mr.author).await?;

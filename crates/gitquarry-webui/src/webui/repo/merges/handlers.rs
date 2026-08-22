@@ -43,7 +43,7 @@ async fn resolve_target(
     let not_found = || {
         AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         ))
     };
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
@@ -71,7 +71,7 @@ async fn require_manage_permission(
     let Some(mr) = domain::merge_request::get(ctx, target, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::merge_request_not_found(locale, number)
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
         )));
     };
     if mr.author == me.username {
@@ -83,7 +83,7 @@ async fn require_manage_permission(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok(())
@@ -218,7 +218,7 @@ async fn async_mr_actions_response(
     let Some(mr) = domain::merge_request::get(ctx, resolved, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::merge_request_not_found(locale, number)
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
         )));
     };
     let can_manage = super::can_manage(ctx, headers, repo_name, &mr.author).await?;
@@ -615,7 +615,7 @@ async fn require_developer_permission(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok(())
