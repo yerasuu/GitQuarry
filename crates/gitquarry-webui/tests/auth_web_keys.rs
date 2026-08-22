@@ -34,6 +34,25 @@ fn base_user() -> User {
     }
 }
 
+/// Regression: `add_pubkey`/`add_gpg_key` each target their own table's
+/// `id`, same as the `remove_*` forms `render_ssh_keys_table`/
+/// `render_gpg_keys_table` already emit — see `handler_keys_post`'s own
+/// doc comment on why (a page-level fragment swapped into a table-only
+/// target would corrupt the DOM). Losing either attribute quietly brings
+/// back the browser's "confirm resubmission" dialog on F5.
+#[test]
+fn add_forms_target_their_own_table() {
+    let html = render_keys_page(&base_user(), "tok", None, gitquarry_i18n::Locale::En).into_string();
+    assert!(
+        html.contains(r##"data-async data-async-target="#ssh-keys-table""##),
+        "{html}"
+    );
+    assert!(
+        html.contains(r##"data-async data-async-target="#gpg-keys-table""##),
+        "{html}"
+    );
+}
+
 #[test]
 fn gpg_keys_section_shows_hint_when_empty() {
     let html = render_keys_page(&base_user(), "tok", None, gitquarry_i18n::Locale::En).into_string();
