@@ -44,6 +44,17 @@ on a per-release versioning scheme.
   engine (maud) across the entire UI.
 - Site footer carrying the copyright, the licence and the running version,
   linking to the changelog the binary itself was built from (`/_changelog`).
+- Instance-level source-link setting shown in the footer.
+- Repo index page: a stats strip, an activity/clone sidebar with a
+  browse-by-topic list, a per-card ssh clone hint, and a card/compact-table
+  density toggle. New-repo button next to the search form; pickaxe logo mark
+  and a real groups link on the sticky topbar.
+- Home page's recent-activity rail now describes push/release/MR events
+  instead of raw repo names, and shows each repo's last-push time — a merge
+  landing on the default branch now counts as a push there too.
+- Settings, account, admin and destructive actions (deletes, MR close/merge)
+  ask for confirmation before submitting, and submit without a full page
+  reload.
 
 ## Internationalization
 
@@ -175,7 +186,8 @@ on a per-release versioning scheme.
   instead of the proxy's own. Off unless the proxy owns that header.
 - `gitquarry fsck` to detect stray objects in a repo.
 - `gitquarry repack` to consolidate a repo's packs.
-- Audit log of admin and repo actions.
+- Audit log of admin and repo actions, now including a `repo.push` entry for
+  every real git push, not just webui-driven actions.
 - Idle- and size-based eviction of local repo mirrors.
 - Graceful shutdown.
 - Server settings editable from the web UI and stored in the bucket, with
