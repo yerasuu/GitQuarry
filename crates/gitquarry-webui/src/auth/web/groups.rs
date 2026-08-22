@@ -225,7 +225,27 @@ pub(crate) async fn handler_groups_post(
             Flash::Err(&invalid_msg)
         }
     };
-    let groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
+    let mut groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
+    // A group this same request just created may not show up in the LIST
+    // above yet — `create`'s own transaction already returned `Cas::Ok`
+    // (the object write landed), but the object-store backend's LIST
+    // consistency isn't guaranteed to catch up in the same round trip
+    // (varies by provider). Every other action here mutates a group
+    // already in `groups`, so this only ever matters for `add_group`:
+    // synthesize the row we already know we just wrote instead of trusting
+    // the LIST to have it, so the new group never *looks* like creating it
+    // silently failed.
+    if form.action == "add_group" && !groups.iter().any(|g| g.name == form.name.trim()) {
+        groups.push(Group {
+            uid: Uid::new(),
+            name: form.name.trim().to_string(),
+            description: non_empty(form.description.clone()),
+            owners: Default::default(),
+            teams: Vec::new(),
+            storage_quota_bytes: None,
+        });
+        groups.sort_by(|a, b| a.name.cmp(&b.name));
+    }
     let names = uid_to_username_map(&ctx.backend(), &ctx.cipher).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &groups).await;
     // `action_result` is `Ok` past this point (both error arms above
