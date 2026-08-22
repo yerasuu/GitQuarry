@@ -12,12 +12,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helv
 p { line-height: var(--lh); }
 /* Topbar shares the same palette/weight conventions as table.header/table.tabs
    below instead of its own look, so the chrome reads as one page, not two. */
-#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: relative; z-index: 5; }
+#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: sticky; top: 0; z-index: 5; }
 #topbar .inner { max-width: 70rem; margin: 0 auto; padding: var(--pad-y) var(--pad-x);
                  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
                  row-gap: var(--gap); column-gap: var(--gap); }
 #topbar .brand { font-weight: bold; letter-spacing: var(--letter); font-size: 1.05em; display: inline-flex; align-items: center; gap: var(--gap); }
 #topbar .brand a { color: var(--fg); display: inline-flex; align-items: center; gap: var(--gap); }
+#topbar .brand svg { width: 20px; height: 20px; flex-shrink: 0; fill: var(--accent); }
 #topbar a { color: var(--fg2); transition: color .15s ease; }
 #topbar a:hover { color: var(--accent); }
 #topbar nav { font-size: 0.9em; color: var(--muted); display: inline-flex; align-items: center; gap: 0; }
@@ -203,6 +204,29 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .sidebar-box h4 { margin-top: 0; }
 .sidebar-box table.commit-meta { margin: 0; }
 .sidebar-box p:last-child { margin-bottom: 0; }
+/* `.sidebar-box` also hosts `repo::summary::render_clone_urls`'s `<h3>`
+   verbatim (the index page's own clone widget, `repo::handler_index`) —
+   same margin reset as the `h4` above, so a box built around either
+   heading level sits flush the same way. */
+.sidebar-box h3 { margin-top: 0; }
+/* `repo::handler_index`'s own two sidebar boxes (activity/topics) use this
+   instead of a bare `h4` — a small uppercase muted label, not the global
+   `h4`'s accent-colored underlined heading every other `.sidebar-box`
+   still gets: scoped to its own class so it doesn't reach those. */
+.sidebar-box-title { margin: 0 0 0.6rem; font-size: var(--fs-sm); font-weight: bold; color: var(--muted);
+                      text-transform: uppercase; letter-spacing: 0.04em; border-bottom: none; padding-bottom: 0; }
+/* `repo::handler_index`'s "recent activity" sidebar box — a compact
+   timestamp/target/verb row per audit entry, not `.community-list`'s
+   icon+fact shape (nothing here is a fixed fact, every row is its own
+   event). */
+.index-activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5em; }
+.index-activity li { display: flex; flex-direction: column; gap: 0.1em; font-size: 0.88em; }
+.index-activity .muted { font-size: 0.85em; }
+.index-activity a { font-weight: bold; }
+/* Same sidebar box's "browse by topic" list — `topic_badges` already emits
+   linked `.badge.accent` pills, this just gives them a wrapping row instead
+   of running on as plain inline text. */
+.index-topics { display: flex; flex-wrap: wrap; gap: 0.35em; }
 /* GitHub-style "About"/community box: a compact wrapping row of icon+count
    stats, then a plain vertical list of icon+link facts — no table, no
    "not found" placeholders (`render_sidebar`'s own doc comment on why the
@@ -235,24 +259,96 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .conflict-help { margin-bottom: 1rem; }
 .conflict-help summary { cursor: pointer; color: var(--fg2); }
 .conflict-help pre { margin-top: 0.5em; }
-.repo-cards { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+/* `repo::handler_index`'s terse instance-stats row (repos/namespaces/users/
+   version) — cgit's own plain numeric header, one bordered strip instead of
+   `table.header`'s title-row shape since there's no one repo here to name. */
+.stats-strip { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: var(--radius);
+               background: var(--surface); margin-bottom: 1rem; overflow: hidden; }
+.stats-strip .stat { flex: 1; min-width: 6em; padding: var(--pad-y) var(--pad-x); border-right: 1px solid var(--border); }
+.stats-strip .stat:last-child { border-right: none; }
+.stats-strip .n { font-weight: bold; font-size: 1.3em; font-variant-numeric: tabular-nums; }
+.stats-strip .l { color: var(--muted); font-size: var(--fs-sm); margin-top: 0.15em; }
+/* The index page's search form + `.btn` "new repo" link, side by side —
+   `.btn`/`button` themselves are styler's own (accent fill), this only
+   supplies the row layout neither has on its own. */
+.controls-row { display: flex; align-items: center; gap: var(--gap); margin-bottom: 0.9rem; flex-wrap: wrap; }
+.controls-row form { display: flex; gap: 0.4em; flex: 1; min-width: 220px; }
+.controls-row form input { flex: 1; }
+/* Same literal size as the search button beside it (`form button`'s own
+   16px/`--pad-y-sm`/`--pad-x-sm`/`--radius-sm`) instead of `.btn`'s own
+   (styler's `--comp-*` sizing) — two buttons on one row read as mismatched
+   otherwise, even though both are "a button". Only size overridden: the
+   accent fill/color stay `.btn`'s own. */
+.controls-row a.btn { font-size: 16px; padding: var(--pad-y-sm) var(--pad-x-sm); border-radius: var(--radius-sm); }
+/* Index page repo listing has two markups always rendered
+   (`repo::handler_index`), CSS picking which one shows — same
+   `[data-density='airy']`-driven swap `.header-lang`/`.sidebar-lang` above
+   already use for this axis, just applied to the whole listing instead of
+   one block within it. Dense (the `:root` default, no attribute) gets the
+   cgit-flavored `.repo-list-compact` table; airy gets these cards. */
+.repo-cards { display: none; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+:root[data-density='airy'] .repo-cards { display: flex; }
+:root[data-density='airy'] .repo-list-compact { display: none; }
 /* Shell comes from `styler`'s `.card`/`.card-pad` now (markup:
    `class="card card-pad repo-card"`) — `.repo-cards`'s own `gap` above
    already spaces the cards, so `.repo-card` itself only keeps the hover
    feedback `.card` doesn't provide on its own. */
 .repo-card { transition: box-shadow .15s ease, border-color .15s ease; }
 .repo-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); }
-.repo-card-title { font-size: 1.05em; font-weight: bold; }
+/* `flex`/`gap` instead of the markup's own literal " " between link/badge/
+   pills doing the spacing: a flex container drops whitespace-only text
+   nodes from layout entirely, so `gap` alone spaces everything evenly and
+   the literal spaces `repo::handler_index`'s markup still emits go inert
+   rather than doubling up. Also what lets `.clone-url` below push itself
+   to the row's far end via `margin-left: auto`. */
+.repo-card-title { font-size: 1.05em; font-weight: bold; display: flex; align-items: center; flex-wrap: wrap; gap: 0.4em; }
 .repo-card-title a { color: var(--fg); }
 .repo-card-desc { color: var(--fg2); margin: 0.3em 0; }
 .repo-card-meta { display: flex; align-items: center; gap: var(--gap); font-size: 0.85em; color: var(--muted); margin-top: 0.4em; }
 .repo-card-meta .lang-swatch { margin-right: 0.15em; }
+/* Topic pills on the index page (cards, the compact table, and the
+   "browse by topic" sidebar box — everywhere `topic_badges` renders inside
+   these three containers) as an outline pill instead of `.badge.accent`'s
+   own filled one. Scoped to these containers rather than restyling
+   `.badge.accent` itself: that class is also `owner`'s permission-tier
+   badge elsewhere (`.decoration-*`'s own doc comment), which should keep
+   its filled weight. */
+.repo-card-title .badge.accent, .rl-topics .badge.accent, .index-topics .badge.accent {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+}
+/* Per-card ssh clone hint, index cards only (`repo::handler_index`).
+   Hidden below `760px`: at card width there's no room next to a real repo
+   name without wrapping awkwardly. */
+.clone-url { margin-left: auto; font-size: 0.78em; color: var(--muted); background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius-sm); padding: 0.1em 0.5em; display: none; }
+@media (min-width: 760px) { .clone-url { display: inline-block; } }
 /* Section header row above a namespace's repos — same weight as
    `table.list tr.section-header` used, just as a plain block since cards
-   aren't inside a table anymore. */
+   aren't inside a table anymore. Unscoped by density on purpose: it sits
+   between whichever listing is visible either way, so it isn't part of
+   the `.repo-cards`/`.repo-list-compact` swap above. */
 .repo-cards-ns { font-weight: bold; color: var(--muted); font-size: 0.85em; text-transform: uppercase;
                  letter-spacing: 0.03em; margin: 1rem 0 0.3rem; }
 .repo-cards-ns:first-child { margin-top: 0; }
+/* Dense default: a plain bordered table instead of cards, one row per
+   repo — same fields as `.repo-card` (name/archived, description, topics,
+   lang+stars), just laid out to read at a glance across many repos rather
+   than skimmed one card at a time. `.repo-cards-ns` above still separates
+   namespaces, shared with the cards view. */
+.repo-list-compact { display: block; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 1rem; }
+.rl-row { display: grid; grid-template-columns: 1.6fr 2.2fr auto auto; gap: var(--gap); align-items: center;
+          padding: var(--pad-y-sm) var(--pad-x-sm); font-size: 0.92em; border-top: 1px solid var(--border); }
+.rl-row:first-child { border-top: none; }
+.rl-row:hover { background: var(--surface); }
+.rl-name { font-weight: bold; }
+.rl-name a { color: var(--fg); }
+.rl-desc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-topics { display: flex; flex-wrap: wrap; gap: 0.3em; }
+.rl-meta { display: flex; align-items: center; gap: var(--gap); color: var(--muted); font-size: 0.92em; white-space: nowrap; }
+.rl-meta .lang-swatch { margin-right: 0.15em; }
+@media (max-width: 640px) {
+  .rl-row { grid-template-columns: 1fr; row-gap: 0.2em; }
+  .rl-desc { white-space: normal; }
+}
 /* `<details><summary>` action-menu — free click-to-toggle/keyboard support
    from the browser, no JS. Was `#topbar`-scoped ("the only one in this
    pass") until the repo header's ref switcher became a second consumer;

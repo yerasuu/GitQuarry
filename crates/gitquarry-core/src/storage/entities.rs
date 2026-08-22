@@ -69,6 +69,13 @@ pub struct ServerSettings {
     /// so an address check would be a TOCTOU with DNS rebinding behind it.
     #[serde(default, alias = "mirror_allowed_hosts")]
     pub mirror_extra_hosts: Vec<String>,
+    /// The footer's "source" link — either an absolute `http(s)://` URL, or
+    /// a `namespace/name` repo already hosted on this instance (rendered as
+    /// `/namespace/name`). `None` hides the link entirely rather than
+    /// guessing at one: this project's own repo layout (a fork's included)
+    /// varies too much per deployment to default to anything real.
+    #[serde(default)]
+    pub source_link: Option<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol

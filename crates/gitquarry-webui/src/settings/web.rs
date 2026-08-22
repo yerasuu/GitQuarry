@@ -86,6 +86,8 @@ pub(crate) struct SettingsForm {
     #[serde(default)]
     mirror_extra_hosts: String,
     #[serde(default)]
+    source_link: String,
+    #[serde(default)]
     csrf: String,
 }
 
@@ -196,6 +198,7 @@ pub(crate) async fn handler_settings_post(
         oidc_client_secret: oidc_fields.2,
         oidc_redirect_base_url: oidc_fields.3,
         mirror_extra_hosts: mirror_extra_hosts.clone(),
+        source_link: non_empty(form.source_link),
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
     let flash = if let Some(msg) = &validation_error {
@@ -295,6 +298,13 @@ fn settings_body_impl(
         (PreEscaped(render_flash(message, locale)))
         form method="post" action="/_settings" data-async data-async-target="#settings-body" {
             (PreEscaped(csrf))
+            (settings_section(&t::settings_footer_heading(locale), Some(&t::settings_source_link_prose(locale)), html! {
+                div class="field" {
+                    label { (t::settings_source_link_label(locale)) }
+                    input name="source_link" value=(field(&settings.source_link))
+                        placeholder="namespace/name" size="50";
+                }
+            }))
             (settings_section(&t::settings_network_heading(locale), None, html! {
                 div class="field" {
                     label { (t::settings_web_bind_label(locale)) }
