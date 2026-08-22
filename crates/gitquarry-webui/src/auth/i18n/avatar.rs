@@ -9,3 +9,7 @@ msg!(description() {
 });
 msg!(upload_button() { Locale::Es => "subir", Locale::En => "upload" });
 msg!(remove_button() { Locale::Es => "quitar avatar", Locale::En => "remove avatar" });
+msg!(remove_avatar_confirm() {
+    Locale::Es => "¿quitar el avatar?",
+    Locale::En => "remove avatar?",
+});

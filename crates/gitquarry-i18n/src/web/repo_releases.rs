@@ -54,3 +54,11 @@ msg!(delete_release_button() {
     Locale::Es => "eliminar lanzamiento (y sus archivos)",
     Locale::En => "delete release (and its assets)",
 });
+msg!(delete_release_confirm(tag: &str) {
+    Locale::Es => "¿eliminar el lanzamiento '{tag}' y todos sus archivos? no se puede deshacer.",
+    Locale::En => "delete release '{tag}' and all its assets? this cannot be undone.",
+});
+msg!(delete_asset_confirm(filename: &str) {
+    Locale::Es => "¿eliminar el archivo '{filename}'? no se puede deshacer.",
+    Locale::En => "delete asset '{filename}'? this cannot be undone.",
+});

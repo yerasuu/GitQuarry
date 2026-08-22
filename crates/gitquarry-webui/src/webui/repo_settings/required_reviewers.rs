@@ -55,7 +55,7 @@ pub fn render_required_reviewers_form(
     let current = retry.map_or(stored.as_str(), |f| f.required_reviewers.as_str());
     html! {
         (settings_section(&t::required_reviewers_heading(locale), Some(&t::required_reviewers_prose(locale)), html! {
-            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" data-confirm=(t::save_required_reviewers_confirm(locale)) {
                 (PreEscaped(csrf))
                 input type="hidden" name="conf_action" value="set_required_reviewers";
                 input name="required_reviewers" value=(current) size="60" placeholder=(t::required_reviewers_placeholder(locale));

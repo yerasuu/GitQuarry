@@ -37,9 +37,21 @@ msg!(opened_by_middle() { Locale::Es => " el ", Locale::En => " on " });
 msg!(close_button() { Locale::Es => "cerrar", Locale::En => "close" });
 msg!(reopen_button() { Locale::Es => "reabrir", Locale::En => "reopen" });
 msg!(merge_button() { Locale::Es => "fusionar", Locale::En => "merge" });
-msg!(merge_confirm() {
-    Locale::Es => "fusionar este merge request? esta accion no se puede deshacer.",
-    Locale::En => "merge this merge request? this cannot be undone.",
+msg!(merge_confirm(number: u64, title: &str) {
+    Locale::Es => "¿fusionar el merge request #{number} '{title}'? no se puede deshacer.",
+    Locale::En => "merge request #{number} '{title}'? this cannot be undone.",
+});
+msg!(merge_confirm_with_branch_delete(number: u64, title: &str) {
+    Locale::Es => "¿fusionar el merge request #{number} '{title}'? no se puede deshacer. si 'eliminar rama origen' esta marcado, esa rama tambien se borrara.",
+    Locale::En => "merge request #{number} '{title}'? this cannot be undone. if 'delete source branch' is checked, that branch is deleted too.",
+});
+msg!(close_confirm(number: u64, title: &str) {
+    Locale::Es => "¿cerrar el merge request #{number} '{title}'?",
+    Locale::En => "close merge request #{number} '{title}'?",
+});
+msg!(bulk_apply_confirm() {
+    Locale::Es => "¿aplicar esta accion a todos los merge requests seleccionados?",
+    Locale::En => "apply this action to every selected merge request?",
 });
 msg!(merge_strategy_label() { Locale::Es => "estrategia de fusion", Locale::En => "merge strategy" });
 msg!(merge_strategy_merge_option() { Locale::Es => "fusion (merge commit)", Locale::En => "merge commit" });

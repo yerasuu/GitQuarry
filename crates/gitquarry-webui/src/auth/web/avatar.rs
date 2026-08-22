@@ -94,7 +94,7 @@ fn render_profile_section_impl(
                 button type="submit" { (crate::auth::i18n::avatar::upload_button(locale)) }
             }
             @if user.avatar_content_type.is_some() {
-                form method="post" action="/_account/profile/delete" {
+                form method="post" action="/_account/profile/delete" data-confirm=(crate::auth::i18n::avatar::remove_avatar_confirm(locale)) {
                     (PreEscaped(csrf))
                     button type="submit" { (crate::auth::i18n::avatar::remove_button(locale)) }
                 }
@@ -130,7 +130,7 @@ fn render_primary_email_section(
     html! {
         div id="primary-email-section" {
             @if email_self_service {
-                form method="post" action=(EMAIL_ACTION_URL) data-async data-async-target="#primary-email-section" {
+                form method="post" action=(EMAIL_ACTION_URL) data-async data-async-target="#primary-email-section" data-confirm=(t::save_email_confirm(locale)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="email_action" value="set_email";
                     (field(&t::primary_email_label(locale), Some(&t::primary_email_hint(locale)), html! {
@@ -166,7 +166,7 @@ fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n
                     tr {
                         td { (email) }
                         td {
-                            form method="post" action=(EMAIL_ACTION_URL) style="display:inline" data-async data-async-target="#secondary-emails-table" {
+                            form method="post" action=(EMAIL_ACTION_URL) style="display:inline" data-async data-async-target="#secondary-emails-table" data-confirm=(t::remove_secondary_email_confirm(locale, email)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="email_action" value="remove_secondary_email";
                                 input type="hidden" name="secondary_email" value=(email);

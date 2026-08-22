@@ -104,3 +104,7 @@ msg!(settings_redirect_base_url_placeholder() {
 });
 
 msg!(settings_save_button() { Locale::Es => "guardar", Locale::En => "save" });
+msg!(settings_oidc_save_confirm() {
+    Locale::Es => "¿guardar la configuracion OIDC? un valor erroneo puede romper el login para todos hasta corregirlo directamente en el bucket.",
+    Locale::En => "save OIDC config? a bad value can break login for everyone until fixed directly in the bucket.",
+});

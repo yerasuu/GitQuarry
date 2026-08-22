@@ -247,7 +247,7 @@ fn render_asset_table(
                     td { code { (gitquarry_core::validate::short_sha(&asset.sha256)) } }
                     td {
                         @if can_write {
-                            form method="post" action="/_releases/assets/delete" style="display:inline" data-async data-async-target="#asset-table" {
+                            form method="post" action="/_releases/assets/delete" style="display:inline" data-async data-async-target="#asset-table" data-confirm=(t::delete_asset_confirm(locale, &asset.filename)) {
                                 (PreEscaped(csrf_field(headers)))
                                 input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="tag" value=(tag);
@@ -349,7 +349,7 @@ pub async fn render_release_detail(
             }
 
             h4 { (t::delete_release_heading(locale)) }
-            form method="post" action="/_releases/delete" {
+            form method="post" action="/_releases/delete" data-confirm=(t::delete_release_confirm(locale, tag)) {
                 (PreEscaped(csrf_field(headers)))
                 input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);

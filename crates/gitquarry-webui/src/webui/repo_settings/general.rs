@@ -92,7 +92,7 @@ pub fn render_repo_conf_form(
             (t::repo_conf_prose_prefix(locale)) code { (repo_name) "/.conf/config.json" } (t::repo_conf_prose_suffix(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
+        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" data-confirm=(t::save_general_confirm(locale)) {
             (PreEscaped(csrf))
             div class="field" {
                 label { (t::field_label_description(locale)) }

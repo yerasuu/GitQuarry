@@ -36,6 +36,25 @@ fn render(section: &str) -> String {
     .into_string()
 }
 
+/// Regression: 13 sections wrapped badly (or forced `table.tabs`'s own
+/// horizontal scroll) in the old horizontal `project_subnav` row — the
+/// sidebar reuses `account_settings_page`'s own `.settings-layout`/
+/// `.settings-sidebar`/`.settings-content` classes instead (see
+/// `render_settings_section`'s own doc comment), so losing any of them
+/// quietly brings back the old overflow.
+#[test]
+fn sections_render_as_a_sidebar_not_a_horizontal_row() {
+    let html = render("settings_labels");
+    assert!(html.contains(r#"<div class="settings-layout">"#), "{html}");
+    assert!(html.contains(r#"<nav class="settings-sidebar""#), "{html}");
+    assert!(html.contains(r#"<div class="settings-content">"#), "{html}");
+    assert!(!html.contains(r#"<table class="tabs subnav">"#), "{html}");
+    assert!(
+        html.contains(r#"<a class="active" aria-current="page" href="/acme/proj?view=settings_labels">labels</a>"#),
+        "{html}"
+    );
+}
+
 #[test]
 fn sub_nav_lists_every_section_with_its_own_label() {
     let html = render("settings");
