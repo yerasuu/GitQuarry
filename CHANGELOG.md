@@ -49,6 +49,9 @@ on a per-release versioning scheme.
 
 - Full English/Spanish bilingual UI, driven by a locale-aware message and
   template catalog threaded through every page.
+- Per-account default language, set from account settings — the session-only
+  locale override still takes precedence when set, same precedence order as
+  theme/density.
 
 ## Auth & permissions
 
@@ -90,6 +93,10 @@ on a per-release versioning scheme.
 - Editable group description page.
 - Default branch selector, backed by the repo's real HEAD.
 - Delete a repo from its settings tab, confirmed by typing its name.
+- Repo settings reorganized into separate tabs (general, default branch,
+  protected branches/tags, signed commits, topics, required reviewers,
+  labels, LFS limit, permissions, mirrors, move, danger zone) instead of one
+  long stacked page — same treatment account settings already had.
 - Move a repo to a new namespace or name.
 - Archive a repo: archived repos reject pushes and are badged throughout the
   UI.

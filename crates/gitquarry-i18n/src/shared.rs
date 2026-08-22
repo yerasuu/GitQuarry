@@ -585,6 +585,17 @@ msg!(
 );
 
 msg!(
+    /// `auth::web::appearance::handler_appearance_post`'s `set_locale_pref`:
+    /// not one of the 3 accepted values (`""`/`"es"`/`"en"`, the same set
+    /// `gitquarry_i18n::Locale::parse` plus the empty "no pick yet" sentinel
+    /// accepts).
+    invalid_locale(value: &str) {
+        Locale::Es => "idioma invalido: {value}",
+        Locale::En => "invalid locale: {value}",
+    }
+);
+
+msg!(
     /// `webui::require_csrf`: the submitted `csrf` field didn't match this
     /// session's cookie (missing, expired, or a stale form). No `ctx` in
     /// scope here, so this only gets the cookie-override/built-in-default

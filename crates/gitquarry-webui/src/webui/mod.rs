@@ -189,7 +189,7 @@ pub(crate) use density_pref::{effective_density, handler_toggle_density};
 pub use page_chrome::layout;
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
-    permission_badge_class, settings_section, tab_links, topic_badges,
+    permission_badge_class, project_subnav, settings_section, tab_links, topic_badges,
 };
 pub(crate) use raw_link::{github_raw_link, raw_link};
 pub(crate) use repo_link::{github_blob_link, repo_link};
@@ -514,13 +514,22 @@ async fn request_cache_middleware(
 ) -> Response {
     let cached: std::sync::Arc<dyn gitquarry_core::storage::Backend> =
         std::sync::Arc::new(s3db::RequestCache::new(std::sync::Arc::clone(&ctx.backend)));
+    // Computed once, up front, rather than lazily like `CURRENT_USER_MEMO`:
+    // `AppError::into_response` (the one caller that actually needs this
+    // task-local, see its own doc comment) has no `HeaderMap` to resolve it
+    // from later, so it has to already be sitting in scope by the time any
+    // handler further down the stack can fail.
+    let locale = locale_pref::effective_locale(&ctx, req.headers()).await;
     // Nested alongside `REQUEST_BACKEND`: `login::CURRENT_USER_MEMO` memoizes
     // `login::current_user`'s decoded result the same "one request, never
     // longer" way, see its own doc comment for why that's safe.
-    crate::auth::web::login::CURRENT_USER_MEMO
+    locale_pref::CURRENT_LOCALE
         .scope(
-            std::cell::RefCell::new(None),
-            gitquarry_core::app::REQUEST_BACKEND.scope(cached, next.run(req)),
+            locale,
+            crate::auth::web::login::CURRENT_USER_MEMO.scope(
+                std::cell::RefCell::new(None),
+                gitquarry_core::app::REQUEST_BACKEND.scope(cached, next.run(req)),
+            ),
         )
         .await
 }
@@ -577,9 +586,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
     );
     headers.insert(
         axum::http::HeaderName::from_static("permissions-policy"),
-        axum::http::HeaderValue::from_static(
-            "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
-        ),
+        axum::http::HeaderValue::from_static("geolocation=(), camera=(), microphone=(), payment=(), usb=()"),
     );
     headers.insert(
         axum::http::HeaderName::from_static("content-security-policy"),

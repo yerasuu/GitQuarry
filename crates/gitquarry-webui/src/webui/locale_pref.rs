@@ -41,3 +41,15 @@ pub(crate) async fn effective_locale(
         None => gitquarry_i18n::Locale::DEFAULT,
     }
 }
+
+tokio::task_local! {
+    /// This request's own [`effective_locale`], scoped by
+    /// `webui::request_cache_middleware` alongside
+    /// [`gitquarry_core::app::REQUEST_BACKEND`]/
+    /// [`crate::auth::web::login::CURRENT_USER_MEMO`]. Exists for
+    /// [`super::error::AppError`]'s `IntoResponse` impl, which -- being a
+    /// sync trait method with no `HeaderMap`/`AppContext` of its own --
+    /// can't call `effective_locale` directly; every other handler still
+    /// calls `effective_locale` itself and has no reason to touch this.
+    pub(crate) static CURRENT_LOCALE: gitquarry_i18n::Locale;
+}

@@ -3,6 +3,10 @@ use gitquarry_webui::auth::web::appearance::*;
 use gitquarry_core::auth::entities::User;
 
 fn user_with_prefs(text_size_default: &str, theme_default: &str) -> User {
+    user_with_locale(text_size_default, theme_default, "")
+}
+
+fn user_with_locale(text_size_default: &str, theme_default: &str, locale_default: &str) -> User {
     User {
         uid: Default::default(),
         username: "alice".to_string(),
@@ -24,7 +28,7 @@ fn user_with_prefs(text_size_default: &str, theme_default: &str) -> User {
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
         totp_last_step: 0,
-        locale_default: String::new(),
+        locale_default: locale_default.to_string(),
         storage_quota_bytes: None,
         avatar_content_type: None,
         secondary_emails: Default::default(),
@@ -54,4 +58,17 @@ fn theme_pref_shows_the_current_default_as_selected() {
     let html =
         render_appearance_page(&user_with_prefs("", "dark"), "tok", None, gitquarry_i18n::Locale::En).into_string();
     assert!(html.contains(r#"<option value="dark" selected>dark</option>"#));
+}
+
+#[test]
+fn locale_pref_shows_the_current_default_as_selected() {
+    let html =
+        render_appearance_page(&user_with_locale("", "", ""), "tok", None, gitquarry_i18n::Locale::En).into_string();
+    assert!(html.contains(r#"<option value="" selected>automatic (uses the site's built-in default)</option>"#));
+    assert!(html.contains(r#"<option value="es">Español</option>"#));
+    assert!(html.contains(r#"<option value="en">English</option>"#));
+
+    let html =
+        render_appearance_page(&user_with_locale("", "", "es"), "tok", None, gitquarry_i18n::Locale::En).into_string();
+    assert!(html.contains(r#"<option value="es" selected>Español</option>"#));
 }
