@@ -48,6 +48,23 @@ fn text_size_pref_shows_the_current_default_as_selected() {
     assert!(html.contains(r#"<option value="lg" selected>large</option>"#));
 }
 
+/// All 4 preference forms share one `#appearance-body` async target so a
+/// submit refreshes the shared flash banner above them, not just its own
+/// form — see `render_appearance_page`'s own doc comment. Regression: a
+/// form that quietly loses `data-async`/its target brings back the
+/// "confirm resubmission" dialog on F5.
+#[test]
+fn every_pref_form_shares_one_async_target() {
+    let html = render_appearance_page(&user_with_prefs("", ""), "tok", None, gitquarry_i18n::Locale::En).into_string();
+    assert!(html.starts_with(r#"<div id="appearance-body">"#), "{html}");
+    assert_eq!(
+        html.matches(r##"data-async data-async-target="#appearance-body""##)
+            .count(),
+        4,
+        "{html}"
+    );
+}
+
 #[test]
 fn theme_pref_shows_the_current_default_as_selected() {
     let html = render_appearance_page(&user_with_prefs("", ""), "tok", None, gitquarry_i18n::Locale::En).into_string();
