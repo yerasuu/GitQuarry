@@ -6,11 +6,21 @@
 //! duplicate-collapse leverage the way `shared` had) and a single file would
 //! grow unmanageably large across ~30 page files.
 //!
-//! `login`/`users`/`groups`/`security`/`profile`/`preferences`/`favorites`
-//! live at `auth::i18n` instead, alongside the `auth::web`
-//! pages they're copy for.
+//! `auth_*`/`search`/`settings` cover `webui::auth::web`/`webui::search::web`/
+//! `webui::settings::web` the same way; everything lives here regardless of
+//! which crate renders it — no i18n catalog is allowed to live outside this
+//! crate.
 
 pub mod audit;
+pub mod auth_appearance;
+pub mod auth_avatar;
+pub mod auth_favorites;
+pub mod auth_groups;
+pub mod auth_login;
+pub mod auth_pat;
+pub mod auth_profile;
+pub mod auth_security;
+pub mod auth_users;
 pub mod chrome;
 pub mod repo_activity;
 pub mod repo_compare;
@@ -24,3 +34,5 @@ pub mod repo_settings;
 pub mod repo_stats;
 pub mod repo_summary;
 pub mod repo_tree;
+pub mod search;
+pub mod settings;

@@ -303,7 +303,7 @@ pub(crate) async fn handler_login(
     let body = html! {
         (login_form(locale, &return_to, "", None, &crate::webui::csrf_token(&anchor)))
         @if ctx.oidc.is_some() {
-            p { a href=(format!("/_login_oidc?return_to={}", url_encode(&return_to))) { (crate::auth::i18n::login::log_in_with_oidc_link(locale)) } }
+            p { a href=(format!("/_login_oidc?return_to={}", url_encode(&return_to))) { (gitquarry_i18n::web::auth_login::log_in_with_oidc_link(locale)) } }
         }
     }
     .into_string();
@@ -346,17 +346,17 @@ fn login_form(
             input type="hidden" name="csrf" value=(csrf);
             input type="hidden" name="return_to" value=(return_to);
             div class=(field_class) {
-                label { (crate::auth::i18n::login::username_label(locale)) }
+                label { (gitquarry_i18n::web::auth_login::username_label(locale)) }
                 input type="text" name="username" size="30" value=(username) autofocus;
             }
             div class=(field_class) {
-                label { (crate::auth::i18n::login::password_label(locale)) }
+                label { (gitquarry_i18n::web::auth_login::password_label(locale)) }
                 input type="password" name="password" size="30";
                 @if let Some(msg) = error {
                     div class="field-error" { (msg) }
                 }
             }
-            p { button type="submit" { (crate::auth::i18n::login::log_in_button(locale)) } }
+            p { button type="submit" { (gitquarry_i18n::web::auth_login::log_in_button(locale)) } }
         }
     }
 }
@@ -502,10 +502,10 @@ pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMa
         form method="post" action="/_login_totp" {
             input type="hidden" name="csrf" value=(csrf);
             div class="field" {
-                label { (crate::auth::i18n::login::code_label(locale)) }
+                label { (gitquarry_i18n::web::auth_login::code_label(locale)) }
                 input name="code" size="10" autofocus;
             }
-            p { button type="submit" { (crate::auth::i18n::login::verify_button(locale)) } }
+            p { button type="submit" { (gitquarry_i18n::web::auth_login::verify_button(locale)) } }
         }
     }
     .into_string();
@@ -970,12 +970,12 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
                 gitquarry_i18n::web::chrome::security_tab(locale),
                 gitquarry_i18n::web::chrome::account_settings_tab(locale),
                 crate::webui::csrf_field(headers),
-                crate::auth::i18n::login::logout_link(locale)
+                gitquarry_i18n::web::auth_login::logout_link(locale)
             )
         }
         None => format!(
             " · <a href=\"/_login\">{}</a>",
-            crate::auth::i18n::login::login_link(locale)
+            gitquarry_i18n::web::auth_login::login_link(locale)
         ),
     }
 }

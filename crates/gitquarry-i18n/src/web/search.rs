@@ -1,6 +1,6 @@
-//! `search::web`'s page copy.
+//! `webui::search::web`'s page copy.
 
-use gitquarry_i18n::{Locale, msg};
+use super::super::{Locale, msg};
 
 msg!(
     search_intro() {

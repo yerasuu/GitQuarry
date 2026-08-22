@@ -239,7 +239,7 @@ fn render_pat_page_impl(
     pending_secret: Option<&str>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::pat as t;
+    use gitquarry_i18n::web::auth_pat as t;
     let action_url = "/_account/pat";
     html! {
       div id="pat-body" {

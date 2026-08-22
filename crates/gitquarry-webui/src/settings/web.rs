@@ -79,7 +79,7 @@ fn login_redirect(return_to: &str) -> Response {
 /// `?view=` split still has to (that split predates per-section routes in
 /// this app and hasn't been revisited yet).
 fn settings_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 5] {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     [
         ("footer", "/_settings/footer", t::settings_footer_heading(locale)),
         ("network", "/_settings/network", t::settings_network_heading(locale)),
@@ -133,7 +133,7 @@ fn field(v: &Option<String>) -> &str {
 /// `p.muted` above every section's own form, same "where does this go"
 /// prose the old single-page layout showed once.
 fn saved_in_bucket_prose(locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     html! {
         p class="muted" {
             (t::settings_saved_in_bucket_prefix(locale)) code { ".conf/global.json" } (t::settings_saved_in_bucket_suffix(locale))
@@ -186,7 +186,7 @@ fn render_footer_page(
     message: Option<Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     html! {
         div id="footer-body" {
             (saved_in_bucket_prose(locale))
@@ -262,7 +262,7 @@ fn render_network_page(
     message: Option<Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     html! {
         div id="network-body" {
             (saved_in_bucket_prose(locale))
@@ -344,7 +344,7 @@ fn render_mirrors_cache_page(
     message: Option<Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     html! {
         div id="mirrors-cache-body" {
             (saved_in_bucket_prose(locale))
@@ -448,7 +448,7 @@ fn render_external_mirrors_page(
     message: Option<Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     html! {
         div id="external-mirrors-body" {
             (saved_in_bucket_prose(locale))
@@ -571,7 +571,7 @@ fn render_oidc_page(
     message: Option<Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::settings::i18n as t;
+    use gitquarry_i18n::web::settings as t;
     html! {
         div id="oidc-body" {
             (saved_in_bucket_prose(locale))

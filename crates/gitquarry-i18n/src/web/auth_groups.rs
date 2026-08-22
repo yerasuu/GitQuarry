@@ -1,6 +1,6 @@
-//! `auth::web::groups`'s page copy.
+//! `webui::auth::web::groups`'s page copy.
 
-use gitquarry_i18n::{Locale, msg};
+use super::super::{Locale, msg};
 
 msg!(all_group_repos_scope() {
     Locale::Es => "todos los repos del grupo",

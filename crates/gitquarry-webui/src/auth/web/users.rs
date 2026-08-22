@@ -377,7 +377,7 @@ pub fn render_users_page(
     q: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth_users as t;
     html! {
         p class="muted" {
             (t::intro_stored_prefix(locale)) code { ".conf/users/<username>.json" } (t::intro_bucket_and_keys(locale))
@@ -446,7 +446,7 @@ fn render_users_list(
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth_users as t;
     html! {
         div id="users-list" {
             @if users.is_empty() {
@@ -465,7 +465,7 @@ pub fn render_user(
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth_users as t;
     html! {
         @let card_target = format!("#user-card-{}", user.username);
         div class="card card-pad user-card" id=(format!("user-card-{}", user.username)) {
@@ -603,7 +603,7 @@ const PERMISSION_TIERS: [Permission; 5] = [
 ];
 
 fn permission_label(perm: Permission, locale: gitquarry_i18n::Locale) -> String {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth_users as t;
     match perm {
         Permission::Guest => t::permission_guest_label(locale),
         Permission::Reporter => t::permission_reporter_label(locale),
@@ -627,7 +627,7 @@ fn repo_perm_row(
     card_target: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth_users as t;
     let perm_label = permission_label(perm, locale);
     html! {
         tr {

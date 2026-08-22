@@ -1,6 +1,6 @@
-//! `auth::web::avatar`'s page copy.
+//! `webui::auth::web::avatar`'s page copy.
 
-use gitquarry_i18n::{Locale, msg};
+use super::super::{Locale, msg};
 
 msg!(heading() { Locale::Es => "avatar", Locale::En => "avatar" });
 msg!(description() {

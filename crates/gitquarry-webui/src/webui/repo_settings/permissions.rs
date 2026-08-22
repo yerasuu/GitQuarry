@@ -129,7 +129,7 @@ pub(super) fn render_perm_grid_fragment(
                                 // Same "admin" badge text already cataloged for
                                 // `auth::web::users`'s own permission table — reused
                                 // here rather than duplicated verbatim.
-                                " " span class="badge accent" { (crate::auth::i18n::users::admin_label(locale)) }
+                                " " span class="badge accent" { (gitquarry_i18n::web::auth_users::admin_label(locale)) }
                             }
                         }
                         td {
