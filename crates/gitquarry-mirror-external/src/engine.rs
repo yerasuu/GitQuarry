@@ -413,6 +413,8 @@ async fn persist_pulled_ref_to_s3(
                     )
                     .await;
                 }
+                gitquarry_core::storage::settings::touch_last_push(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid)
+                    .await;
                 return Ok(());
             }
             Cas::Conflict if attempt < MANIFEST_CAS_MAX_RETRIES => {

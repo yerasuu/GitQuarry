@@ -164,6 +164,17 @@ pub struct RepoConfig {
     /// the actual irreversible wipe this field used to trigger directly.
     #[serde(default)]
     pub deleted_at: Option<u64>,
+    /// Unix seconds of the last successful manifest write — set by
+    /// `storage::settings::touch_last_push`, called from both
+    /// `mirror::hook::run_pre_receive_hook` (a real push) and
+    /// `gitquarry-mirror-external`'s sync engine (a pull landing new refs):
+    /// either one is "this repo's content changed", not just a human push.
+    /// `None` for a repo nothing has ever pushed to. Best-effort like
+    /// [`Self::pack_bytes`] — a write that loses a CAS race here just means
+    /// the home page's "updated" stamp is briefly stale, never wrong in a
+    /// way that matters.
+    #[serde(default)]
+    pub last_push: Option<u64>,
     /// Best-effort running total of this repo's own `.pack` bytes —
     /// incremented alongside each successful pack upload
     /// (`mirror::hook::run_pre_receive_hook`), never decremented from there.
