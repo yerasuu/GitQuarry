@@ -295,12 +295,14 @@ pub(crate) async fn handler_index(
                 @if !recent_activity.is_empty() {
                     div class="card card-pad sidebar-box" {
                         h4 { "recent activity" }
-                        ul class="community-list" {
+                        ul class="index-activity" {
                             @for e in &recent_activity {
                                 li {
-                                    span class="muted" { (e.at) " " }
-                                    a href=(format!("/{}", url_encode(&e.target))) { (e.target) }
-                                    " " span class="muted" { code { (e.action) } }
+                                    span class="muted" { (e.at) }
+                                    span {
+                                        a href=(format!("/{}", url_encode(&e.target))) { (e.target) }
+                                        " " span class="muted" { code { (e.action) } }
+                                    }
                                 }
                             }
                         }
@@ -309,7 +311,7 @@ pub(crate) async fn handler_index(
                 @if !all_topics.is_empty() {
                     div class="card card-pad sidebar-box" {
                         h4 { "browse by topic" }
-                        p { (maud::PreEscaped(super::topic_badges(&all_topics))) }
+                        div class="index-topics" { (maud::PreEscaped(super::topic_badges(&all_topics))) }
                     }
                 }
             }

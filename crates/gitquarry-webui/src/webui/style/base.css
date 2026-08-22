@@ -208,6 +208,18 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    same margin reset as the `h4` above, so a box built around either
    heading level sits flush the same way. */
 .sidebar-box h3 { margin-top: 0; }
+/* `repo::handler_index`'s "recent activity" sidebar box — a compact
+   timestamp/target/verb row per audit entry, not `.community-list`'s
+   icon+fact shape (nothing here is a fixed fact, every row is its own
+   event). */
+.index-activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5em; }
+.index-activity li { display: flex; flex-direction: column; gap: 0.1em; font-size: 0.88em; }
+.index-activity .muted { font-size: 0.85em; }
+.index-activity a { font-weight: bold; }
+/* Same sidebar box's "browse by topic" list — `topic_badges` already emits
+   linked `.badge.accent` pills, this just gives them a wrapping row instead
+   of running on as plain inline text. */
+.index-topics { display: flex; flex-wrap: wrap; gap: 0.35em; }
 /* GitHub-style "About"/community box: a compact wrapping row of icon+count
    stats, then a plain vertical list of icon+link facts — no table, no
    "not found" placeholders (`render_sidebar`'s own doc comment on why the
