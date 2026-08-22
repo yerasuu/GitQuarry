@@ -565,7 +565,7 @@ pub fn render_group(
                 }
                 @for owner in &group.owners {
                     @match resolve_name(names, owner) {
-                        Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf)),
+                        Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf, locale)),
                         None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
                     }
                 }
@@ -599,7 +599,7 @@ pub fn render_group(
             }
 
             @if is_admin {
-                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" {
+                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(crate::auth::i18n::groups::groups_delete_group_confirm(locale, &group.name)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value="delete_group";
                     input type="hidden" name="name" value=(group.name);
@@ -667,7 +667,7 @@ pub fn render_team(
             }
             @for member in &team.members {
                 @match resolve_name(names, member) {
-                    Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf)),
+                    Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf, locale)),
                     None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
                 }
             }
@@ -680,7 +680,7 @@ pub fn render_team(
             input name="username" size="30" placeholder=(crate::auth::i18n::groups::groups_username_placeholder(locale));
             button type="submit" { (crate::auth::i18n::groups::groups_add_member_button(locale)) }
         }
-        form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" {
+        form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(crate::auth::i18n::groups::groups_delete_team_confirm(locale, &team.name)) {
             (PreEscaped(csrf))
             input type="hidden" name="group_action" value="delete_team";
             input type="hidden" name="name" value=(group_name);
@@ -695,13 +695,20 @@ pub fn render_team(
 /// action and a different set of hidden fields to carry. Every action on
 /// this page now targets `#groups-list` (see `render_groups_list`'s own
 /// doc comment), so there's nothing left to make optional here.
-fn group_action_row(group_name: &str, action: &str, hidden: &[(&str, &str)], button_label: &str, csrf: &str) -> Markup {
+fn group_action_row(
+    group_name: &str,
+    action: &str,
+    hidden: &[(&str, &str)],
+    button_label: &str,
+    csrf: &str,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
     let label = hidden.last().map(|(_, v)| *v).unwrap_or_default();
     html! {
         tr {
             td { (label) }
             td {
-                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" {
+                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(crate::auth::i18n::groups::groups_remove_member_confirm(locale, label)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value=(action);
                     input type="hidden" name="name" value=(group_name);

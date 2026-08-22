@@ -21,7 +21,15 @@ fn each_section_wraps_the_flash_and_form_in_one_async_target() {
         let html = settings_body(id, &settings, "tok", None, gitquarry_i18n::Locale::En).into_string();
         let wrapper = format!(r#"<div id="{id}-body">"#);
         assert!(html.starts_with(&wrapper), "{id}: {html}");
-        let form = format!(r##"<form method="post" action="{action}" data-async data-async-target="#{id}-body">"##);
+        // `oidc` alone carries `data-confirm` — a bad value there can break
+        // login for everyone, unlike the other four sections.
+        let form = if *id == "oidc" {
+            format!(
+                r##"<form method="post" action="{action}" data-async data-async-target="#{id}-body" data-confirm="save OIDC config? a bad value can break login for everyone until fixed directly in the bucket.">"##
+            )
+        } else {
+            format!(r##"<form method="post" action="{action}" data-async data-async-target="#{id}-body">"##)
+        };
         assert!(html.contains(&form), "{id}: missing {form:?} in {html}");
     }
 }

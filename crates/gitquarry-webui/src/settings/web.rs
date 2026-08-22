@@ -583,7 +583,7 @@ fn render_oidc_page(
                     a href="/_users" { "/_users" } (t::settings_oidc_intro_see(locale)) code { "private" } (t::settings_oidc_intro_private(locale))
                     a href="/_users" { "/_users" } (t::settings_oidc_intro_see_there(locale))
                 }
-                form method="post" action="/_settings/oidc" data-async data-async-target="#oidc-body" {
+                form method="post" action="/_settings/oidc" data-async data-async-target="#oidc-body" data-confirm=(t::settings_oidc_save_confirm(locale)) {
                     (PreEscaped(csrf))
                     div class="field" {
                         label { (t::settings_issuer_url_label(locale)) }
