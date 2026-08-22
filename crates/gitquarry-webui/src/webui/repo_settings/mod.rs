@@ -630,6 +630,10 @@ pub struct RepoState<'a> {
 /// `pub`, same cross-crate-test reason as [`Namespaces`].
 pub struct PageChrome<'a> {
     pub csrf: &'a str,
+    // `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash`
+    // goes `pub(crate)` outside that config, which is what makes plain
+    // `cargo check` flag this field as exposing a private type.
+    #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
     pub message: Option<Flash<'a>>,
     /// `Some((mirror_id, token))` for exactly one response: right after
     /// `add_mirror`/`edit_mirror` sets a token, never on a later page load
