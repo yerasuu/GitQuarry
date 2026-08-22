@@ -149,9 +149,9 @@ pub(super) async fn render_about(
             div class="repo-layout" {
                 div class="repo-main" {
                     p {
-                        a href=(raw_link("snapshot", repo_name, rev).fmt("tar.gz").to_string()) { (gitquarry_i18n::shared::snapshot_tar_gz(locale)) }
+                        a href=(raw_link("snapshot", repo_name, rev).fmt("tar.gz").to_string()) { (gitquarry_i18n::shared::repo::snapshot_tar_gz(locale)) }
                         " · "
-                        a href=(raw_link("snapshot", repo_name, rev).fmt("zip").to_string()) { (gitquarry_i18n::shared::snapshot_zip(locale)) }
+                        a href=(raw_link("snapshot", repo_name, rev).fmt("zip").to_string()) { (gitquarry_i18n::shared::repo::snapshot_zip(locale)) }
                     }
                     @if let Some(source_name) = &forked_from_name {
                         p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_name) } }

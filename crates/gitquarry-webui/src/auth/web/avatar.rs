@@ -284,7 +284,7 @@ pub(crate) async fn handler_emails_post(
     else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
@@ -346,7 +346,7 @@ pub(crate) async fn handler_avatar_upload_post(
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_multipart(locale, e)
+            gitquarry_i18n::shared::release::invalid_multipart(locale, e)
         ))
     })? {
         match field.name() {
@@ -359,12 +359,15 @@ pub(crate) async fn handler_avatar_upload_post(
             Some("avatar") => {
                 let mut buf = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    AppError::bad_request(anyhow::anyhow!("{}", gitquarry_i18n::shared::reading_file(locale, e)))
+                    AppError::bad_request(anyhow::anyhow!(
+                        "{}",
+                        gitquarry_i18n::shared::release::reading_file(locale, e)
+                    ))
                 })? {
                     if buf.len() + chunk.len() > MAX_AVATAR_UPLOAD_BYTES {
                         return Err(AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::asset_too_large(locale, MAX_AVATAR_UPLOAD_BYTES as u64)
+                            gitquarry_i18n::shared::release::asset_too_large(locale, MAX_AVATAR_UPLOAD_BYTES as u64)
                         )));
                     }
                     buf.extend_from_slice(&chunk);
@@ -380,7 +383,7 @@ pub(crate) async fn handler_avatar_upload_post(
     let buf = uploaded.ok_or_else(|| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::missing_file_to_upload(locale)
+            gitquarry_i18n::shared::release::missing_file_to_upload(locale)
         ))
     })?;
     let content_type = validate::sniff_avatar_content_type(&buf).map_err(AppError::bad_request)?;
@@ -391,7 +394,7 @@ pub(crate) async fn handler_avatar_upload_post(
         .map_err(|e| {
             AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::creating_temp_file(locale, e)
+                gitquarry_i18n::shared::release::creating_temp_file(locale, e)
             ))
         })?
         .into_temp_path();

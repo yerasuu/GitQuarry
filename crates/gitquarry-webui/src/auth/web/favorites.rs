@@ -65,13 +65,13 @@ pub(crate) async fn handler_favorites_get(
         .ok_or_else(|| {
             AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::user_not_found(locale, &username)
+                gitquarry_i18n::shared::auth::user_not_found(locale, &username)
             ))
         })?;
     if !target.favorites_public {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::favorites_not_public(locale, &username)
+            gitquarry_i18n::shared::auth::favorites_not_public(locale, &username)
         )));
     }
     let visible = visible_starred(&ctx, &headers, &target.starred).await?;
@@ -226,7 +226,7 @@ pub(crate) async fn handler_account_favorites_post(
         let (Some(mut fresh), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
             return Err(AppError::forbidden(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::account_no_longer_exists(locale)
+                gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
             )));
         };
         fresh.favorites_public = form.favorites_public == "1";
@@ -266,7 +266,7 @@ pub(crate) async fn handler_account_favorites_post(
     let Some(resolved) = ctx.resolve_repo(&repo).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &repo)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &repo)
         )));
     };
     // Same check `handler_repo` gates viewing with, and same not-found
@@ -283,7 +283,7 @@ pub(crate) async fn handler_account_favorites_post(
         if !can_view_repo(&ctx, &headers, &repo, repo_config.visibility).await? {
             return Err(AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::repo_not_found(locale, &repo)
+                gitquarry_i18n::shared::repo::repo_not_found(locale, &repo)
             )));
         }
     }
@@ -294,7 +294,7 @@ pub(crate) async fn handler_account_favorites_post(
     let Some((cas, now_starred)) = domain::repo::toggle_star(&ctx, &me.username, &resolved.uid).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     if cas == Cas::Ok {
@@ -313,7 +313,7 @@ pub(crate) async fn handler_account_favorites_post(
     let (Some(me), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     // Authoritative, not the `now_starred` `toggle_star` returned: that

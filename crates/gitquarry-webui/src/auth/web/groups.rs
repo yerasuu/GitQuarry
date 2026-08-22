@@ -316,7 +316,7 @@ async fn apply_groups_action(
             if !me.is_admin {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::only_admin_creates_groups(locale)
+                    gitquarry_i18n::shared::auth::only_admin_creates_groups(locale)
                 )));
             }
             let name = form.name.trim();
@@ -325,13 +325,13 @@ async fn apply_groups_action(
                 Ok(cas) => cas,
                 Err(e) => return Ok(Err(e.to_string())),
             };
-            Ok(cas.ok_or_else(|| gitquarry_i18n::shared::name_already_taken(locale, name)))
+            Ok(cas.ok_or_else(|| gitquarry_i18n::shared::auth::name_already_taken(locale, name)))
         }
         "delete_group" => {
             if !me.is_admin {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::only_admin_deletes_groups(locale)
+                    gitquarry_i18n::shared::auth::only_admin_deletes_groups(locale)
                 )));
             }
             domain::group::delete(ctx, &form.name).await?;
@@ -346,12 +346,12 @@ async fn apply_groups_action(
             if !me.is_admin {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::only_admin_sets_storage_quota(locale)
+                    gitquarry_i18n::shared::auth::only_admin_sets_storage_quota(locale)
                 )));
             }
             let (group, etag) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, &form.name).await?;
             let Some(mut group) = group else {
-                return Ok(Err(gitquarry_i18n::shared::group_not_found(locale, &form.name)));
+                return Ok(Err(gitquarry_i18n::shared::auth::group_not_found(locale, &form.name)));
             };
             let raw = form.storage_quota.trim();
             let quota_bytes = if raw.is_empty() {
@@ -376,12 +376,12 @@ async fn apply_groups_action(
             if !access::can_manage_group_for(ctx.backend().as_ref(), &ctx.cipher, &me.username, &form.name).await? {
                 return Err(AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::you_dont_manage_group(locale, &form.name)
+                    gitquarry_i18n::shared::auth::you_dont_manage_group(locale, &form.name)
                 )));
             }
             let (group, etag) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, &form.name).await?;
             let Some(mut group) = group else {
-                return Ok(Err(gitquarry_i18n::shared::group_not_found(locale, &form.name)));
+                return Ok(Err(gitquarry_i18n::shared::auth::group_not_found(locale, &form.name)));
             };
             if let Err(msg) = apply_group_action(ctx, &mut group, form, locale).await {
                 return Ok(Err(msg));
@@ -570,7 +570,7 @@ pub fn render_group(
                 @for owner in &group.owners {
                     @match resolve_name(names, owner) {
                         Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &gitquarry_i18n::web::auth::groups::groups_remove_button(locale), csrf, locale)),
-                        None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
+                        None => tr { td { em { (gitquarry_i18n::shared::auth::user_deleted(locale)) } } td {} },
                     }
                 }
             }
@@ -653,7 +653,7 @@ pub fn render_team(
                 // that set it — `strip_prefix` just undoes the
                 // `format!("{group_name}/{local}")` `parse_team_repos` did.
                 Some(full_name) => full_name.strip_prefix(&group_prefix).unwrap_or(full_name).to_string(),
-                None => gitquarry_i18n::shared::repo_deleted(locale),
+                None => gitquarry_i18n::shared::repo::repo_deleted(locale),
             })
             .collect::<Vec<_>>()
             .join(", "),
@@ -672,7 +672,7 @@ pub fn render_team(
             @for member in &team.members {
                 @match resolve_name(names, member) {
                     Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &gitquarry_i18n::web::auth::groups::groups_remove_button(locale), csrf, locale)),
-                    None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
+                    None => tr { td { em { (gitquarry_i18n::shared::auth::user_deleted(locale)) } } td {} },
                 }
             }
         }

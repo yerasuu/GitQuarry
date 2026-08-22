@@ -321,7 +321,7 @@ pub(crate) async fn handler_login(
         cookie_header,
         cookie_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -418,7 +418,7 @@ pub(crate) async fn handler_login_local(
             locale,
             &form.return_to,
             &form.username,
-            Some(&gitquarry_i18n::shared::wrong_username_or_password(locale)),
+            Some(&gitquarry_i18n::shared::auth::wrong_username_or_password(locale)),
             &csrf,
         )
         .into_string();
@@ -464,7 +464,7 @@ pub(crate) async fn handler_login_local(
             header,
             value
                 .parse()
-                .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
         );
         return Ok(resp);
     }
@@ -480,7 +480,7 @@ pub(crate) async fn handler_login_local(
         header,
         value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -548,22 +548,22 @@ pub(crate) async fn handler_login_totp_post(
     // lands them inside an account they didn't choose.
     crate::webui::require_csrf_for(&headers, PENDING_TOTP_COOKIE, &form.csrf)?;
     let raw = get_cookie(&headers, PENDING_TOTP_COOKIE)
-        .context(gitquarry_i18n::shared::no_totp_login_in_progress(locale))
+        .context(gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale))
         .map_err(AppError::bad_request)?;
     let sealed = B64
         .decode(raw)
-        .context(gitquarry_i18n::shared::invalid_totp_cookie(locale))
+        .context(gitquarry_i18n::shared::auth::invalid_totp_cookie(locale))
         .map_err(AppError::bad_request)?;
     let plain = ctx
         .cipher
         .open(PENDING_TOTP_COOKIE, &sealed)
         .map_err(AppError::bad_request)?;
     let pending: PendingTotpCookie =
-        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::corrupt_totp_cookie(locale))?;
+        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::auth::corrupt_totp_cookie(locale))?;
     if expired(pending.exp) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_totp_login_in_progress(locale)
+            gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale)
         )));
     }
 
@@ -601,7 +601,7 @@ pub(crate) async fn handler_login_totp_post(
         ctx.login_attempts.record_failure(&pending.username);
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::incorrect_code(locale)
+            gitquarry_i18n::shared::auth::incorrect_code(locale)
         )));
     };
     ctx.login_attempts.clear(&user.username);
@@ -619,13 +619,13 @@ pub(crate) async fn handler_login_totp_post(
         session_header,
         session_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     resp_headers.append(
         clear_header,
         clear_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -641,7 +641,7 @@ pub(crate) async fn handler_login_oidc(
     let client = ctx
         .oidc
         .as_ref()
-        .context(gitquarry_i18n::shared::oidc_not_configured(locale))
+        .context(gitquarry_i18n::shared::oidc::oidc_not_configured(locale))
         .map_err(AppError::bad_request)?;
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -678,7 +678,7 @@ pub(crate) async fn handler_login_oidc(
         header,
         value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -700,71 +700,71 @@ pub(crate) async fn handler_callback(
     let client = ctx
         .oidc
         .as_ref()
-        .context(gitquarry_i18n::shared::oidc_not_configured(locale))
+        .context(gitquarry_i18n::shared::oidc::oidc_not_configured(locale))
         .map_err(AppError::bad_request)?;
 
     if let Some(err) = params.error {
         let desc = params.error_description.unwrap_or_default();
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::oidc_provider_rejected_login(locale, &err, &desc)
+            gitquarry_i18n::shared::oidc::oidc_provider_rejected_login(locale, &err, &desc)
         )));
     }
     let code = params
         .code
-        .context(gitquarry_i18n::shared::missing_code_param(locale))
+        .context(gitquarry_i18n::shared::oidc::missing_code_param(locale))
         .map_err(AppError::bad_request)?;
     let state = params
         .state
-        .context(gitquarry_i18n::shared::missing_state_param(locale))
+        .context(gitquarry_i18n::shared::oidc::missing_state_param(locale))
         .map_err(AppError::bad_request)?;
 
     let flow_raw = get_cookie(&headers, FLOW_COOKIE)
-        .context(gitquarry_i18n::shared::no_oidc_login_in_progress(locale))
+        .context(gitquarry_i18n::shared::oidc::no_oidc_login_in_progress(locale))
         .map_err(AppError::bad_request)?;
     let flow_sealed = B64
         .decode(flow_raw)
-        .context(gitquarry_i18n::shared::invalid_oidc_flow_cookie(locale))
+        .context(gitquarry_i18n::shared::oidc::invalid_oidc_flow_cookie(locale))
         .map_err(AppError::bad_request)?;
     let flow_plain = ctx
         .cipher
         .open(FLOW_COOKIE, &flow_sealed)
         .map_err(AppError::bad_request)?;
     let flow: FlowCookie =
-        serde_json::from_slice(&flow_plain).context(gitquarry_i18n::shared::corrupt_oidc_flow_cookie(locale))?;
+        serde_json::from_slice(&flow_plain).context(gitquarry_i18n::shared::oidc::corrupt_oidc_flow_cookie(locale))?;
     if expired(flow.exp) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_oidc_login_in_progress(locale)
+            gitquarry_i18n::shared::oidc::no_oidc_login_in_progress(locale)
         )));
     }
 
     if flow.csrf != state {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::oidc_state_mismatch(locale)
+            gitquarry_i18n::shared::oidc::oidc_state_mismatch(locale)
         )));
     }
 
     let http_client = openidconnect::reqwest::ClientBuilder::new()
         .redirect(openidconnect::reqwest::redirect::Policy::none())
         .build()
-        .context(gitquarry_i18n::shared::failed_to_build_oidc_client(locale))?;
+        .context(gitquarry_i18n::shared::oidc::failed_to_build_oidc_client(locale))?;
 
     let token_response = client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(PkceCodeVerifier::new(flow.pkce_verifier))
         .request_async(&http_client)
         .await
-        .context(gitquarry_i18n::shared::code_token_exchange_failed(locale))?;
+        .context(gitquarry_i18n::shared::oidc::code_token_exchange_failed(locale))?;
 
     let id_token = token_response
         .id_token()
-        .context(gitquarry_i18n::shared::oidc_missing_id_token(locale))?;
+        .context(gitquarry_i18n::shared::oidc::oidc_missing_id_token(locale))?;
     let nonce = Nonce::new(flow.nonce);
     let claims = id_token
         .claims(&client.id_token_verifier(), &nonce)
-        .context(gitquarry_i18n::shared::failed_to_verify_id_token(locale))?;
+        .context(gitquarry_i18n::shared::oidc::failed_to_verify_id_token(locale))?;
 
     // Nothing short of an explicit `true` will do. Identity here is the
     // email and nothing else (`SessionSubject::Email`), so an IdP that
@@ -774,12 +774,12 @@ pub(crate) async fn handler_callback(
     if claims.email_verified() != Some(true) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::oidc_email_not_verified(locale)
+            gitquarry_i18n::shared::oidc::oidc_email_not_verified(locale)
         )));
     }
     let email = claims
         .email()
-        .context(gitquarry_i18n::shared::id_token_missing_email_claim(locale))?
+        .context(gitquarry_i18n::shared::oidc::id_token_missing_email_claim(locale))?
         .as_str()
         .to_string();
 
@@ -820,13 +820,13 @@ pub(crate) async fn handler_callback(
             pending_header,
             pending_value
                 .parse()
-                .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
         );
         resp_headers.append(
             clear_header,
             clear_value
                 .parse()
-                .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
         );
         return Ok(resp);
     }
@@ -842,13 +842,13 @@ pub(crate) async fn handler_callback(
         session_header,
         session_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     resp_headers.append(
         clear_header,
         clear_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }

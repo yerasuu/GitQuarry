@@ -354,7 +354,7 @@ pub async fn fork(
     // a copy that silently did nothing must never end with a fork that
     // looks created but isn't.
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
     strip_uninheritable(&dest).await?;
 
@@ -467,7 +467,7 @@ pub async fn create_from_template(
 ) -> Result<Option<ResolvedRepo>> {
     let (source_config, _etag) = source.remote.get_repo_config().await?;
     if !source_config.is_template {
-        bail!("{}", gitquarry_i18n::shared::repo_not_a_template(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::repo_not_a_template(locale));
     }
     let Some(dest) = ctx.create_repo(dest_full_name).await? else {
         return Ok(None);
@@ -475,7 +475,7 @@ pub async fn create_from_template(
 
     source.remote.copy_all_to(&dest.remote).await?;
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
     // A template is *published* to be copied by other people, so inheriting
     // the template author's mirror credential here would be worse than in
@@ -609,7 +609,7 @@ pub async fn set_default_branch(resolved: &ResolvedRepo, branch: &str, locale: g
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/heads/{branch}");
     if !manifest.refs.contains_key(&target) {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
     }
     manifest.head = Some(target);
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
@@ -625,7 +625,7 @@ pub async fn create_tag(resolved: &ResolvedRepo, tag: &str, sha: &str, locale: g
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/tags/{tag}");
     if manifest.refs.contains_key(&target) {
-        bail!("{}", gitquarry_i18n::shared::tag_already_exists(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::tag_already_exists(locale, tag));
     }
     manifest.refs.insert(target, sha.to_string());
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
@@ -642,19 +642,19 @@ pub async fn delete_tag(resolved: &ResolvedRepo, tag: &str, locale: gitquarry_i1
     if config.protected_tags.contains(tag) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::protected_tag_cannot_be_deleted(locale, tag)
+            gitquarry_i18n::shared::repo::protected_tag_cannot_be_deleted(locale, tag)
         );
     }
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/tags/{tag}");
     if manifest.refs.remove(&target).is_none() {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
 
 /// `Err` if `branch` is protected (same unconditional bar [`delete_tag`]
-/// applies, see [`gitquarry_i18n::shared::protected_branch_cannot_be_deleted`]'s
+/// applies, see [`gitquarry_i18n::shared::repo::protected_branch_cannot_be_deleted`]'s
 /// own doc comment on why no owner bypass), is the repo's current default
 /// branch, or doesn't currently exist.
 pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
@@ -662,7 +662,7 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     if config.protected_branches.contains(branch) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::protected_branch_cannot_be_deleted(locale, branch)
+            gitquarry_i18n::shared::repo::protected_branch_cannot_be_deleted(locale, branch)
         );
     }
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
@@ -670,11 +670,11 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     if manifest.head.as_deref() == Some(target.as_str()) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::default_branch_cannot_be_deleted(locale, branch)
+            gitquarry_i18n::shared::repo::default_branch_cannot_be_deleted(locale, branch)
         );
     }
     if manifest.refs.remove(&target).is_none() {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
     }
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
@@ -713,7 +713,7 @@ pub async fn set_protected_branches(
     let requested = parse_csv_field(raw_csv);
     for branch in &requested {
         if !valid.contains(branch.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
         }
     }
     config.protected_branches = requested.clone();
@@ -748,7 +748,7 @@ pub async fn set_require_signed_commits(
     let requested = parse_csv_field(raw_csv);
     for branch in &requested {
         if !valid.contains(branch.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
         }
     }
     config.require_signed_commits = requested.clone();
@@ -783,7 +783,7 @@ pub async fn set_protected_tags(
     let requested = parse_csv_field(raw_csv);
     for tag in &requested {
         if !valid.contains(tag.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
         }
     }
     config.protected_tags = requested.clone();
@@ -852,7 +852,7 @@ pub async fn set_required_reviewers(
     for username in raw_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let (user, _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
         if user.is_none() {
-            bail!("{}", gitquarry_i18n::shared::unknown_assignee(locale, username));
+            bail!("{}", gitquarry_i18n::shared::repo::unknown_assignee(locale, username));
         }
         required_reviewers.insert(username.to_string());
     }
@@ -955,7 +955,7 @@ pub async fn set_permission(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     let (user, etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
-    let mut user = user.with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+    let mut user = user.with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     match perm {
         Some(p) => {
             user.repos.insert(repo_uid.clone(), p);

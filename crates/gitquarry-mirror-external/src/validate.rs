@@ -178,7 +178,7 @@ pub fn check_host_allowed(remote_url: &str, allowed: &[String]) -> Result<()> {
     if !matched {
         bail!(
             "{}",
-            gitquarry_i18n::shared::mirror_host_not_allowed(gitquarry_i18n::Locale::DEFAULT, &host)
+            gitquarry_i18n::shared::settings::mirror_host_not_allowed(gitquarry_i18n::Locale::DEFAULT, &host)
         );
     }
     Ok(())

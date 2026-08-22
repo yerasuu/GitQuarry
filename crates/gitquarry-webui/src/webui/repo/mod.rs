@@ -652,7 +652,7 @@ pub(crate) async fn can_view_repo(
 pub(crate) fn require_sha(params: &HashMap<String, String>, locale: gitquarry_i18n::Locale) -> Result<&str, AppError> {
     let sha = params
         .get("sha")
-        .context(gitquarry_i18n::shared::missing_sha_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_sha_param(locale))
         .map_err(AppError::bad_request)?;
     validate::validate_sha(sha).map_err(AppError::bad_request)?;
     Ok(sha.as_str())
@@ -661,7 +661,7 @@ pub(crate) fn require_sha(params: &HashMap<String, String>, locale: gitquarry_i1
 pub(crate) fn require_tag(params: &HashMap<String, String>, locale: gitquarry_i18n::Locale) -> Result<&str, AppError> {
     let tag = params
         .get("tag")
-        .context(gitquarry_i18n::shared::missing_tag_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_tag_param(locale))
         .map_err(AppError::bad_request)?;
     validate::validate_rev(tag).map_err(AppError::bad_request)?;
     Ok(tag.as_str())
@@ -674,7 +674,7 @@ pub(crate) fn require_number(
     params
         .get("number")
         .and_then(|s| s.parse().ok())
-        .context(gitquarry_i18n::shared::missing_number_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_number_param(locale))
         .map_err(AppError::bad_request)
 }
 
@@ -685,7 +685,7 @@ pub(crate) fn require_filename(
     params
         .get("filename")
         .map(String::as_str)
-        .context(gitquarry_i18n::shared::missing_filename_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_filename_param(locale))
         .map_err(AppError::bad_request)
 }
 
@@ -733,7 +733,7 @@ pub(crate) async fn handler_repo(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     };
 
@@ -819,7 +819,7 @@ pub(crate) async fn handler_repo(
         // is merely hidden vs. genuinely absent.
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     }
 
@@ -1007,11 +1007,11 @@ async fn render_repo_view(
         "compare" => {
             let base = params
                 .get("base")
-                .context(gitquarry_i18n::shared::missing_base_param(locale))
+                .context(gitquarry_i18n::shared::repo::missing_base_param(locale))
                 .map_err(AppError::bad_request)?;
             let head = params
                 .get("head")
-                .context(gitquarry_i18n::shared::missing_head_param(locale))
+                .context(gitquarry_i18n::shared::repo::missing_head_param(locale))
                 .map_err(AppError::bad_request)?;
             validate::validate_rev(base).map_err(AppError::bad_request)?;
             validate::validate_rev(head).map_err(AppError::bad_request)?;
@@ -1060,7 +1060,7 @@ async fn render_repo_view(
             if path.is_empty() {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::blame_requires_path(locale)
+                    gitquarry_i18n::shared::repo::blame_requires_path(locale)
                 )));
             }
             render_blame(&mirror.path, &name, rev, path, locale).await?
@@ -1068,7 +1068,7 @@ async fn render_repo_view(
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::unknown_view(locale, other)
+                gitquarry_i18n::shared::repo::unknown_view(locale, other)
             )));
         }
     };

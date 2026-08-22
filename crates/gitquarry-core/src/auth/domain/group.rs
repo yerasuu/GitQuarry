@@ -92,7 +92,7 @@ pub async fn add_owner(
     let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
         .await?
         .0
-        .with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+        .with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     group.owners.insert(user.uid);
     Ok(())
 }
@@ -121,7 +121,7 @@ pub async fn add_team(
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
     if group.teams.iter().any(|t| t.name == name) {
-        bail!("{}", gitquarry_i18n::shared::team_already_exists(locale, name));
+        bail!("{}", gitquarry_i18n::shared::auth::team_already_exists(locale, name));
     }
     let permission = match permission_str {
         "guest" => Permission::Guest,
@@ -129,7 +129,7 @@ pub async fn add_team(
         "developer" => Permission::Developer,
         "maintainer" => Permission::Maintainer,
         "owner" => Permission::Owner,
-        other => bail!("{}", gitquarry_i18n::shared::invalid_permission(locale, other)),
+        other => bail!("{}", gitquarry_i18n::shared::auth::invalid_permission(locale, other)),
     };
     let repos = parse_team_repos(ctx, &group.name, repos_csv, locale).await?;
     group.teams.push(Team {
@@ -157,7 +157,7 @@ pub async fn add_team_member(
     let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
         .await?
         .0
-        .with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+        .with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     find_team_mut(group, team, locale)?.members.insert(user.uid);
     Ok(())
 }
@@ -182,7 +182,7 @@ fn find_team_mut<'a>(group: &'a mut Group, team: &str, locale: gitquarry_i18n::L
         .teams
         .iter_mut()
         .find(|t| t.name == team)
-        .with_context(|| gitquarry_i18n::shared::team_not_found(locale, team))
+        .with_context(|| gitquarry_i18n::shared::auth::team_not_found(locale, team))
 }
 
 /// Resolves each comma-separated repo-local name (relative to `group_name`
@@ -206,7 +206,7 @@ pub async fn parse_team_repos(
         let full_name = format!("{group_name}/{local}");
         let uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, &full_name)
             .await?
-            .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, &full_name))?;
+            .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, &full_name))?;
         uids.insert(uid);
     }
     Ok(Some(uids))

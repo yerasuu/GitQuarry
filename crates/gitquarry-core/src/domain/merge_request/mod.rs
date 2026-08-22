@@ -145,7 +145,10 @@ async fn resolve_title_and_description(
         description.to_string()
     };
     if title.is_empty() {
-        bail!("{}", gitquarry_i18n::shared::merge_request_needs_a_title(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_needs_a_title(locale)
+        );
     }
     Ok((crate::validate::validate_issue_title(title)?, description))
 }
@@ -168,19 +171,28 @@ pub async fn create(
         if etag.is_none() {
             bail!(
                 "{}",
-                gitquarry_i18n::shared::repo_not_found(locale, new.source_repo.as_str())
+                gitquarry_i18n::shared::repo::repo_not_found(locale, new.source_repo.as_str())
             );
         }
         if source_config.forked_from.as_ref() != Some(&target.uid) {
-            bail!("{}", gitquarry_i18n::shared::source_repo_not_a_fork(locale));
+            bail!(
+                "{}",
+                gitquarry_i18n::shared::merge_request::source_repo_not_a_fork(locale)
+            );
         }
         source_remote
     };
     if !branch_exists(&source_remote, new.source_branch).await? {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, new.source_branch));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::repo::not_a_branch(locale, new.source_branch)
+        );
     }
     if !branch_exists(&target.remote, new.target_branch).await? {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, new.target_branch));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::repo::not_a_branch(locale, new.target_branch)
+        );
     }
 
     let (title, description) = resolve_title_and_description(ctx, target, &source_remote, &new, locale).await?;
@@ -255,10 +267,16 @@ async fn transition(
     let backend = ctx.backend();
     let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
     let Some(mut mr) = mr else {
-        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
+        );
     };
     if mr.status != expected {
-        bail!("{}", gitquarry_i18n::shared::merge_request_wrong_status(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_wrong_status(locale)
+        );
     }
     mr.status = next;
     mr.updated_at = now_stamp();
@@ -308,10 +326,16 @@ async fn set_draft(
     let backend = ctx.backend();
     let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
     let Some(mut mr) = mr else {
-        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
+        );
     };
     if mr.status != MrStatus::Open || mr.is_draft == draft {
-        bail!("{}", gitquarry_i18n::shared::merge_request_wrong_status(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_wrong_status(locale)
+        );
     }
     mr.is_draft = draft;
     mr.updated_at = now_stamp();
@@ -367,7 +391,7 @@ pub async fn edit_metadata(
     let mut labels = Vec::new();
     for name in edit.labels_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         if !known_labels.contains(name) {
-            bail!("{}", gitquarry_i18n::shared::unknown_label(locale, name));
+            bail!("{}", gitquarry_i18n::shared::repo::unknown_label(locale, name));
         }
         labels.push(name.to_string());
     }
@@ -377,7 +401,7 @@ pub async fn edit_metadata(
     for username in edit.assignees_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let (user, _etag) = access::get_user(backend.as_ref(), &ctx.cipher, username).await?;
         if user.is_none() {
-            bail!("{}", gitquarry_i18n::shared::unknown_assignee(locale, username));
+            bail!("{}", gitquarry_i18n::shared::repo::unknown_assignee(locale, username));
         }
         assignees.push(username.to_string());
     }
@@ -385,14 +409,20 @@ pub async fn edit_metadata(
     for username in edit.reviewers_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let (user, _etag) = access::get_user(backend.as_ref(), &ctx.cipher, username).await?;
         if user.is_none() {
-            bail!("{}", gitquarry_i18n::shared::unknown_reviewer(locale, username));
+            bail!(
+                "{}",
+                gitquarry_i18n::shared::merge_request::unknown_reviewer(locale, username)
+            );
         }
         reviewers.push(username.to_string());
     }
 
     let (mr, etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
     let Some(mut mr) = mr else {
-        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
+        );
     };
     mr.title = title;
     mr.description = edit.description.to_string();
@@ -444,7 +474,10 @@ pub async fn add_line_comment(
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
     if anchor.path.is_empty() || anchor.line == 0 {
-        bail!("{}", gitquarry_i18n::shared::invalid_comment_anchor(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::invalid_comment_anchor(locale)
+        );
     }
     add_comment_anchored(ctx, target, number, author, body, Some(anchor), locale).await
 }
@@ -459,7 +492,10 @@ async fn add_comment_anchored(
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
     if get(ctx, target, number).await?.is_none() {
-        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
+        );
     }
     let comment = MrComment {
         author: author.to_string(),
@@ -498,7 +534,7 @@ pub async fn edit_comment(
         bail!("comment {comment_id} not found on MR #{number}");
     };
     if comment.author != actor {
-        bail!("{}", gitquarry_i18n::shared::not_comment_author(locale));
+        bail!("{}", gitquarry_i18n::shared::merge_request::not_comment_author(locale));
     }
     comment.body = body.to_string();
     merge_requests::put_mr_comment(
@@ -532,7 +568,7 @@ pub async fn delete_comment(
         bail!("comment {comment_id} not found on MR #{number}");
     };
     if comment.author != actor && !is_moderator {
-        bail!("{}", gitquarry_i18n::shared::not_comment_author(locale));
+        bail!("{}", gitquarry_i18n::shared::merge_request::not_comment_author(locale));
     }
     merge_requests::delete_mr_comment(backend.as_ref(), &ctx.cipher, &target.uid, number, comment_id).await;
     Ok(())
@@ -551,10 +587,16 @@ pub async fn add_review(
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
     let Some(mr) = get(ctx, target, number).await? else {
-        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
+        );
     };
     if mr.author == author && verdict != ReviewVerdict::Commented {
-        bail!("{}", gitquarry_i18n::shared::cannot_review_own_merge_request(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::cannot_review_own_merge_request(locale)
+        );
     }
     let review = MrReview {
         author: author.to_string(),
@@ -993,20 +1035,29 @@ pub async fn merge(
     let backend = ctx.backend();
     let (mr, mr_etag) = merge_requests::get_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, number).await?;
     let Some(mut mr) = mr else {
-        bail!("{}", gitquarry_i18n::shared::merge_request_not_found(locale, number));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
+        );
     };
     if mr.status != MrStatus::Open {
-        bail!("{}", gitquarry_i18n::shared::merge_request_wrong_status(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_wrong_status(locale)
+        );
     }
     if mr.is_draft {
-        bail!("{}", gitquarry_i18n::shared::merge_request_is_draft(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_is_draft(locale)
+        );
     }
     let reviews = list_reviews(ctx, target, number).await?;
     let summary = review_summary(&reviews);
     if !summary.changes_requested_by.is_empty() {
         bail!(
             "{}",
-            gitquarry_i18n::shared::merge_request_changes_requested_pending(locale)
+            gitquarry_i18n::shared::merge_request::merge_request_changes_requested_pending(locale)
         );
     }
 
@@ -1017,16 +1068,25 @@ pub async fn merge(
     let (manifest, manifest_etag) = target.remote.get_manifest().await?;
     let target_ref = format!("refs/heads/{}", mr.target_branch);
     let Some(target_sha) = manifest.refs.get(&target_ref).cloned() else {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, &mr.target_branch));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::repo::not_a_branch(locale, &mr.target_branch)
+        );
     };
     let Some(head_sha) = git::browse::resolve_commit(git_dir, &head_ref).await? else {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, &mr.source_branch));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::repo::not_a_branch(locale, &mr.source_branch)
+        );
     };
 
     if let Some(missing) = missing_required_reviewers(target, git_dir, &mr, &target_sha, &head_sha, &summary).await? {
         bail!(
             "{}",
-            gitquarry_i18n::shared::merge_request_missing_required_reviewers(locale, &missing.join(", "))
+            gitquarry_i18n::shared::merge_request::merge_request_missing_required_reviewers(
+                locale,
+                &missing.join(", ")
+            )
         );
     }
 
@@ -1040,7 +1100,7 @@ pub async fn merge(
         if !git::is_ancestor(git_dir, &target_sha, &head_sha).await? {
             bail!(
                 "{}",
-                gitquarry_i18n::shared::merge_request_not_fast_forwardable(locale, &mr.target_branch)
+                gitquarry_i18n::shared::merge_request::merge_request_not_fast_forwardable(locale, &mr.target_branch)
             );
         }
         head_sha.clone()

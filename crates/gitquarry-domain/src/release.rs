@@ -66,7 +66,7 @@ pub async fn generate_notes(
     locale: gitquarry_i18n::Locale,
 ) -> Result<String> {
     if !tag_exists(resolved, tag).await? {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     let mirror_path = ctx.open_mirror(resolved).await?.path.clone();
     let tags = git::browse::list_refs_detailed(&mirror_path, "refs/tags/").await?;
@@ -81,7 +81,7 @@ pub async fn generate_notes(
     };
 
     if commits.is_empty() {
-        return Ok(gitquarry_i18n::shared::no_commits_since_previous_tag(locale));
+        return Ok(gitquarry_i18n::shared::release::no_commits_since_previous_tag(locale));
     }
     let mut notes = String::new();
     for commit in &commits {
@@ -109,7 +109,7 @@ pub async fn create(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     if !tag_exists(resolved, tag).await? {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     let release = ReleaseMeta {
         tag: tag.to_string(),
@@ -147,7 +147,7 @@ pub async fn edit(
 ) -> Result<Cas> {
     let (mut release, etag) = resolved.remote.get_release(tag).await?;
     if etag.is_none() {
-        bail!("{}", gitquarry_i18n::shared::release_not_found(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
     release.title = title.to_string();
     release.notes = notes.to_string();
@@ -204,10 +204,13 @@ pub async fn add_asset(ctx: &AppContext, resolved: &ResolvedRepo, asset: NewAsse
     } = asset;
     let (mut release, etag) = resolved.remote.get_release(tag).await?;
     if etag.is_none() {
-        bail!("{}", gitquarry_i18n::shared::release_not_found(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
     if release.assets.iter().any(|a| a.filename == filename) {
-        bail!("{}", gitquarry_i18n::shared::asset_already_exists(locale, filename));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::release::asset_already_exists(locale, filename)
+        );
     }
     let signature_verified = match signature {
         Some(sig) => {
@@ -250,12 +253,12 @@ pub async fn remove_asset(
 ) -> Result<Cas> {
     let (mut release, etag) = resolved.remote.get_release(tag).await?;
     if etag.is_none() {
-        bail!("{}", gitquarry_i18n::shared::release_not_found(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
     let before = release.assets.len();
     release.assets.retain(|a| a.filename != filename);
     if release.assets.len() == before {
-        bail!("{}", gitquarry_i18n::shared::asset_not_found(locale, filename));
+        bail!("{}", gitquarry_i18n::shared::release::asset_not_found(locale, filename));
     }
     let cas = resolved.remote.put_release(&release, etag.as_deref()).await?;
     if cas == Cas::Ok {

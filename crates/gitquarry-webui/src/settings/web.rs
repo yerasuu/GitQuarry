@@ -46,7 +46,7 @@ pub(crate) async fn require_admin(ctx: &AppContext, headers: &HeaderMap, return_
         return Some(
             AppError::forbidden(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::bootstrap_grant_required(locale)
+                gitquarry_i18n::shared::settings::bootstrap_grant_required(locale)
             ))
             .into_response(),
         );
@@ -58,7 +58,7 @@ pub(crate) async fn require_admin(ctx: &AppContext, headers: &HeaderMap, return_
             Some(
                 AppError::forbidden(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::account_is_not_admin(locale)
+                    gitquarry_i18n::shared::auth::account_is_not_admin(locale)
                 ))
                 .into_response(),
             )
@@ -506,7 +506,7 @@ pub(crate) async fn handler_settings_external_mirrors_post(
     let mirror_extra_hosts = parse_mirror_hosts(&form.mirror_extra_hosts);
     let bad_mirror_host = mirror_extra_hosts.iter().find(|host| !is_host_pattern(host)).cloned();
     let validation_error =
-        bad_mirror_host.map(|host| gitquarry_i18n::shared::invalid_mirror_host_pattern(locale, &host));
+        bad_mirror_host.map(|host| gitquarry_i18n::shared::settings::invalid_mirror_host_pattern(locale, &host));
     let settings = ServerSettings {
         mirror_extra_hosts: mirror_extra_hosts.clone(),
         ..current
@@ -662,7 +662,7 @@ pub(crate) async fn handler_settings_oidc_post(
         oidc_fields,
         (Some(_), Some(_), Some(_), Some(_)) | (None, None, None, None)
     ) {
-        Some(gitquarry_i18n::shared::oidc_fields_go_together(locale))
+        Some(gitquarry_i18n::shared::settings::oidc_fields_go_together(locale))
     } else {
         None
     };

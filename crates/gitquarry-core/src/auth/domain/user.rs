@@ -185,7 +185,7 @@ async fn reject_if_claimed_as_secondary(
         .await?
         .is_some()
     {
-        bail!("{}", gitquarry_i18n::shared::email_claimed_as_secondary(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::email_claimed_as_secondary(locale));
     }
     Ok(())
 }
@@ -229,7 +229,7 @@ pub async fn set_email(
     if let Some(op) = user.email_claim_op()?
         && txn::run(ctx.backend().as_ref(), &ctx.cipher, vec![op]).await? == Cas::Conflict
     {
-        bail!("{}", gitquarry_i18n::shared::email_already_associated(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::email_already_associated(locale));
     }
 
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
@@ -278,7 +278,10 @@ pub async fn set_own_email(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     if ctx.oidc.is_some() {
-        bail!("{}", gitquarry_i18n::shared::primary_email_is_admin_managed(locale));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::auth::primary_email_is_admin_managed(locale)
+        );
     }
     set_email(ctx, username, email, locale).await
 }
@@ -335,7 +338,7 @@ pub async fn toggle_admin(ctx: &AppContext, username: &str, locale: gitquarry_i1
 pub async fn add_pubkey(ctx: &AppContext, username: &str, pubkey: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
     let fingerprint = access::key_fingerprint(pubkey)?;
     if !access::claim_pubkey(ctx.backend().as_ref(), &ctx.cipher, &fingerprint, username).await? {
-        bail!("{}", gitquarry_i18n::shared::key_already_associated(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::key_already_associated(locale));
     }
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.pubkeys.push(pubkey.to_string());
@@ -417,7 +420,7 @@ pub async fn set_repo_perm(
             Some(p) => {
                 let repo_uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo)
                     .await?
-                    .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, repo))?;
+                    .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, repo))?;
                 user.repos.insert(repo_uid, p);
             }
             None => {
@@ -444,7 +447,7 @@ pub async fn set_repo_perm(
 pub async fn enable_totp(ctx: &AppContext, username: &str, locale: gitquarry_i18n::Locale) -> Result<(Cas, String)> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     if user.totp_enabled {
-        bail!("{}", gitquarry_i18n::shared::totp_already_enabled(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::totp_already_enabled(locale));
     }
     let secret = totp::generate_secret();
     user.totp_secret = Some(secret.clone());
@@ -490,9 +493,9 @@ pub async fn confirm_totp(
     let secret = user
         .totp_secret
         .clone()
-        .with_context(|| gitquarry_i18n::shared::no_pending_totp_enrollment(locale))?;
+        .with_context(|| gitquarry_i18n::shared::auth::no_pending_totp_enrollment(locale))?;
     if !totp::verify_code(&secret, code) {
-        bail!("{}", gitquarry_i18n::shared::incorrect_code(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::incorrect_code(locale));
     }
     let (plaintext, hashed) = fresh_recovery_codes()?;
     user.totp_enabled = true;
@@ -520,7 +523,7 @@ pub async fn regenerate_recovery_codes(
 ) -> Result<(Cas, Vec<String>)> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     if !user.totp_enabled {
-        bail!("{}", gitquarry_i18n::shared::no_pending_totp_enrollment(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::no_pending_totp_enrollment(locale));
     }
     let (plaintext, hashed) = fresh_recovery_codes()?;
     user.totp_recovery_codes = hashed;
@@ -600,7 +603,7 @@ pub async fn add_secondary_email(
 ) -> Result<Cas> {
     let email = crate::validate::validate_secondary_email(email)?;
     if !access::claim_secondary_email(ctx.backend().as_ref(), &ctx.cipher, &email, username).await? {
-        bail!("{}", gitquarry_i18n::shared::email_already_associated(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::email_already_associated(locale));
     }
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.secondary_emails.insert(email);
@@ -668,7 +671,7 @@ async fn require_user(
     locale: gitquarry_i18n::Locale,
 ) -> Result<(User, Option<String>)> {
     let (user, etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
-    let user = user.with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+    let user = user.with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     Ok((user, etag))
 }
 
@@ -693,7 +696,7 @@ async fn parse_repos_field(
         }
         let (repo, perm) = entry
             .split_once(':')
-            .with_context(|| gitquarry_i18n::shared::invalid_entry(locale, entry))?;
+            .with_context(|| gitquarry_i18n::shared::auth::invalid_entry(locale, entry))?;
         let repo = repo.trim();
         let perm = match perm.trim() {
             "guest" => Permission::Guest,
@@ -701,7 +704,7 @@ async fn parse_repos_field(
             "developer" => Permission::Developer,
             "maintainer" => Permission::Maintainer,
             "owner" => Permission::Owner,
-            other => bail!("{}", gitquarry_i18n::shared::invalid_permission(locale, other)),
+            other => bail!("{}", gitquarry_i18n::shared::auth::invalid_permission(locale, other)),
         };
         if repo == "*" {
             default_permission = Some(perm);
@@ -709,7 +712,7 @@ async fn parse_repos_field(
         }
         let uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo)
             .await?
-            .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, repo))?;
+            .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, repo))?;
         repos.insert(uid, perm);
     }
     Ok((repos, default_permission))

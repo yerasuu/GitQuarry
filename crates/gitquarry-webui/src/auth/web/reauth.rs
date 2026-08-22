@@ -22,7 +22,7 @@ pub(super) fn require_reauth(me: &User, attempt: &str, locale: gitquarry_i18n::L
             .is_some_and(|h| password::verify_password(attempt, h));
     let code_ok = me.totp_secret.as_deref().is_some_and(|s| totp::verify_code(s, attempt));
     if !password_ok && !code_ok {
-        return Err(gitquarry_i18n::shared::wrong_password_or_code(locale));
+        return Err(gitquarry_i18n::shared::auth::wrong_password_or_code(locale));
     }
     Ok(())
 }

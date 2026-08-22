@@ -222,7 +222,7 @@ pub(crate) async fn handler_users_post(
         let (Some(user), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &form.username).await? else {
             return Err(AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::account_no_longer_exists(locale)
+                gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
             )));
         };
         let repo_names = repo_uid_to_name_map(&ctx, std::slice::from_ref(&user)).await;
@@ -296,7 +296,7 @@ pub async fn apply_users_action(
                 Ok(cas) => cas,
                 Err(e) => return Ok(Err(e.to_string())),
             };
-            cas.ok_or_else(|| gitquarry_i18n::shared::name_already_taken(locale, username))
+            cas.ok_or_else(|| gitquarry_i18n::shared::auth::name_already_taken(locale, username))
         }
         "delete_user" => {
             domain::user::delete(ctx, &form.username).await?;
@@ -344,7 +344,7 @@ pub async fn apply_users_action(
         "add_repo_perm" => {
             let repo = form.repo.trim();
             if repo.is_empty() {
-                return Ok(Err(gitquarry_i18n::shared::missing_repo(locale)));
+                return Ok(Err(gitquarry_i18n::shared::auth::missing_repo(locale)));
             }
             let perm = match form.perm.as_str() {
                 "guest" => Permission::Guest,
@@ -352,7 +352,7 @@ pub async fn apply_users_action(
                 "developer" => Permission::Developer,
                 "maintainer" => Permission::Maintainer,
                 "owner" => Permission::Owner,
-                other => return Ok(Err(gitquarry_i18n::shared::invalid_permission(locale, other))),
+                other => return Ok(Err(gitquarry_i18n::shared::auth::invalid_permission(locale, other))),
             };
             domain::user::set_repo_perm(ctx, &form.username, repo, Some(perm), locale)
                 .await
@@ -513,7 +513,7 @@ pub fn render_user(
                 @for (repo_uid, perm) in &user.repos {
                     @match repo_names.get(repo_uid) {
                         Some(name) => (repo_perm_row(user, name, name, *perm, csrf, &card_target, locale)),
-                        None => tr { td colspan="3" { em { (gitquarry_i18n::shared::repo_deleted(locale)) } } },
+                        None => tr { td colspan="3" { em { (gitquarry_i18n::shared::repo::repo_deleted(locale)) } } },
                     }
                 }
             }

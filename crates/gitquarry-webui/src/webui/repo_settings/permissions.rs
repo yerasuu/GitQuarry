@@ -31,7 +31,7 @@ pub(super) async fn save_perm(
         "owner" => Some(Permission::Owner),
         "none" => None,
         other => {
-            return Ok(FlashOutcome::Invalid(gitquarry_i18n::shared::invalid_permission(
+            return Ok(FlashOutcome::Invalid(gitquarry_i18n::shared::auth::invalid_permission(
                 locale, other,
             )));
         }

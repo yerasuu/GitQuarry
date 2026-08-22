@@ -118,7 +118,7 @@ pub async fn plain(
     if size > PLAIN_MAX_BYTES {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::file_too_large(locale, size, PLAIN_MAX_BYTES)
+            gitquarry_i18n::shared::release::file_too_large(locale, size, PLAIN_MAX_BYTES)
         )));
     }
     let bytes = git::browse::read_blob(bare_repo, rev, path).await?;
@@ -165,7 +165,7 @@ pub async fn snapshot(
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::invalid_snapshot_format(locale, other)
+                gitquarry_i18n::shared::release::invalid_snapshot_format(locale, other)
             )));
         }
     };
@@ -227,11 +227,11 @@ pub(crate) async fn release_asset(
     if etag.is_none() || !release.assets.iter().any(|a| a.filename == filename) {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_asset_on_release(locale, &filename, tag)
+            gitquarry_i18n::shared::release::no_asset_on_release(locale, &filename, tag)
         )));
     }
 
-    let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::creating_temp_dir_for_asset(locale))?;
+    let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::release::creating_temp_dir_for_asset(locale))?;
     let tmp_path = tmp_dir.path().join(&filename);
     remote.download_asset(tag, &filename, &tmp_path).await?;
 

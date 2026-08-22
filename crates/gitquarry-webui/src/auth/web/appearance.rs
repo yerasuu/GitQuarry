@@ -85,7 +85,7 @@ pub(crate) async fn handler_appearance_post(
     let (Some(mut me), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
 
@@ -94,7 +94,7 @@ pub(crate) async fn handler_appearance_post(
             TextSize::parse(&form.text_size).ok_or_else(|| {
                 AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_size(locale, &form.text_size)
+                    gitquarry_i18n::shared::auth::invalid_size(locale, &form.text_size)
                 ))
             })?;
             me.text_size_default = form.text_size.clone();
@@ -103,7 +103,7 @@ pub(crate) async fn handler_appearance_post(
             if !matches!(form.theme.as_str(), "" | "dark" | "light") {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_theme(locale, &form.theme)
+                    gitquarry_i18n::shared::auth::invalid_theme(locale, &form.theme)
                 )));
             }
             me.theme_default = form.theme.clone();
@@ -112,7 +112,7 @@ pub(crate) async fn handler_appearance_post(
             if !matches!(form.density.as_str(), "" | "dense" | "airy") {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_density(locale, &form.density)
+                    gitquarry_i18n::shared::auth::invalid_density(locale, &form.density)
                 )));
             }
             me.density_default = form.density.clone();
@@ -121,7 +121,7 @@ pub(crate) async fn handler_appearance_post(
             if !matches!(form.locale.as_str(), "" | "es" | "en") {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_locale(locale, &form.locale)
+                    gitquarry_i18n::shared::auth::invalid_locale(locale, &form.locale)
                 )));
             }
             me.locale_default = form.locale.clone();

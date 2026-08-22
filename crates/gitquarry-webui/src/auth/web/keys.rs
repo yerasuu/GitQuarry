@@ -168,7 +168,7 @@ pub(crate) async fn handler_keys_post(
     else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::user_not_found(locale, &me.username)
+            gitquarry_i18n::shared::auth::user_not_found(locale, &me.username)
         )));
     };
 
