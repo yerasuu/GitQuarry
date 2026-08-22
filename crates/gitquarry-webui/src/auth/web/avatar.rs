@@ -55,7 +55,27 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
 /// `email_self_service` is [`gitquarry_core::app::AppContext::oidc`] being
 /// unset — see `domain::user::set_own_email` for why the primary address is
 /// admin-managed wherever OIDC can resolve a login by it.
+#[cfg(any(test, feature = "test-util"))]
+pub fn render_profile_section(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    message: Option<crate::webui::Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_profile_section_impl(user, csrf, email_self_service, message, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn render_profile_section(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    message: Option<crate::webui::Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_profile_section_impl(user, csrf, email_self_service, message, locale)
+}
+fn render_profile_section_impl(
     user: &User,
     csrf: &str,
     email_self_service: bool,
@@ -81,9 +101,36 @@ fn render_profile_section(
             }
         }))
 
-        (settings_section(&t::primary_email_heading(locale), Some(&t::primary_email_purpose(locale)), html! {
+        (settings_section(&t::primary_email_heading(locale), Some(&t::primary_email_purpose(locale)), render_primary_email_section(user, csrf, email_self_service, locale)))
+
+        (settings_section(&t::secondary_emails_heading(locale), Some(&t::secondary_emails_purpose(locale)), html! {
+            (render_secondary_emails_table(user, csrf, locale))
+            form method="post" action=(EMAIL_ACTION_URL) data-async data-async-target="#secondary-emails-table" {
+                (PreEscaped(csrf))
+                input type="hidden" name="email_action" value="add_secondary_email";
+                (field(&t::secondary_email_column_header(locale), None, html! {
+                    input type="email" name="secondary_email" size="40" placeholder=(t::add_secondary_email_placeholder(locale));
+                }))
+                button type="submit" { (t::add_secondary_email_button(locale)) }
+            }
+        }))
+    }
+}
+
+/// The primary-email form/display alone, wrapped in a stable `id` so
+/// `set_email` can swap just this fragment — same reasoning
+/// `render_secondary_emails_table` below already has for its own removal.
+fn render_primary_email_section(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    use crate::auth::i18n::security as t;
+    html! {
+        div id="primary-email-section" {
             @if email_self_service {
-                form method="post" action=(EMAIL_ACTION_URL) {
+                form method="post" action=(EMAIL_ACTION_URL) data-async data-async-target="#primary-email-section" {
                     (PreEscaped(csrf))
                     input type="hidden" name="email_action" value="set_email";
                     (field(&t::primary_email_label(locale), Some(&t::primary_email_hint(locale)), html! {
@@ -100,19 +147,7 @@ fn render_profile_section(
                 }
                 p class="muted" { (t::primary_email_admin_managed(locale)) }
             }
-        }))
-
-        (settings_section(&t::secondary_emails_heading(locale), Some(&t::secondary_emails_purpose(locale)), html! {
-            (render_secondary_emails_table(user, csrf, locale))
-            form method="post" action=(EMAIL_ACTION_URL) {
-                (PreEscaped(csrf))
-                input type="hidden" name="email_action" value="add_secondary_email";
-                (field(&t::secondary_email_column_header(locale), None, html! {
-                    input type="email" name="secondary_email" size="40" placeholder=(t::add_secondary_email_placeholder(locale));
-                }))
-                button type="submit" { (t::add_secondary_email_button(locale)) }
-            }
-        }))
+        }
     }
 }
 
@@ -179,20 +214,26 @@ pub(crate) async fn handler_emails_post(
     let csrf = csrf_field(&headers);
     let self_service = ctx.oidc.is_none();
 
+    // Async is different from the plain fallback below: the two targets an
+    // async submit on this page can hit (`#primary-email-section`,
+    // `#secondary-emails-table`) never contain a flash banner
+    // (`render_profile_section`'s own shell has it, outside either), so a
+    // page-level fragment swapped into one would corrupt it — same
+    // reasoning `keys::handler_keys_post`'s own doc comment gives for its
+    // own `fail!`. This goes through `AppError` instead: a real non-2xx
+    // status, picked up by `extractFlashMessage`/`showErrorToast` the same
+    // way any other failed `data-async` request already is.
     macro_rules! fail {
-        ($msg:expr) => {
+        ($msg:expr) => {{
+            if headers.contains_key(crate::webui::ASYNC_HEADER) {
+                return Err(AppError::bad_request(anyhow::anyhow!("{}", $msg)));
+            }
             return Ok(axum::response::Html(layout(
                 "profile",
                 "",
                 &account_settings_page(
                     "profile",
-                    render_profile_section(
-                        &me,
-                        &csrf,
-                        self_service,
-                        Some(crate::webui::Flash::Err(&$msg)),
-                        locale,
-                    ),
+                    render_profile_section(&me, &csrf, self_service, Some(crate::webui::Flash::Err(&$msg)), locale),
                     locale,
                 )
                 .into_string(),
@@ -201,8 +242,8 @@ pub(crate) async fn handler_emails_post(
                 effective_density(&ctx, &headers).await,
                 locale,
             ))
-            .into_response())
-        };
+            .into_response());
+        }};
     }
 
     let cas = match form.action.as_str() {
@@ -246,10 +287,18 @@ pub(crate) async fn handler_emails_post(
             gitquarry_i18n::shared::account_no_longer_exists(locale)
         )));
     };
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_secondary_email" {
-        return Ok(
-            axum::response::Html(render_secondary_emails_table(&me, &csrf, locale).into_string()).into_response(),
-        );
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        if form.action == "set_email" {
+            return Ok(axum::response::Html(
+                render_primary_email_section(&me, &csrf, self_service, locale).into_string(),
+            )
+            .into_response());
+        }
+        if matches!(form.action.as_str(), "add_secondary_email" | "remove_secondary_email") {
+            return Ok(
+                axum::response::Html(render_secondary_emails_table(&me, &csrf, locale).into_string()).into_response(),
+            );
+        }
     }
     let body = account_settings_page(
         "profile",
