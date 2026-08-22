@@ -187,10 +187,14 @@ pub(crate) use locale_pref::effective_locale;
 // `esc`/`non_empty` above.
 pub(crate) use density_pref::{effective_density, handler_toggle_density};
 pub use page_chrome::layout;
+// `init_source_link`/`resolve_source_link_href` are `pub`, not `pub(crate)`,
+// same cross-crate reason as `layout` above: `gitquarry-server`'s `serve::run`
+// calls the former once at startup, right after resolving `ServerSettings`.
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
     permission_badge_class, project_subnav, settings_section, tab_links, topic_badges,
 };
+pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};
 pub(crate) use repo_link::{github_blob_link, repo_link};
 pub(crate) use text_size::{TextSize, effective_text_size, handler_toggle_text_size, render_text_size_buttons};

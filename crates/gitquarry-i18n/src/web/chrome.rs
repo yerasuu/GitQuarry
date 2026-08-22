@@ -73,6 +73,7 @@ msg!(
 msg!(limited_visibility_badge() { Locale::Es => "limitado", Locale::En => "limited" });
 msg!(private_visibility_badge() { Locale::Es => "privado", Locale::En => "private" });
 msg!(changelog_nav() { Locale::Es => "changelog", Locale::En => "changelog" });
+msg!(source_nav() { Locale::Es => "codigo fuente", Locale::En => "source" });
 msg!(changelog_heading() { Locale::Es => "cambios", Locale::En => "changelog" });
 msg!(changelog_running_version(version: &str) {
     Locale::Es => "Esta instancia ejecuta la version {version}. Estas notas son las de ese binario, no las de la ultima publicada.",

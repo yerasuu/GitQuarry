@@ -95,10 +95,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use gitquarry_core::app::AppContext;
+use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::{git, storage, validate};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -135,6 +136,14 @@ pub(crate) async fn handler_index(
     let viewer_logged_in = login::current_user(&ctx, &headers).await.is_some();
     let mut repos = list_visible_repos(&ctx, viewer_logged_in).await?;
     repos.sort_by(|a, b| a.name.cmp(&b.name));
+    // Both stay unaffected by `?q=` below: they describe the whole visible
+    // set, not the current search/filter.
+    let repo_count = repos.len();
+    let ns_count = repos
+        .iter()
+        .filter_map(|r| r.name.split_once('/').map(|(ns, _)| ns))
+        .collect::<HashSet<_>>()
+        .len();
 
     let q = params.get("q").map(String::as_str).unwrap_or("");
     let q_lower = q.to_ascii_lowercase();
@@ -163,6 +172,17 @@ pub(crate) async fn handler_index(
         })
         .collect();
 
+    // Per-card ssh clone hint (cards view only) — same host/port derivation
+    // `summary::render_clone_urls` uses for a single repo's own clone table,
+    // just inlined here instead of reused: that helper renders a whole
+    // `<h3>+table>`, not a bare string, so there's nothing smaller to call.
+    let ssh_host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.split(':').next())
+        .unwrap_or("<host>");
+    let ssh_port = ctx.ssh_bind.rsplit_once(':').map(|(_, p)| p).unwrap_or(&ctx.ssh_bind);
+
     // `#repo-list`'s own inner content, factored out so the async path below
     // (live search-as-you-type, `style/app.js`'s `data-live-search`) can
     // return just this fragment instead of the whole page — same
@@ -184,6 +204,7 @@ pub(crate) async fn handler_index(
                             " " span class="badge" { "archived" }
                         }
                         (maud::PreEscaped(super::topic_badges(&repo.topics)))
+                        code class="clone-url" { "ssh://" (ssh_host) ":" (ssh_port) "/" (repo.name) }
                     }
                     @if let Some(desc) = &repo.description {
                         @if !desc.is_empty() {
@@ -204,17 +225,112 @@ pub(crate) async fn handler_index(
                 }
             }
         }
+        // Same rows, cgit-flavored dense table instead of cards — CSS-only
+        // swap (`base.css`'s `[data-density='airy']` rule), same pattern as
+        // `.header-lang`/`.sidebar-lang` already use for this axis: both
+        // markups always render, `data-density` on `<html>` picks which one
+        // is visible, no JS needed to switch view when the toggle fires.
+        div class="repo-list-compact" {
+            @for (header, repo) in &rows {
+                @if let Some(ns) = header {
+                    p class="repo-cards-ns" { (ns) }
+                }
+                div class="rl-row" {
+                    div class="rl-name" {
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        @if repo.archived {
+                            " " span class="badge" { "archived" }
+                        }
+                    }
+                    div class="rl-desc" {
+                        @if let Some(desc) = &repo.description {
+                            @if !desc.is_empty() {
+                                (desc)
+                            }
+                        }
+                    }
+                    div class="rl-topics" { (maud::PreEscaped(super::topic_badges(&repo.topics))) }
+                    div class="rl-meta" {
+                        @if let Some(lang) = &repo.primary_language {
+                            span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                            span { (lang) }
+                        }
+                        @if repo.star_count > 0 {
+                            span { (repo.star_count) " \u{2605}" }
+                        }
+                    }
+                }
+            }
+        }
     };
     if headers.contains_key(super::ASYNC_HEADER) {
         return Ok(Html(results.into_string()));
     }
+    // Chrome around `results` that only a full page load needs — skipped on
+    // the live-search fragment above, same reasoning `results` itself is
+    // factored out for: no point re-fetching the user count or walking the
+    // audit log on every keystroke.
+    let user_count = access::list_usernames(ctx.backend().as_ref())
+        .await
+        .map(|names| names.len())
+        .unwrap_or(0);
+    // Same visibility this repo already got from `list_visible_repos` above:
+    // an audit entry only shows here if its `target` is a repo currently in
+    // `repos`, so this can never surface more than a repo's own `?view=activity`
+    // tab already would for the same viewer.
+    let visible_names: HashSet<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+    let recent_activity: Vec<storage::audit::AuditEntry> = storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| visible_names.contains(e.target.as_str()))
+        .take(5)
+        .collect();
+    let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
-        form method="get" action="/" data-async data-live-search="#repo-list" {
-            input name="q" value=(q) placeholder="search repos or topics";
-            button type="submit" { "search" }
+        div class="stats-strip" {
+            div class="stat" { div class="n" { (repo_count) } div class="l" { "repositories" } }
+            div class="stat" { div class="n" { (ns_count) } div class="l" { "namespaces" } }
+            div class="stat" { div class="n" { (user_count) } div class="l" { "users" } }
+            div class="stat" { div class="n" { "v" (env!("CARGO_PKG_VERSION")) } div class="l" { "server" } }
         }
-        p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
-        div id="repo-list" { (results) }
+        div class="repo-layout" {
+            div class="repo-main" {
+                div class="controls-row" {
+                    form method="get" action="/" data-async data-live-search="#repo-list" {
+                        input name="q" value=(q) placeholder="search repos or topics";
+                        button type="submit" { "search" }
+                    }
+                    a class="btn" href="/_new" { "+ new repo" }
+                }
+                p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
+                div id="repo-list" { (results) }
+            }
+            aside class="repo-sidebar" {
+                @if !recent_activity.is_empty() {
+                    div class="card card-pad sidebar-box" {
+                        h4 class="sidebar-box-title" { "recent activity" }
+                        ul class="index-activity" {
+                            @for e in &recent_activity {
+                                li {
+                                    span class="muted" { (e.at) }
+                                    span {
+                                        a href=(format!("/{}", url_encode(&e.target))) { (e.target) }
+                                        " " span class="muted" { code { (e.action) } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                @if !all_topics.is_empty() {
+                    div class="card card-pad sidebar-box" {
+                        h4 class="sidebar-box-title" { "browse by topic" }
+                        div class="index-topics" { (maud::PreEscaped(super::topic_badges(&all_topics))) }
+                    }
+                }
+            }
+        }
     }
     .into_string();
     let topnav = login::topnav(&ctx, &headers).await;
