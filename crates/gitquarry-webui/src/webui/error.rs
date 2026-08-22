@@ -120,20 +120,28 @@ impl IntoResponse for AppError {
         if self.status.is_server_error() {
             eprintln!("gitquarry: UI web: {:#}", self.error);
         }
-        let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
         // No `HeaderMap` reaches this conversion, so the explicit theme/
         // density cookies can't be read here — falls back to
         // `prefers-color-scheme` and the dense default, same as a
-        // first-ever visit would. Same story for locale: falls back to
-        // `Locale::DEFAULT` since there's no cookie/account to check either.
+        // first-ever visit would. Locale doesn't have that problem:
+        // `super::locale_pref::CURRENT_LOCALE` was already resolved (cookie,
+        // then account default) by `webui::request_cache_middleware` before
+        // this handler ever ran — `try_with` rather than `with` since a test
+        // or background path constructing an `AppError` outside that
+        // middleware's scope has nothing to read, and falls back to
+        // `Locale::DEFAULT` same as before.
+        let locale = super::locale_pref::CURRENT_LOCALE
+            .try_with(|locale| *locale)
+            .unwrap_or(gitquarry_i18n::Locale::DEFAULT);
+        let msg = self.client_message(locale);
         let body = super::page_chrome::layout(
             "error",
             "",
-            &super::flash::render_flash(Some(super::flash::Flash::Err(&msg)), gitquarry_i18n::Locale::DEFAULT),
+            &super::flash::render_flash(Some(super::flash::Flash::Err(&msg)), locale),
             "",
             "",
             "",
-            gitquarry_i18n::Locale::DEFAULT,
+            locale,
         );
         (self.status, Html(body)).into_response()
     }

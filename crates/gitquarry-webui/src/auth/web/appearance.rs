@@ -61,6 +61,10 @@ pub(crate) struct AppearanceForm {
     /// "no preference, use the site default (dense)".
     #[serde(default)]
     density: String,
+    /// Only read by `set_locale_pref`: `"es"`/`"en"` (`gitquarry_i18n::Locale::parse`'s
+    /// accepted set), or empty for "no preference, use the site default".
+    #[serde(default)]
+    locale: String,
 }
 
 pub(crate) async fn handler_appearance_post(
@@ -112,6 +116,15 @@ pub(crate) async fn handler_appearance_post(
                 )));
             }
             me.density_default = form.density.clone();
+        }
+        "set_locale_pref" => {
+            if !matches!(form.locale.as_str(), "" | "es" | "en") {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::invalid_locale(locale, &form.locale)
+                )));
+            }
+            me.locale_default = form.locale.clone();
         }
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
@@ -187,6 +200,19 @@ pub fn render_appearance_page(
                     option value="" selected[user.density_default.is_empty()] { (crate::auth::i18n::appearance::density_default_label(locale)) }
                     option value="dense" selected[user.density_default == "dense"] { (crate::auth::i18n::appearance::density_dense_label(locale)) }
                     option value="airy" selected[user.density_default == "airy"] { (crate::auth::i18n::appearance::density_airy_label(locale)) }
+                }
+                button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
+            }
+        }))
+
+        (settings_section(&crate::auth::i18n::appearance::locale_heading(locale), Some(&crate::auth::i18n::appearance::locale_description(locale)), html! {
+            form method="post" action=(action_url) {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_locale_pref";
+                select name="locale" {
+                    option value="" selected[user.locale_default.is_empty()] { (crate::auth::i18n::appearance::locale_automatic(locale)) }
+                    option value="es" selected[user.locale_default == "es"] { (crate::auth::i18n::appearance::locale_es(locale)) }
+                    option value="en" selected[user.locale_default == "en"] { (crate::auth::i18n::appearance::locale_en(locale)) }
                 }
                 button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
             }

@@ -21,10 +21,16 @@
 //! the rest of [`super::repo`]'s views.
 //!
 //! One file per sub-form (mirrors the layout [`super::super::git::browse`]
-//! uses for its own per-concern split), all wired together by
-//! [`handler_repo_conf_post`] (the single `POST` dispatcher every sub-form
-//! shares) and [`render_settings_page`] (assembles every sub-form's markup
-//! into the one page).
+//! uses for its own per-concern split), each its own `?view=settings_<id>`
+//! page (`settings_sections`, `project_subnav`) — the general/description
+//! section alone keeps the bare `?view=settings` id, both because it's the
+//! first tab and because it's also `header_bar`'s own top-level "Settings"
+//! tab target. All wired together by [`handler_repo_conf_post`] (the single
+//! `POST` dispatcher every sub-form still shares — one route, same as
+//! before, only the *response* narrowed from all 13 sections to whichever
+//! one owns the action that just posted) and [`render_settings_section`]
+//! (assembles one section's sub-nav + markup, called by both that POST
+//! handler and `repo::handler_repo`'s own GET dispatch).
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod danger_zone;
@@ -77,7 +83,7 @@ pub mod topics;
 mod topics;
 
 use super::{
-    AppError, Flash, State_, csrf_field, effective_density, effective_locale, effective_theme, layout,
+    AppError, Flash, State_, csrf_field, effective_density, effective_locale, effective_theme, layout, render_flash,
     render_repo_action_buttons, require_csrf, url_encode,
 };
 use crate::auth::web::login;
@@ -90,7 +96,7 @@ use gitquarry_core::auth::entities::{Permission, User};
 use gitquarry_core::storage::entities::RepoConfig;
 use gitquarry_core::storage::remote::Manifest;
 use gitquarry_core::validate;
-use maud::{Markup, html};
+use maud::{Markup, PreEscaped, html};
 
 /// What each `save_*` helper below reports back, instead of a
 /// `Flash<'static>` directly: the CAS-conflict case now needs
@@ -374,7 +380,8 @@ pub(crate) async fn handler_repo_conf_post(
         },
     );
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = render_settings_page(
+    let body = render_settings_section(
+        section_for_action(&form.action),
         &name,
         &config,
         owner_display.as_deref().unwrap_or(""),
@@ -524,9 +531,13 @@ pub struct RepoConfForm {
 
 /// `users`/`group_names` always travel together on this page — every
 /// namespace-picking form (owner transfer, move) offers both as options —
-/// bundled so [`render_settings_page`] doesn't carry two more positional
-/// slice params on top of everything else it already does.
-pub(crate) struct Namespaces<'a> {
+/// bundled so [`render_settings_section`] doesn't carry two more positional
+/// slice params on top of everything else it already does. `pub`, not
+/// `pub(crate)`, for the same cross-crate-test reason as [`RepoConfForm`]:
+/// [`render_settings_section`] takes one by value and is itself `pub` so
+/// `tests/webui_repo_settings_sections.rs` can exercise the sub-nav/dispatch
+/// logic directly.
+pub struct Namespaces<'a> {
     pub users: &'a [User],
     pub group_names: &'a [String],
 }
@@ -539,11 +550,12 @@ pub(crate) struct Namespaces<'a> {
 /// outside this module already follows.
 pub(crate) use mirrors::fetch_mr_links_by_mirror;
 
-/// `manifest`/`granted` always travel together into [`render_settings_page`]
+/// `manifest`/`granted` always travel together into [`render_settings_section`]
 /// too — this repo's own live branch list and its own permission grants —
 /// bundled for the same reason [`Namespaces`] is: one struct slot instead of
 /// two more positional params clippy's `too_many_arguments` would flag.
-pub(crate) struct RepoState<'a> {
+/// `pub`, same cross-crate-test reason as [`Namespaces`].
+pub struct RepoState<'a> {
     pub manifest: &'a Manifest,
     pub granted: &'a [(User, Permission)],
     /// Each mirror with its current etag — the edit form's CAS guard, see
@@ -554,11 +566,12 @@ pub(crate) struct RepoState<'a> {
     pub mr_links: &'a std::collections::HashMap<String, Vec<gitquarry_mirror_external::access::ExternalPrLink>>,
 }
 
-/// `csrf`/`message`/`locale` bundled so [`render_settings_page`] doesn't
+/// `csrf`/`message`/`locale` bundled so [`render_settings_section`] doesn't
 /// cross clippy's `too_many_arguments` now that `locale` (needed once its
 /// sub-forms became locale-aware) would have been the 8th positional param —
 /// same reasoning as [`Namespaces`]/[`RepoState`] and `groups::PageChrome`.
-pub(crate) struct PageChrome<'a> {
+/// `pub`, same cross-crate-test reason as [`Namespaces`].
+pub struct PageChrome<'a> {
     pub csrf: &'a str,
     pub message: Option<Flash<'a>>,
     /// `Some((mirror_id, token))` for exactly one response: right after
@@ -576,7 +589,100 @@ pub(crate) struct PageChrome<'a> {
     pub locale: gitquarry_i18n::Locale,
 }
 
-pub(crate) fn render_settings_page(
+/// Which of [`settings_sections`]' ids owns a given `RepoConfForm::action` —
+/// [`handler_repo_conf_post`] uses this to know which single section to
+/// re-render after a save, same job `RepoConfForm`'s own doc comment
+/// describes for `action` itself, just inverted (action → owning page
+/// instead of page → accepted actions). Falls back to `"settings"` (general)
+/// for `""`/anything unrecognized, matching [`render_settings_section`]'s own
+/// fallback arm.
+fn section_for_action(action: &str) -> &'static str {
+    match action {
+        "set_default_branch" => "settings_default_branch",
+        "set_protected_branches" => "settings_protected_branches",
+        "set_protected_tags" => "settings_protected_tags",
+        "set_require_signed_commits" => "settings_signed_commits",
+        "set_topics" => "settings_topics",
+        "set_required_reviewers" => "settings_reviewers",
+        "set_labels" => "settings_labels",
+        "set_lfs_max_blob_size" => "settings_lfs",
+        "set_perm" => "settings_permissions",
+        "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => "settings_mirrors",
+        "move_repo" => "settings_move",
+        "delete_repo" | "purge_repo" => "settings_danger_zone",
+        _ => "settings",
+    }
+}
+
+/// Section ids/hrefs/labels for [`project_subnav`]'s sub-tab row — same
+/// "id, href, label" shape [`super::account_sections`] uses for the account
+/// settings sidebar, just a horizontal row instead of a vertical one (a
+/// repo's settings tab already sits inside the repo's own header/tabs
+/// chrome, which a second full sidebar would compete with for width).
+/// `"settings"`, not `"settings_general"`: it's also `header_bar`'s
+/// top-level "Settings" tab target, so a bare `?view=settings` link (the
+/// tab itself, [`handler_repo_conf_post`]'s `restore_repo` redirect) lands
+/// on a real section instead of a dead end that'd need its own
+/// default-redirect.
+fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'static str, String, String); 13] {
+    use gitquarry_i18n::web::repo_settings as t;
+    let link = |view: &str| repo_link(repo_name, view, "").to_string();
+    [
+        ("settings", link("settings"), t::repo_conf_heading(locale)),
+        (
+            "settings_default_branch",
+            link("settings_default_branch"),
+            t::default_branch_heading(locale),
+        ),
+        (
+            "settings_protected_branches",
+            link("settings_protected_branches"),
+            t::protected_branches_heading(locale),
+        ),
+        (
+            "settings_protected_tags",
+            link("settings_protected_tags"),
+            t::protected_tags_heading(locale),
+        ),
+        (
+            "settings_signed_commits",
+            link("settings_signed_commits"),
+            t::require_signed_commits_heading(locale),
+        ),
+        ("settings_topics", link("settings_topics"), t::topics_heading(locale)),
+        (
+            "settings_reviewers",
+            link("settings_reviewers"),
+            t::required_reviewers_heading(locale),
+        ),
+        ("settings_labels", link("settings_labels"), t::labels_heading(locale)),
+        ("settings_lfs", link("settings_lfs"), t::lfs_limit_heading(locale)),
+        (
+            "settings_permissions",
+            link("settings_permissions"),
+            t::permissions_heading(locale),
+        ),
+        ("settings_mirrors", link("settings_mirrors"), t::mirrors_heading(locale)),
+        ("settings_move", link("settings_move"), t::move_repo_heading(locale)),
+        (
+            "settings_danger_zone",
+            link("settings_danger_zone"),
+            t::delete_repo_label(locale),
+        ),
+    ]
+}
+
+/// `section` is one of [`settings_sections`]'s ids — everything else this
+/// page's data (`?view=`-dispatched on the GET side, [`section_for_action`]
+/// -dispatched after a POST) is still fetched unconditionally by both
+/// callers, same as before this split, when one call here rendered all 13
+/// sections at once: splitting *what's shown* from *what's fetched* would
+/// trade a bigger diff across both call sites for a per-tab fetch saving
+/// neither caller asked for. Only the assembly changed — a
+/// [`project_subnav`] row plus exactly one sub-form's markup instead of all
+/// 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
+pub fn render_settings_section(
+    section: &str,
     repo_name: &str,
     config: &RepoConfig,
     current_owner: &str,
@@ -603,23 +709,94 @@ pub(crate) fn render_settings_page(
     // sub-form gets `None` and falls back to its own stored value, same as
     // a plain page load.
     let retry_for = |action: &str| retry.filter(|f| f.action == action);
-    html! {
-        (general::render_repo_conf_form(repo_name, config, current_owner, csrf, message, retry_for(""), locale))
-        (default_branch::render_default_branch_form(repo_name, manifest, csrf, retry_for("set_default_branch"), locale))
-        (protected_branches::render_protected_branches_form(repo_name, config, manifest, csrf, retry_for("set_protected_branches"), locale))
-        (protected_tags::render_protected_tags_form(repo_name, config, manifest, csrf, retry_for("set_protected_tags"), locale))
-        (require_signed_commits::render_require_signed_commits_form(repo_name, config, manifest, csrf, retry_for("set_require_signed_commits"), locale))
-        (topics::render_topics_form(repo_name, config, csrf, retry_for("set_topics"), locale))
-        (required_reviewers::render_required_reviewers_form(repo_name, config, csrf, retry_for("set_required_reviewers"), locale))
-        (labels::render_labels_form(repo_name, config, csrf, retry_for("set_labels"), locale))
-        (lfs_limit::render_lfs_limit_form(repo_name, config, csrf, retry_for("set_lfs_max_blob_size"), locale))
-        (crate::webui::settings_section(
+    let sections = settings_sections(repo_name, locale);
+    let tabs: Vec<(&str, String, String)> = sections
+        .iter()
+        .map(|(id, href, label)| (*id, href.clone(), label.clone()))
+        .collect();
+    // Normalized once, up front, rather than matched separately by the
+    // sub-nav below and the `content` dispatch further down: an
+    // unrecognized `section` (a stale bookmark, a typo'd `?view=`) falls
+    // back to general content either way (`content`'s own `_` arm), so the
+    // sub-nav needs the same fallback id to highlight the tab that actually
+    // matches what's showing — highlighting nothing while general's content
+    // renders anyway would be its own small "which tab am I on" bug.
+    let active = sections
+        .iter()
+        .find(|(id, _, _)| *id == section)
+        .map_or("settings", |(id, _, _)| id);
+    let content = match active {
+        "settings_default_branch" => default_branch::render_default_branch_form(
+            repo_name,
+            manifest,
+            csrf,
+            retry_for("set_default_branch"),
+            locale,
+        ),
+        "settings_protected_branches" => protected_branches::render_protected_branches_form(
+            repo_name,
+            config,
+            manifest,
+            csrf,
+            retry_for("set_protected_branches"),
+            locale,
+        ),
+        "settings_protected_tags" => protected_tags::render_protected_tags_form(
+            repo_name,
+            config,
+            manifest,
+            csrf,
+            retry_for("set_protected_tags"),
+            locale,
+        ),
+        "settings_signed_commits" => require_signed_commits::render_require_signed_commits_form(
+            repo_name,
+            config,
+            manifest,
+            csrf,
+            retry_for("set_require_signed_commits"),
+            locale,
+        ),
+        "settings_topics" => topics::render_topics_form(repo_name, config, csrf, retry_for("set_topics"), locale),
+        "settings_reviewers" => required_reviewers::render_required_reviewers_form(
+            repo_name,
+            config,
+            csrf,
+            retry_for("set_required_reviewers"),
+            locale,
+        ),
+        "settings_labels" => labels::render_labels_form(repo_name, config, csrf, retry_for("set_labels"), locale),
+        "settings_lfs" => {
+            lfs_limit::render_lfs_limit_form(repo_name, config, csrf, retry_for("set_lfs_max_blob_size"), locale)
+        }
+        "settings_permissions" => crate::webui::settings_section(
             &gitquarry_i18n::web::repo_settings::permissions_heading(locale),
             None,
             permissions::render_perm_grid(repo_name, granted, csrf, locale),
-        ))
-        (mirrors::render_mirrors_section(repo_name, mirrors, mr_links, csrf, pending_mirror_token, locale))
-        (move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale))
-        (danger_zone::render_delete_repo_form(repo_name, config.deleted_at, csrf, retry_for("delete_repo"), retry_for("purge_repo"), locale))
+        ),
+        "settings_mirrors" => {
+            mirrors::render_mirrors_section(repo_name, mirrors, mr_links, csrf, pending_mirror_token, locale)
+        }
+        "settings_move" => {
+            move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale)
+        }
+        "settings_danger_zone" => danger_zone::render_delete_repo_form(
+            repo_name,
+            config.deleted_at,
+            csrf,
+            retry_for("delete_repo"),
+            retry_for("purge_repo"),
+            locale,
+        ),
+        // "settings" (general) falls in here too, alongside any unrecognized
+        // `?view=` value — same "unknown view, show the first tab" fallback
+        // every other repo view already has via `handler_repo`'s own
+        // `view.get("view").map_or("about", ...)`.
+        _ => general::render_repo_conf_form(repo_name, config, current_owner, csrf, None, retry_for(""), locale),
+    };
+    html! {
+        (super::project_subnav(&tabs, active))
+        (PreEscaped(render_flash(message, locale)))
+        (content)
     }
 }
