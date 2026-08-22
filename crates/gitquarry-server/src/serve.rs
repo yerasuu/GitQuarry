@@ -124,8 +124,12 @@ pub async fn run(rest: &[String]) -> Result<()> {
         // wrong key would leave every operation failing to decrypt, better
         // to cut it off here with a clear message than after binding any
         // port.
-        let cipher =
-            gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?;
+        let cipher = gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase)
+            .await
+            .context(
+                "couldn't reach the storage backend to read/create the bucket's encryption config \
+                 (retries already exhausted -- check the endpoint is up and reachable, not just this process)",
+            )?;
         // Config exists and connects fine, but the bucket itself has never
         // had an admin user created (infra-as-code wrote `gitquarry.toml`
         // ahead of the first real deploy, or it points at a brand-new
