@@ -11,6 +11,13 @@ msg!(settings_saved_in_bucket_suffix() {
     Locale::En => " inside the bucket. All of this only applies on (re)start; a CLI flag always wins over what's saved here.",
 });
 
+msg!(settings_footer_heading() { Locale::Es => "pie de pagina", Locale::En => "footer" });
+msg!(settings_source_link_prose() {
+    Locale::Es => "El enlace \"codigo fuente\" del pie de pagina. Un repo ya alojado aca (namespace/nombre) o una URL http(s) completa. Vacio lo oculta.",
+    Locale::En => "The footer's \"source\" link. A repo already hosted here (namespace/name) or a full http(s) URL. Empty hides it.",
+});
+msg!(settings_source_link_label() { Locale::Es => "enlace de codigo fuente", Locale::En => "source link" });
+
 msg!(settings_network_heading() { Locale::Es => "red", Locale::En => "network" });
 msg!(settings_web_bind_label() { Locale::Es => "web-bind", Locale::En => "web-bind" });
 msg!(settings_ssh_bind_label() { Locale::Es => "ssh-bind", Locale::En => "ssh-bind" });

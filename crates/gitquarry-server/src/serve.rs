@@ -209,6 +209,12 @@ pub async fn run(rest: &[String]) -> Result<()> {
         }
     };
 
+    // Resolved once here, same "restart to apply" contract every other
+    // `ServerSettings` field already has (`settings/web.rs`'s own flash
+    // message) — see `webui::init_source_link`'s own doc comment on why
+    // this isn't re-read per page render.
+    webui::init_source_link(webui::resolve_source_link_href(settings.source_link.as_deref()));
+
     let web_bind = args
         .web_bind
         .or(settings.web_bind)

@@ -652,6 +652,43 @@ pub(crate) const STYLE: &str = concat!(
 const COPYRIGHT_HOLDER: &str = "Yerasuu";
 const COPYRIGHT_YEAR: &str = "2026";
 
+/// The footer's "source" link (`ServerSettings::source_link`, already
+/// resolved to an href — see [`resolve_source_link_href`]) — a
+/// process-wide `OnceLock`, not a `layout` parameter: `layout` renders on
+/// every single page (~35 call sites across the crate), and this one link
+/// changes only when an admin edits `/_settings` and the process restarts
+/// to apply it (same "restart to apply" contract every other `ServerSettings`
+/// field already has), so it isn't worth threading a new argument through
+/// every one of them. `gitquarry-server`'s `serve::run` calls
+/// [`init_source_link`] once at startup, right after resolving
+/// `ServerSettings`; unset (tests, or before that runs) reads as "no link".
+static SOURCE_LINK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Called once at startup with the already-resolved href — see
+/// [`resolve_source_link_href`]. A second call (there shouldn't be one) is
+/// silently ignored rather than panicking: a `OnceLock` staying at whatever
+/// value it first got is a safer failure mode for page chrome than crashing
+/// the server over it.
+pub fn init_source_link(href: Option<String>) {
+    let _ = SOURCE_LINK.set(href);
+}
+
+/// `ServerSettings::source_link`'s raw stored value (either an absolute
+/// `http(s)://` URL or a `namespace/name` repo path) resolved to what
+/// actually belongs in `href=`. Pulled out of [`init_source_link`]'s call
+/// site so it's independently testable without a real `OnceLock` write.
+pub fn resolve_source_link_href(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        Some(raw.to_string())
+    } else {
+        Some(format!("/{raw}"))
+    }
+}
+
 pub fn layout(
     title: &str,
     header: &str,
@@ -719,6 +756,10 @@ pub fn layout(
                 // isn't handed the same three links on every page.
                 footer class="site-footer" {
                     span { (chrome::footer_copyright(locale, COPYRIGHT_YEAR, COPYRIGHT_HOLDER)) }
+                    @if let Some(link) = SOURCE_LINK.get().and_then(|v| v.as_deref()) {
+                        " · "
+                        a href=(link) { (chrome::source_nav(locale)) }
+                    }
                     " · "
                     a href="/_license" rel="license" { "AGPL-3.0-or-later" }
                     " · "
