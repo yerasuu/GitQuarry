@@ -96,23 +96,6 @@ fn tabs_bar(
     }
 }
 
-/// A second `.tabs`-styled row stacked directly under the main tabs bar —
-/// see `base.css`'s own doc comment on `table.tabs.subnav` for why it's a
-/// distinct modifier class rather than a second bare `table.tabs`. No
-/// hamburger toggle (`tab_links`'s own `toggle: None`): every caller so far
-/// (a repo settings section list, `merges`' open/closed/all status filter)
-/// is short enough to read fine as an always-visible stack on mobile, unlike
-/// the main tabs bar's 9 entries.
-pub(crate) fn project_subnav(tabs: &[(&str, String, String)], active: &str) -> maud::Markup {
-    maud::html! {
-        table class="tabs subnav" {
-            tr {
-                td { (tab_links(None, tabs, active)) }
-            }
-        }
-    }
-}
-
 /// Looks up the display label for whichever `id` is currently `active` —
 /// used for the "GitQuarry / {label}" title so the breadcrumb shows
 /// translated text instead of the (deliberately untranslated, English-only)
@@ -187,7 +170,11 @@ fn title_bar(
 pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> String {
     use gitquarry_i18n::web::chrome;
     let tabs: &[(&str, String, String)] = &[
-        ("settings", "/_settings".to_string(), chrome::settings_tab(locale)),
+        (
+            "settings",
+            "/_settings/footer".to_string(),
+            chrome::settings_tab(locale),
+        ),
         ("users", "/_users".to_string(), chrome::users_tab(locale)),
         ("groups", "/_groups".to_string(), chrome::groups_tab(locale)),
         ("audit", "/_audit".to_string(), chrome::audit_tab(locale)),
@@ -652,6 +639,43 @@ pub(crate) const STYLE: &str = concat!(
 const COPYRIGHT_HOLDER: &str = "Yerasuu";
 const COPYRIGHT_YEAR: &str = "2026";
 
+/// The footer's "source" link (`ServerSettings::source_link`, already
+/// resolved to an href — see [`resolve_source_link_href`]) — a
+/// process-wide `OnceLock`, not a `layout` parameter: `layout` renders on
+/// every single page (~35 call sites across the crate), and this one link
+/// changes only when an admin edits `/_settings` and the process restarts
+/// to apply it (same "restart to apply" contract every other `ServerSettings`
+/// field already has), so it isn't worth threading a new argument through
+/// every one of them. `gitquarry-server`'s `serve::run` calls
+/// [`init_source_link`] once at startup, right after resolving
+/// `ServerSettings`; unset (tests, or before that runs) reads as "no link".
+static SOURCE_LINK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Called once at startup with the already-resolved href — see
+/// [`resolve_source_link_href`]. A second call (there shouldn't be one) is
+/// silently ignored rather than panicking: a `OnceLock` staying at whatever
+/// value it first got is a safer failure mode for page chrome than crashing
+/// the server over it.
+pub fn init_source_link(href: Option<String>) {
+    let _ = SOURCE_LINK.set(href);
+}
+
+/// `ServerSettings::source_link`'s raw stored value (either an absolute
+/// `http(s)://` URL or a `namespace/name` repo path) resolved to what
+/// actually belongs in `href=`. Pulled out of [`init_source_link`]'s call
+/// site so it's independently testable without a real `OnceLock` write.
+pub fn resolve_source_link_href(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        Some(raw.to_string())
+    } else {
+        Some(format!("/{raw}"))
+    }
+}
+
 pub fn layout(
     title: &str,
     header: &str,
@@ -680,7 +704,14 @@ pub fn layout(
                 a class="skip-link" href="#content" { (chrome::skip_to_content(locale)) }
                 div id="topbar" {
                     div class="inner" {
-                        span class="brand" { a href="/" { "GitQuarry" } }
+                        span class="brand" {
+                            a href="/" {
+                                svg viewBox="0 0 24 24" aria-hidden="true" {
+                                    path d="M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z" {}
+                                }
+                                "GitQuarry"
+                            }
+                        }
                         // Pure-CSS collapse (no JS in this codebase at all):
                         // a hidden checkbox + its `<label>` as the visible
                         // hamburger toggle, `nav` shown via the sibling
@@ -691,10 +722,11 @@ pub fn layout(
                         label for="nav-toggle" class="nav-toggle-btn" aria-label=(chrome::menu_toggle_label(locale)) { (super::icons::menu()) }
                         nav {
                             a href="/" { (chrome::repos_nav(locale)) } " · "
-                            a href="/_new" { (chrome::new_repo_nav(locale)) }
+                            a href="/_new" { (chrome::new_repo_nav(locale)) } " · "
+                            a href="/_groups" { (chrome::groups_tab(locale)) }
                             (maud::PreEscaped(topnav_auth))
                             " · "
-                            a href="/_settings" { (chrome::settings_tab(locale)) }
+                            a href="/_settings/footer" { (chrome::settings_tab(locale)) }
                             " · "
                             (super::theme_pref::render_theme_toggle(theme))
                             " · "
@@ -711,6 +743,10 @@ pub fn layout(
                 // isn't handed the same three links on every page.
                 footer class="site-footer" {
                     span { (chrome::footer_copyright(locale, COPYRIGHT_YEAR, COPYRIGHT_HOLDER)) }
+                    @if let Some(link) = SOURCE_LINK.get().and_then(|v| v.as_deref()) {
+                        " · "
+                        a href=(link) { (chrome::source_nav(locale)) }
+                    }
                     " · "
                     a href="/_license" rel="license" { "AGPL-3.0-or-later" }
                     " · "

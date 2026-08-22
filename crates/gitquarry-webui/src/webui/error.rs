@@ -49,26 +49,6 @@ impl AppError {
         }
     }
 
-    /// `[tracker]` compiled in but not configured for
-    /// this deploy — an operator condition, not a client mistake, so 503
-    /// rather than 400/404. An `AppError` so tracker's render functions
-    /// (which return `Result<String, AppError>`, not a full `Response`) can
-    /// surface it the same way every other failure there does.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn service_unavailable(error: anyhow::Error) -> Self {
-        AppError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            error,
-        }
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
-    pub(crate) fn service_unavailable(error: anyhow::Error) -> Self {
-        AppError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            error,
-        }
-    }
-
     /// For the `webui::raw` routes (plain/patch/rawdiff/snapshot/atom/
     /// release_asset): those promise a non-HTML body on success, so an
     /// error must stay plain text too instead of falling back to the

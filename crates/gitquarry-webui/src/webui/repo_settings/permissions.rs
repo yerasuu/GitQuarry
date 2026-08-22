@@ -31,7 +31,7 @@ pub(super) async fn save_perm(
         "owner" => Some(Permission::Owner),
         "none" => None,
         other => {
-            return Ok(FlashOutcome::Invalid(gitquarry_i18n::shared::invalid_permission(
+            return Ok(FlashOutcome::Invalid(gitquarry_i18n::shared::auth::invalid_permission(
                 locale, other,
             )));
         }
@@ -129,11 +129,11 @@ pub(super) fn render_perm_grid_fragment(
                                 // Same "admin" badge text already cataloged for
                                 // `auth::web::users`'s own permission table — reused
                                 // here rather than duplicated verbatim.
-                                " " span class="badge accent" { (crate::auth::i18n::users::admin_label(locale)) }
+                                " " span class="badge accent" { (gitquarry_i18n::web::auth::users::admin_label(locale)) }
                             }
                         }
                         td {
-                            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) style="display:inline" data-async data-async-target="#perm-grid" {
+                            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) style="display:inline" data-async data-async-target="#perm-grid" data-confirm=(t::change_perm_confirm(locale, &user.username)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="conf_action" value="set_perm";
                                 input type="hidden" name="username" value=(user.username);

@@ -8,21 +8,22 @@
 //! - per-user ssh:// permissions — a Pijul-Nest-style grid, adapted to what
 //!   git actually has: no discussions/channels/tags, no "everybody" row
 //!   (ssh:// always requires an authorized pubkey), just the five
-//!   [`gitquarry_core::auth::access::Permission`] tiers per user, same enum
+//!   [`gitquarry_core::auth::entities::Permission`] tiers per user, same enum
 //!   [`gitquarry_core::auth::access`] already uses.
 //! - deleting the repo outright (irreversible, gated by typing the repo's
 //!   full name — see [`danger_zone::render_delete_repo_form`]).
 //!
-//! Split out of [`super::settings`] (server-wide settings) because it's a
+//! Split out of [`crate::settings`] (server-wide settings) because it's a
 //! per-repo concern with its own gate call ([`require_repo_authority`],
-//! which — unlike [`super::settings::require_admin`] — also lets a
+//! which — unlike [`crate::settings::web::require_admin`] — also lets a
 //! `Maintainer`/`Owner`-tier grant on this one repo through, not just
 //! global admins) despite living behind the same `POST /{repo}` route as
 //! the rest of [`super::repo`]'s views.
 //!
-//! One file per sub-form (mirrors the layout [`super::super::git::browse`]
+//! One file per sub-form (mirrors the layout `gitquarry_core::git::browse`
 //! uses for its own per-concern split), each its own `?view=settings_<id>`
-//! page (`settings_sections`, `project_subnav`) — the general/description
+//! page (`settings_sections`, the sidebar in [`render_settings_section`]) —
+//! the general/description
 //! section alone keeps the bare `?view=settings` id, both because it's the
 //! first tab and because it's also `header_bar`'s own top-level "Settings"
 //! tab target. All wired together by [`handler_repo_conf_post`] (the single
@@ -156,7 +157,7 @@ async fn require_repo_authority(
         return Ok(Some(
             AppError::forbidden(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::bootstrap_grant_required(locale)
+                gitquarry_i18n::shared::settings::bootstrap_grant_required(locale)
             ))
             .into_response(),
         ));
@@ -183,7 +184,7 @@ async fn require_repo_authority(
     Ok(Some(
         AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::insufficient_repo_permission(locale)
+            gitquarry_i18n::shared::repo::insufficient_repo_permission(locale)
         ))
         .into_response(),
     ))
@@ -204,7 +205,7 @@ pub(crate) async fn handler_repo_conf_post(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     };
     let users = access::list_all_users(&ctx.backend(), &ctx.cipher).await?;
@@ -216,7 +217,9 @@ pub(crate) async fn handler_repo_conf_post(
 
     let (outcome, pending_mirror_token) = match form.action.as_str() {
         "delete_repo" if form.confirm_name.trim() != name => (
-            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name)),
+            FlashOutcome::Invalid(gitquarry_i18n::shared::repo::type_name_to_confirm_deletion(
+                locale, &name,
+            )),
             None,
         ),
         "delete_repo" => {
@@ -233,7 +236,9 @@ pub(crate) async fn handler_repo_conf_post(
             return Ok(Redirect::to("/").into_response());
         }
         "purge_repo" if form.confirm_name.trim() != name => (
-            FlashOutcome::Invalid(gitquarry_i18n::shared::type_name_to_confirm_deletion(locale, &name)),
+            FlashOutcome::Invalid(gitquarry_i18n::shared::repo::type_name_to_confirm_deletion(
+                locale, &name,
+            )),
             None,
         ),
         "purge_repo" => {
@@ -312,7 +317,28 @@ pub(crate) async fn handler_repo_conf_post(
         }
         _ => (general::save_conf(&ctx, &resolved, &name, &form, &actor).await?, None),
     };
+    let is_async = headers.contains_key(super::ASYNC_HEADER);
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
+    // Async is different from the plain fallback below: none of this page's
+    // three async targets (`#mirrors-section`, `#perm-grid`, and every
+    // other action's `#repo-settings-section-body` — see
+    // `render_settings_section`'s own doc comment) is guaranteed to
+    // contain a flash banner (the first two don't), so a rejected/
+    // conflicted save goes through `AppError` here instead: a real non-2xx
+    // status, picked up by `extractFlashMessage`/`showErrorToast` the same
+    // way any other failed `data-async` request already is — same
+    // reasoning `keys::handler_keys_post`'s own doc comment gives for its
+    // `fail!`. Checked before any of `save_conf`/`save_topics`/etc.'s
+    // success paths below, so it also covers the two narrow fragments that
+    // were already async (`sync_mirror_now`/`delete_mirror`/`set_perm`)
+    // and previously had this same gap.
+    if is_async {
+        match &outcome {
+            FlashOutcome::Conflict => return Err(AppError::bad_request(anyhow::anyhow!("{}", cas_conflict_msg))),
+            FlashOutcome::Invalid(msg) => return Err(AppError::bad_request(anyhow::anyhow!("{msg}"))),
+            FlashOutcome::Ok(_) => {}
+        }
+    }
     let flash = match &outcome {
         FlashOutcome::Ok(msg) => Flash::Ok(msg),
         FlashOutcome::Conflict => Flash::Err(&cas_conflict_msg),
@@ -338,8 +364,7 @@ pub(crate) async fn handler_repo_conf_post(
     // this one section, and everything `render_mirrors_section` needs is
     // already fetched above regardless of which action fired -- no extra
     // query for this path.
-    if headers.contains_key(super::ASYNC_HEADER) && matches!(form.action.as_str(), "sync_mirror_now" | "delete_mirror")
-    {
+    if is_async && matches!(form.action.as_str(), "sync_mirror_now" | "delete_mirror") {
         return Ok(axum::response::Html(
             mirrors::render_mirrors_section(
                 &name,
@@ -357,9 +382,45 @@ pub(crate) async fn handler_repo_conf_post(
     // own doc comment): `set_perm` (row save or the add-access form) only
     // ever changes this one grid, and `granted` is already fetched above
     // regardless of which action fired.
-    if headers.contains_key(super::ASYNC_HEADER) && form.action == "set_perm" {
+    if is_async && form.action == "set_perm" {
         return Ok(axum::response::Html(
             permissions::render_perm_grid_fragment(&name, &granted, &csrf_field(&headers), locale).into_string(),
+        )
+        .into_response());
+    }
+    // Async, every other action (general/topics/labels/protected-branches/
+    // protected-tags/signed-commits/reviewers/lfs-limit/move/danger-zone's
+    // own name-mismatch retry — everything not already handled by the two
+    // narrower targets above): `render_settings_section` re-renders the
+    // one active section, wrapped in `#repo-settings-body` (see that fn's
+    // own doc comment) so `data-async-target="#repo-settings-body"` has
+    // something to swap.
+    if is_async {
+        return Ok(axum::response::Html(
+            render_settings_section(
+                section_for_action(&form.action),
+                &name,
+                &config,
+                owner_display.as_deref().unwrap_or(""),
+                Namespaces {
+                    users: &users,
+                    group_names: &group_names,
+                },
+                RepoState {
+                    manifest: &manifest,
+                    granted: &granted,
+                    mirrors: &mirrors_list,
+                    mr_links: &mr_links_by_mirror,
+                },
+                PageChrome {
+                    csrf: &csrf_field(&headers),
+                    message: Some(flash),
+                    pending_mirror_token: pending_mirror_token.as_ref(),
+                    retry: retry_form,
+                    locale,
+                },
+            )
+            .into_string(),
         )
         .into_response());
     }
@@ -573,6 +634,10 @@ pub struct RepoState<'a> {
 /// `pub`, same cross-crate-test reason as [`Namespaces`].
 pub struct PageChrome<'a> {
     pub csrf: &'a str,
+    // `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash`
+    // goes `pub(crate)` outside that config, which is what makes plain
+    // `cargo check` flag this field as exposing a private type.
+    #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
     pub message: Option<Flash<'a>>,
     /// `Some((mirror_id, token))` for exactly one response: right after
     /// `add_mirror`/`edit_mirror` sets a token, never on a later page load
@@ -614,11 +679,13 @@ fn section_for_action(action: &str) -> &'static str {
     }
 }
 
-/// Section ids/hrefs/labels for [`project_subnav`]'s sub-tab row — same
-/// "id, href, label" shape [`super::account_sections`] uses for the account
-/// settings sidebar, just a horizontal row instead of a vertical one (a
-/// repo's settings tab already sits inside the repo's own header/tabs
-/// chrome, which a second full sidebar would compete with for width).
+/// Section ids/hrefs/labels for [`render_settings_section`]'s own sidebar —
+/// same "id, href, label" shape [`super::account_sections`] uses for the
+/// account settings sidebar (this one's `.settings-sidebar`/
+/// `.settings-layout` too — same CSS, a second instance). Used to render as
+/// `project_subnav`'s horizontal tab row instead, which read fine for
+/// account settings' 6 entries but wrapped badly (or forced `table.tabs`'s
+/// own horizontal scroll) at this page's 13.
 /// `"settings"`, not `"settings_general"`: it's also `header_bar`'s
 /// top-level "Settings" tab target, so a bare `?view=settings` link (the
 /// tab itself, [`handler_repo_conf_post`]'s `restore_repo` redirect) lands
@@ -678,9 +745,17 @@ fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'sta
 /// callers, same as before this split, when one call here rendered all 13
 /// sections at once: splitting *what's shown* from *what's fetched* would
 /// trade a bigger diff across both call sites for a per-tab fetch saving
-/// neither caller asked for. Only the assembly changed — a
-/// [`project_subnav`] row plus exactly one sub-form's markup instead of all
-/// 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
+/// neither caller asked for. Only the assembly changed — a sidebar row per
+/// [`settings_sections`] entry plus exactly one sub-form's markup instead
+/// of all 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
+///
+/// The whole thing (sidebar, flash, and the one active section) is wrapped
+/// in `#repo-settings-body` — every sub-form under `repo_settings/` other
+/// than the mirrors/permissions sections (which have their own narrower
+/// `#mirrors-section`/`#perm-grid` targets) is `data-async
+/// data-async-target="#repo-settings-body"`, so a save re-renders in
+/// place instead of leaving the browser's "confirm resubmission" dialog
+/// for a later F5.
 pub fn render_settings_section(
     section: &str,
     repo_name: &str,
@@ -795,8 +870,29 @@ pub fn render_settings_section(
         _ => general::render_repo_conf_form(repo_name, config, current_owner, csrf, None, retry_for(""), locale),
     };
     html! {
-        (super::project_subnav(&tabs, active))
-        (PreEscaped(render_flash(message, locale)))
-        (content)
+      div id="repo-settings-body" {
+        // Vertical sidebar instead of `project_subnav`'s horizontal tab
+        // row — same `.settings-layout`/`.settings-sidebar`/
+        // `.settings-content` `account_settings_page` already uses for its
+        // own 6-section nav, reused as-is rather than a new look: 13
+        // sections is too many for one horizontal row on anything but a
+        // wide viewport without either wrapping badly or forcing
+        // `table.tabs`'s own horizontal scroll just to reach "delete repo".
+        div class="settings-layout" {
+            nav class="settings-sidebar" aria-label=(gitquarry_i18n::web::chrome::repo_settings_sidebar_nav_label(locale)) {
+                ul {
+                    @for (id, href, label) in &tabs {
+                        li {
+                            a class=[(active == *id).then_some("active")] aria-current=[(active == *id).then_some("page")] href=(href) { (label) }
+                        }
+                    }
+                }
+            }
+            div class="settings-content" {
+                (PreEscaped(render_flash(message, locale)))
+                (content)
+            }
+        }
+      }
     }
 }

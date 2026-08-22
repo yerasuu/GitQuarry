@@ -1,5 +1,5 @@
 //! Local password login for the web UI (`User::password_hash`). Unrelated to
-//! [`crate::crypto::Cipher`]: that derives symmetric key material from the
+//! `gitquarry_core::crypto::Cipher`: that derives symmetric key material from the
 //! bucket passphrase with fixed params and a caller-supplied salt; this
 //! produces a self-contained Argon2id PHC string (its own random salt
 //! embedded) meant only for [`verify_password`], never for deriving key

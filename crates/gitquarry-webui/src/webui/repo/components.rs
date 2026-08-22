@@ -12,7 +12,7 @@ use gitquarry_core::domain::commit_signature::CommitSigner;
 use gitquarry_core::git::browse::{CommitInfo, RefInfo};
 use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_components as t;
+use gitquarry_i18n::web::repo::components as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -680,7 +680,7 @@ pub(crate) fn comment_edit_delete_controls(
             }
         }
         @if can_delete {
-            form method="post" action=(format!("{mutation_prefix}/comment/delete")) style="display:inline" {
+            form method="post" action=(format!("{mutation_prefix}/comment/delete")) style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
                 (PreEscaped(&csrf_html))
                 input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="number" value=(number);

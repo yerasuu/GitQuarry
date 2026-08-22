@@ -1,4 +1,4 @@
-//! Every mutation of a [`crate::auth::access::Group`]/[`crate::auth::access::Team`]
+//! Every mutation of a [`crate::auth::entities::Group`]/[`crate::auth::entities::Team`]
 //! goes through here. See [`crate::domain::repo`]'s doc comment for the
 //! `domain`/`web` boundary this follows.
 //!
@@ -19,19 +19,28 @@ use anyhow::{Context, Result, bail};
 use s3db::txn::{self, TxnOp};
 use std::collections::BTreeSet;
 
-/// Reserves the namespace (shared with [`crate::auth::access::User`]
+/// Reserves the namespace (shared with [`crate::auth::entities::User`]
 /// names) and writes the group object in one create-only [`txn::run`]
-/// transaction — same reasoning as [`crate::domain::user::create`]: either
+/// transaction — same reasoning as [`crate::auth::domain::user::create`]: either
 /// both land or neither does, no manual rollback-on-failure in between.
 /// `None` if `name` is already taken (by a user, a group, or a stray
 /// namespace entry).
-pub async fn create(ctx: &AppContext, name: &str, description: Option<String>) -> Result<Option<Cas>> {
+///
+/// `creator` starts as the group's sole owner — without this, a group
+/// admin creates comes out with an empty `owners` set, manageable only
+/// through the `is_admin` bypass [`super::super::access::can_manage_group`]
+/// also grants; that's fine while the creator stays a global admin, but
+/// silently strands the group the moment they're demoted (nobody left who
+/// can add an owner, since adding one already needs to manage the group).
+/// Every other forge (GitHub/Codeberg orgs, ...) makes the creator an
+/// owner for the same reason.
+pub async fn create(ctx: &AppContext, name: &str, description: Option<String>, creator: Uid) -> Result<Option<Cas>> {
     access::validate_username(name)?; // same charset rules as a username
     let group = Group {
         uid: Uid::new(),
         name: name.to_string(),
         description,
-        owners: BTreeSet::new(),
+        owners: BTreeSet::from([creator]),
         teams: Vec::new(),
         storage_quota_bytes: None,
     };
@@ -83,7 +92,7 @@ pub async fn add_owner(
     let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
         .await?
         .0
-        .with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+        .with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     group.owners.insert(user.uid);
     Ok(())
 }
@@ -112,7 +121,7 @@ pub async fn add_team(
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
     if group.teams.iter().any(|t| t.name == name) {
-        bail!("{}", gitquarry_i18n::shared::team_already_exists(locale, name));
+        bail!("{}", gitquarry_i18n::shared::auth::team_already_exists(locale, name));
     }
     let permission = match permission_str {
         "guest" => Permission::Guest,
@@ -120,7 +129,7 @@ pub async fn add_team(
         "developer" => Permission::Developer,
         "maintainer" => Permission::Maintainer,
         "owner" => Permission::Owner,
-        other => bail!("{}", gitquarry_i18n::shared::invalid_permission(locale, other)),
+        other => bail!("{}", gitquarry_i18n::shared::auth::invalid_permission(locale, other)),
     };
     let repos = parse_team_repos(ctx, &group.name, repos_csv, locale).await?;
     group.teams.push(Team {
@@ -148,7 +157,7 @@ pub async fn add_team_member(
     let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
         .await?
         .0
-        .with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+        .with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     find_team_mut(group, team, locale)?.members.insert(user.uid);
     Ok(())
 }
@@ -173,7 +182,7 @@ fn find_team_mut<'a>(group: &'a mut Group, team: &str, locale: gitquarry_i18n::L
         .teams
         .iter_mut()
         .find(|t| t.name == team)
-        .with_context(|| gitquarry_i18n::shared::team_not_found(locale, team))
+        .with_context(|| gitquarry_i18n::shared::auth::team_not_found(locale, team))
 }
 
 /// Resolves each comma-separated repo-local name (relative to `group_name`
@@ -197,7 +206,7 @@ pub async fn parse_team_repos(
         let full_name = format!("{group_name}/{local}");
         let uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, &full_name)
             .await?
-            .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, &full_name))?;
+            .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, &full_name))?;
         uids.insert(uid);
     }
     Ok(Some(uids))

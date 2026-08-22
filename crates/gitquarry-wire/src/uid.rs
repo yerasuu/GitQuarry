@@ -48,7 +48,7 @@ impl fmt::Display for Uid {
     }
 }
 
-/// Reconstructs a `Uid` from its own [`Display`]ed text — for reading one
+/// Reconstructs a `Uid` from its own [`fmt::Display`]ed text — for reading one
 /// back from somewhere it was previously written verbatim (an S3 key
 /// segment, a local mirror directory name), never for parsing arbitrary
 /// input: nothing validates the format here, callers already trust the

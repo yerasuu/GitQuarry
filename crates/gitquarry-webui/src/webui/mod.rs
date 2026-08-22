@@ -18,7 +18,7 @@
 //! Split by concern:
 //! - this file: routing plus the two request-wide middlewares
 //!   ([`request_cache_middleware`], [`security_headers`]).
-//! - [`page_chrome`]/[`repo_link`]/[`flash`]/[`error`]/[`escaping`]/
+//! - [`page_chrome`]/[`mod@repo_link`]/[`flash`]/[`error`]/[`escaping`]/
 //!   [`cookies`]/[`csrf`]/[`guards`]/[`actions`]/[`text_size`]/
 //!   [`theme_pref`]/[`locale_pref`]/[`diff_view`]: shared render helpers and
 //!   request-wide concerns every page needs, one file per concern (same
@@ -47,9 +47,9 @@
 //!   tokens for git-smart-HTTP clone/push, scoped by explicit repo +
 //!   [`gitquarry_core::auth::entities::Permission`] ceiling; lives entirely
 //!   in [`gitquarry_core::auth::domain::pat`]). All of these (plus their
-//!   [`gitquarry_core::auth::domain`] CRUD and [`crate::auth::i18n`] copy)
-//!   live under [`crate::auth`], not here, but are routed from this same
-//!   table.
+//!   [`gitquarry_core::auth::domain`] CRUD and `gitquarry_i18n::web::auth::*`
+//!   copy) live under [`crate::auth`], not here, but are routed from this
+//!   same table.
 //! - [`fork`]: `POST /_fork`, copies a whole repo to a new one under the
 //!   caller's own namespace or a group they own — open to any logged-in
 //!   user, unlike [`repo_new`] which is admin-only.
@@ -187,10 +187,14 @@ pub(crate) use locale_pref::effective_locale;
 // `esc`/`non_empty` above.
 pub(crate) use density_pref::{effective_density, handler_toggle_density};
 pub use page_chrome::layout;
+// `init_source_link`/`resolve_source_link_href` are `pub`, not `pub(crate)`,
+// same cross-crate reason as `layout` above: `gitquarry-server`'s `serve::run`
+// calls the former once at startup, right after resolving `ServerSettings`.
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
-    permission_badge_class, project_subnav, settings_section, tab_links, topic_badges,
+    permission_badge_class, settings_section, tab_links, topic_badges,
 };
+pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};
 pub(crate) use repo_link::{github_blob_link, repo_link};
 pub(crate) use text_size::{TextSize, effective_text_size, handler_toggle_text_size, render_text_size_buttons};
@@ -300,8 +304,28 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_metrics", get(health::handler_metrics))
         .route("/", get(repo::handler_index))
         .route(
-            "/_settings",
-            get(crate::settings::web::handler_settings_get).post(crate::settings::web::handler_settings_post),
+            "/_settings/footer",
+            get(crate::settings::web::handler_settings_footer_get)
+                .post(crate::settings::web::handler_settings_footer_post),
+        )
+        .route(
+            "/_settings/network",
+            get(crate::settings::web::handler_settings_network_get)
+                .post(crate::settings::web::handler_settings_network_post),
+        )
+        .route(
+            "/_settings/mirrors-cache",
+            get(crate::settings::web::handler_settings_mirrors_cache_get)
+                .post(crate::settings::web::handler_settings_mirrors_cache_post),
+        )
+        .route(
+            "/_settings/external-mirrors",
+            get(crate::settings::web::handler_settings_external_mirrors_get)
+                .post(crate::settings::web::handler_settings_external_mirrors_post),
+        )
+        .route(
+            "/_settings/oidc",
+            get(crate::settings::web::handler_settings_oidc_get).post(crate::settings::web::handler_settings_oidc_post),
         )
         .route(
             "/_users",

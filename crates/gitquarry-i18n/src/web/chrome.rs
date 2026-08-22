@@ -30,6 +30,8 @@ msg!(
 );
 msg!(account_appearance_section() { Locale::Es => "apariencia", Locale::En => "appearance" });
 msg!(settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes de cuenta", Locale::En => "account settings navigation" });
+msg!(repo_settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes del repositorio", Locale::En => "repo settings navigation" });
+msg!(server_settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes del servidor", Locale::En => "server settings navigation" });
 
 msg!(about_tab() { Locale::Es => "acerca de", Locale::En => "about" });
 msg!(summary_tab() { Locale::Es => "resumen", Locale::En => "summary" });
@@ -73,6 +75,7 @@ msg!(
 msg!(limited_visibility_badge() { Locale::Es => "limitado", Locale::En => "limited" });
 msg!(private_visibility_badge() { Locale::Es => "privado", Locale::En => "private" });
 msg!(changelog_nav() { Locale::Es => "changelog", Locale::En => "changelog" });
+msg!(source_nav() { Locale::Es => "codigo fuente", Locale::En => "source" });
 msg!(changelog_heading() { Locale::Es => "cambios", Locale::En => "changelog" });
 msg!(changelog_running_version(version: &str) {
     Locale::Es => "Esta instancia ejecuta la version {version}. Estas notas son las de ese binario, no las de la ultima publicada.",

@@ -107,23 +107,22 @@ pub(crate) async fn handler_security_post(
     // generic error page over one bad field would be a much worse outcome
     // than just showing the error where the user can retry.
     macro_rules! fail {
-        ($msg:expr) => {
+        ($msg:expr) => {{
+            let content = render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, locale);
+            if headers.contains_key(crate::webui::ASYNC_HEADER) {
+                return Ok(axum::response::Html(content.into_string()).into_response());
+            }
             return Ok(axum::response::Html(layout(
                 "security",
                 "",
-                &account_settings_page(
-                    "security",
-                    render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, locale),
-                    locale,
-                )
-                .into_string(),
+                &account_settings_page("security", content, locale).into_string(),
                 &topnav,
                 effective_theme(&ctx, &headers).await,
                 effective_density(&ctx, &headers).await,
                 locale,
             ))
-            .into_response())
-        };
+            .into_response());
+        }};
     }
 
     let mut pending_totp_secret = None;
@@ -134,7 +133,7 @@ pub(crate) async fn handler_security_post(
                 fail!(e);
             }
             if form.password != form.password_confirm {
-                fail!(crate::auth::i18n::security::password_mismatch(locale));
+                fail!(gitquarry_i18n::web::auth::security::password_mismatch(locale));
             }
             match domain::user::set_password(&ctx, &me.username, non_empty(form.password.clone()).as_deref(), locale)
                 .await
@@ -190,7 +189,7 @@ pub(crate) async fn handler_security_post(
     let (Some(me), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     let content = render_security_page(
@@ -201,6 +200,13 @@ pub(crate) async fn handler_security_post(
         revealed_recovery_codes.as_deref(),
         locale,
     );
+    // Async (`data-async-target="#security-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment) — a revealed TOTP secret/QR or recovery-code set
+    // still shows up fine in the swapped fragment, it just never triggers
+    // a real page navigation for an F5 to later warn about resubmitting.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
     let body = account_settings_page("security", content, locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
@@ -214,6 +220,16 @@ pub(crate) async fn handler_security_post(
     .into_response())
 }
 
+/// All 5 forms below (only 1-3 render at once, depending on 2FA state)
+/// target this one `#security-body` — every action can reveal something
+/// only the *next* render shows (a TOTP secret + QR, a set of recovery
+/// codes) or change which of the three 2FA forms even exists, so a submit
+/// has to refresh the whole wrapper, not just the form that fired it. Same
+/// reasoning `render_appearance_page`'s own doc comment gives.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_security_page(
     user: &User,
     csrf: &str,
@@ -222,7 +238,7 @@ pub fn render_security_page(
     revealed_recovery_codes: Option<&[String]>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     let action_url = "/_account/security";
     // Only asked for where there is something to re-prove: an account with
     // neither a password nor a TOTP secret (an OIDC-only user setting a
@@ -231,6 +247,7 @@ pub fn render_security_page(
     let needs_reauth = user.password_hash.is_some() || user.totp_secret.is_some();
     let has_password = user.password_hash.is_some();
     html! {
+      div id="security-body" {
         p class="muted" {
             (t::logged_in_as(locale)) strong { (user.username) }
             @if let Some(email) = &user.email {
@@ -247,7 +264,7 @@ pub fn render_security_page(
 
         (settings_section(&t::password_heading(locale), None, html! {
             p class="muted" { (t::password_purpose_prefix(locale)) code { "/_login" } (t::password_purpose_suffix(locale)) }
-            form method="post" action=(action_url) {
+            form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=[has_password.then(|| t::change_password_confirm(locale))] {
                 (PreEscaped(csrf))
                 input type="hidden" name="security_action" value="set_password";
                 // `username` in a hidden field, and `autocomplete` on every
@@ -275,7 +292,7 @@ pub fn render_security_page(
         (settings_section(&t::two_factor_heading(locale), None, html! {
             @if user.totp_enabled {
                 p class="muted" { (t::totp_active_hint(locale)) }
-                form method="post" action=(action_url) {
+                form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=(t::disable_totp_confirm(locale)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="security_action" value="disable_totp";
                     (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
@@ -291,7 +308,7 @@ pub fn render_security_page(
                 }
                 p { code { (secret) } }
                 p { a href=(uri) { (t::totp_open_app_link(locale)) } }
-                form method="post" action=(action_url) {
+                form method="post" action=(action_url) data-async data-async-target="#security-body" {
                     (PreEscaped(csrf))
                     input type="hidden" name="security_action" value="confirm_totp";
                     (field(&t::totp_confirm_placeholder(locale), None, html! {
@@ -301,7 +318,7 @@ pub fn render_security_page(
                 }
             } @else {
                 p class="muted" { (t::totp_inactive_hint(locale)) }
-                form method="post" action=(action_url) {
+                form method="post" action=(action_url) data-async data-async-target="#security-body" {
                     (PreEscaped(csrf))
                     input type="hidden" name="security_action" value="enable_totp";
                     button type="submit" { (t::enable_totp_button(locale)) }
@@ -319,7 +336,7 @@ pub fn render_security_page(
                     pre { @for code in codes { (code) "\n" } }
                 }
                 p class="muted" { (t::recovery_codes_remaining_hint(locale, user.totp_recovery_codes.len())) }
-                form method="post" action=(action_url) {
+                form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=(t::regenerate_recovery_codes_confirm(locale)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="security_action" value="regenerate_recovery_codes";
                     (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
@@ -329,5 +346,6 @@ pub fn render_security_page(
                 }
             }))
         }
+      }
     }
 }

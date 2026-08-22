@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_compare as t;
+use gitquarry_i18n::web::repo::compare as t;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 

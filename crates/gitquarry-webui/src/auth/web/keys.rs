@@ -7,7 +7,7 @@
 //! commits already pushed) — neither is a way to log in, which is what
 //! `security` is now exclusively about (password, 2FA, recovery codes).
 //!
-//! Copy comes from [`crate::auth::i18n::security`] rather than a catalog of
+//! Copy comes from [`gitquarry_i18n::web::auth::security`] rather than a catalog of
 //! its own: the strings didn't change meaning by moving page, and forking
 //! them would mean two ids for one sentence.
 //!
@@ -100,9 +100,21 @@ pub(crate) async fn handler_keys_post(
     // A rejected action re-renders this same page with `Flash::Err` rather
     // than a generic error page — same reasoning `security`'s own handler
     // gives: losing the whole key list over one bad field is a worse
-    // outcome than showing the error where it can be retried.
+    // outcome than showing the error where it can be retried. Async is
+    // different: the add/remove targets below are the narrow per-table
+    // `id`s (`#ssh-keys-table`/`#gpg-keys-table`), which never contain a
+    // flash banner (`render_keys_page`'s own shell has it, outside either
+    // table) — swapping a *page* fragment into one of those would corrupt
+    // it (`style/app.js`'s `target.replaceWith` takes the response's first
+    // element, which would be the whole `<html>`), so this goes through
+    // `AppError` instead: a real non-2xx status, picked up by
+    // `extractFlashMessage`/`showErrorToast` the same way any other failed
+    // `data-async` request already is.
     macro_rules! fail {
-        ($msg:expr) => {
+        ($msg:expr) => {{
+            if headers.contains_key(crate::webui::ASYNC_HEADER) {
+                return Err(AppError::bad_request(anyhow::anyhow!("{}", $msg)));
+            }
             return Ok(axum::response::Html(layout(
                 "keys",
                 "",
@@ -117,8 +129,8 @@ pub(crate) async fn handler_keys_post(
                 effective_density(&ctx, &headers).await,
                 locale,
             ))
-            .into_response())
-        };
+            .into_response());
+        }};
     }
 
     let cas = match form.action.as_str() {
@@ -156,17 +168,24 @@ pub(crate) async fn handler_keys_post(
     else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::user_not_found(locale, &me.username)
+            gitquarry_i18n::shared::auth::user_not_found(locale, &me.username)
         )));
     };
 
     // Async (`data-async-target`, see `webui::ASYNC_HEADER`'s own doc
-    // comment): a removal only ever changes its own table, so swap just
-    // that fragment instead of re-rendering the page around it.
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_pubkey" {
+    // comment): an add or a remove only ever changes its own table, so swap
+    // just that fragment instead of re-rendering the page around it — the
+    // page-level "saved." flash below is skipped on this path the same way
+    // a removal already skipped it, not shown at all rather than shown
+    // somewhere a table-only swap can't reach.
+    if headers.contains_key(crate::webui::ASYNC_HEADER)
+        && matches!(form.action.as_str(), "add_pubkey" | "remove_pubkey")
+    {
         return Ok(axum::response::Html(render_ssh_keys_table(&me, &csrf, locale).into_string()).into_response());
     }
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_gpg_key" {
+    if headers.contains_key(crate::webui::ASYNC_HEADER)
+        && matches!(form.action.as_str(), "add_gpg_key" | "remove_gpg_key")
+    {
         return Ok(axum::response::Html(render_gpg_keys_table(&me, &csrf, locale).into_string()).into_response());
     }
 
@@ -191,7 +210,7 @@ pub(crate) async fn handler_keys_post(
 /// The SSH key table alone, wrapped in a stable `id` so a removal can swap
 /// just this fragment instead of the whole page.
 fn render_ssh_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="ssh-keys-table" {
             table class="list" {
@@ -204,7 +223,7 @@ fn render_ssh_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
                     tr {
                         td { code { (fp) } }
                         td {
-                            form method="post" action=(ACTION_URL) style="display:inline" data-async data-async-target="#ssh-keys-table" {
+                            form method="post" action=(ACTION_URL) style="display:inline" data-async data-async-target="#ssh-keys-table" data-confirm=(t::remove_ssh_key_confirm(locale, &fp)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="keys_action" value="remove_pubkey";
                                 input type="hidden" name="fingerprint" value=(fp);
@@ -223,7 +242,7 @@ fn render_ssh_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
 /// is already stored on `GpgKeyEntry` (see its own doc comment): nothing
 /// here calls into `crate::gpg` at all, this is a plain sync render.
 fn render_gpg_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="gpg-keys-table" {
             table class="list" {
@@ -235,7 +254,7 @@ fn render_gpg_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
                     tr {
                         td { code { (key.fingerprint) } }
                         td {
-                            form method="post" action=(ACTION_URL) style="display:inline" data-async data-async-target="#gpg-keys-table" {
+                            form method="post" action=(ACTION_URL) style="display:inline" data-async data-async-target="#gpg-keys-table" data-confirm=(t::remove_gpg_key_confirm(locale, &key.fingerprint)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="keys_action" value="remove_gpg_key";
                                 input type="hidden" name="gpg_fingerprint" value=(key.fingerprint);
@@ -259,7 +278,7 @@ fn render_keys_page(user: &User, csrf: &str, message: Option<Flash>, locale: git
 }
 
 fn render_keys_page_impl(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     // Only asked for where there is something to re-prove: an account with
     // neither a password nor a TOTP secret has no second factor, and
     // demanding one would lock it out of ever acquiring a key.
@@ -269,7 +288,7 @@ fn render_keys_page_impl(user: &User, csrf: &str, message: Option<Flash>, locale
 
         (settings_section(&t::ssh_keys_heading(locale), None, html! {
             (render_ssh_keys_table(user, csrf, locale))
-            form method="post" action=(ACTION_URL) {
+            form method="post" action=(ACTION_URL) data-async data-async-target="#ssh-keys-table" {
                 (PreEscaped(csrf))
                 input type="hidden" name="keys_action" value="add_pubkey";
                 (field(&t::add_pubkey_label(locale), Some(&t::add_pubkey_hint(locale)), html! {
@@ -286,7 +305,7 @@ fn render_keys_page_impl(user: &User, csrf: &str, message: Option<Flash>, locale
 
         (settings_section(&t::gpg_keys_heading(locale), Some(&t::gpg_keys_purpose(locale)), html! {
             (render_gpg_keys_table(user, csrf, locale))
-            form method="post" action=(ACTION_URL) {
+            form method="post" action=(ACTION_URL) data-async data-async-target="#gpg-keys-table" {
                 (PreEscaped(csrf))
                 input type="hidden" name="keys_action" value="add_gpg_key";
                 (field(&t::add_gpg_key_label(locale), None, html! {

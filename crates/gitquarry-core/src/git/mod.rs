@@ -7,7 +7,7 @@
 //! - [`http`]: git smart-HTTP, layered as middleware onto the web server's
 //!   router (see its own module doc for why) — the only piece here that
 //!   isn't purely transport-agnostic plumbing, since it has to cooperate
-//!   with [`crate::webui`]'s router instead of owning its own listener.
+//!   with `gitquarry_webui::webui`'s router instead of owning its own listener.
 //!
 //! Read-heavy operations for the web UI (log, tree, blame, archive, ...)
 //! live in [`browse`] instead — different concern, different consumers:
@@ -230,7 +230,7 @@ pub enum MergeTreeOutcome {
 /// (`--merge-base=<commit>`, added in git 2.40) instead of letting git find
 /// one itself. A real merge of two branches wants `None` (git's own
 /// merge-base search is exactly what a real `git merge` would do); replaying
-/// one commit onto a new parent — [`domain::merge_request::merge`]'s rebase
+/// one commit onto a new parent — [`crate::domain::merge_request::merge`]'s rebase
 /// strategy — wants `Some(that commit's own first parent)`, which is what
 /// turns this 3-way merge into cherry-pick semantics (apply just that
 /// commit's own diff, not everything back to whatever git would've picked
@@ -367,7 +367,7 @@ pub async fn commit_tree(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// One source-branch commit as [`domain::merge_request::merge`]'s rebase
+/// One source-branch commit as [`crate::domain::merge_request::merge`]'s rebase
 /// strategy needs to replay it onto a new parent: enough to call
 /// [`merge_tree`] with `parent` as the explicit merge-base (cherry-pick
 /// semantics) and then [`commit_tree`] with the original author preserved.
@@ -385,6 +385,26 @@ pub struct RebaseCommit {
     pub author_email: String,
     pub author_date: String,
     pub message: String,
+}
+
+/// Count of commits in `range` (e.g. `"old..new"`, or just `"new"` for a
+/// branch that didn't exist before) — `--count` has git report just the
+/// number without ever materializing the sha list, unlike
+/// [`rev_list_range`], so this stays cheap even for a huge initial import.
+pub async fn rev_list_count(git_dir: &Path, range: &str) -> Result<u64> {
+    let out = run_text(
+        Some(git_dir),
+        &[
+            OsStr::new("rev-list"),
+            OsStr::new("--count"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(range),
+        ],
+    )
+    .await?;
+    out.trim()
+        .parse::<u64>()
+        .context("git rev-list --count returned non-numeric output")
 }
 
 /// Oldest-first shas in `range` (e.g. `"base..head"`) — the replay order a

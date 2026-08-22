@@ -55,6 +55,17 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
 /// `email_self_service` is [`gitquarry_core::app::AppContext::oidc`] being
 /// unset — see `domain::user::set_own_email` for why the primary address is
 /// admin-managed wherever OIDC can resolve a login by it.
+#[cfg(any(test, feature = "test-util"))]
+pub fn render_profile_section(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    message: Option<crate::webui::Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_profile_section_impl(user, csrf, email_self_service, message, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn render_profile_section(
     user: &User,
     csrf: &str,
@@ -62,28 +73,64 @@ fn render_profile_section(
     message: Option<crate::webui::Flash>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::security as t;
+    render_profile_section_impl(user, csrf, email_self_service, message, locale)
+}
+fn render_profile_section_impl(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    message: Option<crate::webui::Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         (PreEscaped(crate::webui::render_flash(message, locale)))
 
-        (settings_section(&crate::auth::i18n::avatar::heading(locale), Some(&crate::auth::i18n::avatar::description(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::avatar::heading(locale), Some(&gitquarry_i18n::web::auth::avatar::description(locale)), html! {
             p { (crate::webui::identicon::account_avatar_sized(&user.username, user.avatar_content_type.as_deref(), 48)) }
             form method="post" action="/_account/profile" enctype="multipart/form-data" {
                 (PreEscaped(csrf))
                 input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required;
-                button type="submit" { (crate::auth::i18n::avatar::upload_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::avatar::upload_button(locale)) }
             }
             @if user.avatar_content_type.is_some() {
-                form method="post" action="/_account/profile/delete" {
+                form method="post" action="/_account/profile/delete" data-confirm=(gitquarry_i18n::web::auth::avatar::remove_avatar_confirm(locale)) {
                     (PreEscaped(csrf))
-                    button type="submit" { (crate::auth::i18n::avatar::remove_button(locale)) }
+                    button type="submit" { (gitquarry_i18n::web::auth::avatar::remove_button(locale)) }
                 }
             }
         }))
 
-        (settings_section(&t::primary_email_heading(locale), Some(&t::primary_email_purpose(locale)), html! {
+        (settings_section(&t::primary_email_heading(locale), Some(&t::primary_email_purpose(locale)), render_primary_email_section(user, csrf, email_self_service, locale)))
+
+        (settings_section(&t::secondary_emails_heading(locale), Some(&t::secondary_emails_purpose(locale)), html! {
+            (render_secondary_emails_table(user, csrf, locale))
+            form method="post" action=(EMAIL_ACTION_URL) data-async data-async-target="#secondary-emails-table" {
+                (PreEscaped(csrf))
+                input type="hidden" name="email_action" value="add_secondary_email";
+                (field(&t::secondary_email_column_header(locale), None, html! {
+                    input type="email" name="secondary_email" size="40" placeholder=(t::add_secondary_email_placeholder(locale));
+                }))
+                button type="submit" { (t::add_secondary_email_button(locale)) }
+            }
+        }))
+    }
+}
+
+/// The primary-email form/display alone, wrapped in a stable `id` so
+/// `set_email` can swap just this fragment — same reasoning
+/// `render_secondary_emails_table` below already has for its own removal.
+fn render_primary_email_section(
+    user: &User,
+    csrf: &str,
+    email_self_service: bool,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    use gitquarry_i18n::web::auth::security as t;
+    html! {
+        div id="primary-email-section" {
             @if email_self_service {
-                form method="post" action=(EMAIL_ACTION_URL) {
+                form method="post" action=(EMAIL_ACTION_URL) data-async data-async-target="#primary-email-section" data-confirm=(t::save_email_confirm(locale)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="email_action" value="set_email";
                     (field(&t::primary_email_label(locale), Some(&t::primary_email_hint(locale)), html! {
@@ -100,26 +147,14 @@ fn render_profile_section(
                 }
                 p class="muted" { (t::primary_email_admin_managed(locale)) }
             }
-        }))
-
-        (settings_section(&t::secondary_emails_heading(locale), Some(&t::secondary_emails_purpose(locale)), html! {
-            (render_secondary_emails_table(user, csrf, locale))
-            form method="post" action=(EMAIL_ACTION_URL) {
-                (PreEscaped(csrf))
-                input type="hidden" name="email_action" value="add_secondary_email";
-                (field(&t::secondary_email_column_header(locale), None, html! {
-                    input type="email" name="secondary_email" size="40" placeholder=(t::add_secondary_email_placeholder(locale));
-                }))
-                button type="submit" { (t::add_secondary_email_button(locale)) }
-            }
-        }))
+        }
     }
 }
 
 /// The secondary-emails table alone, wrapped in a stable `id` so a removal
 /// can swap just this fragment.
 fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     html! {
         div id="secondary-emails-table" {
             table class="list" {
@@ -131,7 +166,7 @@ fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n
                     tr {
                         td { (email) }
                         td {
-                            form method="post" action=(EMAIL_ACTION_URL) style="display:inline" data-async data-async-target="#secondary-emails-table" {
+                            form method="post" action=(EMAIL_ACTION_URL) style="display:inline" data-async data-async-target="#secondary-emails-table" data-confirm=(t::remove_secondary_email_confirm(locale, email)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="email_action" value="remove_secondary_email";
                                 input type="hidden" name="secondary_email" value=(email);
@@ -179,20 +214,26 @@ pub(crate) async fn handler_emails_post(
     let csrf = csrf_field(&headers);
     let self_service = ctx.oidc.is_none();
 
+    // Async is different from the plain fallback below: the two targets an
+    // async submit on this page can hit (`#primary-email-section`,
+    // `#secondary-emails-table`) never contain a flash banner
+    // (`render_profile_section`'s own shell has it, outside either), so a
+    // page-level fragment swapped into one would corrupt it — same
+    // reasoning `keys::handler_keys_post`'s own doc comment gives for its
+    // own `fail!`. This goes through `AppError` instead: a real non-2xx
+    // status, picked up by `extractFlashMessage`/`showErrorToast` the same
+    // way any other failed `data-async` request already is.
     macro_rules! fail {
-        ($msg:expr) => {
+        ($msg:expr) => {{
+            if headers.contains_key(crate::webui::ASYNC_HEADER) {
+                return Err(AppError::bad_request(anyhow::anyhow!("{}", $msg)));
+            }
             return Ok(axum::response::Html(layout(
                 "profile",
                 "",
                 &account_settings_page(
                     "profile",
-                    render_profile_section(
-                        &me,
-                        &csrf,
-                        self_service,
-                        Some(crate::webui::Flash::Err(&$msg)),
-                        locale,
-                    ),
+                    render_profile_section(&me, &csrf, self_service, Some(crate::webui::Flash::Err(&$msg)), locale),
                     locale,
                 )
                 .into_string(),
@@ -201,8 +242,8 @@ pub(crate) async fn handler_emails_post(
                 effective_density(&ctx, &headers).await,
                 locale,
             ))
-            .into_response())
-        };
+            .into_response());
+        }};
     }
 
     let cas = match form.action.as_str() {
@@ -243,13 +284,21 @@ pub(crate) async fn handler_emails_post(
     else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_secondary_email" {
-        return Ok(
-            axum::response::Html(render_secondary_emails_table(&me, &csrf, locale).into_string()).into_response(),
-        );
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        if form.action == "set_email" {
+            return Ok(axum::response::Html(
+                render_primary_email_section(&me, &csrf, self_service, locale).into_string(),
+            )
+            .into_response());
+        }
+        if matches!(form.action.as_str(), "add_secondary_email" | "remove_secondary_email") {
+            return Ok(
+                axum::response::Html(render_secondary_emails_table(&me, &csrf, locale).into_string()).into_response(),
+            );
+        }
     }
     let body = account_settings_page(
         "profile",
@@ -297,7 +346,7 @@ pub(crate) async fn handler_avatar_upload_post(
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_multipart(locale, e)
+            gitquarry_i18n::shared::release::invalid_multipart(locale, e)
         ))
     })? {
         match field.name() {
@@ -310,12 +359,15 @@ pub(crate) async fn handler_avatar_upload_post(
             Some("avatar") => {
                 let mut buf = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    AppError::bad_request(anyhow::anyhow!("{}", gitquarry_i18n::shared::reading_file(locale, e)))
+                    AppError::bad_request(anyhow::anyhow!(
+                        "{}",
+                        gitquarry_i18n::shared::release::reading_file(locale, e)
+                    ))
                 })? {
                     if buf.len() + chunk.len() > MAX_AVATAR_UPLOAD_BYTES {
                         return Err(AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::asset_too_large(locale, MAX_AVATAR_UPLOAD_BYTES as u64)
+                            gitquarry_i18n::shared::release::asset_too_large(locale, MAX_AVATAR_UPLOAD_BYTES as u64)
                         )));
                     }
                     buf.extend_from_slice(&chunk);
@@ -331,7 +383,7 @@ pub(crate) async fn handler_avatar_upload_post(
     let buf = uploaded.ok_or_else(|| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::missing_file_to_upload(locale)
+            gitquarry_i18n::shared::release::missing_file_to_upload(locale)
         ))
     })?;
     let content_type = validate::sniff_avatar_content_type(&buf).map_err(AppError::bad_request)?;
@@ -342,7 +394,7 @@ pub(crate) async fn handler_avatar_upload_post(
         .map_err(|e| {
             AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::creating_temp_file(locale, e)
+                gitquarry_i18n::shared::release::creating_temp_file(locale, e)
             ))
         })?
         .into_temp_path();

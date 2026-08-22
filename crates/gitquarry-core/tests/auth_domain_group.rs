@@ -36,6 +36,25 @@ fn test_ctx(backend: LocalBackend, cipher: Cipher) -> gitquarry_core::app::AppCo
     }
 }
 
+/// Regression: without this, a freshly created group came out with an
+/// empty `owners` set — manageable only through the global-admin bypass
+/// `access::can_manage_group` also grants, which strands the group the
+/// moment its creator is demoted (nobody left who can add an owner, since
+/// adding one already needs to manage the group).
+#[tokio::test]
+async fn create_makes_the_creator_the_sole_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let ctx = test_ctx(backend, cipher);
+    let creator = Uid::new();
+    create(&ctx, "acme", None, creator.clone()).await.unwrap().unwrap();
+    let (group, _etag) = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap();
+    let group = group.unwrap();
+    assert_eq!(group.owners, std::collections::BTreeSet::from([creator]));
+}
+
 #[tokio::test]
 async fn parse_team_repos_empty_means_unscoped() {
     let dir = tempfile::tempdir().unwrap();

@@ -1391,6 +1391,104 @@ async fn merge_succeeds_cleanly_and_updates_the_manifest_and_mr_status() {
     );
 }
 
+/// A merge lands code on the target branch exactly like a real push does —
+/// but never goes through `mirror::hook::run_pre_receive_hook`, the only
+/// other place `RepoConfig::last_push` used to get stamped. Without its own
+/// call, the home page's "updated X ago" would silently never move for a
+/// repo whose only activity is merged MRs.
+#[tokio::test]
+async fn merging_into_the_default_branch_stamps_last_push() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let (main_sha, _feature_sha) = init_mirror_with_branches(&git_dir);
+    let mut manifest = Manifest::default();
+    manifest.refs.insert("refs/heads/main".to_string(), main_sha.clone());
+    manifest
+        .refs
+        .insert("refs/heads/feature".to_string(), _feature_sha.clone());
+    manifest.head = Some("refs/heads/main".to_string());
+    target.remote.put_manifest(&manifest, None).await.unwrap();
+
+    let new = NewMergeRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "Add widget",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    let (before, _etag) = target.remote.get_repo_config().await.unwrap();
+    assert_eq!(before.last_push, None);
+
+    merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap();
+
+    let (after, _etag) = target.remote.get_repo_config().await.unwrap();
+    assert!(after.last_push.is_some());
+    // The merge commit plus whatever `init_mirror_with_branches` gave
+    // `feature` of its own — not pinned to an exact count, just "counted
+    // something real".
+    assert!(after.last_push_commits.unwrap_or(0) >= 1);
+    assert_eq!(after.last_push_branch, Some("main".to_string()));
+}
+
+/// Same merge as above, but into a branch that isn't the repo's default —
+/// `last_push` must stay untouched, same "default branch only" scoping the
+/// pre-receive hook and the mirror-external sync engine both apply.
+#[tokio::test]
+async fn merging_into_a_non_default_branch_leaves_last_push_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let target = test_target(dir.path());
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let (main_sha, _feature_sha) = init_mirror_with_branches(&git_dir);
+    let mut manifest = Manifest::default();
+    manifest.refs.insert("refs/heads/main".to_string(), main_sha.clone());
+    manifest
+        .refs
+        .insert("refs/heads/feature".to_string(), _feature_sha.clone());
+    // Default branch is `main`; this MR merges into a different one.
+    manifest.head = Some("refs/heads/main".to_string());
+    manifest.refs.insert("refs/heads/release".to_string(), main_sha.clone());
+    target.remote.put_manifest(&manifest, None).await.unwrap();
+
+    let new = NewMergeRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "release",
+        title: "Add widget",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.unwrap();
+
+    merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::Es,
+    )
+    .await
+    .unwrap();
+
+    let (after, _etag) = target.remote.get_repo_config().await.unwrap();
+    assert_eq!(after.last_push, None);
+}
+
 #[tokio::test]
 async fn merge_rejects_until_a_required_reviewer_approves() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,4 +1,4 @@
-//! Every mutation a [`crate::storage::settings::RepoConfig`] or a repo's
+//! Every mutation a [`crate::storage::entities::RepoConfig`] or a repo's
 //! own identity (name claim, manifest, physical storage) goes through —
 //! the single place `create`/`rename`/`delete`/`fork`/permission-grant
 //! logic lives, so `webui::repo_new`/`webui::fork`/`webui::repo_settings`/
@@ -7,12 +7,12 @@
 //! `git::ssh`'s implicit-create-on-push ended up skipping `RepoConfig`
 //! entirely — see [`create`]'s doc comment).
 //!
-//! Transport-agnostic on purpose: no [`crate::webui::AppError`], no CSRF/
+//! Transport-agnostic on purpose: no `gitquarry_webui::webui::AppError`, no CSRF/
 //! session/actor concerns, no audit logging — those stay in whichever
 //! caller has an HTTP request or an authenticated actor in hand. Errors are
 //! plain `anyhow::Error` with the same user-facing Spanish messages the web
 //! handlers already showed; callers that need a specific HTTP status map
-//! them the same way [`crate::webui::AppError::bad_request`] already does.
+//! them the same way `gitquarry_webui::webui::AppError::bad_request` already does.
 //! Where there's one well-defined "expected" failure (name already taken,
 //! nothing to resolve), the shape is `Result<Option<T>>` — same convention
 //! [`crate::app::AppContext::resolve_repo`]/`create_repo` already use, not
@@ -354,7 +354,7 @@ pub async fn fork(
     // a copy that silently did nothing must never end with a fork that
     // looks created but isn't.
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
     strip_uninheritable(&dest).await?;
 
@@ -366,6 +366,11 @@ pub async fn fork(
         visibility: source_config.visibility,
         archived: false,
         deleted_at: None,
+        // A byte-for-byte copy landing right now is itself a content change
+        // for the new repo, same as a push or a mirror sync would be.
+        last_push: Some(now_secs()),
+        last_push_commits: None,
+        last_push_branch: None,
         // A real byte-for-byte copy (`copy_all_to` just above), unlike
         // `domain::remote_fork`'s peer-sync case — the new owner's quota
         // accounting should reflect what they actually just received, not
@@ -462,7 +467,7 @@ pub async fn create_from_template(
 ) -> Result<Option<ResolvedRepo>> {
     let (source_config, _etag) = source.remote.get_repo_config().await?;
     if !source_config.is_template {
-        bail!("{}", gitquarry_i18n::shared::repo_not_a_template(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::repo_not_a_template(locale));
     }
     let Some(dest) = ctx.create_repo(dest_full_name).await? else {
         return Ok(None);
@@ -470,7 +475,7 @@ pub async fn create_from_template(
 
     source.remote.copy_all_to(&dest.remote).await?;
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
     // A template is *published* to be copied by other people, so inheriting
     // the template author's mirror credential here would be worse than in
@@ -485,6 +490,11 @@ pub async fn create_from_template(
         visibility: source_config.visibility,
         archived: false,
         deleted_at: None,
+        // Same reasoning as `fork`'s own doc comment on this field: a
+        // byte-for-byte copy landing right now is itself a content change.
+        last_push: Some(now_secs()),
+        last_push_commits: None,
+        last_push_branch: None,
         // Same reasoning as `fork`'s own doc comment on this field: a real
         // byte-for-byte copy, so the new owner's quota should reflect it
         // from the start.
@@ -539,10 +549,21 @@ pub struct ConfPatch {
 }
 
 /// Re-reads the etag right before writing so a concurrent edit CAS-fails
-/// instead of being silently overwritten.
-pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatch) -> Result<Cas> {
+/// instead of being silently overwritten. The `bool` half of the return is
+/// whether `patch` actually differs from what was already stored — a
+/// resubmit of an unchanged form still writes (same CAS-freshness reasoning
+/// as any other save) but isn't real activity, so `webui::repo_settings`
+/// skips the audit-log entry for it (`activity`'s own repo-activity feed
+/// would otherwise be mostly "saved general settings" noise from people just
+/// reopening and resaving the form).
+pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatch) -> Result<(Cas, bool)> {
     let (current, etag) = resolved.remote.get_repo_config().await?;
     let old_owner = current.owner.clone();
+    let changed = patch.description != current.description
+        || patch.owner != current.owner
+        || patch.visibility != current.visibility
+        || patch.archived != current.archived
+        || patch.is_template != current.is_template;
     let config = RepoConfig {
         description: patch.description,
         owner: patch.owner,
@@ -576,7 +597,7 @@ pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatc
         )
         .await;
     }
-    Ok(cas)
+    Ok((cas, changed))
 }
 
 /// The default branch isn't cosmetic metadata: it's `Manifest::head` (not
@@ -588,7 +609,7 @@ pub async fn set_default_branch(resolved: &ResolvedRepo, branch: &str, locale: g
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/heads/{branch}");
     if !manifest.refs.contains_key(&target) {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
     }
     manifest.head = Some(target);
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
@@ -604,7 +625,7 @@ pub async fn create_tag(resolved: &ResolvedRepo, tag: &str, sha: &str, locale: g
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/tags/{tag}");
     if manifest.refs.contains_key(&target) {
-        bail!("{}", gitquarry_i18n::shared::tag_already_exists(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::tag_already_exists(locale, tag));
     }
     manifest.refs.insert(target, sha.to_string());
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
@@ -621,19 +642,19 @@ pub async fn delete_tag(resolved: &ResolvedRepo, tag: &str, locale: gitquarry_i1
     if config.protected_tags.contains(tag) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::protected_tag_cannot_be_deleted(locale, tag)
+            gitquarry_i18n::shared::repo::protected_tag_cannot_be_deleted(locale, tag)
         );
     }
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/tags/{tag}");
     if manifest.refs.remove(&target).is_none() {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
 
 /// `Err` if `branch` is protected (same unconditional bar [`delete_tag`]
-/// applies, see [`gitquarry_i18n::shared::protected_branch_cannot_be_deleted`]'s
+/// applies, see [`gitquarry_i18n::shared::repo::protected_branch_cannot_be_deleted`]'s
 /// own doc comment on why no owner bypass), is the repo's current default
 /// branch, or doesn't currently exist.
 pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
@@ -641,7 +662,7 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     if config.protected_branches.contains(branch) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::protected_branch_cannot_be_deleted(locale, branch)
+            gitquarry_i18n::shared::repo::protected_branch_cannot_be_deleted(locale, branch)
         );
     }
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
@@ -649,11 +670,11 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     if manifest.head.as_deref() == Some(target.as_str()) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::default_branch_cannot_be_deleted(locale, branch)
+            gitquarry_i18n::shared::repo::default_branch_cannot_be_deleted(locale, branch)
         );
     }
     if manifest.refs.remove(&target).is_none() {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
     }
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
@@ -692,7 +713,7 @@ pub async fn set_protected_branches(
     let requested = parse_csv_field(raw_csv);
     for branch in &requested {
         if !valid.contains(branch.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
         }
     }
     config.protected_branches = requested.clone();
@@ -727,7 +748,7 @@ pub async fn set_require_signed_commits(
     let requested = parse_csv_field(raw_csv);
     for branch in &requested {
         if !valid.contains(branch.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
         }
     }
     config.require_signed_commits = requested.clone();
@@ -762,7 +783,7 @@ pub async fn set_protected_tags(
     let requested = parse_csv_field(raw_csv);
     for tag in &requested {
         if !valid.contains(tag.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
         }
     }
     config.protected_tags = requested.clone();
@@ -831,7 +852,7 @@ pub async fn set_required_reviewers(
     for username in raw_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let (user, _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
         if user.is_none() {
-            bail!("{}", gitquarry_i18n::shared::unknown_assignee(locale, username));
+            bail!("{}", gitquarry_i18n::shared::repo::unknown_assignee(locale, username));
         }
         required_reviewers.insert(username.to_string());
     }
@@ -934,7 +955,7 @@ pub async fn set_permission(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     let (user, etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
-    let mut user = user.with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+    let mut user = user.with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     match perm {
         Some(p) => {
             user.repos.insert(repo_uid.clone(), p);

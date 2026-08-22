@@ -2,7 +2,7 @@
 //! initial `.conf/config.json` — so `git push` afterward fills in refs the
 //! normal way, same as pushing to a repo that doesn't exist yet already
 //! does implicitly. The repo's folder (and `owner`) is either the creator's
-//! own username or an existing [`gitquarry_core::auth::access::Group`] — never a
+//! own username or an existing [`gitquarry_core::auth::entities::Group`] — never a
 //! free-text namespace: [`crate::auth::web::profile`] reads `owner` back to list "this
 //! user/group's repos", so it has to name something real. Admin-gated like
 //! `/_settings`/`/_users`: creating a repo is an operator action, not
@@ -171,16 +171,22 @@ async fn error_page(
     group_names: &[String],
     message: &str,
 ) -> Response {
-    let topnav = login::topnav(ctx, headers).await;
     let locale = effective_locale(ctx, headers).await;
-    let body = render_new_form(
+    let content = render_new_form(
         username,
         group_names,
         &csrf_field(headers),
         Some(Flash::Err(message)),
         locale,
-    )
-    .into_string();
+    );
+    // Async (`data-async-target="#new-repo-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment): a rejected name/namespace re-renders in place, no
+    // real page navigation for an F5 to later warn about resubmitting.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return axum::response::Html(content.into_string()).into_response();
+    }
+    let topnav = login::topnav(ctx, headers).await;
+    let body = content.into_string();
     axum::response::Html(layout(
         "new repo",
         "",
@@ -203,6 +209,7 @@ pub fn render_new_form(
 ) -> Markup {
     use gitquarry_i18n::web::repo_new::*;
     html! {
+      div id="new-repo-body" {
         h3 { (repo_new_heading(locale)) }
         p class="muted" {
             (repo_new_prose_creates_empty(locale)) code { "refs.json" } (repo_new_prose_in_bucket_under(locale))
@@ -214,7 +221,7 @@ pub fn render_new_form(
             code { "owner" } (repo_new_prose_owner_note(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action="/_new" {
+        form method="post" action="/_new" data-async data-async-target="#new-repo-body" {
             (PreEscaped(csrf))
             div class="field" {
                 label { (repo_new_namespace_label(locale)) }
@@ -247,6 +254,7 @@ pub fn render_new_form(
             }
             p { button type="submit" { (repo_new_create_button(locale)) } }
         }
+      }
     }
 }
 #[cfg(not(any(test, feature = "test-util")))]
@@ -259,6 +267,7 @@ fn render_new_form(
 ) -> Markup {
     use gitquarry_i18n::web::repo_new::*;
     html! {
+      div id="new-repo-body" {
         h3 { (repo_new_heading(locale)) }
         p class="muted" {
             (repo_new_prose_creates_empty(locale)) code { "refs.json" } (repo_new_prose_in_bucket_under(locale))
@@ -270,7 +279,7 @@ fn render_new_form(
             code { "owner" } (repo_new_prose_owner_note(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action="/_new" {
+        form method="post" action="/_new" data-async data-async-target="#new-repo-body" {
             (PreEscaped(csrf))
             div class="field" {
                 label { (repo_new_namespace_label(locale)) }
@@ -303,5 +312,6 @@ fn render_new_form(
             }
             p { button type="submit" { (repo_new_create_button(locale)) } }
         }
+      }
     }
 }

@@ -103,6 +103,11 @@ pub fn raw_disposition(path: &str, content_type: &str) -> Option<String> {
     })
 }
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; `AppError` goes `pub(crate)` outside that config,
+/// which is what makes plain `cargo check` flag this as exposing a
+/// private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn plain(
     bare_repo: &Path,
     rev: &str,
@@ -113,7 +118,7 @@ pub async fn plain(
     if size > PLAIN_MAX_BYTES {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::file_too_large(locale, size, PLAIN_MAX_BYTES)
+            gitquarry_i18n::shared::release::file_too_large(locale, size, PLAIN_MAX_BYTES)
         )));
     }
     let bytes = git::browse::read_blob(bare_repo, rev, path).await?;
@@ -122,6 +127,9 @@ pub async fn plain(
     Ok(respond(content_type, bytes, disposition.as_deref()))
 }
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; see [`plain`]'s doc comment for why.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn patch(bare_repo: &Path, sha: &str) -> Result<Response, AppError> {
     let text = git::browse::format_patch(bare_repo, sha).await?;
     let filename = format!("{}.patch", validate::short_sha(sha));
@@ -137,6 +145,9 @@ pub(crate) async fn rawdiff(bare_repo: &Path, sha: &str) -> Result<Response, App
     Ok(respond("text/plain; charset=utf-8", diff.into_bytes(), None))
 }
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; see [`plain`]'s doc comment for why.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn snapshot(
     bare_repo: &Path,
     repo_name: &str,
@@ -154,7 +165,7 @@ pub async fn snapshot(
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::invalid_snapshot_format(locale, other)
+                gitquarry_i18n::shared::release::invalid_snapshot_format(locale, other)
             )));
         }
     };
@@ -165,6 +176,9 @@ pub async fn snapshot(
 
 const ATOM_ENTRY_LIMIT: usize = 20;
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; see [`plain`]'s doc comment for why.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn atom(bare_repo: &Path, repo_name: &str, rev: &str) -> Result<Response, AppError> {
     let commits = git::browse::log(bare_repo, rev, ATOM_ENTRY_LIMIT, None).await?;
     let updated = commits.first().map_or("1970-01-01T00:00:00Z", |c| c.date.as_str());
@@ -213,11 +227,11 @@ pub(crate) async fn release_asset(
     if etag.is_none() || !release.assets.iter().any(|a| a.filename == filename) {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_asset_on_release(locale, &filename, tag)
+            gitquarry_i18n::shared::release::no_asset_on_release(locale, &filename, tag)
         )));
     }
 
-    let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::creating_temp_dir_for_asset(locale))?;
+    let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::release::creating_temp_dir_for_asset(locale))?;
     let tmp_path = tmp_dir.path().join(&filename);
     remote.download_asset(tag, &filename, &tmp_path).await?;
 

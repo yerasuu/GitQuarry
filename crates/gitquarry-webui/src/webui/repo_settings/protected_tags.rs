@@ -62,7 +62,7 @@ pub(super) fn render_protected_tags_form(
             p class="muted" {
                 (gitquarry_i18n::web::repo_settings::protected_tags_prose(locale, &tags.join(", ")))
             }
-            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" data-confirm=(gitquarry_i18n::web::repo_settings::save_protected_tags_confirm(locale)) {
                 (PreEscaped(csrf))
                 input type="hidden" name="conf_action" value="set_protected_tags";
                 input name="protected_tags" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::protected_tags_placeholder(locale));

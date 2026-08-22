@@ -111,14 +111,14 @@ pub(crate) async fn handler_bootstrap_get(
     if crate::auth::web::login::login_enforced(&ctx).await {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::bootstrap_already_done(locale)
+            gitquarry_i18n::shared::settings::bootstrap_already_done(locale)
         )));
     }
     let submitted = params.get("token").map(String::as_str).unwrap_or("");
     if !ct_eq(submitted, &TOKEN) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::bootstrap_token_invalid(locale)
+            gitquarry_i18n::shared::settings::bootstrap_token_invalid(locale)
         )));
     }
 
@@ -136,7 +136,7 @@ pub(crate) async fn handler_bootstrap_get(
         header,
         value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }

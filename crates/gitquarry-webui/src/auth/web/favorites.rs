@@ -10,8 +10,8 @@
 //! to the account one rather than rendered twice.
 //!
 //! Starring is a personal bookmark list, not an account-identity setting —
-//! same [`gitquarry_core::auth::access::User::starred`] field
-//! `render_star_button` (in [`crate::webui::actions`]) already writes to;
+//! same [`gitquarry_core::auth::entities::User::starred`] field
+//! `render_star_button` (in `crate::webui::actions`) already writes to;
 //! this is just its own page plus the toggle action.
 //!
 //! Read-only means the starred list filtered through [`can_view_repo`] same
@@ -65,13 +65,13 @@ pub(crate) async fn handler_favorites_get(
         .ok_or_else(|| {
             AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::user_not_found(locale, &username)
+                gitquarry_i18n::shared::auth::user_not_found(locale, &username)
             ))
         })?;
     if !target.favorites_public {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::favorites_not_public(locale, &username)
+            gitquarry_i18n::shared::auth::favorites_not_public(locale, &username)
         )));
     }
     let visible = visible_starred(&ctx, &headers, &target.starred).await?;
@@ -226,7 +226,7 @@ pub(crate) async fn handler_account_favorites_post(
         let (Some(mut fresh), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
             return Err(AppError::forbidden(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::account_no_longer_exists(locale)
+                gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
             )));
         };
         fresh.favorites_public = form.favorites_public == "1";
@@ -237,8 +237,11 @@ pub(crate) async fn handler_account_favorites_post(
             Cas::Conflict => Flash::Err(&cas_conflict_msg),
         };
         let starred = own_starred_with_counts(&ctx, &fresh.starred).await;
-        let topnav = login::topnav(&ctx, &headers).await;
         let content = render_favorites_page(&fresh, &csrf_field(&headers), Some(flash), &starred, locale);
+        if headers.contains_key(crate::webui::ASYNC_HEADER) {
+            return Ok(Html(content.into_string()).into_response());
+        }
+        let topnav = login::topnav(&ctx, &headers).await;
         let body = account_settings_page("favorites", content, locale).into_string();
         return Ok(Html(layout(
             "favorites",
@@ -263,7 +266,7 @@ pub(crate) async fn handler_account_favorites_post(
     let Some(resolved) = ctx.resolve_repo(&repo).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &repo)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &repo)
         )));
     };
     // Same check `handler_repo` gates viewing with, and same not-found
@@ -280,7 +283,7 @@ pub(crate) async fn handler_account_favorites_post(
         if !can_view_repo(&ctx, &headers, &repo, repo_config.visibility).await? {
             return Err(AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::repo_not_found(locale, &repo)
+                gitquarry_i18n::shared::repo::repo_not_found(locale, &repo)
             )));
         }
     }
@@ -291,7 +294,7 @@ pub(crate) async fn handler_account_favorites_post(
     let Some((cas, now_starred)) = domain::repo::toggle_star(&ctx, &me.username, &resolved.uid).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     if cas == Cas::Ok {
@@ -310,7 +313,7 @@ pub(crate) async fn handler_account_favorites_post(
     let (Some(me), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
     // Authoritative, not the `now_starred` `toggle_star` returned: that
@@ -319,6 +322,17 @@ pub(crate) async fn handler_account_favorites_post(
     // exhausted-retries path it's a placeholder, and trusting it here would
     // tell the browser its own click took even when the write didn't.
     let now_starred = me.starred.contains(&resolved.uid);
+    // This page's own "remove" row (`favorites_action=remove_from_list`,
+    // set alongside `star_action=toggle_star` — see `render_favorites_page`'s
+    // own doc comment) needs the whole `#favorites-body` back, the row it
+    // was in just disappeared; a bare `star_button_html`/count pair
+    // (the branch below, for a star button elsewhere on the site) has
+    // nowhere on this page to land.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.favorites_action == "remove_from_list" {
+        let starred = own_starred_with_counts(&ctx, &me.starred).await;
+        let content = render_favorites_page(&me, &csrf_field(&headers), None, &starred, locale);
+        return Ok(Html(content.into_string()).into_response());
+    }
     // Async (`data-async`, see `webui::ASYNC_HEADER`'s own doc comment):
     // the button itself is all the caller needs back, not a redirect or
     // the whole favorites page. Checked before the redirect below since a
@@ -367,6 +381,19 @@ pub(crate) async fn handler_account_favorites_post(
 /// input), so it's spliced in via [`PreEscaped`] rather than escaped like
 /// every other interpolated value here — same for [`render_flash`]'s
 /// output, which already runs its own message through `esc()`.
+/// Both the visibility toggle and each row's "remove" button target this
+/// one `#favorites-body` wrapper — either can change what the flash above
+/// says, and removing a row changes the table below it, so both need the
+/// whole thing back, not just their own form. Same reasoning
+/// `render_appearance_page`'s own doc comment gives. The star *button*
+/// elsewhere on the site (`actions::star_button_html`, repo pages) shares
+/// this page's `toggle_star` action but is a different, narrower `data-async`
+/// consumer of its own (see `handler_account_favorites_post`'s own doc
+/// comment on how the two are told apart).
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_favorites_page(
     user: &User,
     csrf: &str,
@@ -376,29 +403,30 @@ pub fn render_favorites_page(
 ) -> Markup {
     let action_url = "/_account/favorites";
     html! {
+      div id="favorites-body" {
         (PreEscaped(render_flash(message, locale)))
 
-        (settings_section(&crate::auth::i18n::favorites::visibility_heading(locale), Some(&crate::auth::i18n::favorites::visibility_description(locale)), html! {
-            form method="post" action=(action_url) {
+        (settings_section(&gitquarry_i18n::web::auth::favorites::visibility_heading(locale), Some(&gitquarry_i18n::web::auth::favorites::visibility_description(locale)), html! {
+            form method="post" action=(action_url) data-async data-async-target="#favorites-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="favorites_action" value="set_visibility";
                 label {
                     input type="checkbox" name="favorites_public" value="1" checked[user.favorites_public];
-                    (crate::auth::i18n::favorites::public_checkbox_label(locale))
+                    (gitquarry_i18n::web::auth::favorites::public_checkbox_label(locale))
                 }
-                button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
         }))
 
-        (settings_section(&crate::auth::i18n::favorites::starred_heading(locale), Some(&crate::auth::i18n::favorites::starred_intro(locale)), html! {
+        (settings_section(&gitquarry_i18n::web::auth::favorites::starred_heading(locale), Some(&gitquarry_i18n::web::auth::favorites::starred_intro(locale)), html! {
             @if starred.is_empty() {
                 div class="empty-state" {
                     span class="empty-state-icon" { (crate::webui::icons::star()) }
-                    div class="empty-state-title" { (crate::auth::i18n::favorites::no_starred_repos_hint(locale)) }
+                    div class="empty-state-title" { (gitquarry_i18n::web::auth::favorites::no_starred_repos_hint(locale)) }
                 }
             } @else {
                 table class="list" {
-                    tr { th { (crate::auth::i18n::favorites::repo_column_header(locale)) } th {} }
+                    tr { th { (gitquarry_i18n::web::auth::favorites::repo_column_header(locale)) } th {} }
                     @for (repo, stars) in starred {
                         tr {
                             td {
@@ -408,15 +436,25 @@ pub fn render_favorites_page(
                                 }
                             }
                             td {
-                                form method="post" action=(action_url) style="display:inline" {
+                                form method="post" action=(action_url) style="display:inline" data-async data-async-target="#favorites-body" {
                                     (PreEscaped(csrf))
                                     // `star_action`, matching `actions.rs`'s
                                     // `star_button_html` -- both forms feed the
                                     // same `FavoritesForm`, whose `star_action`
                                     // field now deserializes from that wire name.
                                     input type="hidden" name="star_action" value="toggle_star";
+                                    // Marks this submit as coming from *this*
+                                    // page rather than a `star_button_html`
+                                    // elsewhere — both set `star_action=toggle_star`,
+                                    // but this one's async response has to be
+                                    // the whole `#favorites-body` (the row it
+                                    // was in just disappeared), not a lone
+                                    // button fragment. See
+                                    // `handler_account_favorites_post`'s own
+                                    // doc comment.
+                                    input type="hidden" name="favorites_action" value="remove_from_list";
                                     input type="hidden" name="repo" value=(repo);
-                                    button type="submit" { (crate::auth::i18n::favorites::remove_button_label(locale)) }
+                                    button type="submit" { (gitquarry_i18n::web::auth::favorites::remove_button_label(locale)) }
                                 }
                             }
                         }
@@ -424,6 +462,7 @@ pub fn render_favorites_page(
                 }
             }
         }))
+      }
     }
 }
 
@@ -434,16 +473,16 @@ pub fn render_favorites_page(
 pub fn render_public_favorites_page(username: &str, repos: &[(String, u32)], locale: gitquarry_i18n::Locale) -> Markup {
     html! {
         p class="muted" {
-            (crate::auth::i18n::favorites::public_favorites_of_prefix(locale)) strong { (username) } "."
+            (gitquarry_i18n::web::auth::favorites::public_favorites_of_prefix(locale)) strong { (username) } "."
         }
         @if repos.is_empty() {
             div class="empty-state" {
                 span class="empty-state-icon" { (crate::webui::icons::star()) }
-                div class="empty-state-title" { (crate::auth::i18n::favorites::no_favorites_visible_hint(locale)) }
+                div class="empty-state-title" { (gitquarry_i18n::web::auth::favorites::no_favorites_visible_hint(locale)) }
             }
         } @else {
             table class="list" {
-                tr { th { (crate::auth::i18n::favorites::repo_column_header(locale)) } }
+                tr { th { (gitquarry_i18n::web::auth::favorites::repo_column_header(locale)) } }
                 @for (repo, stars) in repos {
                     tr {
                         td {

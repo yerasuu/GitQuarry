@@ -34,7 +34,7 @@ pub struct ServerSettings {
     #[serde(default)]
     pub mirrors_max_size: Option<String>,
     /// OIDC login for the web UI (admin pages + reading `private` repos as a
-    /// matching [`crate::auth::access::User`]). All four fields are required
+    /// matching [`crate::auth::entities::User`]). All four fields are required
     /// together — see [`gitquarry_auth_crypto::oidc::discover`] — or OIDC stays off and
     /// admin pages stay exactly as open as they are without this configured.
     #[serde(default)]
@@ -69,12 +69,19 @@ pub struct ServerSettings {
     /// so an address check would be a TOCTOU with DNS rebinding behind it.
     #[serde(default, alias = "mirror_allowed_hosts")]
     pub mirror_extra_hosts: Vec<String>,
+    /// The footer's "source" link — either an absolute `http(s)://` URL, or
+    /// a `namespace/name` repo already hosted on this instance (rendered as
+    /// `/namespace/name`). `None` hides the link entirely rather than
+    /// guessing at one: this project's own repo layout (a fork's included)
+    /// varies too much per deployment to default to anything real.
+    #[serde(default)]
+    pub source_link: Option<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
 /// transports (`crate::git::ssh`, `crate::git::http`) are untouched by any
 /// of this — both already require an explicit per-repo
-/// [`crate::auth::access::Permission`] grant regardless of tier, so they're
+/// [`crate::auth::entities::Permission`] grant regardless of tier, so they're
 /// already gated in the sense that matters there, with one asymmetry:
 /// `ssh://` can't have a fully anonymous caller (opening a connection at
 /// all needs a pubkey that resolves to a user), while `crate::git::http`
@@ -98,8 +105,8 @@ pub enum Visibility {
     Private,
 }
 
-/// Who a repo belongs to — a [`crate::auth::access::User`] or
-/// [`crate::auth::access::Group`], named by uid rather than by the
+/// Who a repo belongs to — a [`crate::auth::entities::User`] or
+/// [`crate::auth::entities::Group`], named by uid rather than by the
 /// namespace segment of the repo's own path (those two aren't guaranteed
 /// to agree: an admin can transfer ownership via `webui::repo_settings::save_conf`
 /// without moving the repo). Internally tagged (`{"kind":"user","uid":"..."}`)
@@ -157,6 +164,33 @@ pub struct RepoConfig {
     /// the actual irreversible wipe this field used to trigger directly.
     #[serde(default)]
     pub deleted_at: Option<u64>,
+    /// Unix seconds of the last successful manifest write — set by
+    /// `storage::settings::touch_last_push`, called from both
+    /// `mirror::hook::run_pre_receive_hook` (a real push) and
+    /// `gitquarry-mirror-external`'s sync engine (a pull landing new refs):
+    /// either one is "this repo's content changed", not just a human push.
+    /// `None` for a repo nothing has ever pushed to. Best-effort like
+    /// [`Self::pack_bytes`] — a write that loses a CAS race here just means
+    /// the home page's "updated" stamp is briefly stale, never wrong in a
+    /// way that matters.
+    #[serde(default)]
+    pub last_push: Option<u64>,
+    /// Commit count for the same push [`Self::last_push`] stamps — how many
+    /// new commits `git rev-list --count` found in that push's `old..new`
+    /// range (or just `new` for a branch that didn't exist before). Set
+    /// alongside `last_push`, same best-effort tolerance, same two callers.
+    /// Purely for the home page's "N commits pushed to `<branch>`" activity
+    /// line — nothing else reads it, so a stale/missing value there is the
+    /// entire blast radius.
+    #[serde(default)]
+    pub last_push_commits: Option<u32>,
+    /// Short name (`refs/heads/` stripped) of the branch [`Self::last_push`]
+    /// landed on — always the repo's default branch, since that's the only
+    /// branch this ever fires for, but stored rather than re-derived so the
+    /// home page's activity line doesn't need its own `Manifest` fetch just
+    /// to name it.
+    #[serde(default)]
+    pub last_push_branch: Option<String>,
     /// Best-effort running total of this repo's own `.pack` bytes —
     /// incremented alongside each successful pack upload
     /// (`mirror::hook::run_pre_receive_hook`), never decremented from there.

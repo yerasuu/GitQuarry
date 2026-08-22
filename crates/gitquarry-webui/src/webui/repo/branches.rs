@@ -28,7 +28,7 @@ async fn require_write_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let perm =
@@ -37,7 +37,7 @@ async fn require_write_target(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok((resolved, name))

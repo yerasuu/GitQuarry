@@ -137,7 +137,7 @@ fn render_search_page(q: &str, results: Option<SearchResults>, locale: gitquarry
 }
 
 fn render_search_page_impl(q: &str, results: Option<SearchResults>, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::search::i18n as t;
+    use gitquarry_i18n::web::search as t;
     html! {
         p class="muted" { (t::search_intro(locale)) }
         form method="get" action="/_search" {

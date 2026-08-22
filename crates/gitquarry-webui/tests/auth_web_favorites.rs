@@ -48,6 +48,21 @@ fn favorites_page_lists_starred_repos_with_an_unstar_button() {
     assert!(html.contains(r#"value="toggle_star""#));
     assert!(html.contains(r#"action="/_account/favorites""#));
     assert!(html.contains("tok"));
+    // Regression: the row's "remove" form carries `favorites_action=
+    // remove_from_list` alongside `star_action=toggle_star` — that's what
+    // tells `handler_account_favorites_post` to send back the whole
+    // `#favorites-body` (the row just disappeared) instead of the bare
+    // star-button fragment a `star_button_html` elsewhere on the site
+    // expects — see that handler's own doc comment. Losing either
+    // attribute here means either a broken async swap or the browser's
+    // "confirm resubmission" dialog coming back on F5.
+    assert!(html.contains(r#"value="remove_from_list""#), "{html}");
+    assert_eq!(
+        html.matches(r##"data-async data-async-target="#favorites-body""##)
+            .count(),
+        2,
+        "{html}"
+    );
 }
 
 #[test]
