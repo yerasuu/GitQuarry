@@ -265,6 +265,10 @@ pub(crate) async fn handler_users_post(
 /// exceptional errors (backend/storage via bare `?`) — this whole route is
 /// already admin-gated by the caller, so there's no separate authorization
 /// class to keep apart here the way `groups::apply_groups_action` does.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `AppError` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn apply_users_action(
     ctx: &gitquarry_core::app::AppContext,
     form: &UsersForm,
@@ -361,6 +365,10 @@ pub async fn apply_users_action(
     })
 }
 
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_users_page(
     users: &[User],
     repo_names: &HashMap<Uid, String>,

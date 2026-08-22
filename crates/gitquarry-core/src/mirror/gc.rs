@@ -142,7 +142,10 @@ pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
                 let _guard = ctx.locks.lock(&m.repo_name).await;
                 let remote = ctx.remote_for_uid(&crate::storage::uid::Uid::from(m.repo_name.clone()));
                 if let Err(e) = crate::mirror::sync_bare_repo_from_s3(&remote, &m.path).await {
-                    eprintln!("gitquarry: warning: prewarm sync failed for mirror '{}': {e:#}", m.repo_name);
+                    eprintln!(
+                        "gitquarry: warning: prewarm sync failed for mirror '{}': {e:#}",
+                        m.repo_name
+                    );
                 }
             }
         })

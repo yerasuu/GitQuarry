@@ -18,7 +18,7 @@
 //! Split by concern:
 //! - this file: routing plus the two request-wide middlewares
 //!   ([`request_cache_middleware`], [`security_headers`]).
-//! - [`page_chrome`]/[`repo_link`]/[`flash`]/[`error`]/[`escaping`]/
+//! - [`page_chrome`]/[`mod@repo_link`]/[`flash`]/[`error`]/[`escaping`]/
 //!   [`cookies`]/[`csrf`]/[`guards`]/[`actions`]/[`text_size`]/
 //!   [`theme_pref`]/[`locale_pref`]/[`diff_view`]: shared render helpers and
 //!   request-wide concerns every page needs, one file per concern (same

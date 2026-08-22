@@ -689,6 +689,9 @@ pub(crate) async fn handler_settings_oidc_post(
     Ok(render_page(&ctx, &headers, "oidc", content, locale).await)
 }
 
+// Only called by `settings_body`/`settings_full_page`, both test-only
+// helpers — dead outside `test-util`, which is what `cargo check` flags.
+#[cfg(any(test, feature = "test-util"))]
 fn render_section(
     section: &str,
     settings: &ServerSettings,

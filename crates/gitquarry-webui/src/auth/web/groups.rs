@@ -438,6 +438,10 @@ async fn apply_group_action(
 /// [`render_group`]/[`render_team`]) was the 8th positional param.
 pub struct PageChrome<'a> {
     pub csrf: &'a str,
+    // `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash`
+    // goes `pub(crate)` outside that config, which is what makes plain
+    // `cargo check` flag this field as exposing a private type.
+    #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
     pub message: Option<Flash<'a>>,
     pub locale: gitquarry_i18n::Locale,
 }

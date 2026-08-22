@@ -1,4 +1,4 @@
-//! Every mutation of an [`crate::auth::access::User`] goes through here —
+//! Every mutation of an [`crate::auth::entities::User`] goes through here —
 //! `auth::web::users` calls this instead of orchestrating
 //! `reserve_namespace`/`claim_pubkey`/`claim_email`/`put_user` (and their
 //! rollback-on-failure ordering) inline. See [`crate::domain::repo`]'s doc
@@ -16,7 +16,7 @@ use s3db::txn::{self, TxnOp};
 use std::collections::BTreeMap;
 
 /// Creates a new user: bundles the namespace reservation (shared with
-/// [`crate::auth::access::Group`] names), the pubkey/email claims if given,
+/// [`crate::auth::entities::Group`] names), the pubkey/email claims if given,
 /// and the user object write itself into one create-only [`txn::run`]
 /// transaction — either all of them land, or none do, with no manual
 /// rollback-on-failure dance needed in between. `None` if any of those keys
@@ -533,7 +533,7 @@ pub async fn regenerate_recovery_codes(
 /// removal itself is persisted, so a match that then lost a concurrent CAS
 /// race to another login attempt correctly reports failure rather than
 /// letting the same code work twice. `Ok(false)` for no match, a user with
-/// 2FA off, or a user that doesn't exist — [`crate::auth::web::login`] treats
+/// 2FA off, or a user that doesn't exist — `gitquarry_webui::auth::web::login` treats
 /// every one of those identically to a wrong TOTP code, never leaking which.
 pub async fn consume_recovery_code(ctx: &AppContext, username: &str, code: &str) -> Result<bool> {
     let (Some(mut user), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await? else {

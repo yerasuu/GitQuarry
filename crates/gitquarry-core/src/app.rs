@@ -380,14 +380,15 @@ impl AppContext {
     pub async fn visible_repo_uids(&self) -> Result<Vec<Uid>> {
         {
             let cached = self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned");
-            if let Some((fetched_at, uids)) = cached.as_ref() {
-                if fetched_at.elapsed() < VISIBLE_REPO_UIDS_TTL {
-                    return Ok(uids.clone());
-                }
+            if let Some((fetched_at, uids)) = cached.as_ref()
+                && fetched_at.elapsed() < VISIBLE_REPO_UIDS_TTL
+            {
+                return Ok(uids.clone());
             }
         }
         let uids = crate::storage::settings::list_visible_repo_uids(self.backend().as_ref()).await?;
-        *self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned") = Some((Instant::now(), uids.clone()));
+        *self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned") =
+            Some((Instant::now(), uids.clone()));
         Ok(uids)
     }
 

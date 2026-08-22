@@ -179,7 +179,7 @@ pub struct User {
     pub density_default: String,
     /// `false` (default, private) unless this user opted in — when `true`,
     /// `/_profile/<user>/favorites` is readable by anyone, not just this
-    /// user's own session, and [`crate::auth::web::profile`] links to it from the
+    /// user's own session, and `gitquarry_webui::auth::web::profile` links to it from the
     /// public profile page. Only ever flips via this user's own
     /// `/_profile/<user>/preferences` form, same self-service-only scope as
     /// `text_size_default`/`theme_default`.
@@ -189,7 +189,7 @@ pub struct User {
     /// `None`: 2FA was never set up (or was disabled). `Some` while
     /// `totp_enabled` is still `false` means enrollment is pending: the
     /// secret/QR has been shown but no correct code has been submitted back
-    /// yet, so [`crate::auth::web::login`] must not require it. Only
+    /// yet, so `gitquarry_webui::auth::web::login` must not require it. Only
     /// `auth::domain::user::enable_totp`/`confirm_totp`/`disable_totp` ever touch
     /// either of these two fields.
     #[serde(default)]

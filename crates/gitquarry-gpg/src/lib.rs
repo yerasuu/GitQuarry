@@ -6,7 +6,7 @@
 //! signature "Verified" badge would reuse [`verify_detached_signature`]
 //! the same way.
 //!
-//! The binary being absent is reported once, loudly, by [`gpg_missing_hint`]
+//! The binary being absent is reported once, loudly, by [`spawn_error`]
 //! rather than per call: it is an operator condition (a deploy image
 //! without `gnupg`), and the failure it otherwise produces is
 //! indistinguishable from "this signature doesn't match any key" — the two

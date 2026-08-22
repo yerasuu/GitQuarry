@@ -168,6 +168,10 @@ pub(crate) async fn handler_appearance_post(
 /// for it to belong to individually), so any of the 4 submits has to
 /// refresh the whole wrapper to get a fresh banner, same reasoning
 /// `settings::web::settings_body`'s own doc comment gives for `/_settings`.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_appearance_page(
     user: &User,
     csrf: &str,

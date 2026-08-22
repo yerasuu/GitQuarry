@@ -34,7 +34,7 @@ pub struct ServerSettings {
     #[serde(default)]
     pub mirrors_max_size: Option<String>,
     /// OIDC login for the web UI (admin pages + reading `private` repos as a
-    /// matching [`crate::auth::access::User`]). All four fields are required
+    /// matching [`crate::auth::entities::User`]). All four fields are required
     /// together — see [`gitquarry_auth_crypto::oidc::discover`] — or OIDC stays off and
     /// admin pages stay exactly as open as they are without this configured.
     #[serde(default)]
@@ -81,7 +81,7 @@ pub struct ServerSettings {
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
 /// transports (`crate::git::ssh`, `crate::git::http`) are untouched by any
 /// of this — both already require an explicit per-repo
-/// [`crate::auth::access::Permission`] grant regardless of tier, so they're
+/// [`crate::auth::entities::Permission`] grant regardless of tier, so they're
 /// already gated in the sense that matters there, with one asymmetry:
 /// `ssh://` can't have a fully anonymous caller (opening a connection at
 /// all needs a pubkey that resolves to a user), while `crate::git::http`
@@ -105,8 +105,8 @@ pub enum Visibility {
     Private,
 }
 
-/// Who a repo belongs to — a [`crate::auth::access::User`] or
-/// [`crate::auth::access::Group`], named by uid rather than by the
+/// Who a repo belongs to — a [`crate::auth::entities::User`] or
+/// [`crate::auth::entities::Group`], named by uid rather than by the
 /// namespace segment of the repo's own path (those two aren't guaranteed
 /// to agree: an admin can transfer ownership via `webui::repo_settings::save_conf`
 /// without moving the repo). Internally tagged (`{"kind":"user","uid":"..."}`)

@@ -226,6 +226,10 @@ pub(crate) async fn handler_security_post(
 /// codes) or change which of the three 2FA forms even exists, so a submit
 /// has to refresh the whole wrapper, not just the form that fired it. Same
 /// reasoning `render_appearance_page`'s own doc comment gives.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_security_page(
     user: &User,
     csrf: &str,

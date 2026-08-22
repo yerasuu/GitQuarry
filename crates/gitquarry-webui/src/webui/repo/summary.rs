@@ -126,7 +126,15 @@ pub(super) async fn render_about(
     let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
     let readme = render_readme_from_entries(bare_repo, rev, &root_entries).await?;
     let sidebar = render_sidebar(
-        ctx, resolved, bare_repo, repo_name, rev, headers, config, languages, &root_entries,
+        ctx,
+        resolved,
+        bare_repo,
+        repo_name,
+        rev,
+        headers,
+        config,
+        languages,
+        &root_entries,
     )
     .await?;
 
@@ -358,6 +366,11 @@ fn license_kind_from_text(text: &str) -> Option<&'static str> {
 /// Renders the root README as markdown (`.md`/`.markdown`) or as preformatted
 /// text otherwise. `None` if the repo has no README at `rev`'s root, it's too
 /// big, or it isn't valid UTF-8.
+///
+/// Only called from cross-crate `tests/*.rs` (`render_about` calls
+/// [`render_readme_from_entries`] directly instead, sharing one `ls_tree`)
+/// — dead outside `test-util`, which is what `cargo check` flags.
+#[cfg(any(test, feature = "test-util"))]
 pub async fn render_readme(bare_repo: &FsPath, rev: &str) -> Result<Option<String>> {
     let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
     render_readme_from_entries(bare_repo, rev, &root_entries).await
@@ -588,7 +601,7 @@ fn linguist_color(name: &str) -> Option<&'static str> {
 }
 
 /// Color for a language name — [`linguist_color`] when it's one of the
-/// languages [`git::browse::language_for_extension`] can produce, else a
+/// languages `gitquarry_core::git::browse::language_for_extension` can produce, else a
 /// fixed hash-to-hue fallback (djb2-style) so an unrecognized name still
 /// gets a stable, distinct color instead of a missing one.
 #[cfg(any(test, feature = "test-util"))]

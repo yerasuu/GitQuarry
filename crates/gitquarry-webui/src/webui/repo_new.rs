@@ -2,7 +2,7 @@
 //! initial `.conf/config.json` — so `git push` afterward fills in refs the
 //! normal way, same as pushing to a repo that doesn't exist yet already
 //! does implicitly. The repo's folder (and `owner`) is either the creator's
-//! own username or an existing [`gitquarry_core::auth::access::Group`] — never a
+//! own username or an existing [`gitquarry_core::auth::entities::Group`] — never a
 //! free-text namespace: [`crate::auth::web::profile`] reads `owner` back to list "this
 //! user/group's repos", so it has to name something real. Admin-gated like
 //! `/_settings`/`/_users`: creating a repo is an operator action, not

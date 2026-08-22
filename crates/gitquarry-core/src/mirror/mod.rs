@@ -168,12 +168,11 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
     // an in-process cache disconnected from the mirror's real on-disk state
     // could otherwise skip a sync into a mirror eviction had just emptied.
     let marker_path = bare_repo.join(SYNC_MARKER);
-    if let Some(etag) = etag.as_deref() {
-        if let Ok(marker) = tokio::fs::read_to_string(&marker_path).await {
-            if marker.trim() == etag {
-                return Ok(());
-            }
-        }
+    if let Some(etag) = etag.as_deref()
+        && let Ok(marker) = tokio::fs::read_to_string(&marker_path).await
+        && marker.trim() == etag
+    {
+        return Ok(());
     }
 
     let remote_packs = remote.list_pack_names().await?;

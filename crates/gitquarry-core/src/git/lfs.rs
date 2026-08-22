@@ -178,7 +178,7 @@ pub(super) fn denial_response(reason: super::http::Denial) -> Response {
     }
 }
 
-/// `"upload"` needs [`crate::auth::access::Permission::Developer`],
+/// `"upload"` needs [`crate::auth::entities::Permission::Developer`],
 /// `"download"` (or anything else the client sends — the spec only defines
 /// these two) needs `Reporter`. Parsed once, before any object is touched,
 /// so a malformed `operation` fails the whole batch with one clear error

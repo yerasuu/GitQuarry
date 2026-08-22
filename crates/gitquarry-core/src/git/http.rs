@@ -4,11 +4,11 @@
 //! <https://git-scm.com/docs/http-protocol>. One of the two publicly
 //! supported transports (alongside [`super::ssh`]); this file owns the wire
 //! protocol only — it never renders HTML and never calls into
-//! [`crate::webui::repo`]/[`crate::webui::repo_settings`], and vice versa. It
-//! has to live alongside [`crate::webui`]'s router rather than owning its own
+//! `gitquarry_webui::webui::repo`/`gitquarry_webui::webui::repo_settings`, and vice versa. It
+//! has to live alongside `gitquarry_webui::webui`'s router rather than owning its own
 //! listener (unlike [`super::ssh`]) because both transports are meant to
 //! share one HTTP port — so it's wired in as [`middleware`], a layer over
-//! the whole router (see [`crate::webui::run_server`]): it short-circuits the
+//! the whole router (see `gitquarry_webui::webui::run_server`): it short-circuits the
 //! three paths above before the browsing-UI's `/{*repo}` catch-all route
 //! ever sees them, and passes everything else through unchanged — same
 //! shape as `webui`'s own `security_headers` layer.

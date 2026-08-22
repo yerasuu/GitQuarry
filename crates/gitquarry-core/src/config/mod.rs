@@ -155,7 +155,7 @@ impl Config {
     }
 
     /// Writes a brand-new `gitquarry.toml` with a single `[buckets.<name>]`
-    /// section — what the first-run setup wizard ([`setup`]) calls once
+    /// section — what the first-run setup wizard (`gitquarry-server`'s `setup`) calls once
     /// it already has a bucket config it verified works against S3. Refuses
     /// to touch `path` if anything is there already: this only ever creates
     /// a config from nothing, never edits or replaces an existing one (that
