@@ -159,7 +159,7 @@ msg!(
 
 msg!(
     /// A `perm` form field that isn't one of the five
-    /// [`crate::auth::access::Permission`] tier names — confirmed
+    /// `auth::access::Permission` tier names — confirmed
     /// duplicated verbatim across `auth::domain::group::add_team`,
     /// `auth::domain::user::parse_repos_field`.
     invalid_permission(other: &str) {
@@ -1086,7 +1086,7 @@ msg!(
 
 msg!(
     /// `domain::merge_request::merge`: at least one reviewer's *latest*
-    /// verdict ([`crate::domain::merge_request::review_summary`]) is
+    /// verdict (`domain::merge_request::review_summary`) is
     /// `ChangesRequested` — merging is blocked until they either submit a
     /// new verdict or the requested changes land.
     merge_request_changes_requested_pending() {

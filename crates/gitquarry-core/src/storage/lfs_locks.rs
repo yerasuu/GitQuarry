@@ -1,8 +1,8 @@
 //! Git LFS locking API metadata (`POST/GET .../info/lfs/locks`,
 //! `POST .../info/lfs/locks/verify`, `POST .../info/lfs/locks/<id>/unlock`,
 //! see <https://github.com/git-lfs/git-lfs/blob/main/docs/api/locking.md>) —
-//! same per-repo `s3db` [`Collection`] convention as
-//! [`super::issues`]/[`super::milestones`]: metadata scoped per-repo-uid at
+//! same per-repo `s3db` `Collection` convention as `issues`/`milestones`
+//! (tracker, parked on `feature/tracker`): metadata scoped per-repo-uid at
 //! runtime, so `#[derive(Entity)]`'s compile-time-literal collection name
 //! can't be used. Separate from [`super::remote::Remote`]'s LFS object
 //! methods on purpose: a lock is small JSON metadata about a path, never a

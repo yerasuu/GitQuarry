@@ -3,7 +3,7 @@
 //! the same reason [`crate::search`] was: self-contained, no domain entity
 //! of its own beyond [`gitquarry_core::storage::entities::ServerSettings`] (a plain
 //! struct, CRUD stays inline in [`web`] rather than a whole `domain` layer
-//! for two functions). [`webui::require_admin`] is the shared admin-page gate
+//! for two functions). [`web::require_admin`] is the shared admin-page gate
 //! also used by [`crate::auth::web::users`] and [`crate::webui::repo_settings`].
 
 pub mod i18n;

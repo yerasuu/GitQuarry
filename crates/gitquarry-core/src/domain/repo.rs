@@ -1,4 +1,4 @@
-//! Every mutation a [`crate::storage::settings::RepoConfig`] or a repo's
+//! Every mutation a [`crate::storage::entities::RepoConfig`] or a repo's
 //! own identity (name claim, manifest, physical storage) goes through —
 //! the single place `create`/`rename`/`delete`/`fork`/permission-grant
 //! logic lives, so `webui::repo_new`/`webui::fork`/`webui::repo_settings`/
@@ -7,12 +7,12 @@
 //! `git::ssh`'s implicit-create-on-push ended up skipping `RepoConfig`
 //! entirely — see [`create`]'s doc comment).
 //!
-//! Transport-agnostic on purpose: no [`crate::webui::AppError`], no CSRF/
+//! Transport-agnostic on purpose: no `gitquarry_webui::webui::AppError`, no CSRF/
 //! session/actor concerns, no audit logging — those stay in whichever
 //! caller has an HTTP request or an authenticated actor in hand. Errors are
 //! plain `anyhow::Error` with the same user-facing Spanish messages the web
 //! handlers already showed; callers that need a specific HTTP status map
-//! them the same way [`crate::webui::AppError::bad_request`] already does.
+//! them the same way `gitquarry_webui::webui::AppError::bad_request` already does.
 //! Where there's one well-defined "expected" failure (name already taken,
 //! nothing to resolve), the shape is `Result<Option<T>>` — same convention
 //! [`crate::app::AppContext::resolve_repo`]/`create_repo` already use, not

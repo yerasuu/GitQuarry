@@ -21,7 +21,7 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Runs [`sweep_once`] forever on [`SWEEP_INTERVAL`]. Meant to run detached
 /// (`tokio::spawn`), same as [`super::gc::run_periodic_sweep`] and
-/// [`super::external::run_periodic_sync`] — a sweep failure must never take
+/// `gitquarry_mirror_external::engine::run_periodic_sync` — a sweep failure must never take
 /// down ssh://, git-smart-HTTP, or the web UI.
 pub async fn run_periodic_sweep(ctx: Arc<AppContext>) {
     let mut ticker = tokio::time::interval(SWEEP_INTERVAL);

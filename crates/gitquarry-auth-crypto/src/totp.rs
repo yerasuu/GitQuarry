@@ -5,7 +5,7 @@
 //! whole-purpose TOTP crate: this is ~40 lines of well-specified logic this
 //! codebase can own and unit-test directly, same spirit as
 //! [`super::password`]'s thin Argon2 wrapper instead of a generic "auth"
-//! crate. Unrelated to [`crate::crypto::Cipher`] (bucket-at-rest encryption)
+//! crate. Unrelated to `gitquarry_core::crypto::Cipher` (bucket-at-rest encryption)
 //! — a different concern, same "don't conflate" split `password` already
 //! keeps from `crypto`.
 

@@ -10,8 +10,8 @@
 //! to the account one rather than rendered twice.
 //!
 //! Starring is a personal bookmark list, not an account-identity setting —
-//! same [`gitquarry_core::auth::access::User::starred`] field
-//! `render_star_button` (in [`crate::webui::actions`]) already writes to;
+//! same [`gitquarry_core::auth::entities::User::starred`] field
+//! `render_star_button` (in `crate::webui::actions`) already writes to;
 //! this is just its own page plus the toggle action.
 //!
 //! Read-only means the starred list filtered through [`can_view_repo`] same

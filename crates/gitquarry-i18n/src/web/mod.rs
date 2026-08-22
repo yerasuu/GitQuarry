@@ -7,7 +7,7 @@
 //! grow unmanageably large across ~30 page files.
 //!
 //! `login`/`users`/`groups`/`security`/`profile`/`preferences`/`favorites`
-//! live at [`crate::auth::i18n`] instead, alongside the [`crate::auth::web`]
+//! live at `auth::i18n` instead, alongside the `auth::web`
 //! pages they're copy for.
 
 pub mod audit;

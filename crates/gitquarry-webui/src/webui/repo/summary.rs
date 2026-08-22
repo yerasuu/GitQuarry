@@ -596,7 +596,7 @@ fn linguist_color(name: &str) -> Option<&'static str> {
 }
 
 /// Color for a language name — [`linguist_color`] when it's one of the
-/// languages [`git::browse::language_for_extension`] can produce, else a
+/// languages `gitquarry_core::git::browse::language_for_extension` can produce, else a
 /// fixed hash-to-hue fallback (djb2-style) so an unrecognized name still
 /// gets a stable, distinct color instead of a missing one.
 #[cfg(any(test, feature = "test-util"))]

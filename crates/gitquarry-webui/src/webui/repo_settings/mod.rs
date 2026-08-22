@@ -8,19 +8,19 @@
 //! - per-user ssh:// permissions — a Pijul-Nest-style grid, adapted to what
 //!   git actually has: no discussions/channels/tags, no "everybody" row
 //!   (ssh:// always requires an authorized pubkey), just the five
-//!   [`gitquarry_core::auth::access::Permission`] tiers per user, same enum
+//!   [`gitquarry_core::auth::entities::Permission`] tiers per user, same enum
 //!   [`gitquarry_core::auth::access`] already uses.
 //! - deleting the repo outright (irreversible, gated by typing the repo's
 //!   full name — see [`danger_zone::render_delete_repo_form`]).
 //!
-//! Split out of [`super::settings`] (server-wide settings) because it's a
+//! Split out of [`crate::settings`] (server-wide settings) because it's a
 //! per-repo concern with its own gate call ([`require_repo_authority`],
-//! which — unlike [`super::settings::require_admin`] — also lets a
+//! which — unlike [`crate::settings::web::require_admin`] — also lets a
 //! `Maintainer`/`Owner`-tier grant on this one repo through, not just
 //! global admins) despite living behind the same `POST /{repo}` route as
 //! the rest of [`super::repo`]'s views.
 //!
-//! One file per sub-form (mirrors the layout [`super::super::git::browse`]
+//! One file per sub-form (mirrors the layout `gitquarry_core::git::browse`
 //! uses for its own per-concern split), each its own `?view=settings_<id>`
 //! page (`settings_sections`, the sidebar in [`render_settings_section`]) —
 //! the general/description

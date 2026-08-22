@@ -1,4 +1,4 @@
-//! Every mutation of a [`crate::auth::access::Group`]/[`crate::auth::access::Team`]
+//! Every mutation of a [`crate::auth::entities::Group`]/[`crate::auth::entities::Team`]
 //! goes through here. See [`crate::domain::repo`]'s doc comment for the
 //! `domain`/`web` boundary this follows.
 //!
@@ -19,9 +19,9 @@ use anyhow::{Context, Result, bail};
 use s3db::txn::{self, TxnOp};
 use std::collections::BTreeSet;
 
-/// Reserves the namespace (shared with [`crate::auth::access::User`]
+/// Reserves the namespace (shared with [`crate::auth::entities::User`]
 /// names) and writes the group object in one create-only [`txn::run`]
-/// transaction — same reasoning as [`crate::domain::user::create`]: either
+/// transaction — same reasoning as [`crate::auth::domain::user::create`]: either
 /// both land or neither does, no manual rollback-on-failure in between.
 /// `None` if `name` is already taken (by a user, a group, or a stray
 /// namespace entry).

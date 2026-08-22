@@ -7,7 +7,7 @@
 //! - [`http`]: git smart-HTTP, layered as middleware onto the web server's
 //!   router (see its own module doc for why) — the only piece here that
 //!   isn't purely transport-agnostic plumbing, since it has to cooperate
-//!   with [`crate::webui`]'s router instead of owning its own listener.
+//!   with `gitquarry_webui::webui`'s router instead of owning its own listener.
 //!
 //! Read-heavy operations for the web UI (log, tree, blame, archive, ...)
 //! live in [`browse`] instead — different concern, different consumers:
@@ -230,7 +230,7 @@ pub enum MergeTreeOutcome {
 /// (`--merge-base=<commit>`, added in git 2.40) instead of letting git find
 /// one itself. A real merge of two branches wants `None` (git's own
 /// merge-base search is exactly what a real `git merge` would do); replaying
-/// one commit onto a new parent — [`domain::merge_request::merge`]'s rebase
+/// one commit onto a new parent — [`crate::domain::merge_request::merge`]'s rebase
 /// strategy — wants `Some(that commit's own first parent)`, which is what
 /// turns this 3-way merge into cherry-pick semantics (apply just that
 /// commit's own diff, not everything back to whatever git would've picked
@@ -367,7 +367,7 @@ pub async fn commit_tree(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// One source-branch commit as [`domain::merge_request::merge`]'s rebase
+/// One source-branch commit as [`crate::domain::merge_request::merge`]'s rebase
 /// strategy needs to replay it onto a new parent: enough to call
 /// [`merge_tree`] with `parent` as the explicit merge-base (cherry-pick
 /// semantics) and then [`commit_tree`] with the original author preserved.

@@ -1,5 +1,5 @@
 //! Login for the web UI, two ways in, both resolving to the same
-//! [`gitquarry_core::auth::access::User`]:
+//! [`gitquarry_core::auth::entities::User`]:
 //! - OIDC: the `/_login_oidc` -> IdP -> `/_callback` round trip, resolved
 //!   against `access.json` by verified email.
 //! - password: a plain username/password form, POSTed to `/_login`,
