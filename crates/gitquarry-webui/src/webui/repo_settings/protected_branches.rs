@@ -72,7 +72,7 @@ pub fn render_protected_branches_form(
             p class="muted" {
                 (gitquarry_i18n::web::repo_settings::protected_branches_prose(locale, &branches.join(", ")))
             }
-            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="conf_action" value="set_protected_branches";
                 input name="protected" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::protected_branches_placeholder(locale));

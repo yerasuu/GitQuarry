@@ -237,8 +237,11 @@ pub(crate) async fn handler_account_favorites_post(
             Cas::Conflict => Flash::Err(&cas_conflict_msg),
         };
         let starred = own_starred_with_counts(&ctx, &fresh.starred).await;
-        let topnav = login::topnav(&ctx, &headers).await;
         let content = render_favorites_page(&fresh, &csrf_field(&headers), Some(flash), &starred, locale);
+        if headers.contains_key(crate::webui::ASYNC_HEADER) {
+            return Ok(Html(content.into_string()).into_response());
+        }
+        let topnav = login::topnav(&ctx, &headers).await;
         let body = account_settings_page("favorites", content, locale).into_string();
         return Ok(Html(layout(
             "favorites",
@@ -319,6 +322,17 @@ pub(crate) async fn handler_account_favorites_post(
     // exhausted-retries path it's a placeholder, and trusting it here would
     // tell the browser its own click took even when the write didn't.
     let now_starred = me.starred.contains(&resolved.uid);
+    // This page's own "remove" row (`favorites_action=remove_from_list`,
+    // set alongside `star_action=toggle_star` — see `render_favorites_page`'s
+    // own doc comment) needs the whole `#favorites-body` back, the row it
+    // was in just disappeared; a bare `star_button_html`/count pair
+    // (the branch below, for a star button elsewhere on the site) has
+    // nowhere on this page to land.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.favorites_action == "remove_from_list" {
+        let starred = own_starred_with_counts(&ctx, &me.starred).await;
+        let content = render_favorites_page(&me, &csrf_field(&headers), None, &starred, locale);
+        return Ok(Html(content.into_string()).into_response());
+    }
     // Async (`data-async`, see `webui::ASYNC_HEADER`'s own doc comment):
     // the button itself is all the caller needs back, not a redirect or
     // the whole favorites page. Checked before the redirect below since a
@@ -367,6 +381,15 @@ pub(crate) async fn handler_account_favorites_post(
 /// input), so it's spliced in via [`PreEscaped`] rather than escaped like
 /// every other interpolated value here — same for [`render_flash`]'s
 /// output, which already runs its own message through `esc()`.
+/// Both the visibility toggle and each row's "remove" button target this
+/// one `#favorites-body` wrapper — either can change what the flash above
+/// says, and removing a row changes the table below it, so both need the
+/// whole thing back, not just their own form. Same reasoning
+/// `render_appearance_page`'s own doc comment gives. The star *button*
+/// elsewhere on the site (`actions::star_button_html`, repo pages) shares
+/// this page's `toggle_star` action but is a different, narrower `data-async`
+/// consumer of its own (see `handler_account_favorites_post`'s own doc
+/// comment on how the two are told apart).
 pub fn render_favorites_page(
     user: &User,
     csrf: &str,
@@ -376,10 +399,11 @@ pub fn render_favorites_page(
 ) -> Markup {
     let action_url = "/_account/favorites";
     html! {
+      div id="favorites-body" {
         (PreEscaped(render_flash(message, locale)))
 
         (settings_section(&crate::auth::i18n::favorites::visibility_heading(locale), Some(&crate::auth::i18n::favorites::visibility_description(locale)), html! {
-            form method="post" action=(action_url) {
+            form method="post" action=(action_url) data-async data-async-target="#favorites-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="favorites_action" value="set_visibility";
                 label {
@@ -408,13 +432,23 @@ pub fn render_favorites_page(
                                 }
                             }
                             td {
-                                form method="post" action=(action_url) style="display:inline" {
+                                form method="post" action=(action_url) style="display:inline" data-async data-async-target="#favorites-body" {
                                     (PreEscaped(csrf))
                                     // `star_action`, matching `actions.rs`'s
                                     // `star_button_html` -- both forms feed the
                                     // same `FavoritesForm`, whose `star_action`
                                     // field now deserializes from that wire name.
                                     input type="hidden" name="star_action" value="toggle_star";
+                                    // Marks this submit as coming from *this*
+                                    // page rather than a `star_button_html`
+                                    // elsewhere — both set `star_action=toggle_star`,
+                                    // but this one's async response has to be
+                                    // the whole `#favorites-body` (the row it
+                                    // was in just disappeared), not a lone
+                                    // button fragment. See
+                                    // `handler_account_favorites_post`'s own
+                                    // doc comment.
+                                    input type="hidden" name="favorites_action" value="remove_from_list";
                                     input type="hidden" name="repo" value=(repo);
                                     button type="submit" { (crate::auth::i18n::favorites::remove_button_label(locale)) }
                                 }
@@ -424,6 +458,7 @@ pub fn render_favorites_page(
                 }
             }
         }))
+      }
     }
 }
 

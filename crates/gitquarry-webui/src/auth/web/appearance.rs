@@ -140,8 +140,15 @@ pub(crate) async fn handler_appearance_post(
         Cas::Ok => Flash::Ok("saved."),
         Cas::Conflict => Flash::Err(&cas_conflict_msg),
     };
-    let topnav = login::topnav(&ctx, &headers).await;
     let content = render_appearance_page(&me, &csrf_field(&headers), Some(flash), locale);
+    // Async (`data-async-target="#appearance-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment): a JS client's `<form data-async>` never actually
+    // navigates, so there's no POST result for a later F5 to warn about
+    // resubmitting.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
+    let topnav = login::topnav(&ctx, &headers).await;
     let body = account_settings_page("appearance", content, locale).into_string();
     Ok(axum::response::Html(layout(
         "appearance",
@@ -155,6 +162,12 @@ pub(crate) async fn handler_appearance_post(
     .into_response())
 }
 
+/// All 4 forms below share one `#appearance-body` async target instead of
+/// each owning its own: the flash banner sits above all of them (one save
+/// confirms, or rejects, one preference at a time — there's no "which form"
+/// for it to belong to individually), so any of the 4 submits has to
+/// refresh the whole wrapper to get a fresh banner, same reasoning
+/// `settings::web::settings_body`'s own doc comment gives for `/_settings`.
 pub fn render_appearance_page(
     user: &User,
     csrf: &str,
@@ -164,10 +177,11 @@ pub fn render_appearance_page(
     let current = TextSize::parse(&user.text_size_default);
     let action_url = "/_account/appearance";
     html! {
+      div id="appearance-body" {
         (PreEscaped(render_flash(message, locale)))
 
         (settings_section(&crate::auth::i18n::appearance::text_size_heading(locale), Some(&crate::auth::i18n::appearance::text_size_description(locale)), html! {
-            form method="post" action=(action_url) {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_text_size_pref";
                 select name="text_size" {
@@ -180,7 +194,7 @@ pub fn render_appearance_page(
         }))
 
         (settings_section(&crate::auth::i18n::appearance::theme_heading(locale), Some(&crate::auth::i18n::appearance::theme_description(locale)), html! {
-            form method="post" action=(action_url) {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_theme_pref";
                 select name="theme" {
@@ -193,7 +207,7 @@ pub fn render_appearance_page(
         }))
 
         (settings_section(&crate::auth::i18n::appearance::density_heading(locale), Some(&crate::auth::i18n::appearance::density_description(locale)), html! {
-            form method="post" action=(action_url) {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_density_pref";
                 select name="density" {
@@ -206,7 +220,7 @@ pub fn render_appearance_page(
         }))
 
         (settings_section(&crate::auth::i18n::appearance::locale_heading(locale), Some(&crate::auth::i18n::appearance::locale_description(locale)), html! {
-            form method="post" action=(action_url) {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="set_locale_pref";
                 select name="locale" {
@@ -217,5 +231,6 @@ pub fn render_appearance_page(
                 button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
             }
         }))
+      }
     }
 }

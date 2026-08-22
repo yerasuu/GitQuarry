@@ -312,7 +312,28 @@ pub(crate) async fn handler_repo_conf_post(
         }
         _ => (general::save_conf(&ctx, &resolved, &name, &form, &actor).await?, None),
     };
+    let is_async = headers.contains_key(super::ASYNC_HEADER);
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
+    // Async is different from the plain fallback below: none of this page's
+    // three async targets (`#mirrors-section`, `#perm-grid`, and every
+    // other action's `#repo-settings-section-body` — see
+    // `render_settings_section`'s own doc comment) is guaranteed to
+    // contain a flash banner (the first two don't), so a rejected/
+    // conflicted save goes through `AppError` here instead: a real non-2xx
+    // status, picked up by `extractFlashMessage`/`showErrorToast` the same
+    // way any other failed `data-async` request already is — same
+    // reasoning `keys::handler_keys_post`'s own doc comment gives for its
+    // `fail!`. Checked before any of `save_conf`/`save_topics`/etc.'s
+    // success paths below, so it also covers the two narrow fragments that
+    // were already async (`sync_mirror_now`/`delete_mirror`/`set_perm`)
+    // and previously had this same gap.
+    if is_async {
+        match &outcome {
+            FlashOutcome::Conflict => return Err(AppError::bad_request(anyhow::anyhow!("{}", cas_conflict_msg))),
+            FlashOutcome::Invalid(msg) => return Err(AppError::bad_request(anyhow::anyhow!("{msg}"))),
+            FlashOutcome::Ok(_) => {}
+        }
+    }
     let flash = match &outcome {
         FlashOutcome::Ok(msg) => Flash::Ok(msg),
         FlashOutcome::Conflict => Flash::Err(&cas_conflict_msg),
@@ -338,8 +359,7 @@ pub(crate) async fn handler_repo_conf_post(
     // this one section, and everything `render_mirrors_section` needs is
     // already fetched above regardless of which action fired -- no extra
     // query for this path.
-    if headers.contains_key(super::ASYNC_HEADER) && matches!(form.action.as_str(), "sync_mirror_now" | "delete_mirror")
-    {
+    if is_async && matches!(form.action.as_str(), "sync_mirror_now" | "delete_mirror") {
         return Ok(axum::response::Html(
             mirrors::render_mirrors_section(
                 &name,
@@ -357,9 +377,45 @@ pub(crate) async fn handler_repo_conf_post(
     // own doc comment): `set_perm` (row save or the add-access form) only
     // ever changes this one grid, and `granted` is already fetched above
     // regardless of which action fired.
-    if headers.contains_key(super::ASYNC_HEADER) && form.action == "set_perm" {
+    if is_async && form.action == "set_perm" {
         return Ok(axum::response::Html(
             permissions::render_perm_grid_fragment(&name, &granted, &csrf_field(&headers), locale).into_string(),
+        )
+        .into_response());
+    }
+    // Async, every other action (general/topics/labels/protected-branches/
+    // protected-tags/signed-commits/reviewers/lfs-limit/move/danger-zone's
+    // own name-mismatch retry — everything not already handled by the two
+    // narrower targets above): `render_settings_section` re-renders the
+    // one active section, wrapped in `#repo-settings-body` (see that fn's
+    // own doc comment) so `data-async-target="#repo-settings-body"` has
+    // something to swap.
+    if is_async {
+        return Ok(axum::response::Html(
+            render_settings_section(
+                section_for_action(&form.action),
+                &name,
+                &config,
+                owner_display.as_deref().unwrap_or(""),
+                Namespaces {
+                    users: &users,
+                    group_names: &group_names,
+                },
+                RepoState {
+                    manifest: &manifest,
+                    granted: &granted,
+                    mirrors: &mirrors_list,
+                    mr_links: &mr_links_by_mirror,
+                },
+                PageChrome {
+                    csrf: &csrf_field(&headers),
+                    message: Some(flash),
+                    pending_mirror_token: pending_mirror_token.as_ref(),
+                    retry: retry_form,
+                    locale,
+                },
+            )
+            .into_string(),
         )
         .into_response());
     }
@@ -681,6 +737,14 @@ fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'sta
 /// neither caller asked for. Only the assembly changed — a
 /// [`project_subnav`] row plus exactly one sub-form's markup instead of all
 /// 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
+///
+/// The whole thing (subnav, flash, and the one active section) is wrapped
+/// in `#repo-settings-body` — every sub-form under `repo_settings/` other
+/// than the mirrors/permissions sections (which have their own narrower
+/// `#mirrors-section`/`#perm-grid` targets) is `data-async
+/// data-async-target="#repo-settings-body"`, so a save re-renders in
+/// place instead of leaving the browser's "confirm resubmission" dialog
+/// for a later F5.
 pub fn render_settings_section(
     section: &str,
     repo_name: &str,
@@ -795,8 +859,10 @@ pub fn render_settings_section(
         _ => general::render_repo_conf_form(repo_name, config, current_owner, csrf, None, retry_for(""), locale),
     };
     html! {
+      div id="repo-settings-body" {
         (super::project_subnav(&tabs, active))
         (PreEscaped(render_flash(message, locale)))
         (content)
+      }
     }
 }

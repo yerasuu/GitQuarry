@@ -86,7 +86,10 @@ async fn make_user(ctx: &AppContext, username: &str, quota_bytes: Option<u64>) -
 }
 
 async fn make_group(ctx: &AppContext, name: &str, quota_bytes: Option<u64>) -> OwnerRef {
-    domain::group::create(ctx, name, None).await.unwrap().unwrap();
+    domain::group::create(ctx, name, None, Uid::new())
+        .await
+        .unwrap()
+        .unwrap();
     let (group, etag) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, name)
         .await
         .unwrap();

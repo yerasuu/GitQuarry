@@ -163,7 +163,6 @@ pub(crate) async fn handler_pat_post(
 
     let tokens = access::list_tokens_for_owner(ctx.backend().as_ref(), &ctx.cipher, &me.uid).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &tokens).await;
-    let topnav = login::topnav(&ctx, &headers).await;
     let content = render_pat_page(
         &tokens,
         &repo_names,
@@ -172,6 +171,14 @@ pub(crate) async fn handler_pat_post(
         pending_secret.as_deref(),
         locale,
     );
+    // Async (`data-async-target="#pat-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment) — a created token's one-time secret still shows up
+    // fine in the swapped fragment, it just never triggers a real page
+    // navigation `create`/`revoke` can leave an F5 warning about.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
+    let topnav = login::topnav(&ctx, &headers).await;
     let body = account_settings_page("pat", content, locale).into_string();
     Ok(axum::response::Html(layout(
         "pat",
@@ -197,7 +204,34 @@ async fn create_token(ctx: &gitquarry_core::app::AppContext, me: &User, form: &P
     }
 }
 
+/// Both forms below (revoke, create) target this one `#pat-body` wrapper:
+/// revoking changes the table, creating adds a row *and* shows the
+/// one-time secret banner above it — either way the whole thing has to
+/// refresh, not just the form that submitted, same reasoning
+/// `render_appearance_page`'s own doc comment gives.
+#[cfg(any(test, feature = "test-util"))]
+pub fn render_pat_page(
+    tokens: &[PersonalAccessToken],
+    repo_names: &HashMap<Uid, String>,
+    csrf: &str,
+    message: Option<Flash>,
+    pending_secret: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn render_pat_page(
+    tokens: &[PersonalAccessToken],
+    repo_names: &HashMap<Uid, String>,
+    csrf: &str,
+    message: Option<Flash>,
+    pending_secret: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
+}
+fn render_pat_page_impl(
     tokens: &[PersonalAccessToken],
     repo_names: &HashMap<Uid, String>,
     csrf: &str,
@@ -208,6 +242,7 @@ fn render_pat_page(
     use crate::auth::i18n::pat as t;
     let action_url = "/_account/pat";
     html! {
+      div id="pat-body" {
         (PreEscaped(render_flash(message, locale)))
 
         @if let Some(secret) = pending_secret {
@@ -239,7 +274,7 @@ fn render_pat_page(
                         td { (token.expires_at.as_deref().unwrap_or("—")) }
                         td { (token.last_used_at.as_deref().unwrap_or("—")) }
                         td {
-                            form method="post" action=(&action_url) style="display:inline" {
+                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#pat-body" {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="action" value="revoke";
                                 input type="hidden" name="uid" value=(token.uid.as_str());
@@ -252,7 +287,7 @@ fn render_pat_page(
         }))
 
         (settings_section(&t::create_heading(locale), None, html! {
-            form method="post" action=(&action_url) {
+            form method="post" action=(&action_url) data-async data-async-target="#pat-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="action" value="create";
                 (field(&t::label_column_header(locale), None, html! {
@@ -267,5 +302,6 @@ fn render_pat_page(
                 button type="submit" { (t::create_button(locale)) }
             }
         }))
+      }
     }
 }

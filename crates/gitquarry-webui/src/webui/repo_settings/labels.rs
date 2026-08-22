@@ -65,7 +65,7 @@ pub fn render_labels_form(
                     }
                 }
             }
-            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
                 (PreEscaped(csrf))
                 input type="hidden" name="conf_action" value="set_labels";
                 input name="labels" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::labels_placeholder(locale));

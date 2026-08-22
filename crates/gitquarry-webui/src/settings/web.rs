@@ -98,7 +98,7 @@ pub(crate) async fn handler_settings_get(State(ctx): State_, headers: HeaderMap)
     let (settings, _etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
-    let body = render_settings_form(&settings, &csrf_field(&headers), None, locale).into_string();
+    let body = settings_body(&settings, &csrf_field(&headers), None, locale).into_string();
     Ok(axum::response::Html(layout(
         "settings",
         &admin_header("settings", locale),
@@ -134,7 +134,7 @@ pub(crate) async fn handler_settings_post(
     let oidc_issuer_url = non_empty(form.oidc_issuer_url);
     let oidc_client_id = non_empty(form.oidc_client_id);
     let oidc_redirect_base_url = non_empty(form.oidc_redirect_base_url);
-    // Write-only field: `render_settings_form` never echoes the stored
+    // Write-only field: `settings_body` never echoes the stored
     // secret back, since `type="password"` hides it from the screen but not
     // from the page source, where it would sit in plain text for anything
     // that reads the DOM or caches the response. So a blank submission
@@ -209,12 +209,23 @@ pub(crate) async fn handler_settings_post(
             Cas::Conflict => Flash::Err(&cas_conflict_msg),
         }
     };
+    let body = settings_body(&settings, &csrf_field(&headers), Some(flash), locale);
+    // Async (`data-async-target="#settings-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment): a JS client gets just this fragment back, its
+    // `<form data-async>` never actually navigates, so there's nothing for
+    // a later F5 to "resubmit" a warning about — the browser's address bar
+    // and history entry stay on the original GET the whole time. The full
+    // page below is still the fallback a plain (non-JS) submit gets, same
+    // "still works without it" contract every other `data-async` form here
+    // already has.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(body.into_string()).into_response());
+    }
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = render_settings_form(&settings, &csrf_field(&headers), Some(flash), locale).into_string();
     Ok(axum::response::Html(layout(
         "settings",
         &admin_header("settings", locale),
-        &body,
+        &body.into_string(),
         &topnav,
         effective_theme(&ctx, &headers).await,
         effective_density(&ctx, &headers).await,
@@ -245,7 +256,31 @@ fn is_host_pattern(pattern: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
 }
 
-fn render_settings_form(
+/// `#settings-body`'s id is what `data-async-target` on the `<form>` below
+/// names — the flash banner sits *outside* the form in the markup (above
+/// it), so a plain `data-async` (whose default target is the form itself)
+/// would swap the form back in without ever refreshing that banner. Wrapping
+/// both in one element and targeting that instead is what keeps a "saved" /
+/// error message showing up after an async submit, not just a full-page one.
+#[cfg(any(test, feature = "test-util"))]
+pub fn settings_body(
+    settings: &ServerSettings,
+    csrf: &str,
+    message: Option<Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    settings_body_impl(settings, csrf, message, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn settings_body(
+    settings: &ServerSettings,
+    csrf: &str,
+    message: Option<Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    settings_body_impl(settings, csrf, message, locale)
+}
+fn settings_body_impl(
     settings: &ServerSettings,
     csrf: &str,
     message: Option<Flash>,
@@ -256,11 +291,12 @@ fn render_settings_form(
     }
     use crate::settings::i18n as t;
     html! {
+      div id="settings-body" {
         p class="muted" {
             (t::settings_saved_in_bucket_prefix(locale)) code { ".conf/global.json" } (t::settings_saved_in_bucket_suffix(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action="/_settings" {
+        form method="post" action="/_settings" data-async data-async-target="#settings-body" {
             (PreEscaped(csrf))
             (settings_section(&t::settings_footer_heading(locale), Some(&t::settings_source_link_prose(locale)), html! {
                 div class="field" {
@@ -336,5 +372,6 @@ fn render_settings_form(
             }))
             p { button type="submit" { (t::settings_save_button(locale)) } }
         }
+      }
     }
 }
