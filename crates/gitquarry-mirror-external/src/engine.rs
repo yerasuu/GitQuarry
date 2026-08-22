@@ -413,8 +413,17 @@ async fn persist_pulled_ref_to_s3(
                     )
                     .await;
                 }
-                gitquarry_core::storage::settings::touch_last_push(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid)
+                // Same "default branch only" scoping as the pre-receive
+                // hook's own call: a sync that only lands a feature branch
+                // or a tag isn't code on the repo's main line.
+                if new_manifest.head.as_deref() == Some(ref_name) {
+                    gitquarry_core::storage::settings::touch_last_push(
+                        ctx.backend().as_ref(),
+                        &ctx.cipher,
+                        &resolved.uid,
+                    )
                     .await;
+                }
                 return Ok(());
             }
             Cas::Conflict if attempt < MANIFEST_CAS_MAX_RETRIES => {

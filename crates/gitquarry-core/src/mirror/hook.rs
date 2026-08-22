@@ -492,7 +492,16 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
                 )
                 .await;
             }
-            crate::storage::settings::touch_last_push(hook_ctx.backend.as_ref(), &hook_ctx.cipher, &uid).await;
+            // Only the default branch moves the "last updated" stamp: a
+            // push that only touches a feature branch or a tag isn't code
+            // landing on the repo's main line, which is what the home
+            // page's "updated X ago" is meant to answer.
+            if updates
+                .iter()
+                .any(|u| new_manifest.head.as_deref() == Some(u.refname.as_str()))
+            {
+                crate::storage::settings::touch_last_push(hook_ctx.backend.as_ref(), &hook_ctx.cipher, &uid).await;
+            }
             // The push itself never triggers an external-mirror sync
             // directly — this hook process is short-lived (git kills it as
             // soon as it exits), so it can't hold a long-running task past

@@ -9,9 +9,6 @@
 //! the repo index ([`handler_index`]) and the per-repo dispatcher
 //! ([`handler_repo`]) that picks a view by `?view=` and calls its `render_*`.
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod activity;
-#[cfg(not(any(test, feature = "test-util")))]
 mod activity;
 pub(crate) mod blame;
 pub(crate) mod blob;
