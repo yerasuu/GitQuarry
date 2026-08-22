@@ -366,6 +366,11 @@ fn license_kind_from_text(text: &str) -> Option<&'static str> {
 /// Renders the root README as markdown (`.md`/`.markdown`) or as preformatted
 /// text otherwise. `None` if the repo has no README at `rev`'s root, it's too
 /// big, or it isn't valid UTF-8.
+///
+/// Only called from cross-crate `tests/*.rs` (`render_about` calls
+/// [`render_readme_from_entries`] directly instead, sharing one `ls_tree`)
+/// — dead outside `test-util`, which is what `cargo check` flags.
+#[cfg(any(test, feature = "test-util"))]
 pub async fn render_readme(bare_repo: &FsPath, rev: &str) -> Result<Option<String>> {
     let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
     render_readme_from_entries(bare_repo, rev, &root_entries).await
