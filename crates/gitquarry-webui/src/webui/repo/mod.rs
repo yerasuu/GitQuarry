@@ -128,12 +128,13 @@ struct IndexRepo {
     last_push_branch: Option<String>,
 }
 
-/// GitHub/Artifacts-style relative stamp ("2h ago", "3d ago") for
-/// [`IndexRepo::last_push`] — coarse, single-unit buckets rather than a full
-/// duration breakdown, same as every other "updated X ago" UI. Unlocalized
-/// like the rest of this fragment already is (`results`, below, has no
-/// `locale` in scope — see its own doc comment): threading one through just
-/// for this string would be the only i18n on an otherwise-English page.
+/// Compact stamp ("2h", "3d") for the sidebar's own `<time>` column and the
+/// compact table's dense `.rl-meta` row, both too tight for full words —
+/// coarse, single-unit buckets rather than a full duration breakdown.
+/// Unlocalized like the rest of this fragment already is (`results`, below,
+/// has no `locale` in scope — see its own doc comment): threading one
+/// through just for this string would be the only i18n on an otherwise-
+/// English page.
 fn relative_time_ago(then: u64, now: u64) -> String {
     let diff = now.saturating_sub(then);
     if diff < 60 {
@@ -153,6 +154,39 @@ fn relative_time_ago(then: u64, now: u64) -> String {
         (diff / 31_557_600, "y")
     };
     format!("{value}{unit} ago")
+}
+
+/// Full-words form ("updated 3 hours ago", "updated yesterday") for the
+/// repo card's own meta line — that line has room `relative_time_ago`'s
+/// compact stamp doesn't need to save, and reads better spelled out next to
+/// the language name and star count it sits beside.
+fn relative_time_words(then: u64, now: u64) -> String {
+    let diff = now.saturating_sub(then);
+    fn plural(n: u64, unit: &str) -> String {
+        format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+    }
+    if diff < 60 {
+        return "just now".to_string();
+    }
+    if diff < 3600 {
+        return plural(diff / 60, "minute");
+    }
+    if diff < 86400 {
+        return plural(diff / 3600, "hour");
+    }
+    if diff < 172_800 {
+        return "yesterday".to_string();
+    }
+    if diff < 604_800 {
+        return plural(diff / 86400, "day");
+    }
+    if diff < 2_629_800 {
+        return plural(diff / 604_800, "week");
+    }
+    if diff < 31_557_600 {
+        return plural(diff / 2_629_800, "month");
+    }
+    plural(diff / 31_557_600, "year")
 }
 
 /// One entry in the home page's "recent activity" sidebar — deliberately
@@ -317,14 +351,16 @@ pub(crate) async fn handler_index(
                     @if repo.star_count > 0 || repo.primary_language.is_some() || repo.last_push.is_some() {
                         div class="repo-card-meta" {
                             @if let Some(lang) = &repo.primary_language {
-                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
-                                span { (lang) }
+                                span {
+                                    span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                    (lang)
+                                }
                             }
                             @if repo.star_count > 0 {
                                 span { (repo.star_count) " \u{2605}" }
                             }
                             @if let Some(last_push) = repo.last_push {
-                                span class="muted" { "updated " (relative_time_ago(last_push, now_unix)) }
+                                span { "updated " (relative_time_words(last_push, now_unix)) }
                             }
                         }
                     }
