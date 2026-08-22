@@ -117,6 +117,46 @@ fn render_group_hides_delete_button_for_non_admin() {
     );
 }
 
+/// Regression: every form on this page — including the row-level
+/// `remove_owner`, which used to be deliberately left out of the async
+/// swap (`group_action_row`'s own doc comment, before
+/// `handler_groups_post` learned to async-render every action, not just
+/// `delete_group`/`delete_team`/`remove_team_member`) — now targets the
+/// same `#groups-list`. Losing any one of them quietly brings back the
+/// browser's "confirm resubmission" dialog on F5 for that specific action.
+#[test]
+fn every_group_and_team_form_targets_groups_list() {
+    let alice = Uid::new();
+    let t = team("frontend", &[&alice], Permission::Developer, None);
+    let mut owners = BTreeSet::new();
+    owners.insert(alice.clone());
+    let group = Group {
+        uid: Default::default(),
+        name: "acme".to_string(),
+        description: None,
+        owners,
+        teams: vec![t],
+        storage_quota_bytes: None,
+    };
+    let html = render_group(
+        &group,
+        true,
+        &names_with(&alice, "alice"),
+        &HashMap::new(),
+        "tok",
+        gitquarry_i18n::Locale::En,
+    )
+    .into_string();
+    // set_description, set_storage_quota, remove_owner (row), add_owner,
+    // add_team_member, delete_team, remove_team_member (row), add_team,
+    // delete_group.
+    assert_eq!(
+        html.matches(r##"data-async data-async-target="#groups-list""##).count(),
+        9,
+        "{html}"
+    );
+}
+
 #[test]
 fn groups_page_lists_only_groups_the_viewer_owns_unless_admin() {
     let alice = Uid::new();

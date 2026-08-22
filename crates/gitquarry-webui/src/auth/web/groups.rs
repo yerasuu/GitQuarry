@@ -183,7 +183,19 @@ pub(crate) async fn handler_groups_post(
     };
 
     let action_result = apply_groups_action(&ctx, &me, &form, locale).await?;
+    let is_async = headers.contains_key(crate::webui::ASYNC_HEADER);
 
+    // Async is different from the plain fallback below: every form on this
+    // page targets `#groups-list` (see `render_groups_list`'s own doc
+    // comment), which never contains a flash banner
+    // (`render_groups_page`'s own shell has it, above the list) — a
+    // page-level fragment swapped into it would corrupt the DOM (`style/
+    // app.js`'s `target.replaceWith` taking the whole `<html>` as the
+    // replacement). A rejected action goes through `AppError` instead on
+    // this path: a real non-2xx status, picked up by
+    // `extractFlashMessage`/`showErrorToast` the same way any other failed
+    // `data-async` request already is — same reasoning
+    // `keys::handler_keys_post`'s own doc comment gives for its `fail!`.
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
     let invalid_msg;
     let flash = match &action_result {
@@ -199,8 +211,16 @@ pub(crate) async fn handler_groups_post(
             .await;
             Flash::Ok("saved to the bucket.")
         }
-        Ok(Cas::Conflict) => Flash::Err(&cas_conflict_msg),
+        Ok(Cas::Conflict) => {
+            if is_async {
+                return Err(AppError::bad_request(anyhow::anyhow!("{}", cas_conflict_msg)));
+            }
+            Flash::Err(&cas_conflict_msg)
+        }
         Err(msg) => {
+            if is_async {
+                return Err(AppError::bad_request(anyhow::anyhow!("{msg}")));
+            }
             invalid_msg = msg.clone();
             Flash::Err(&invalid_msg)
         }
@@ -208,18 +228,11 @@ pub(crate) async fn handler_groups_post(
     let groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
     let names = uid_to_username_map(&ctx.backend(), &ctx.cipher).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &groups).await;
-    // Async (`data-async-target="#groups-list"`, see `crate::webui::ASYNC_HEADER`'s
-    // own doc comment): a group/team disappearing (or a member being
-    // removed) changes more than one form's own label, so the whole
-    // group list gets re-rendered from a fresh fetch rather than trying
-    // to patch just one card.
-    if action_result.is_ok()
-        && headers.contains_key(crate::webui::ASYNC_HEADER)
-        && matches!(
-            form.action.as_str(),
-            "delete_group" | "delete_team" | "remove_team_member"
-        )
-    {
+    // `action_result` is `Ok` past this point (both error arms above
+    // already returned) — every successful action refreshes the whole
+    // `#groups-list` fragment from a fresh fetch rather than trying to
+    // patch just the one card/row that changed.
+    if is_async {
         return Ok(axum::response::Html(
             render_groups_list(
                 &me.uid,
@@ -440,7 +453,7 @@ pub fn render_groups_page(
 
         @if is_admin {
             h4 { (crate::auth::i18n::groups::groups_create_heading(locale)) }
-            form method="post" action="/_groups" {
+            form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_group";
                 input name="name" size="30" placeholder=(crate::auth::i18n::groups::groups_name_placeholder(locale));
@@ -461,10 +474,10 @@ fn resolve_name<'a>(names: &'a HashMap<Uid, String>, uid: &Uid) -> Option<&'a st
     names.get(uid).map(String::as_str)
 }
 
-/// The visible group cards alone, wrapped in a stable `id` so `delete_group`/
-/// `delete_team`/`remove_team_member` can swap just this fragment
-/// (`data-async-target="#groups-list"`, see `crate::webui::ASYNC_HEADER`'s
-/// own doc comment) instead of re-rendering the whole page.
+/// The visible group cards alone, wrapped in a stable `id` — every action
+/// on this page (`data-async-target="#groups-list"`, see
+/// `crate::webui::ASYNC_HEADER`'s own doc comment) swaps just this fragment
+/// instead of re-rendering the whole page.
 fn render_groups_list(
     viewer: &Uid,
     is_admin: bool,
@@ -502,7 +515,7 @@ pub fn render_group(
         div class="card card-pad user-card" {
             h4 { (group.name) }
 
-            form method="post" action="/_groups" {
+            form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="set_description";
                 input type="hidden" name="name" value=(group.name);
@@ -512,7 +525,7 @@ pub fn render_group(
             }
 
             @if is_admin {
-                form method="post" action="/_groups" {
+                form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value="set_storage_quota";
                     input type="hidden" name="name" value=(group.name);
@@ -531,12 +544,12 @@ pub fn render_group(
                 }
                 @for owner in &group.owners {
                     @match resolve_name(names, owner) {
-                        Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf, None)),
+                        Some(username) => (group_action_row(&group.name, "remove_owner", &[("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf)),
                         None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
                     }
                 }
             }
-            form method="post" action="/_groups" {
+            form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_owner";
                 input type="hidden" name="name" value=(group.name);
@@ -548,7 +561,7 @@ pub fn render_group(
                 (render_team(&group.name, team, names, repo_names, csrf, locale))
             }
             h4 style="border-bottom:none" { (crate::auth::i18n::groups::groups_new_team_heading(locale)) }
-            form method="post" action="/_groups" {
+            form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_team";
                 input type="hidden" name="name" value=(group.name);
@@ -633,12 +646,12 @@ pub fn render_team(
             }
             @for member in &team.members {
                 @match resolve_name(names, member) {
-                    Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf, Some("#groups-list"))),
+                    Some(username) => (group_action_row(group_name, "remove_team_member", &[("team", &team.name), ("username", username)], &crate::auth::i18n::groups::groups_remove_button(locale), csrf)),
                     None => tr { td { em { (gitquarry_i18n::shared::user_deleted(locale)) } } td {} },
                 }
             }
         }
-        form method="post" action="/_groups" {
+        form method="post" action="/_groups" data-async data-async-target="#groups-list" {
             (PreEscaped(csrf))
             input type="hidden" name="group_action" value="add_team_member";
             input type="hidden" name="name" value=(group_name);
@@ -658,26 +671,16 @@ pub fn render_team(
 
 /// One `<tr>` with a label and a same-row `action`-form button — the shape
 /// every owner/team-member removal row shares, just with a different
-/// action and a different set of hidden fields to carry. `async_target`
-/// is `Some` only for `remove_team_member`: `remove_owner` doesn't live
-/// inside the `#groups-list` fragment's re-render path (it's not one of
-/// the three actions [`handler_groups_post`] branches async on), so
-/// making it `data-async` would leave the row un-swapped on submit.
-fn group_action_row(
-    group_name: &str,
-    action: &str,
-    hidden: &[(&str, &str)],
-    button_label: &str,
-    csrf: &str,
-    async_target: Option<&str>,
-) -> Markup {
+/// action and a different set of hidden fields to carry. Every action on
+/// this page now targets `#groups-list` (see `render_groups_list`'s own
+/// doc comment), so there's nothing left to make optional here.
+fn group_action_row(group_name: &str, action: &str, hidden: &[(&str, &str)], button_label: &str, csrf: &str) -> Markup {
     let label = hidden.last().map(|(_, v)| *v).unwrap_or_default();
     html! {
         tr {
             td { (label) }
             td {
-                form method="post" action="/_groups" style="display:inline"
-                    data-async[async_target.is_some()] data-async-target=[async_target] {
+                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value=(action);
                     input type="hidden" name="name" value=(group_name);
