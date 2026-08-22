@@ -410,8 +410,10 @@ pub(crate) async fn handler_index(
                     div class="rl-topics" { (maud::PreEscaped(super::topic_badges(&repo.topics))) }
                     div class="rl-meta" {
                         @if let Some(lang) = &repo.primary_language {
-                            span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
-                            span { (lang) }
+                            span {
+                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                (lang)
+                            }
                         }
                         @if repo.star_count > 0 {
                             span { (repo.star_count) " \u{2605}" }
