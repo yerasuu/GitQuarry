@@ -126,7 +126,15 @@ pub(super) async fn render_about(
     let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
     let readme = render_readme_from_entries(bare_repo, rev, &root_entries).await?;
     let sidebar = render_sidebar(
-        ctx, resolved, bare_repo, repo_name, rev, headers, config, languages, &root_entries,
+        ctx,
+        resolved,
+        bare_repo,
+        repo_name,
+        rev,
+        headers,
+        config,
+        languages,
+        &root_entries,
     )
     .await?;
 
