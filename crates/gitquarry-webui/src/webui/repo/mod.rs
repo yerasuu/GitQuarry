@@ -274,10 +274,7 @@ pub(crate) async fn handler_index(
         .filter(|e| visible_names.contains(e.target.as_str()))
         .take(5)
         .collect();
-    let clone_widget = match repos.first() {
-        Some(repo) => Some(render_clone_urls(&ctx, &repo.name, &headers).await?),
-        None => None,
-    };
+    let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
         div class="stats-strip" {
             div class="stat" { div class="n" { (repo_count) } div class="l" { "repositories" } }
@@ -309,8 +306,11 @@ pub(crate) async fn handler_index(
                         }
                     }
                 }
-                @if let Some(widget) = clone_widget {
-                    div class="card card-pad sidebar-box" { (widget) }
+                @if !all_topics.is_empty() {
+                    div class="card card-pad sidebar-box" {
+                        h4 { "browse by topic" }
+                        p { (maud::PreEscaped(super::topic_badges(&all_topics))) }
+                    }
                 }
             }
         }
