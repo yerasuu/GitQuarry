@@ -12,12 +12,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helv
 p { line-height: var(--lh); }
 /* Topbar shares the same palette/weight conventions as table.header/table.tabs
    below instead of its own look, so the chrome reads as one page, not two. */
-#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: relative; z-index: 5; }
+#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: sticky; top: 0; z-index: 5; }
 #topbar .inner { max-width: 70rem; margin: 0 auto; padding: var(--pad-y) var(--pad-x);
                  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
                  row-gap: var(--gap); column-gap: var(--gap); }
 #topbar .brand { font-weight: bold; letter-spacing: var(--letter); font-size: 1.05em; display: inline-flex; align-items: center; gap: var(--gap); }
 #topbar .brand a { color: var(--fg); display: inline-flex; align-items: center; gap: var(--gap); }
+#topbar .brand svg { width: 20px; height: 20px; flex-shrink: 0; fill: var(--accent); }
 #topbar a { color: var(--fg2); transition: color .15s ease; }
 #topbar a:hover { color: var(--accent); }
 #topbar nav { font-size: 0.9em; color: var(--muted); display: inline-flex; align-items: center; gap: 0; }
@@ -208,6 +209,12 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    same margin reset as the `h4` above, so a box built around either
    heading level sits flush the same way. */
 .sidebar-box h3 { margin-top: 0; }
+/* `repo::handler_index`'s own two sidebar boxes (activity/topics) use this
+   instead of a bare `h4` — a small uppercase muted label, not the global
+   `h4`'s accent-colored underlined heading every other `.sidebar-box`
+   still gets: scoped to its own class so it doesn't reach those. */
+.sidebar-box-title { margin: 0 0 0.6rem; font-size: var(--fs-sm); font-weight: bold; color: var(--muted);
+                      text-transform: uppercase; letter-spacing: 0.04em; border-bottom: none; padding-bottom: 0; }
 /* `repo::handler_index`'s "recent activity" sidebar box — a compact
    timestamp/target/verb row per audit entry, not `.community-list`'s
    icon+fact shape (nothing here is a fixed fact, every row is its own
@@ -288,11 +295,22 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    feedback `.card` doesn't provide on its own. */
 .repo-card { transition: box-shadow .15s ease, border-color .15s ease; }
 .repo-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); }
-.repo-card-title { font-size: 1.05em; font-weight: bold; }
+/* `flex`/`gap` instead of the markup's own literal " " between link/badge/
+   pills doing the spacing: a flex container drops whitespace-only text
+   nodes from layout entirely, so `gap` alone spaces everything evenly and
+   the literal spaces `repo::handler_index`'s markup still emits go inert
+   rather than doubling up. Also what lets `.clone-url` below push itself
+   to the row's far end via `margin-left: auto`. */
+.repo-card-title { font-size: 1.05em; font-weight: bold; display: flex; align-items: center; flex-wrap: wrap; gap: 0.4em; }
 .repo-card-title a { color: var(--fg); }
 .repo-card-desc { color: var(--fg2); margin: 0.3em 0; }
 .repo-card-meta { display: flex; align-items: center; gap: var(--gap); font-size: 0.85em; color: var(--muted); margin-top: 0.4em; }
 .repo-card-meta .lang-swatch { margin-right: 0.15em; }
+/* Per-card ssh clone hint, index cards only (`repo::handler_index`).
+   Hidden below `760px`: at card width there's no room next to a real repo
+   name without wrapping awkwardly. */
+.clone-url { margin-left: auto; font-size: 0.78em; color: var(--muted); background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius-sm); padding: 0.1em 0.5em; display: none; }
+@media (min-width: 760px) { .clone-url { display: inline-block; } }
 /* Section header row above a namespace's repos — same weight as
    `table.list tr.section-header` used, just as a plain block since cards
    aren't inside a table anymore. Unscoped by density on purpose: it sits

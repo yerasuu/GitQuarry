@@ -680,7 +680,14 @@ pub fn layout(
                 a class="skip-link" href="#content" { (chrome::skip_to_content(locale)) }
                 div id="topbar" {
                     div class="inner" {
-                        span class="brand" { a href="/" { "GitQuarry" } }
+                        span class="brand" {
+                            a href="/" {
+                                svg viewBox="0 0 24 24" aria-hidden="true" {
+                                    path d="M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z" {}
+                                }
+                                "GitQuarry"
+                            }
+                        }
                         // Pure-CSS collapse (no JS in this codebase at all):
                         // a hidden checkbox + its `<label>` as the visible
                         // hamburger toggle, `nav` shown via the sibling
@@ -691,7 +698,8 @@ pub fn layout(
                         label for="nav-toggle" class="nav-toggle-btn" aria-label=(chrome::menu_toggle_label(locale)) { (super::icons::menu()) }
                         nav {
                             a href="/" { (chrome::repos_nav(locale)) } " · "
-                            a href="/_new" { (chrome::new_repo_nav(locale)) }
+                            a href="/_new" { (chrome::new_repo_nav(locale)) } " · "
+                            a href="/_groups" { (chrome::groups_tab(locale)) }
                             (maud::PreEscaped(topnav_auth))
                             " · "
                             a href="/_settings" { (chrome::settings_tab(locale)) }
