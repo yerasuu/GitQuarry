@@ -95,10 +95,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use gitquarry_core::app::AppContext;
+use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::{git, storage, validate};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -135,6 +136,14 @@ pub(crate) async fn handler_index(
     let viewer_logged_in = login::current_user(&ctx, &headers).await.is_some();
     let mut repos = list_visible_repos(&ctx, viewer_logged_in).await?;
     repos.sort_by(|a, b| a.name.cmp(&b.name));
+    // Both stay unaffected by `?q=` below: they describe the whole visible
+    // set, not the current search/filter.
+    let repo_count = repos.len();
+    let ns_count = repos
+        .iter()
+        .filter_map(|r| r.name.split_once('/').map(|(ns, _)| ns))
+        .collect::<HashSet<_>>()
+        .len();
 
     let q = params.get("q").map(String::as_str).unwrap_or("");
     let q_lower = q.to_ascii_lowercase();
@@ -245,13 +254,66 @@ pub(crate) async fn handler_index(
     if headers.contains_key(super::ASYNC_HEADER) {
         return Ok(Html(results.into_string()));
     }
+    // Chrome around `results` that only a full page load needs — skipped on
+    // the live-search fragment above, same reasoning `results` itself is
+    // factored out for: no point re-fetching the user count or walking the
+    // audit log on every keystroke.
+    let user_count = access::list_usernames(ctx.backend().as_ref())
+        .await
+        .map(|names| names.len())
+        .unwrap_or(0);
+    // Same visibility this repo already got from `list_visible_repos` above:
+    // an audit entry only shows here if its `target` is a repo currently in
+    // `repos`, so this can never surface more than a repo's own `?view=activity`
+    // tab already would for the same viewer.
+    let visible_names: HashSet<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+    let recent_activity: Vec<storage::audit::AuditEntry> = storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| visible_names.contains(e.target.as_str()))
+        .take(5)
+        .collect();
+    let clone_widget = match repos.first() {
+        Some(repo) => Some(render_clone_urls(&ctx, &repo.name, &headers).await?),
+        None => None,
+    };
     let body = maud::html! {
-        form method="get" action="/" data-async data-live-search="#repo-list" {
-            input name="q" value=(q) placeholder="search repos or topics";
-            button type="submit" { "search" }
+        div class="stats-strip" {
+            div class="stat" { div class="n" { (repo_count) } div class="l" { "repositories" } }
+            div class="stat" { div class="n" { (ns_count) } div class="l" { "namespaces" } }
+            div class="stat" { div class="n" { (user_count) } div class="l" { "users" } }
+            div class="stat" { div class="n" { "v" (env!("CARGO_PKG_VERSION")) } div class="l" { "server" } }
         }
-        p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
-        div id="repo-list" { (results) }
+        div class="repo-layout" {
+            div class="repo-main" {
+                form method="get" action="/" data-async data-live-search="#repo-list" {
+                    input name="q" value=(q) placeholder="search repos or topics";
+                    button type="submit" { "search" }
+                }
+                p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
+                div id="repo-list" { (results) }
+            }
+            aside class="repo-sidebar" {
+                @if !recent_activity.is_empty() {
+                    div class="card card-pad sidebar-box" {
+                        h4 { "recent activity" }
+                        ul class="community-list" {
+                            @for e in &recent_activity {
+                                li {
+                                    span class="muted" { (e.at) " " }
+                                    a href=(format!("/{}", url_encode(&e.target))) { (e.target) }
+                                    " " span class="muted" { code { (e.action) } }
+                                }
+                            }
+                        }
+                    }
+                }
+                @if let Some(widget) = clone_widget {
+                    div class="card card-pad sidebar-box" { (widget) }
+                }
+            }
+        }
     }
     .into_string();
     let topnav = login::topnav(&ctx, &headers).await;

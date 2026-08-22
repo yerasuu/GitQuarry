@@ -203,6 +203,11 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .sidebar-box h4 { margin-top: 0; }
 .sidebar-box table.commit-meta { margin: 0; }
 .sidebar-box p:last-child { margin-bottom: 0; }
+/* `.sidebar-box` also hosts `repo::summary::render_clone_urls`'s `<h3>`
+   verbatim (the index page's own clone widget, `repo::handler_index`) —
+   same margin reset as the `h4` above, so a box built around either
+   heading level sits flush the same way. */
+.sidebar-box h3 { margin-top: 0; }
 /* GitHub-style "About"/community box: a compact wrapping row of icon+count
    stats, then a plain vertical list of icon+link facts — no table, no
    "not found" placeholders (`render_sidebar`'s own doc comment on why the
@@ -235,6 +240,15 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .conflict-help { margin-bottom: 1rem; }
 .conflict-help summary { cursor: pointer; color: var(--fg2); }
 .conflict-help pre { margin-top: 0.5em; }
+/* `repo::handler_index`'s terse instance-stats row (repos/namespaces/users/
+   version) — cgit's own plain numeric header, one bordered strip instead of
+   `table.header`'s title-row shape since there's no one repo here to name. */
+.stats-strip { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: var(--radius);
+               background: var(--surface); margin-bottom: 1rem; overflow: hidden; }
+.stats-strip .stat { flex: 1; min-width: 6em; padding: var(--pad-y) var(--pad-x); border-right: 1px solid var(--border); }
+.stats-strip .stat:last-child { border-right: none; }
+.stats-strip .n { font-weight: bold; font-size: 1.3em; font-variant-numeric: tabular-nums; }
+.stats-strip .l { color: var(--muted); font-size: var(--fs-sm); margin-top: 0.15em; }
 /* Index page repo listing has two markups always rendered
    (`repo::handler_index`), CSS picking which one shows — same
    `[data-density='airy']`-driven swap `.header-lang`/`.sidebar-lang` above
