@@ -192,7 +192,7 @@ pub use page_chrome::layout;
 // calls the former once at startup, right after resolving `ServerSettings`.
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
-    permission_badge_class, project_subnav, settings_section, tab_links, topic_badges,
+    permission_badge_class, settings_section, tab_links, topic_badges,
 };
 pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};

@@ -336,10 +336,11 @@ fn status_tabs(repo_name: &str, status: &str, q: Option<&str>, locale: Locale) -
     })
     .collect();
     html! {
-        // `.subnav`: stacks directly under `page_chrome::project_subnav`'s
-        // own row -- see that modifier's CSS doc comment. No hamburger
-        // toggle (`tab_links`'s own `toggle: None`) -- only 3 entries,
-        // already reads fine as a short always-visible stack on mobile.
+        // `.subnav`: stacks directly under the main tabs bar's own row --
+        // see `base.css`'s own doc comment on `table.tabs.subnav`. No
+        // hamburger toggle (`tab_links`'s own `toggle: None`) -- only 3
+        // entries, already reads fine as a short always-visible stack on
+        // mobile.
         table class="tabs subnav" {
             tr {
                 td { (crate::webui::tab_links(None, &tabs, status)) }
