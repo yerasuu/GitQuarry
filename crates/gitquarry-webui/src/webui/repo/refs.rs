@@ -74,7 +74,7 @@ pub(super) fn tag_table(
                     td class="muted" { (r.date) }
                     @if can_write {
                         td {
-                            form method="post" action="/_tags/delete" style="display:inline" data-async data-async-target="#tag-table" {
+                            form method="post" action="/_tags/delete" style="display:inline" data-async data-async-target="#tag-table" data-confirm=(t::delete_tag_confirm(locale, short)) {
                                 (PreEscaped(csrf_field(headers)))
                                 input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="tag" value=(short);
@@ -126,7 +126,7 @@ pub(super) fn branch_table(
                     td class="muted" { (r.date) }
                     @if can_write {
                         td {
-                            form method="post" action="/_branches/delete" style="display:inline" data-async data-async-target="#branch-table" {
+                            form method="post" action="/_branches/delete" style="display:inline" data-async data-async-target="#branch-table" data-confirm=(t::delete_branch_confirm(locale, short)) {
                                 (PreEscaped(csrf_field(headers)))
                                 input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="branch" value=(short);

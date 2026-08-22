@@ -13,3 +13,7 @@ msg!(none_hint() { Locale::Es => "(ninguno)", Locale::En => "(none)" });
 msg!(edit_comment_button() { Locale::Es => "editar", Locale::En => "edit" });
 msg!(delete_comment_button() { Locale::Es => "borrar", Locale::En => "delete" });
 msg!(save_comment_button() { Locale::Es => "guardar", Locale::En => "save" });
+msg!(delete_comment_confirm() {
+    Locale::Es => "¿borrar este comentario? no se puede deshacer.",
+    Locale::En => "delete this comment? this cannot be undone.",
+});

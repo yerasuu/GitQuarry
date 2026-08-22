@@ -128,7 +128,7 @@ fn render_mr_actions(
             @if can_manage {
                 @match mr.status {
                     MrStatus::Open => {
-                        form method="post" action="/_merges/close" style="display:inline" data-async data-async-target="#mr-actions" {
+                        form method="post" action="/_merges/close" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(t::close_confirm(locale, mr.number, &mr.title)) {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(mr.number);
@@ -163,7 +163,7 @@ fn render_mr_actions(
                 }
             }
             @if can_merge && !mr.is_draft && mr.status == MrStatus::Open {
-                form method="post" action="/_merges/merge" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(t::merge_confirm(locale)) {
+                form method="post" action="/_merges/merge" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
                     (PreEscaped(csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="number" value=(mr.number);
@@ -404,7 +404,7 @@ async fn render_merges_list_impl(
             button type="submit" { (t::search_button(locale)) }
         }
         @if can_bulk_manage {
-            form method="post" action="/_merges/bulk" {
+            form method="post" action="/_merges/bulk" data-confirm=(t::bulk_apply_confirm(locale)) {
                 (PreEscaped(&csrf_html))
                 input type="hidden" name="repo" value=(repo_name);
                 div class="table-scroll" {
