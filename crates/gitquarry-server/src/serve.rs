@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use gitquarry_auth_crypto::oidc;
 use gitquarry_core::app::{AppContext, Locks};
 use gitquarry_core::auth::access;
+use gitquarry_core::events::RepoEvent;
 use gitquarry_core::git::ssh;
 use gitquarry_core::mirror::{deleted_repo_sweep, gc};
 use gitquarry_core::{config, storage};
@@ -279,6 +280,43 @@ pub async fn run(rest: &[String]) -> Result<()> {
         mirror_sync: Some(Arc::new(crate::mirror_sync::MirrorExternalHook::default())),
         visible_repo_uids_cache: Default::default(),
     });
+
+    // Turns a real push into a `repo.push` audit entry — the audit log
+    // otherwise only ever sees webui-driven actions (settings, releases,
+    // merges, ...), never the actual git activity the index page's own
+    // "recent activity" rail is supposed to be showing. `git::http`/
+    // `git::ssh` already emit `RepoEvent::Push` on every successful push;
+    // nothing consumed it until now (`events::EventBus`'s own doc comment —
+    // webhooks Phase 1 scaffolding). The closure itself must stay
+    // synchronous (`events::Consumer`'s signature), so the actual write is
+    // a detached task, same "must never make the pusher wait" reasoning
+    // `git::http`/`git::ssh` already apply to the emit call itself.
+    ctx.events.register(Arc::new({
+        let ctx = Arc::clone(&ctx);
+        move |event| {
+            let RepoEvent::Push { repo_uid, refs, pusher } = event else {
+                return;
+            };
+            let ctx = Arc::clone(&ctx);
+            tokio::spawn(async move {
+                let Ok((config, _etag)) =
+                    storage::settings::get_repo_config(ctx.backend().as_ref(), repo_uid.as_str(), &ctx.cipher).await
+                else {
+                    return;
+                };
+                let detail = refs.iter().map(|r| r.refname.as_str()).collect::<Vec<_>>().join(", ");
+                storage::audit::record(
+                    ctx.backend().as_ref(),
+                    &ctx.cipher,
+                    pusher.as_deref().unwrap_or("unknown"),
+                    "repo.push",
+                    &config.full_name,
+                    Some(detail),
+                )
+                .await;
+            });
+        }
+    }));
 
     // Warms `ctx.visible_repo_uids_cache` before either server accepts a
     // connection, so the very first hit on the home page (this deployment's
