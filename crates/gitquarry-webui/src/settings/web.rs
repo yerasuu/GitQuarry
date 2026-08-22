@@ -290,87 +290,138 @@ fn settings_body_impl(
         v.as_deref().unwrap_or("")
     }
     use crate::settings::i18n as t;
+    // `(id, href, label)` — same shape `repo_settings::settings_sections`
+    // and `page_chrome::account_sections` already feed their own sidebars,
+    // just anchors into this one still-single form instead of separate
+    // `?view=` pages: `/_settings` submits everything in one `PUT`
+    // (`handler_settings_post`'s own OIDC all-4-or-none check spans several
+    // of these sections at once), so there's no one section to isolate a
+    // save to the way a repo-settings sub-form can.
+    let sections = [
+        (
+            "settings-footer",
+            "#settings-footer",
+            t::settings_footer_heading(locale),
+        ),
+        (
+            "settings-network",
+            "#settings-network",
+            t::settings_network_heading(locale),
+        ),
+        (
+            "settings-mirrors-cache",
+            "#settings-mirrors-cache",
+            t::settings_mirrors_cache_heading(locale),
+        ),
+        (
+            "settings-external-mirrors",
+            "#settings-external-mirrors",
+            t::settings_external_mirrors_heading(locale),
+        ),
+        ("settings-oidc", "#settings-oidc", t::settings_oidc_heading(locale)),
+    ];
     html! {
       div id="settings-body" {
-        p class="muted" {
-            (t::settings_saved_in_bucket_prefix(locale)) code { ".conf/global.json" } (t::settings_saved_in_bucket_suffix(locale))
-        }
-        (PreEscaped(render_flash(message, locale)))
-        form method="post" action="/_settings" data-async data-async-target="#settings-body" {
-            (PreEscaped(csrf))
-            (settings_section(&t::settings_footer_heading(locale), Some(&t::settings_source_link_prose(locale)), html! {
-                div class="field" {
-                    label { (t::settings_source_link_label(locale)) }
-                    input name="source_link" value=(field(&settings.source_link))
-                        placeholder="namespace/name" size="50";
+        div class="settings-layout" {
+            nav class="settings-sidebar" aria-label=(gitquarry_i18n::web::chrome::server_settings_sidebar_nav_label(locale)) {
+                ul {
+                    @for (_id, href, label) in &sections {
+                        li { a href=(href) { (label) } }
+                    }
                 }
-            }))
-            (settings_section(&t::settings_network_heading(locale), None, html! {
-                div class="field" {
-                    label { (t::settings_web_bind_label(locale)) }
-                    input name="web_bind" value=(field(&settings.web_bind)) placeholder="127.0.0.1:8080";
-                }
-                div class="field" {
-                    label { (t::settings_ssh_bind_label(locale)) }
-                    input name="ssh_bind" value=(field(&settings.ssh_bind)) placeholder="127.0.0.1:2222";
-                }
-            }))
-            (settings_section(&t::settings_mirrors_cache_heading(locale), None, html! {
-                div class="field" {
-                    label { (t::settings_mirrors_dir_label(locale)) }
-                    input name="mirrors_dir" value=(field(&settings.mirrors_dir))
-                        placeholder=(t::settings_mirrors_dir_placeholder(locale)) size="50";
-                }
-                div class="field" {
-                    label { (t::settings_mirrors_max_age_label(locale)) }
-                    input name="mirrors_max_age" value=(field(&settings.mirrors_max_age)) placeholder=(t::settings_mirrors_max_age_placeholder(locale));
-                }
-                div class="field" {
-                    label { (t::settings_mirrors_max_size_label(locale)) }
-                    input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
-                }
-            }))
-            (settings_section(&t::settings_external_mirrors_heading(locale), Some(&t::settings_mirror_hosts_prose(locale)), html! {
+            }
+            div class="settings-content" {
                 p class="muted" {
-                    (t::settings_mirror_hosts_builtin_prefix(locale))
-                    code { (gitquarry_mirror_external::validate::BUILTIN_HOSTS.join(", ")) }
-                    (t::settings_mirror_hosts_builtin_suffix(locale))
+                    (t::settings_saved_in_bucket_prefix(locale)) code { ".conf/global.json" } (t::settings_saved_in_bucket_suffix(locale))
                 }
-                div class="field" {
-                    label { (t::settings_mirror_hosts_label(locale)) }
-                    textarea name="mirror_extra_hosts" rows="4" cols="50"
-                        placeholder="gitlab.tudominio.com\n*.gitea.interno" { (settings.mirror_extra_hosts.join("\n")) }
+                (PreEscaped(render_flash(message, locale)))
+                form method="post" action="/_settings" data-async data-async-target="#settings-body" {
+                    (PreEscaped(csrf))
+                    div id="settings-footer" {
+                        (settings_section(&t::settings_footer_heading(locale), Some(&t::settings_source_link_prose(locale)), html! {
+                            div class="field" {
+                                label { (t::settings_source_link_label(locale)) }
+                                input name="source_link" value=(field(&settings.source_link))
+                                    placeholder="namespace/name" size="50";
+                            }
+                        }))
+                    }
+                    div id="settings-network" {
+                        (settings_section(&t::settings_network_heading(locale), None, html! {
+                            div class="field" {
+                                label { (t::settings_web_bind_label(locale)) }
+                                input name="web_bind" value=(field(&settings.web_bind)) placeholder="127.0.0.1:8080";
+                            }
+                            div class="field" {
+                                label { (t::settings_ssh_bind_label(locale)) }
+                                input name="ssh_bind" value=(field(&settings.ssh_bind)) placeholder="127.0.0.1:2222";
+                            }
+                        }))
+                    }
+                    div id="settings-mirrors-cache" {
+                        (settings_section(&t::settings_mirrors_cache_heading(locale), None, html! {
+                            div class="field" {
+                                label { (t::settings_mirrors_dir_label(locale)) }
+                                input name="mirrors_dir" value=(field(&settings.mirrors_dir))
+                                    placeholder=(t::settings_mirrors_dir_placeholder(locale)) size="50";
+                            }
+                            div class="field" {
+                                label { (t::settings_mirrors_max_age_label(locale)) }
+                                input name="mirrors_max_age" value=(field(&settings.mirrors_max_age)) placeholder=(t::settings_mirrors_max_age_placeholder(locale));
+                            }
+                            div class="field" {
+                                label { (t::settings_mirrors_max_size_label(locale)) }
+                                input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
+                            }
+                        }))
+                    }
+                    div id="settings-external-mirrors" {
+                        (settings_section(&t::settings_external_mirrors_heading(locale), Some(&t::settings_mirror_hosts_prose(locale)), html! {
+                            p class="muted" {
+                                (t::settings_mirror_hosts_builtin_prefix(locale))
+                                code { (gitquarry_mirror_external::validate::BUILTIN_HOSTS.join(", ")) }
+                                (t::settings_mirror_hosts_builtin_suffix(locale))
+                            }
+                            div class="field" {
+                                label { (t::settings_mirror_hosts_label(locale)) }
+                                textarea name="mirror_extra_hosts" rows="4" cols="50"
+                                    placeholder="gitlab.tudominio.com\n*.gitea.interno" { (settings.mirror_extra_hosts.join("\n")) }
+                            }
+                        }))
+                    }
+                    div id="settings-oidc" {
+                        (settings_section(&t::settings_oidc_heading(locale), None, html! {
+                            p class="muted" {
+                                (t::settings_oidc_intro_gates(locale)) code { "/_settings" } ", " code { "/_users" } ", "
+                                (t::settings_oidc_intro_tab(locale))
+                                a href="/_users" { "/_users" } (t::settings_oidc_intro_see(locale)) code { "private" } (t::settings_oidc_intro_private(locale))
+                                a href="/_users" { "/_users" } (t::settings_oidc_intro_see_there(locale))
+                            }
+                            div class="field" {
+                                label { (t::settings_issuer_url_label(locale)) }
+                                input name="oidc_issuer_url" value=(field(&settings.oidc_issuer_url)) placeholder="https://idp.example.com" size="50";
+                            }
+                            div class="field" {
+                                label { (t::settings_client_id_label(locale)) }
+                                input name="oidc_client_id" value=(field(&settings.oidc_client_id)) size="50";
+                            }
+                            div class="field" {
+                                label { (t::settings_client_secret_label(locale)) }
+                                // No `value`: see `handler_settings_post` on why this one
+                                // field is write-only. Blank means "unchanged".
+                                input type="password" name="oidc_client_secret" size="50"
+                                    placeholder=(if settings.oidc_client_secret.is_some() { t::settings_client_secret_placeholder_unchanged(locale) } else { t::settings_client_secret_placeholder_unset(locale) });
+                            }
+                            div class="field" {
+                                label { (t::settings_redirect_base_url_label(locale)) }
+                                input name="oidc_redirect_base_url" value=(field(&settings.oidc_redirect_base_url))
+                                    placeholder=(t::settings_redirect_base_url_placeholder(locale)) size="50";
+                            }
+                        }))
+                    }
+                    p { button type="submit" { (t::settings_save_button(locale)) } }
                 }
-            }))
-            (settings_section(&t::settings_oidc_heading(locale), None, html! {
-                p class="muted" {
-                    (t::settings_oidc_intro_gates(locale)) code { "/_settings" } ", " code { "/_users" } ", "
-                    (t::settings_oidc_intro_tab(locale))
-                    a href="/_users" { "/_users" } (t::settings_oidc_intro_see(locale)) code { "private" } (t::settings_oidc_intro_private(locale))
-                    a href="/_users" { "/_users" } (t::settings_oidc_intro_see_there(locale))
-                }
-                div class="field" {
-                    label { (t::settings_issuer_url_label(locale)) }
-                    input name="oidc_issuer_url" value=(field(&settings.oidc_issuer_url)) placeholder="https://idp.example.com" size="50";
-                }
-                div class="field" {
-                    label { (t::settings_client_id_label(locale)) }
-                    input name="oidc_client_id" value=(field(&settings.oidc_client_id)) size="50";
-                }
-                div class="field" {
-                    label { (t::settings_client_secret_label(locale)) }
-                    // No `value`: see `handler_settings_post` on why this one
-                    // field is write-only. Blank means "unchanged".
-                    input type="password" name="oidc_client_secret" size="50"
-                        placeholder=(if settings.oidc_client_secret.is_some() { t::settings_client_secret_placeholder_unchanged(locale) } else { t::settings_client_secret_placeholder_unset(locale) });
-                }
-                div class="field" {
-                    label { (t::settings_redirect_base_url_label(locale)) }
-                    input name="oidc_redirect_base_url" value=(field(&settings.oidc_redirect_base_url))
-                        placeholder=(t::settings_redirect_base_url_placeholder(locale)) size="50";
-                }
-            }))
-            p { button type="submit" { (t::settings_save_button(locale)) } }
+            }
         }
       }
     }
