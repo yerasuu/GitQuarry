@@ -30,6 +30,8 @@ msg!(
 );
 msg!(account_appearance_section() { Locale::Es => "apariencia", Locale::En => "appearance" });
 msg!(settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes de cuenta", Locale::En => "account settings navigation" });
+msg!(repo_settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes del repositorio", Locale::En => "repo settings navigation" });
+msg!(server_settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes del servidor", Locale::En => "server settings navigation" });
 
 msg!(about_tab() { Locale::Es => "acerca de", Locale::En => "about" });
 msg!(summary_tab() { Locale::Es => "resumen", Locale::En => "summary" });

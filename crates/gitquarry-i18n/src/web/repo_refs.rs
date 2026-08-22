@@ -22,3 +22,12 @@ msg!(
         Locale::En => "'{source}' doesn't resolve to an existing commit in this repo",
     }
 );
+
+msg!(delete_tag_confirm(tag: &str) {
+    Locale::Es => "¿eliminar la etiqueta '{tag}'? no se puede deshacer.",
+    Locale::En => "delete tag '{tag}'? this cannot be undone.",
+});
+msg!(delete_branch_confirm(branch: &str) {
+    Locale::Es => "¿eliminar la rama '{branch}'? no se puede deshacer.",
+    Locale::En => "delete branch '{branch}'? this cannot be undone.",
+});

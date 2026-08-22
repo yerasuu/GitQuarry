@@ -103,6 +103,39 @@ msg!(disable_totp_button() {
 msg!(delete_user_button() { Locale::Es => "eliminar usuario", Locale::En => "delete user" });
 msg!(remove_button() { Locale::Es => "quitar", Locale::En => "remove" });
 
+msg!(remove_pubkey_confirm(username: &str) {
+    Locale::Es => "¿quitar esta clave SSH de '{username}'? no podra usarla para push/clone por ssh.",
+    Locale::En => "remove this SSH key from '{username}'? they lose ssh push/clone access with it.",
+});
+msg!(set_email_confirm(username: &str) {
+    Locale::Es => "¿cambiar el correo de '{username}'?",
+    Locale::En => "change '{username}''s email?",
+});
+msg!(set_password_confirm(username: &str) {
+    Locale::Es => "¿cambiar la contraseña de '{username}'? la anterior deja de funcionar de inmediato.",
+    Locale::En => "change '{username}''s password? the old one stops working immediately.",
+});
+msg!(make_admin_confirm(username: &str) {
+    Locale::Es => "¿dar a '{username}' acceso total de admin (ajustes/usuarios/repos privados)?",
+    Locale::En => "grant '{username}' full admin access (settings/users/private repos)?",
+});
+msg!(remove_admin_confirm(username: &str) {
+    Locale::Es => "¿quitar el acceso de admin a '{username}'?",
+    Locale::En => "remove admin access from '{username}'?",
+});
+msg!(disable_totp_confirm(username: &str) {
+    Locale::Es => "¿desactivar 2FA de '{username}'? su cuenta quedara protegida solo por la contraseña.",
+    Locale::En => "disable 2FA for '{username}'? their account is then protected by password alone.",
+});
+msg!(delete_user_confirm(username: &str) {
+    Locale::Es => "¿eliminar la cuenta de '{username}'? no se puede deshacer.",
+    Locale::En => "delete '{username}''s account? this cannot be undone.",
+});
+msg!(remove_repo_perm_confirm(username: &str) {
+    Locale::Es => "¿quitar este acceso a repo de '{username}'?",
+    Locale::En => "remove this repo access from '{username}'?",
+});
+
 msg!(password_no_changes_placeholder() { Locale::Es => "(sin cambios)", Locale::En => "(no changes)" });
 msg!(password_none_placeholder() { Locale::Es => "(sin contraseña)", Locale::En => "(no password)" });
 

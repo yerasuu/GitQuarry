@@ -96,23 +96,6 @@ fn tabs_bar(
     }
 }
 
-/// A second `.tabs`-styled row stacked directly under the main tabs bar —
-/// see `base.css`'s own doc comment on `table.tabs.subnav` for why it's a
-/// distinct modifier class rather than a second bare `table.tabs`. No
-/// hamburger toggle (`tab_links`'s own `toggle: None`): every caller so far
-/// (a repo settings section list, `merges`' open/closed/all status filter)
-/// is short enough to read fine as an always-visible stack on mobile, unlike
-/// the main tabs bar's 9 entries.
-pub(crate) fn project_subnav(tabs: &[(&str, String, String)], active: &str) -> maud::Markup {
-    maud::html! {
-        table class="tabs subnav" {
-            tr {
-                td { (tab_links(None, tabs, active)) }
-            }
-        }
-    }
-}
-
 /// Looks up the display label for whichever `id` is currently `active` —
 /// used for the "GitQuarry / {label}" title so the breadcrumb shows
 /// translated text instead of the (deliberately untranslated, English-only)
@@ -187,7 +170,11 @@ fn title_bar(
 pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> String {
     use gitquarry_i18n::web::chrome;
     let tabs: &[(&str, String, String)] = &[
-        ("settings", "/_settings".to_string(), chrome::settings_tab(locale)),
+        (
+            "settings",
+            "/_settings/footer".to_string(),
+            chrome::settings_tab(locale),
+        ),
         ("users", "/_users".to_string(), chrome::users_tab(locale)),
         ("groups", "/_groups".to_string(), chrome::groups_tab(locale)),
         ("audit", "/_audit".to_string(), chrome::audit_tab(locale)),
@@ -739,7 +726,7 @@ pub fn layout(
                             a href="/_groups" { (chrome::groups_tab(locale)) }
                             (maud::PreEscaped(topnav_auth))
                             " · "
-                            a href="/_settings" { (chrome::settings_tab(locale)) }
+                            a href="/_settings/footer" { (chrome::settings_tab(locale)) }
                             " · "
                             (super::theme_pref::render_theme_toggle(theme))
                             " · "

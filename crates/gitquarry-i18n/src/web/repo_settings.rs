@@ -8,6 +8,34 @@ use super::super::{Locale, msg};
 // instead of six near-identical entries (same dedup the groups.rs catalog
 // already uses for its own "remove" button, reused across owner/team rows).
 msg!(save_button() { Locale::Es => "guardar", Locale::En => "save" });
+msg!(change_perm_confirm(username: &str) {
+    Locale::Es => "¿cambiar el acceso de '{username}' a este repo?",
+    Locale::En => "change '{username}''s access to this repo?",
+});
+msg!(save_general_confirm() {
+    Locale::Es => "¿guardar los ajustes generales? incluye visibilidad y archivado.",
+    Locale::En => "save general settings? this includes visibility and archived state.",
+});
+msg!(save_protected_branches_confirm() {
+    Locale::Es => "¿guardar la lista de ramas protegidas? quitar una entrada le retira la proteccion.",
+    Locale::En => "save the protected branches list? removing an entry unprotects it.",
+});
+msg!(save_protected_tags_confirm() {
+    Locale::Es => "¿guardar la lista de tags protegidos? quitar una entrada le retira la proteccion.",
+    Locale::En => "save the protected tags list? removing an entry unprotects it.",
+});
+msg!(save_required_reviewers_confirm() {
+    Locale::Es => "¿guardar la lista de reviewers requeridos?",
+    Locale::En => "save the required reviewers list?",
+});
+msg!(save_require_signed_commits_confirm() {
+    Locale::Es => "¿guardar la lista de ramas con commits firmados requeridos? quitar una entrada le retira el requisito.",
+    Locale::En => "save the signed-commits-required branch list? removing an entry drops the requirement.",
+});
+msg!(save_labels_confirm() {
+    Locale::Es => "¿guardar las etiquetas? una etiqueta quitada de la lista se elimina tambien de los issues/MRs existentes.",
+    Locale::En => "save labels? a label removed from the list is also removed from existing issues/MRs.",
+});
 
 // Both the delete-repo and move-repo forms end their confirmation prose the
 // same way: "... Type the full name (<code>repo</code>) to confirm." — shared
@@ -201,9 +229,9 @@ msg!(mirror_last_error() { Locale::Es => "sync fallido", Locale::En => "sync fai
 msg!(add_mirror_heading() { Locale::Es => "agregar espejo", Locale::En => "add mirror" });
 msg!(sync_now_button() { Locale::Es => "sincronizar ahora", Locale::En => "sync now" });
 msg!(delete_mirror_button() { Locale::Es => "eliminar", Locale::En => "delete" });
-msg!(delete_mirror_confirm() {
-    Locale::Es => "eliminar este espejo? esta accion no se puede deshacer.",
-    Locale::En => "delete this mirror? this cannot be undone.",
+msg!(delete_mirror_confirm(label: &str) {
+    Locale::Es => "¿eliminar el espejo '{label}'? no se puede deshacer.",
+    Locale::En => "delete mirror '{label}'? this cannot be undone.",
 });
 msg!(add_mirror_button() { Locale::Es => "agregar espejo", Locale::En => "add mirror" });
 msg!(save_mirror_button() { Locale::Es => "guardar espejo", Locale::En => "save mirror" });

@@ -22,7 +22,8 @@
 //!
 //! One file per sub-form (mirrors the layout [`super::super::git::browse`]
 //! uses for its own per-concern split), each its own `?view=settings_<id>`
-//! page (`settings_sections`, `project_subnav`) — the general/description
+//! page (`settings_sections`, the sidebar in [`render_settings_section`]) —
+//! the general/description
 //! section alone keeps the bare `?view=settings` id, both because it's the
 //! first tab and because it's also `header_bar`'s own top-level "Settings"
 //! tab target. All wired together by [`handler_repo_conf_post`] (the single
@@ -670,11 +671,13 @@ fn section_for_action(action: &str) -> &'static str {
     }
 }
 
-/// Section ids/hrefs/labels for [`project_subnav`]'s sub-tab row — same
-/// "id, href, label" shape [`super::account_sections`] uses for the account
-/// settings sidebar, just a horizontal row instead of a vertical one (a
-/// repo's settings tab already sits inside the repo's own header/tabs
-/// chrome, which a second full sidebar would compete with for width).
+/// Section ids/hrefs/labels for [`render_settings_section`]'s own sidebar —
+/// same "id, href, label" shape [`super::account_sections`] uses for the
+/// account settings sidebar (this one's `.settings-sidebar`/
+/// `.settings-layout` too — same CSS, a second instance). Used to render as
+/// `project_subnav`'s horizontal tab row instead, which read fine for
+/// account settings' 6 entries but wrapped badly (or forced `table.tabs`'s
+/// own horizontal scroll) at this page's 13.
 /// `"settings"`, not `"settings_general"`: it's also `header_bar`'s
 /// top-level "Settings" tab target, so a bare `?view=settings` link (the
 /// tab itself, [`handler_repo_conf_post`]'s `restore_repo` redirect) lands
@@ -734,11 +737,11 @@ fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'sta
 /// callers, same as before this split, when one call here rendered all 13
 /// sections at once: splitting *what's shown* from *what's fetched* would
 /// trade a bigger diff across both call sites for a per-tab fetch saving
-/// neither caller asked for. Only the assembly changed — a
-/// [`project_subnav`] row plus exactly one sub-form's markup instead of all
-/// 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
+/// neither caller asked for. Only the assembly changed — a sidebar row per
+/// [`settings_sections`] entry plus exactly one sub-form's markup instead
+/// of all 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
 ///
-/// The whole thing (subnav, flash, and the one active section) is wrapped
+/// The whole thing (sidebar, flash, and the one active section) is wrapped
 /// in `#repo-settings-body` — every sub-form under `repo_settings/` other
 /// than the mirrors/permissions sections (which have their own narrower
 /// `#mirrors-section`/`#perm-grid` targets) is `data-async
@@ -860,9 +863,28 @@ pub fn render_settings_section(
     };
     html! {
       div id="repo-settings-body" {
-        (super::project_subnav(&tabs, active))
-        (PreEscaped(render_flash(message, locale)))
-        (content)
+        // Vertical sidebar instead of `project_subnav`'s horizontal tab
+        // row — same `.settings-layout`/`.settings-sidebar`/
+        // `.settings-content` `account_settings_page` already uses for its
+        // own 6-section nav, reused as-is rather than a new look: 13
+        // sections is too many for one horizontal row on anything but a
+        // wide viewport without either wrapping badly or forcing
+        // `table.tabs`'s own horizontal scroll just to reach "delete repo".
+        div class="settings-layout" {
+            nav class="settings-sidebar" aria-label=(gitquarry_i18n::web::chrome::repo_settings_sidebar_nav_label(locale)) {
+                ul {
+                    @for (id, href, label) in &tabs {
+                        li {
+                            a class=[(active == *id).then_some("active")] aria-current=[(active == *id).then_some("page")] href=(href) { (label) }
+                        }
+                    }
+                }
+            }
+            div class="settings-content" {
+                (PreEscaped(render_flash(message, locale)))
+                (content)
+            }
+        }
       }
     }
 }

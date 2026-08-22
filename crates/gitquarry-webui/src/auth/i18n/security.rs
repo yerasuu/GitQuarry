@@ -21,6 +21,14 @@ msg!(ssh_keys_heading() { Locale::Es => "claves SSH", Locale::En => "SSH keys" }
 msg!(pubkey_column_header() { Locale::Es => "clave pública", Locale::En => "pubkey" });
 msg!(no_keys_yet_hint() { Locale::Es => "(sin claves todavía)", Locale::En => "(no keys yet)" });
 msg!(delete_button() { Locale::Es => "eliminar", Locale::En => "delete" });
+msg!(remove_ssh_key_confirm(fingerprint: &str) {
+    Locale::Es => "¿eliminar la clave SSH '{fingerprint}'? dejara de poder usarse para push/clone por ssh.",
+    Locale::En => "remove SSH key '{fingerprint}'? it stops working for ssh push/clone.",
+});
+msg!(remove_gpg_key_confirm(fingerprint: &str) {
+    Locale::Es => "¿eliminar la clave GPG '{fingerprint}'? los commits futuros ya no se verificaran con ella.",
+    Locale::En => "remove GPG key '{fingerprint}'? future commits won't verify against it.",
+});
 msg!(add_pubkey_placeholder() {
     Locale::Es => "ssh-ed25519 AAAA... comentario",
     Locale::En => "ssh-ed25519 AAAA... comment",
@@ -63,6 +71,10 @@ msg!(password_no_changes_placeholder() { Locale::Es => "(sin cambios)", Locale::
 msg!(password_not_set_placeholder() { Locale::Es => "(sin contraseña)", Locale::En => "(no password)" });
 msg!(change_password_button() { Locale::Es => "cambiar contraseña", Locale::En => "change password" });
 msg!(set_password_button() { Locale::Es => "establecer contraseña", Locale::En => "set password" });
+msg!(change_password_confirm() {
+    Locale::Es => "¿cambiar la contraseña? cerrara la posibilidad de entrar con la anterior.",
+    Locale::En => "change password? the old one stops working immediately.",
+});
 
 msg!(two_factor_heading() {
     Locale::Es => "verificación en dos pasos (TOTP)",
@@ -77,6 +89,10 @@ msg!(totp_disable_placeholder() {
     Locale::En => "password or 6-digit code",
 });
 msg!(disable_totp_button() { Locale::Es => "desactivar 2FA", Locale::En => "disable 2FA" });
+msg!(disable_totp_confirm() {
+    Locale::Es => "¿desactivar 2FA? la cuenta quedara protegida solo por la contraseña.",
+    Locale::En => "disable 2FA? the account is then protected by password alone.",
+});
 msg!(totp_scan_hint() {
     Locale::Es => "Escanea o copia este secreto en tu app de autenticación y confirma con un código.",
     Locale::En => "Scan or copy this secret into your authenticator app, then confirm with a code.",
@@ -107,6 +123,10 @@ msg!(regenerate_recovery_codes_placeholder() {
     Locale::En => "password or 6-digit code",
 });
 msg!(regenerate_recovery_codes_button() { Locale::Es => "regenerar códigos", Locale::En => "regenerate codes" });
+msg!(regenerate_recovery_codes_confirm() {
+    Locale::Es => "¿regenerar los codigos de recuperacion? los actuales dejaran de servir.",
+    Locale::En => "regenerate recovery codes? the current ones stop working.",
+});
 
 // Placeholder for the re-auth field in front of a credential change
 // (a new password, a new SSH key) -- see
@@ -160,3 +180,11 @@ msg!(primary_email_admin_managed() {
 });
 msg!(no_primary_email() { Locale::Es => "(sin correo principal)", Locale::En => "(no primary email)" });
 msg!(save_email_button() { Locale::Es => "guardar correo", Locale::En => "save email" });
+msg!(save_email_confirm() {
+    Locale::Es => "¿cambiar el correo principal? se usara para notificaciones y recuperacion de cuenta.",
+    Locale::En => "change primary email? it's used for notifications and account recovery.",
+});
+msg!(remove_secondary_email_confirm(email: &str) {
+    Locale::Es => "¿quitar el correo secundario '{email}'?",
+    Locale::En => "remove secondary email '{email}'?",
+});

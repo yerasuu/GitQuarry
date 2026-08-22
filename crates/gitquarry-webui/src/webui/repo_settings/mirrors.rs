@@ -424,7 +424,7 @@ pub fn render_mirrors_section(
                                 button type="submit" { (t::sync_now_button(locale)) }
                             }
                             " "
-                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#mirrors-section" data-confirm=(t::delete_mirror_confirm(locale)) {
+                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#mirrors-section" data-confirm=(t::delete_mirror_confirm(locale, &mirror.label)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="conf_action" value="delete_mirror";
                                 input type="hidden" name="mirror_id" value=(mirror.id);

@@ -482,15 +482,17 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
 
     match remote.put_manifest(&new_manifest, etag.as_deref()).await? {
         Cas::Ok => {
+            let uid = crate::storage::uid::Uid::from(repo_uid.clone());
             if uploaded_bytes > 0 {
                 crate::storage::settings::bump_pack_bytes(
                     hook_ctx.backend.as_ref(),
                     &hook_ctx.cipher,
-                    &crate::storage::uid::Uid::from(repo_uid.clone()),
+                    &uid,
                     uploaded_bytes,
                 )
                 .await;
             }
+            crate::storage::settings::touch_last_push(hook_ctx.backend.as_ref(), &hook_ctx.cipher, &uid).await;
             // The push itself never triggers an external-mirror sync
             // directly — this hook process is short-lived (git kills it as
             // soon as it exits), so it can't hold a long-running task past

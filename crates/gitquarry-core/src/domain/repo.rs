@@ -366,6 +366,9 @@ pub async fn fork(
         visibility: source_config.visibility,
         archived: false,
         deleted_at: None,
+        // A byte-for-byte copy landing right now is itself a content change
+        // for the new repo, same as a push or a mirror sync would be.
+        last_push: Some(now_secs()),
         // A real byte-for-byte copy (`copy_all_to` just above), unlike
         // `domain::remote_fork`'s peer-sync case — the new owner's quota
         // accounting should reflect what they actually just received, not
@@ -485,6 +488,9 @@ pub async fn create_from_template(
         visibility: source_config.visibility,
         archived: false,
         deleted_at: None,
+        // Same reasoning as `fork`'s own doc comment on this field: a
+        // byte-for-byte copy landing right now is itself a content change.
+        last_push: Some(now_secs()),
         // Same reasoning as `fork`'s own doc comment on this field: a real
         // byte-for-byte copy, so the new owner's quota should reflect it
         // from the start.

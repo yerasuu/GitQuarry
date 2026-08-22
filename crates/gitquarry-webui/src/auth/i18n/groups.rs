@@ -59,6 +59,10 @@ msg!(groups_repos_scope_placeholder() {
 });
 msg!(groups_create_team_button() { Locale::Es => "crear equipo", Locale::En => "create team" });
 msg!(groups_delete_group_button() { Locale::Es => "eliminar grupo", Locale::En => "delete group" });
+msg!(groups_delete_group_confirm(name: &str) {
+    Locale::Es => "¿eliminar el grupo '{name}'? no se puede deshacer.",
+    Locale::En => "delete group '{name}'? this cannot be undone.",
+});
 
 msg!(groups_team_label_prefix() { Locale::Es => "equipo: ", Locale::En => "team: " });
 msg!(groups_scope_in() { Locale::Es => " en ", Locale::En => " in " });
@@ -66,4 +70,12 @@ msg!(groups_member_column() { Locale::Es => "miembro", Locale::En => "member" })
 msg!(groups_no_members_hint() { Locale::Es => "(sin miembros todavía)", Locale::En => "(no members yet)" });
 msg!(groups_add_member_button() { Locale::Es => "agregar miembro", Locale::En => "add member" });
 msg!(groups_delete_team_button() { Locale::Es => "eliminar equipo", Locale::En => "delete team" });
+msg!(groups_delete_team_confirm(name: &str) {
+    Locale::Es => "¿eliminar el equipo '{name}'? no se puede deshacer.",
+    Locale::En => "delete team '{name}'? this cannot be undone.",
+});
 msg!(groups_remove_button() { Locale::Es => "eliminar", Locale::En => "remove" });
+msg!(groups_remove_member_confirm(name: &str) {
+    Locale::Es => "¿quitar a '{name}'?",
+    Locale::En => "remove '{name}'?",
+});
