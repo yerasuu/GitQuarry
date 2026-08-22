@@ -135,7 +135,15 @@ struct IndexRepo {
 /// has no `locale` in scope — see its own doc comment): threading one
 /// through just for this string would be the only i18n on an otherwise-
 /// English page.
+#[cfg(any(test, feature = "test-util"))]
+pub fn relative_time_ago(then: u64, now: u64) -> String {
+    relative_time_ago_impl(then, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn relative_time_ago(then: u64, now: u64) -> String {
+    relative_time_ago_impl(then, now)
+}
+fn relative_time_ago_impl(then: u64, now: u64) -> String {
     let diff = now.saturating_sub(then);
     if diff < 60 {
         return "just now".to_string();
@@ -160,7 +168,15 @@ fn relative_time_ago(then: u64, now: u64) -> String {
 /// repo card's own meta line — that line has room `relative_time_ago`'s
 /// compact stamp doesn't need to save, and reads better spelled out next to
 /// the language name and star count it sits beside.
+#[cfg(any(test, feature = "test-util"))]
+pub fn relative_time_words(then: u64, now: u64) -> String {
+    relative_time_words_impl(then, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn relative_time_words(then: u64, now: u64) -> String {
+    relative_time_words_impl(then, now)
+}
+fn relative_time_words_impl(then: u64, now: u64) -> String {
     let diff = now.saturating_sub(then);
     fn plural(n: u64, unit: &str) -> String {
         format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
