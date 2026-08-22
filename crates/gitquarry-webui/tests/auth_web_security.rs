@@ -34,6 +34,19 @@ fn security_page_never_exposes_admin_or_delete_actions() {
     // No self-service toggle for the flag that grants /_settings + /_users.
     assert!(!html.contains("toggle_admin"));
     assert!(!html.contains("delete_user"));
+    // Regression: every form on this page (set_password here, plus
+    // whichever 2FA form the current state shows) targets one
+    // `#security-body` wrapper — a submit can reveal a TOTP secret/QR or a
+    // recovery-code set only the *next* render shows, so it has to refresh
+    // the whole page, not just its own form. Losing this quietly brings
+    // back the browser's "confirm resubmission" dialog on F5.
+    assert!(html.starts_with(r#"<div id="security-body">"#), "{html}");
+    assert_eq!(
+        html.matches(r##"data-async data-async-target="#security-body""##)
+            .count(),
+        2,
+        "{html}"
+    );
     // Own identity is shown but never editable here: the address moved to
     // `/_account/profile` entirely, and the only `username` control left is
     // the hidden one a password manager reads to know which account the
