@@ -124,6 +124,8 @@ struct IndexRepo {
     star_count: u32,
     primary_language: Option<String>,
     last_push: Option<u64>,
+    last_push_commits: Option<u32>,
+    last_push_branch: Option<String>,
 }
 
 /// GitHub/Artifacts-style relative stamp ("2h ago", "3d ago") for
@@ -151,6 +153,78 @@ fn relative_time_ago(then: u64, now: u64) -> String {
         (diff / 31_557_600, "y")
     };
     format!("{value}{unit} ago")
+}
+
+/// One entry in the home page's "recent activity" sidebar — deliberately
+/// only these three: a push to a repo's default branch (`IndexRepo::last_push`
+/// et al, never `storage::audit`, see that field's own doc comment), a
+/// release, or a merged MR. All three read as "important code changed" the
+/// way GitHub's own dashboard activity does; everything else `storage::audit`
+/// tracks (config saves, permission grants, star/watch toggles, ...) is
+/// exactly what a repo's own `?view=activity` page deliberately dropped —
+/// pulling it back in here just because this widget also touches `audit`
+/// for release/MR entries would undo that.
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityKind {
+    Push { commits: u32, branch: Option<String> },
+    Release { tag: String },
+    MrMerged { number: u64 },
+}
+#[cfg(not(any(test, feature = "test-util")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActivityKind {
+    Push { commits: u32, branch: Option<String> },
+    Release { tag: String },
+    MrMerged { number: u64 },
+}
+
+impl ActivityKind {
+    pub fn describe(&self) -> String {
+        match self {
+            ActivityKind::Push { commits, branch } => {
+                let plural = if *commits == 1 { "" } else { "s" };
+                match branch {
+                    Some(b) => format!("{commits} commit{plural} pushed to {b}"),
+                    None => format!("{commits} commit{plural} pushed"),
+                }
+            }
+            ActivityKind::Release { tag } => format!("tagged {tag}"),
+            ActivityKind::MrMerged { number } => format!("MR #{number} merged"),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityItem {
+    pub repo: String,
+    pub at: u64,
+    pub kind: ActivityKind,
+}
+#[cfg(not(any(test, feature = "test-util")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActivityItem {
+    repo: String,
+    at: u64,
+    kind: ActivityKind,
+}
+
+/// Newest-first, capped at `limit` — the merge-sort half of the sidebar,
+/// split out from the audit-reading/`IndexRepo`-scanning half above it so
+/// it's testable without either.
+#[cfg(any(test, feature = "test-util"))]
+pub fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    top_recent_activity_impl(items, limit)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    top_recent_activity_impl(items, limit)
+}
+fn top_recent_activity_impl(mut items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    items.sort_by_key(|i| std::cmp::Reverse(i.at));
+    items.truncate(limit);
+    items
 }
 
 pub(crate) async fn handler_index(
@@ -309,18 +383,61 @@ pub(crate) async fn handler_index(
         .await
         .map(|names| names.len())
         .unwrap_or(0);
-    // Same visibility this repo already got from `list_visible_repos` above:
-    // an audit entry only shows here if its `target` is a repo currently in
-    // `repos`, so this can never surface more than a repo's own `?view=activity`
-    // tab already would for the same viewer.
+    // Pushes come from each repo's own `last_push*` fields (see
+    // `ActivityKind`'s own doc comment for why, never generic `storage::audit`
+    // noise); releases and merged MRs are the two `storage::audit` actions
+    // narrow and code-relevant enough to earn a deliberate exception. Same
+    // visibility `repos` already has from `list_visible_repos` above, so
+    // this can never surface a repo the viewer couldn't otherwise see.
     let visible_names: HashSet<&str> = repos.iter().map(|r| r.name.as_str()).collect();
-    let recent_activity: Vec<storage::audit::AuditEntry> = storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
+    let mut activity: Vec<ActivityItem> = repos
+        .iter()
+        .filter_map(|r| {
+            Some(ActivityItem {
+                repo: r.name.clone(),
+                at: r.last_push?,
+                kind: ActivityKind::Push {
+                    commits: r.last_push_commits.unwrap_or(0),
+                    branch: r.last_push_branch.clone(),
+                },
+            })
+        })
+        .collect();
+    for e in storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
         .await
         .unwrap_or_default()
-        .into_iter()
-        .filter(|e| visible_names.contains(e.target.as_str()))
-        .take(5)
-        .collect();
+    {
+        let Some(at) = gitquarry_mirror_external::stamp::to_unix(&e.at).and_then(|s| u64::try_from(s).ok()) else {
+            continue;
+        };
+        match e.action.as_str() {
+            "release.create" => {
+                if let Some((repo, tag)) = e.target.rsplit_once('@')
+                    && visible_names.contains(repo)
+                {
+                    activity.push(ActivityItem {
+                        repo: repo.to_string(),
+                        at,
+                        kind: ActivityKind::Release { tag: tag.to_string() },
+                    });
+                }
+            }
+            "merge_request.merge" => {
+                if let Some((repo, number)) = e.target.rsplit_once('#')
+                    && visible_names.contains(repo)
+                    && let Ok(number) = number.parse::<u64>()
+                {
+                    activity.push(ActivityItem {
+                        repo: repo.to_string(),
+                        at,
+                        kind: ActivityKind::MrMerged { number },
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    let recent_activity = top_recent_activity(activity, 5);
     let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
         div class="stats-strip" {
@@ -346,12 +463,12 @@ pub(crate) async fn handler_index(
                     div class="card card-pad sidebar-box" {
                         h4 class="sidebar-box-title" { "recent activity" }
                         ul class="index-activity" {
-                            @for e in &recent_activity {
+                            @for item in &recent_activity {
                                 li {
-                                    span class="muted" { (e.at) }
+                                    span class="muted" { (relative_time_ago(item.at, now_unix)) }
                                     span {
-                                        a href=(format!("/{}", url_encode(&e.target))) { (e.target) }
-                                        " " span class="muted" { code { (e.action) } }
+                                        a href=(format!("/{}", url_encode(&item.repo))) { (item.repo) }
+                                        " — " (item.kind.describe())
                                     }
                                 }
                             }
@@ -429,6 +546,8 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
                 star_count: config.star_count,
                 primary_language: config.primary_language,
                 last_push: config.last_push,
+                last_push_commits: config.last_push_commits,
+                last_push_branch: config.last_push_branch,
             });
         }
     }

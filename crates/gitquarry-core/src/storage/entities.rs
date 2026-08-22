@@ -175,6 +175,22 @@ pub struct RepoConfig {
     /// way that matters.
     #[serde(default)]
     pub last_push: Option<u64>,
+    /// Commit count for the same push [`Self::last_push`] stamps — how many
+    /// new commits `git rev-list --count` found in that push's `old..new`
+    /// range (or just `new` for a branch that didn't exist before). Set
+    /// alongside `last_push`, same best-effort tolerance, same two callers.
+    /// Purely for the home page's "N commits pushed to `<branch>`" activity
+    /// line — nothing else reads it, so a stale/missing value there is the
+    /// entire blast radius.
+    #[serde(default)]
+    pub last_push_commits: Option<u32>,
+    /// Short name (`refs/heads/` stripped) of the branch [`Self::last_push`]
+    /// landed on — always the repo's default branch, since that's the only
+    /// branch this ever fires for, but stored rather than re-derived so the
+    /// home page's activity line doesn't need its own `Manifest` fetch just
+    /// to name it.
+    #[serde(default)]
+    pub last_push_branch: Option<String>,
     /// Best-effort running total of this repo's own `.pack` bytes —
     /// incremented alongside each successful pack upload
     /// (`mirror::hook::run_pre_receive_hook`), never decremented from there.
