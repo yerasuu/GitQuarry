@@ -204,6 +204,43 @@ pub(crate) async fn handler_index(
                 }
             }
         }
+        // Same rows, cgit-flavored dense table instead of cards — CSS-only
+        // swap (`base.css`'s `[data-density='airy']` rule), same pattern as
+        // `.header-lang`/`.sidebar-lang` already use for this axis: both
+        // markups always render, `data-density` on `<html>` picks which one
+        // is visible, no JS needed to switch view when the toggle fires.
+        div class="repo-list-compact" {
+            @for (header, repo) in &rows {
+                @if let Some(ns) = header {
+                    p class="repo-cards-ns" { (ns) }
+                }
+                div class="rl-row" {
+                    div class="rl-name" {
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        @if repo.archived {
+                            " " span class="badge" { "archived" }
+                        }
+                    }
+                    div class="rl-desc" {
+                        @if let Some(desc) = &repo.description {
+                            @if !desc.is_empty() {
+                                (desc)
+                            }
+                        }
+                    }
+                    div class="rl-topics" { (maud::PreEscaped(super::topic_badges(&repo.topics))) }
+                    div class="rl-meta" {
+                        @if let Some(lang) = &repo.primary_language {
+                            span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                            span { (lang) }
+                        }
+                        @if repo.star_count > 0 {
+                            span { (repo.star_count) " \u{2605}" }
+                        }
+                    }
+                }
+            }
+        }
     };
     if headers.contains_key(super::ASYNC_HEADER) {
         return Ok(Html(results.into_string()));
