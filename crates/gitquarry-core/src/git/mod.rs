@@ -387,6 +387,26 @@ pub struct RebaseCommit {
     pub message: String,
 }
 
+/// Count of commits in `range` (e.g. `"old..new"`, or just `"new"` for a
+/// branch that didn't exist before) — `--count` has git report just the
+/// number without ever materializing the sha list, unlike
+/// [`rev_list_range`], so this stays cheap even for a huge initial import.
+pub async fn rev_list_count(git_dir: &Path, range: &str) -> Result<u64> {
+    let out = run_text(
+        Some(git_dir),
+        &[
+            OsStr::new("rev-list"),
+            OsStr::new("--count"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(range),
+        ],
+    )
+    .await?;
+    out.trim()
+        .parse::<u64>()
+        .context("git rev-list --count returned non-numeric output")
+}
+
 /// Oldest-first shas in `range` (e.g. `"base..head"`) — the replay order a
 /// rebase needs, opposite of `git log`'s default newest-first.
 pub async fn rev_list_range(git_dir: &Path, range: &str) -> Result<Vec<String>> {

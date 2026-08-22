@@ -9,9 +9,6 @@
 //! the repo index ([`handler_index`]) and the per-repo dispatcher
 //! ([`handler_repo`]) that picks a view by `?view=` and calls its `render_*`.
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod activity;
-#[cfg(not(any(test, feature = "test-util")))]
 mod activity;
 pub(crate) mod blame;
 pub(crate) mod blob;
@@ -127,15 +124,26 @@ struct IndexRepo {
     star_count: u32,
     primary_language: Option<String>,
     last_push: Option<u64>,
+    last_push_commits: Option<u32>,
+    last_push_branch: Option<String>,
 }
 
-/// GitHub/Artifacts-style relative stamp ("2h ago", "3d ago") for
-/// [`IndexRepo::last_push`] — coarse, single-unit buckets rather than a full
-/// duration breakdown, same as every other "updated X ago" UI. Unlocalized
-/// like the rest of this fragment already is (`results`, below, has no
-/// `locale` in scope — see its own doc comment): threading one through just
-/// for this string would be the only i18n on an otherwise-English page.
+/// Compact stamp ("2h", "3d") for the sidebar's own `<time>` column and the
+/// compact table's dense `.rl-meta` row, both too tight for full words —
+/// coarse, single-unit buckets rather than a full duration breakdown.
+/// Unlocalized like the rest of this fragment already is (`results`, below,
+/// has no `locale` in scope — see its own doc comment): threading one
+/// through just for this string would be the only i18n on an otherwise-
+/// English page.
+#[cfg(any(test, feature = "test-util"))]
+pub fn relative_time_ago(then: u64, now: u64) -> String {
+    relative_time_ago_impl(then, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn relative_time_ago(then: u64, now: u64) -> String {
+    relative_time_ago_impl(then, now)
+}
+fn relative_time_ago_impl(then: u64, now: u64) -> String {
     let diff = now.saturating_sub(then);
     if diff < 60 {
         return "just now".to_string();
@@ -154,6 +162,119 @@ fn relative_time_ago(then: u64, now: u64) -> String {
         (diff / 31_557_600, "y")
     };
     format!("{value}{unit} ago")
+}
+
+/// Full-words form ("updated 3 hours ago", "updated yesterday") for the
+/// repo card's own meta line — that line has room `relative_time_ago`'s
+/// compact stamp doesn't need to save, and reads better spelled out next to
+/// the language name and star count it sits beside.
+#[cfg(any(test, feature = "test-util"))]
+pub fn relative_time_words(then: u64, now: u64) -> String {
+    relative_time_words_impl(then, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn relative_time_words(then: u64, now: u64) -> String {
+    relative_time_words_impl(then, now)
+}
+fn relative_time_words_impl(then: u64, now: u64) -> String {
+    let diff = now.saturating_sub(then);
+    fn plural(n: u64, unit: &str) -> String {
+        format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+    }
+    if diff < 60 {
+        return "just now".to_string();
+    }
+    if diff < 3600 {
+        return plural(diff / 60, "minute");
+    }
+    if diff < 86400 {
+        return plural(diff / 3600, "hour");
+    }
+    if diff < 172_800 {
+        return "yesterday".to_string();
+    }
+    if diff < 604_800 {
+        return plural(diff / 86400, "day");
+    }
+    if diff < 2_629_800 {
+        return plural(diff / 604_800, "week");
+    }
+    if diff < 31_557_600 {
+        return plural(diff / 2_629_800, "month");
+    }
+    plural(diff / 31_557_600, "year")
+}
+
+/// One entry in the home page's "recent activity" sidebar — deliberately
+/// only these three: a push to a repo's default branch (`IndexRepo::last_push`
+/// et al, never `storage::audit`, see that field's own doc comment), a
+/// release, or a merged MR. All three read as "important code changed" the
+/// way GitHub's own dashboard activity does; everything else `storage::audit`
+/// tracks (config saves, permission grants, star/watch toggles, ...) is
+/// exactly what a repo's own `?view=activity` page deliberately dropped —
+/// pulling it back in here just because this widget also touches `audit`
+/// for release/MR entries would undo that.
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityKind {
+    Push { commits: u32, branch: Option<String> },
+    Release { tag: String },
+    MrMerged { number: u64 },
+}
+#[cfg(not(any(test, feature = "test-util")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActivityKind {
+    Push { commits: u32, branch: Option<String> },
+    Release { tag: String },
+    MrMerged { number: u64 },
+}
+
+impl ActivityKind {
+    pub fn describe(&self) -> String {
+        match self {
+            ActivityKind::Push { commits, branch } => {
+                let plural = if *commits == 1 { "" } else { "s" };
+                match branch {
+                    Some(b) => format!("{commits} commit{plural} pushed to {b}"),
+                    None => format!("{commits} commit{plural} pushed"),
+                }
+            }
+            ActivityKind::Release { tag } => format!("tagged {tag}"),
+            ActivityKind::MrMerged { number } => format!("MR #{number} merged"),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityItem {
+    pub repo: String,
+    pub at: u64,
+    pub kind: ActivityKind,
+}
+#[cfg(not(any(test, feature = "test-util")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActivityItem {
+    repo: String,
+    at: u64,
+    kind: ActivityKind,
+}
+
+/// Newest-first, capped at `limit` — the merge-sort half of the sidebar,
+/// split out from the audit-reading/`IndexRepo`-scanning half above it so
+/// it's testable without either.
+#[cfg(any(test, feature = "test-util"))]
+pub fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    top_recent_activity_impl(items, limit)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    top_recent_activity_impl(items, limit)
+}
+fn top_recent_activity_impl(mut items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    items.sort_by_key(|i| std::cmp::Reverse(i.at));
+    items.truncate(limit);
+    items
 }
 
 pub(crate) async fn handler_index(
@@ -246,14 +367,16 @@ pub(crate) async fn handler_index(
                     @if repo.star_count > 0 || repo.primary_language.is_some() || repo.last_push.is_some() {
                         div class="repo-card-meta" {
                             @if let Some(lang) = &repo.primary_language {
-                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
-                                span { (lang) }
+                                span {
+                                    span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                    (lang)
+                                }
                             }
                             @if repo.star_count > 0 {
                                 span { (repo.star_count) " \u{2605}" }
                             }
                             @if let Some(last_push) = repo.last_push {
-                                span class="muted" { "updated " (relative_time_ago(last_push, now_unix)) }
+                                span { "updated " (relative_time_words(last_push, now_unix)) }
                             }
                         }
                     }
@@ -287,8 +410,10 @@ pub(crate) async fn handler_index(
                     div class="rl-topics" { (maud::PreEscaped(super::topic_badges(&repo.topics))) }
                     div class="rl-meta" {
                         @if let Some(lang) = &repo.primary_language {
-                            span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
-                            span { (lang) }
+                            span {
+                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                (lang)
+                            }
                         }
                         @if repo.star_count > 0 {
                             span { (repo.star_count) " \u{2605}" }
@@ -312,18 +437,61 @@ pub(crate) async fn handler_index(
         .await
         .map(|names| names.len())
         .unwrap_or(0);
-    // Same visibility this repo already got from `list_visible_repos` above:
-    // an audit entry only shows here if its `target` is a repo currently in
-    // `repos`, so this can never surface more than a repo's own `?view=activity`
-    // tab already would for the same viewer.
+    // Pushes come from each repo's own `last_push*` fields (see
+    // `ActivityKind`'s own doc comment for why, never generic `storage::audit`
+    // noise); releases and merged MRs are the two `storage::audit` actions
+    // narrow and code-relevant enough to earn a deliberate exception. Same
+    // visibility `repos` already has from `list_visible_repos` above, so
+    // this can never surface a repo the viewer couldn't otherwise see.
     let visible_names: HashSet<&str> = repos.iter().map(|r| r.name.as_str()).collect();
-    let recent_activity: Vec<storage::audit::AuditEntry> = storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
+    let mut activity: Vec<ActivityItem> = repos
+        .iter()
+        .filter_map(|r| {
+            Some(ActivityItem {
+                repo: r.name.clone(),
+                at: r.last_push?,
+                kind: ActivityKind::Push {
+                    commits: r.last_push_commits.unwrap_or(0),
+                    branch: r.last_push_branch.clone(),
+                },
+            })
+        })
+        .collect();
+    for e in storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
         .await
         .unwrap_or_default()
-        .into_iter()
-        .filter(|e| visible_names.contains(e.target.as_str()))
-        .take(5)
-        .collect();
+    {
+        let Some(at) = gitquarry_mirror_external::stamp::to_unix(&e.at).and_then(|s| u64::try_from(s).ok()) else {
+            continue;
+        };
+        match e.action.as_str() {
+            "release.create" => {
+                if let Some((repo, tag)) = e.target.rsplit_once('@')
+                    && visible_names.contains(repo)
+                {
+                    activity.push(ActivityItem {
+                        repo: repo.to_string(),
+                        at,
+                        kind: ActivityKind::Release { tag: tag.to_string() },
+                    });
+                }
+            }
+            "merge_request.merge" => {
+                if let Some((repo, number)) = e.target.rsplit_once('#')
+                    && visible_names.contains(repo)
+                    && let Ok(number) = number.parse::<u64>()
+                {
+                    activity.push(ActivityItem {
+                        repo: repo.to_string(),
+                        at,
+                        kind: ActivityKind::MrMerged { number },
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    let recent_activity = top_recent_activity(activity, 5);
     let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
         div class="stats-strip" {
@@ -349,12 +517,12 @@ pub(crate) async fn handler_index(
                     div class="card card-pad sidebar-box" {
                         h4 class="sidebar-box-title" { "recent activity" }
                         ul class="index-activity" {
-                            @for e in &recent_activity {
+                            @for item in &recent_activity {
                                 li {
-                                    span class="muted" { (e.at) }
-                                    span {
-                                        a href=(format!("/{}", url_encode(&e.target))) { (e.target) }
-                                        " " span class="muted" { code { (e.action) } }
+                                    time { (relative_time_ago(item.at, now_unix)) }
+                                    div {
+                                        a href=(format!("/{}", url_encode(&item.repo))) { (item.repo) }
+                                        " " span class="verb" { "— " (item.kind.describe()) }
                                     }
                                 }
                             }
@@ -432,6 +600,8 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
                 star_count: config.star_count,
                 primary_language: config.primary_language,
                 last_push: config.last_push,
+                last_push_commits: config.last_push_commits,
+                last_push_branch: config.last_push_branch,
             });
         }
     }

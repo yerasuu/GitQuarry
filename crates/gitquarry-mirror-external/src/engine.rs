@@ -376,6 +376,7 @@ async fn persist_pulled_ref_to_s3(
 ) -> Result<()> {
     for attempt in 1..=MANIFEST_CAS_MAX_RETRIES {
         let (manifest, etag) = resolved.remote.get_manifest().await?;
+        let old_sha = manifest.refs.get(ref_name).cloned();
         let have_tips: Vec<String> = manifest.refs.values().cloned().collect();
         let scratch = gitquarry_core::git::scratch_dir(bare_repo)?;
         let mut uploaded_bytes: u64 = 0;
@@ -413,8 +414,27 @@ async fn persist_pulled_ref_to_s3(
                     )
                     .await;
                 }
-                gitquarry_core::storage::settings::touch_last_push(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid)
+                // Same "default branch only" scoping as the pre-receive
+                // hook's own call: a sync that only lands a feature branch
+                // or a tag isn't code on the repo's main line.
+                if new_manifest.head.as_deref() == Some(ref_name) {
+                    let range = match &old_sha {
+                        Some(old) => format!("{old}..{sha}"),
+                        None => sha.to_string(),
+                    };
+                    let commits = gitquarry_core::git::rev_list_count(bare_repo, &range)
+                        .await
+                        .unwrap_or(0);
+                    let branch = ref_name.strip_prefix("refs/heads/").unwrap_or(ref_name);
+                    gitquarry_core::storage::settings::touch_last_push(
+                        ctx.backend().as_ref(),
+                        &ctx.cipher,
+                        &resolved.uid,
+                        commits.try_into().unwrap_or(u32::MAX),
+                        branch,
+                    )
                     .await;
+                }
                 return Ok(());
             }
             Cas::Conflict if attempt < MANIFEST_CAS_MAX_RETRIES => {

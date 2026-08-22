@@ -1068,7 +1068,9 @@ pub async fn merge(
     };
 
     let scratch = git::scratch_dir(git_dir)?;
-    if let Some(pack) = git::pack_objects_for_push(git_dir, &merge_sha, &[target_sha], scratch.path()).await? {
+    if let Some(pack) =
+        git::pack_objects_for_push(git_dir, &merge_sha, std::slice::from_ref(&target_sha), scratch.path()).await?
+    {
         target
             .remote
             .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
@@ -1076,13 +1078,33 @@ pub async fn merge(
     }
 
     let mut new_manifest = manifest;
-    new_manifest.refs.insert(target_ref, merge_sha.clone());
+    new_manifest.refs.insert(target_ref.clone(), merge_sha.clone());
     let cas = target
         .remote
         .put_manifest(&new_manifest, manifest_etag.as_deref())
         .await?;
     if cas != Cas::Ok {
         bail!("{}", gitquarry_i18n::shared::cas_conflict(locale));
+    }
+    // Same "default branch only" scoping `mirror::hook::run_pre_receive_hook`
+    // and the mirror-external sync engine both apply to their own
+    // `touch_last_push` call: a merge into any other branch isn't code on
+    // the repo's main line. A real ssh/http push never goes through this
+    // function at all, so without this call here the home page's "updated"
+    // stamp would silently miss every merge — the single most common way
+    // code actually lands on `main`.
+    if new_manifest.head.as_deref() == Some(target_ref.as_str()) {
+        let range = format!("{target_sha}..{merge_sha}");
+        let commits = git::rev_list_count(git_dir, &range).await.unwrap_or(0);
+        let branch = mr.target_branch.clone();
+        crate::storage::settings::touch_last_push(
+            backend.as_ref(),
+            &ctx.cipher,
+            &target.uid,
+            commits.try_into().unwrap_or(u32::MAX),
+            &branch,
+        )
+        .await;
     }
     // Fired here, not after the metadata `put_merge_request` below: the
     // merge commit landing on the target branch is what "merged" means,

@@ -13,6 +13,8 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
             archived: false,
             deleted_at: None,
             last_push: None,
+            last_push_commits: None,
+            last_push_branch: None,
             pack_bytes: 0,
             lfs_bytes: 0,
             required_reviewers: Default::default(),
