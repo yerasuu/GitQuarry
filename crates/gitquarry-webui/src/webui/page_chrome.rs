@@ -96,6 +96,23 @@ fn tabs_bar(
     }
 }
 
+/// A second `.tabs`-styled row stacked directly under the main tabs bar —
+/// see `base.css`'s own doc comment on `table.tabs.subnav` for why it's a
+/// distinct modifier class rather than a second bare `table.tabs`. No
+/// hamburger toggle (`tab_links`'s own `toggle: None`): every caller so far
+/// (a repo settings section list, `merges`' open/closed/all status filter)
+/// is short enough to read fine as an always-visible stack on mobile, unlike
+/// the main tabs bar's 9 entries.
+pub(crate) fn project_subnav(tabs: &[(&str, String, String)], active: &str) -> maud::Markup {
+    maud::html! {
+        table class="tabs subnav" {
+            tr {
+                td { (tab_links(None, tabs, active)) }
+            }
+        }
+    }
+}
+
 /// Looks up the display label for whichever `id` is currently `active` —
 /// used for the "GitQuarry / {label}" title so the breadcrumb shows
 /// translated text instead of the (deliberately untranslated, English-only)

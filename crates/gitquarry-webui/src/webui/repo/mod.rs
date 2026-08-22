@@ -421,7 +421,7 @@ pub(crate) async fn handler_repo(
     let owner = owner.as_deref();
 
     let view = params.get("view").map_or("about", String::as_str);
-    if view == "settings" {
+    if view == "settings" || view.starts_with("settings_") {
         // Exempt from the visibility check below: it's the only place
         // Private -> Public is reversible from, and (once logged in, if a
         // login method is configured — see the admin gate right below) this
@@ -454,7 +454,8 @@ pub(crate) async fn handler_repo(
         let (manifest, _etag) = resolved.remote.get_manifest().await?;
         let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
         let mr_links_by_mirror = repo_settings::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
-        let body = repo_settings::render_settings_page(
+        let body = repo_settings::render_settings_section(
+            view,
             &name,
             &config,
             owner.unwrap_or(""),
