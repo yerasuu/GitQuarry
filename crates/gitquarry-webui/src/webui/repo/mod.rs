@@ -465,10 +465,10 @@ pub(crate) async fn handler_index(
                         ul class="index-activity" {
                             @for item in &recent_activity {
                                 li {
-                                    span class="muted" { (relative_time_ago(item.at, now_unix)) }
-                                    span {
+                                    time { (relative_time_ago(item.at, now_unix)) }
+                                    div {
                                         a href=(format!("/{}", url_encode(&item.repo))) { (item.repo) }
-                                        " — " (item.kind.describe())
+                                        " " span class="verb" { "— " (item.kind.describe()) }
                                     }
                                 }
                             }
