@@ -240,7 +240,7 @@ pub(crate) async fn handler_groups_post(
             uid: Uid::new(),
             name: form.name.trim().to_string(),
             description: non_empty(form.description.clone()),
-            owners: Default::default(),
+            owners: std::collections::BTreeSet::from([me.uid.clone()]),
             teams: Vec::new(),
             storage_quota_bytes: None,
         });
@@ -320,7 +320,8 @@ async fn apply_groups_action(
                 )));
             }
             let name = form.name.trim();
-            let cas = match domain::group::create(ctx, name, non_empty(form.description.clone())).await {
+            let cas = match domain::group::create(ctx, name, non_empty(form.description.clone()), me.uid.clone()).await
+            {
                 Ok(cas) => cas,
                 Err(e) => return Ok(Err(e.to_string())),
             };

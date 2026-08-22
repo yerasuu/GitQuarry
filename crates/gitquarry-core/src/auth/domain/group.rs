@@ -25,13 +25,22 @@ use std::collections::BTreeSet;
 /// both land or neither does, no manual rollback-on-failure in between.
 /// `None` if `name` is already taken (by a user, a group, or a stray
 /// namespace entry).
-pub async fn create(ctx: &AppContext, name: &str, description: Option<String>) -> Result<Option<Cas>> {
+///
+/// `creator` starts as the group's sole owner — without this, a group
+/// admin creates comes out with an empty `owners` set, manageable only
+/// through the `is_admin` bypass [`super::super::access::can_manage_group`]
+/// also grants; that's fine while the creator stays a global admin, but
+/// silently strands the group the moment they're demoted (nobody left who
+/// can add an owner, since adding one already needs to manage the group).
+/// Every other forge (GitHub/Codeberg orgs, ...) makes the creator an
+/// owner for the same reason.
+pub async fn create(ctx: &AppContext, name: &str, description: Option<String>, creator: Uid) -> Result<Option<Cas>> {
     access::validate_username(name)?; // same charset rules as a username
     let group = Group {
         uid: Uid::new(),
         name: name.to_string(),
         description,
-        owners: BTreeSet::new(),
+        owners: BTreeSet::from([creator]),
         teams: Vec::new(),
         storage_quota_bytes: None,
     };
