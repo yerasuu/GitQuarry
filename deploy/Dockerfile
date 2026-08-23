@@ -1,7 +1,7 @@
 # Build context must be the repo root, not this directory (COPY below needs
 # Cargo.toml/Cargo.lock/crates/LICENSE/tag-changelog from there):
 # docker build -f deploy/Dockerfile .
-FROM rust:1.97-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 
 WORKDIR /usr/src/gitquarry
 COPY Cargo.toml Cargo.lock ./
