@@ -430,11 +430,16 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     .into_string()
 }
 
+/// `display_name`: the repo's `RepoConfig::display_name`, rendered as the
+/// first crumb in place of the slug the crumb's own href still uses — same
+/// split [`header_bar`] makes for the title above it.
+///
 /// `leaf_view`: view to use for the link of the last segment (the actual
 /// file/folder being shown) — "tree" while navigating folders, "blob" while
 /// viewing a file. Intermediate segments are always folders.
 pub(crate) fn breadcrumbs(
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     leaf_view: &str,
@@ -467,7 +472,7 @@ pub(crate) fn breadcrumbs(
         nav aria-label=(chrome::breadcrumb_nav_label(locale)) {
             ol class="breadcrumb" {
                 li class="breadcrumb-item" {
-                    a href=(repo_link(repo_name, "tree", rev).to_string()) { (repo_name) }
+                    a href=(repo_link(repo_name, "tree", rev).to_string()) { (super::repo_label(repo_name, display_name)) }
                 }
                 @for (i, (href, seg)) in crumbs.iter().enumerate() {
                     li class="breadcrumb-sep" aria-hidden="true" { "/" }

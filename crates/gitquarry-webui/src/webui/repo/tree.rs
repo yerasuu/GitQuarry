@@ -20,6 +20,7 @@ pub async fn render_tree(
     ctx: &AppContext,
     bare_repo: &FsPath,
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     locale: Locale,
@@ -40,7 +41,7 @@ pub async fn render_tree(
         // redundant here, the repo's already named in the page header right
         // above this tab. Same fix `log::render_log` already got.
         @if !path.is_empty() {
-            (PreEscaped(breadcrumbs(repo_name, rev, path, "tree", locale)))
+            (PreEscaped(breadcrumbs(repo_name, display_name, rev, path, "tree", locale)))
         }
         div class="table-scroll" {
         table class="list" {

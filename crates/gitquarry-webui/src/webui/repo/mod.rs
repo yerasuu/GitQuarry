@@ -1018,15 +1018,37 @@ async fn render_repo_view(
         "summary" => render_summary(ctx, &mirror.path, &name, rev, headers).await?,
         "activity" => render_activity(ctx, &mirror.path, &name, rev, locale).await?,
         "refs" => render_refs(ctx, &mirror.path, &name, headers, None, None, locale).await?,
-        "tree" => render_tree(ctx, &mirror.path, &name, rev, path, locale).await?,
-        "blob" => render_blob(&mirror.path, &name, rev, path, locale).await?,
+        "tree" => {
+            render_tree(
+                ctx,
+                &mirror.path,
+                &name,
+                config.display_name.as_deref(),
+                rev,
+                path,
+                locale,
+            )
+            .await?
+        }
+        "blob" => render_blob(&mirror.path, &name, config.display_name.as_deref(), rev, path, locale).await?,
         "log" => {
             let q = params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
             if let Some(q) = q {
                 validate::validate_query(q).map_err(AppError::bad_request)?;
             }
             let skip: usize = params.get("skip").and_then(|s| s.parse().ok()).unwrap_or(0);
-            render_log(ctx, &mirror.path, &name, rev, path, q, skip, locale).await?
+            render_log(
+                ctx,
+                &mirror.path,
+                &name,
+                config.display_name.as_deref(),
+                rev,
+                path,
+                q,
+                skip,
+                locale,
+            )
+            .await?
         }
         "commit" => {
             let sha = require_sha(params, locale)?;
@@ -1092,7 +1114,7 @@ async fn render_repo_view(
                     gitquarry_i18n::shared::repo::blame_requires_path(locale)
                 )));
             }
-            render_blame(&mirror.path, &name, rev, path, locale).await?
+            render_blame(&mirror.path, &name, config.display_name.as_deref(), rev, path, locale).await?
         }
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
