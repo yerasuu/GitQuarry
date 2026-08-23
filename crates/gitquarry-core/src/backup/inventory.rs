@@ -61,6 +61,41 @@ pub enum Class {
     Unknown,
 }
 
+impl Class {
+    /// Every class that can actually appear in a run report, in a stable
+    /// order the settings page renders in. [`Class::Never`] is left out:
+    /// nothing is ever copied under it, so a report row for it would always
+    /// read zero.
+    pub const REPORTABLE: [Class; 8] = [
+        Class::Bootstrap,
+        Class::Git,
+        Class::Lfs,
+        Class::Releases,
+        Class::Avatars,
+        Class::Entities,
+        Class::Audit,
+        Class::Derived,
+    ];
+
+    /// Stable machine name — the key a [`crate::backup::report::BackupRun`]'s
+    /// per-class counters are stored under, so it must not change once
+    /// written: a rename would orphan every stored report's counters.
+    pub fn label(self) -> &'static str {
+        match self {
+            Class::Bootstrap => "bootstrap",
+            Class::Git => "git",
+            Class::Lfs => "lfs",
+            Class::Releases => "releases",
+            Class::Avatars => "avatars",
+            Class::Entities => "entities",
+            Class::Audit => "audit",
+            Class::Derived => "derived",
+            Class::Never => "never",
+            Class::Unknown => "unknown",
+        }
+    }
+}
+
 /// Indexes `gitquarry backfill-repo-index` can rebuild from the entities
 /// they point at. Deliberately *only* these four: the command's own usage
 /// text names exactly them, and every other index under `.conf/index/`
