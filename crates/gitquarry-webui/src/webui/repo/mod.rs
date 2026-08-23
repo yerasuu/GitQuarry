@@ -95,7 +95,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::{git, storage, validate};
+use gitquarry_core::{domain, git, storage, validate};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -580,12 +580,17 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         set.spawn(async move {
             // A fetch error hides the repo rather than showing it: fail
             // closed on a privacy check, not open.
-            storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await
+            let (config, etag) = storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await?;
+            // First uid-based load of a repo predating `display_name`
+            // backfills it (and its slug, if drifted) — see
+            // `domain::repo::backfill_slug`'s own doc comment for why this
+            // has to happen on a listing rather than on a resolve-by-path.
+            anyhow::Ok(domain::repo::backfill_slug(backend, cipher, &uid, config, etag).await)
         });
     }
     let mut visible = Vec::new();
     while let Some(result) = set.join_next().await {
-        let Ok(Ok((config, _etag))) = result else { continue };
+        let Ok(Ok(config)) = result else { continue };
         let show = match config.visibility {
             Visibility::Public => true,
             Visibility::Limited => viewer_logged_in,

@@ -21,12 +21,14 @@
 use crate::app::{AppContext, ResolvedRepo};
 use crate::auth::access;
 use crate::auth::entities::Permission;
+use crate::crypto::Cipher;
 use crate::storage::entities::{Label, OwnerRef, RepoConfig, Visibility};
-use crate::storage::remote::Manifest;
+use crate::storage::remote::{Manifest, Remote};
 use crate::storage::uid::Uid;
-use crate::storage::{self, Cas};
+use crate::storage::{self, Backend, Cas};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How long a soft-deleted repo (`RepoConfig::deleted_at` set) survives
@@ -850,6 +852,100 @@ pub fn slugify_repo_name(display_name: &str) -> Option<String> {
     let capped = trimmed.get(..trimmed.len().min(MAX_REPO_SLUG_LEN)).unwrap_or(trimmed);
     let capped = capped.trim_matches(|c| c == '-' || c == '.');
     (!capped.is_empty()).then(|| capped.to_string())
+}
+
+/// Best-effort backfill for a repo that predates `RepoConfig::display_name`
+/// (or whose slug has otherwise drifted from it): the current `full_name`'s
+/// local segment becomes the public `display_name` (preserved exactly, even
+/// if it has characters `sanitize_path` would now reject), and a clean slug
+/// is derived from it. Never propagates an error — a cosmetic migration
+/// failing must never break the listing page that triggered it (same
+/// fail-quiet spirit `webui::repo::list_visible_repos`'s own doc comment
+/// already applies to privacy checks); a lost race or a name collision on
+/// the derived slug just leaves `config` as it was, retried on the next load.
+///
+/// Deliberately only called from the uid-based listing paths (home index,
+/// profile, group pages) — not from `AppContext::resolve_repo` or any
+/// ssh/http request path, since those resolve a repo by its *current*
+/// `full_name` string, which a legacy repo with an invalid slug can never
+/// again be reached by after `sanitize_path` tightened its charset. A
+/// listing enumerates by uid instead, so it's the one place that can find
+/// such a repo at all in order to fix it.
+pub async fn backfill_slug(
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
+    uid: &Uid,
+    config: RepoConfig,
+    etag: Option<String>,
+) -> RepoConfig {
+    let (namespace, current_local) = config
+        .full_name
+        .rsplit_once('/')
+        .unwrap_or(("", config.full_name.as_str()));
+    if let Some(display_name) = &config.display_name
+        && slugify_repo_name(display_name).as_deref() == Some(current_local)
+    {
+        return config;
+    }
+    let display_name = config.display_name.clone().unwrap_or_else(|| current_local.to_string());
+    let Some(slug) = slugify_repo_name(&display_name) else {
+        return config;
+    };
+    let namespace = namespace.to_string();
+
+    if slug == current_local {
+        // Path's already clean — only `display_name` was missing.
+        let mut updated = config.clone();
+        updated.display_name = Some(display_name);
+        return match storage::settings::put_repo_config(
+            backend.as_ref(),
+            uid.as_str(),
+            &updated,
+            etag.as_deref(),
+            &cipher,
+        )
+        .await
+        {
+            Ok(Cas::Ok) => updated,
+            _ => config,
+        };
+    }
+
+    let new_full_name = if namespace.is_empty() {
+        slug
+    } else {
+        format!("{namespace}/{slug}")
+    };
+    let claimed = storage::settings::claim_repo_name_self_healing(backend.as_ref(), &cipher, &new_full_name, uid, {
+        let backend = Arc::clone(&backend);
+        let cipher = Arc::clone(&cipher);
+        move |existing_uid| {
+            let remote = Remote::new(
+                Arc::clone(&backend),
+                format!("{}/{existing_uid}", crate::storage::REPOS_PREFIX),
+                Arc::clone(&cipher),
+            );
+            async move { remote.exists().await }
+        }
+    })
+    .await;
+    if !matches!(claimed, Ok(true)) {
+        return config;
+    }
+
+    let mut updated = config.clone();
+    updated.full_name = new_full_name.clone();
+    updated.display_name = Some(display_name);
+    match storage::settings::put_repo_config(backend.as_ref(), uid.as_str(), &updated, etag.as_deref(), &cipher).await {
+        Ok(Cas::Ok) => {
+            storage::settings::release_repo_name(backend.as_ref(), &config.full_name).await;
+            updated
+        }
+        _ => {
+            storage::settings::release_repo_name(backend.as_ref(), &new_full_name).await;
+            config
+        }
+    }
 }
 
 /// Topics are cosmetic (discovery/categorization), so unlike

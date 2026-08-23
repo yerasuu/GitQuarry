@@ -107,10 +107,19 @@ async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, groups: &[G
         let backend = ctx.backend();
         let cipher = std::sync::Arc::clone(&ctx.cipher);
         set.spawn(async move {
-            let name = gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher)
+            let name = match gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher)
                 .await
-                .ok()
-                .map(|(config, _etag)| config.full_name);
+            {
+                Ok((config, etag)) => {
+                    // See `domain::repo::backfill_slug`'s own doc comment:
+                    // this is a uid-based listing, one of the few places
+                    // that can find and fix a repo predating `display_name`/
+                    // a drifted slug.
+                    let config = gitquarry_core::domain::repo::backfill_slug(backend, cipher, &uid, config, etag).await;
+                    Some(config.full_name)
+                }
+                Err(_) => None,
+            };
             (uid, name)
         });
     }
