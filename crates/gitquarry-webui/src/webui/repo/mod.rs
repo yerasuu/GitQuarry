@@ -768,6 +768,7 @@ pub(crate) async fn handler_repo(
             "settings",
             HeaderExtras {
                 description,
+                display_name: config.display_name.as_deref(),
                 archived: config.archived,
                 visibility: config.visibility,
                 branches: &[],
@@ -845,6 +846,7 @@ pub(crate) async fn handler_repo(
             "about",
             HeaderExtras {
                 description,
+                display_name: config.display_name.as_deref(),
                 archived: config.archived,
                 visibility: config.visibility,
                 branches: &[],
@@ -978,6 +980,7 @@ async fn render_repo_view(
         active_tab,
         HeaderExtras {
             description,
+            display_name: config.display_name.as_deref(),
             archived: config.archived,
             visibility: config.visibility,
             branches: &branches,

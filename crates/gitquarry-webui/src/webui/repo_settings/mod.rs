@@ -431,6 +431,7 @@ pub(crate) async fn handler_repo_conf_post(
         "settings",
         super::HeaderExtras {
             description: config.description.as_deref(),
+            display_name: config.display_name.as_deref(),
             archived: config.archived,
             visibility: config.visibility,
             branches: &[],

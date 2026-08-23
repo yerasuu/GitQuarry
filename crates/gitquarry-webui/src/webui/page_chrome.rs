@@ -299,6 +299,11 @@ pub(crate) fn field(label: &str, hint: Option<&str>, control: maud::Markup) -> m
 /// own doc comment): adding `locale` as an 8th positional arg would trip
 /// clippy's `too_many_arguments`.
 pub(crate) struct HeaderExtras<'a> {
+    /// The repo's free-text public name (`RepoConfig::display_name`) — shown
+    /// as the page heading in place of the raw slug when set. `None` for a
+    /// repo not yet backfilled (`domain::repo::backfill_slug`) or predating
+    /// the field, in which case [`header_bar`] falls back to `bare_name`.
+    pub(crate) display_name: Option<&'a str>,
     pub(crate) description: Option<&'a str>,
     pub(crate) archived: bool,
     pub(crate) visibility: gitquarry_core::storage::entities::Visibility,
@@ -335,6 +340,7 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     // (always `<namespace>/<repo>`, see [`gitquarry_core::validate`]'s own
     // invariant), not from this separately-resolved display name.
     let HeaderExtras {
+        display_name,
         description,
         archived,
         visibility,
@@ -414,8 +420,9 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     // separately-resolved owner string through just for this.
     let (owner_slug, bare_name) = repo_name.rsplit_once('/').unwrap_or(("", repo_name));
     let owner_slug = (!owner_slug.is_empty()).then_some(owner_slug);
+    let title = display_name.unwrap_or(bare_name);
     maud::html! {
-        (title_bar(bare_name, owner_slug, badge, Some(&atom_link), ref_switcher, sub))
+        (title_bar(title, owner_slug, badge, Some(&atom_link), ref_switcher, sub))
         (below_header)
         (tabs_bar(&tabs, active, &menu_extra, &chrome::page_tabs_nav_label(locale), &chrome::page_tabs_toggle_label(locale)))
         (sub_tabs)
