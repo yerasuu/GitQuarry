@@ -951,22 +951,25 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
             let u = url_encode(&user.username);
             // `<details><summary>` — click-to-toggle/keyboard support from
             // the browser itself, no JS (see base.css's `#topbar
-            // details.dropdown` rules). The 4 links used to sit flat in the
-            // nav; grouping them under one "account" trigger is the one
-            // dropdown this pass adds.
+            // details.dropdown` rules). The 4 links inside it used to sit
+            // flat in the nav; grouping them under one "account" trigger is
+            // the one dropdown this pass adds. `/_repos` stays flat, right
+            // next to the trigger — it's the logged-in viewer's own repo
+            // dashboard, not an account-settings link, so it belongs beside
+            // `/_groups`/`/_new` in the main nav rather than tucked away
+            // behind a click.
             format!(
-                " · <details class=\"dropdown\"><summary>{}{}</summary><div class=\"dropdown-menu\">\
-                 <a href=\"/_repos\">{}</a>\
+                " · <a href=\"/_repos\">{}</a> · <details class=\"dropdown\"><summary>{}{}</summary><div class=\"dropdown-menu\">\
                  <a href=\"/_profile/{u}\">{}</a>\
                  <a href=\"/_account/favorites\">{}</a>\
                  <a href=\"/_account/security\">{}</a>\
                  <a href=\"/_account/profile\">{}</a>\
                  <form method=\"post\" action=\"/_logout\" class=\"dropdown-form\">{}<button type=\"submit\">{}</button></form>\
                  </div></details>",
+                gitquarry_i18n::web::repos::repos_title(locale),
                 crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref())
                     .into_string(),
                 esc(&user.username),
-                gitquarry_i18n::web::repos::repos_title(locale),
                 gitquarry_i18n::web::chrome::profile_tab(locale),
                 gitquarry_i18n::web::chrome::favorites_tab(locale),
                 gitquarry_i18n::web::chrome::security_tab(locale),
