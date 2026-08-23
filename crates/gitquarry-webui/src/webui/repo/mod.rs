@@ -83,7 +83,8 @@ use tree::render_tree;
 
 use super::{
     AppError, HeaderExtras, Page, State_, compound_path, effective_density, effective_locale, effective_theme,
-    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_link, repo_settings, url_encode,
+    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_label, repo_link, repo_settings,
+    url_encode,
 };
 use crate::auth::web::login;
 use crate::settings::web::require_admin;
@@ -95,7 +96,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::{git, storage, validate};
+use gitquarry_core::{domain, git, storage, validate};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -118,6 +119,11 @@ const MAX_BLOB_BYTES: u64 = 1 << 20;
 /// repo's own page, not the list of all of them.
 struct IndexRepo {
     name: String,
+    /// What every row renders ([`crate::webui::repo_label::repo_label`]),
+    /// while `name` above stays the string the row's href is built from.
+    /// Derived once here rather than per render site: this page renders each
+    /// row twice (cards and the compact table), sorts and filters on it too.
+    label: String,
     description: Option<String>,
     archived: bool,
     topics: std::collections::BTreeSet<String>,
@@ -140,7 +146,7 @@ pub fn relative_time_ago(then: u64, now: u64) -> String {
     relative_time_ago_impl(then, now)
 }
 #[cfg(not(any(test, feature = "test-util")))]
-fn relative_time_ago(then: u64, now: u64) -> String {
+pub(crate) fn relative_time_ago(then: u64, now: u64) -> String {
     relative_time_ago_impl(then, now)
 }
 fn relative_time_ago_impl(then: u64, now: u64) -> String {
@@ -284,13 +290,16 @@ pub(crate) async fn handler_index(
 ) -> Page {
     let viewer_logged_in = login::current_user(&ctx, &headers).await.is_some();
     let mut repos = list_visible_repos(&ctx, viewer_logged_in).await?;
-    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sorted on the label, not the slug: the rows below are ordered by what
+    // the reader can actually see. Namespaces stay contiguous either way —
+    // a label keeps its `<namespace>/` prefix.
+    repos.sort_by(|a, b| a.label.cmp(&b.label));
     // Both stay unaffected by `?q=` below: they describe the whole visible
     // set, not the current search/filter.
     let repo_count = repos.len();
     let ns_count = repos
         .iter()
-        .filter_map(|r| r.name.split_once('/').map(|(ns, _)| ns))
+        .filter_map(|r| r.name.rsplit_once('/').map(|(ns, _)| ns))
         .collect::<HashSet<_>>()
         .len();
 
@@ -303,6 +312,9 @@ pub(crate) async fn handler_index(
         .filter(|r| {
             q.is_empty()
                 || r.name.to_ascii_lowercase().contains(&q_lower)
+                // Matched on the label too, not just the slug — otherwise
+                // typing what's on screen finds nothing.
+                || r.label.to_ascii_lowercase().contains(&q_lower)
                 || r.topics.iter().any(|t| t.contains(&q_lower))
         })
         .collect();
@@ -314,7 +326,7 @@ pub(crate) async fn handler_index(
     let rows: Vec<(Option<&str>, &IndexRepo)> = filtered
         .iter()
         .map(|repo| {
-            let ns = repo.name.split_once('/').map(|(ns, _)| ns);
+            let ns = repo.name.rsplit_once('/').map(|(ns, _)| ns);
             let header = if ns != last_ns { ns } else { None };
             last_ns = ns;
             (header, *repo)
@@ -352,7 +364,7 @@ pub(crate) async fn handler_index(
                 }
                 div class="card card-pad repo-card" {
                     div class="repo-card-title" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.label) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
@@ -395,7 +407,7 @@ pub(crate) async fn handler_index(
                 }
                 div class="rl-row" {
                     div class="rl-name" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.label) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
@@ -492,6 +504,10 @@ pub(crate) async fn handler_index(
         }
     }
     let recent_activity = top_recent_activity(activity, 5);
+    // `ActivityItem::repo` is a `full_name` (it's also built from audit
+    // targets, which only ever carry that), so the sidebar looks its label
+    // back up here rather than carrying one per item.
+    let labels: HashMap<&str, &str> = repos.iter().map(|r| (r.name.as_str(), r.label.as_str())).collect();
     let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
         div class="stats-strip" {
@@ -521,7 +537,7 @@ pub(crate) async fn handler_index(
                                 li {
                                     time { (relative_time_ago(item.at, now_unix)) }
                                     div {
-                                        a href=(format!("/{}", url_encode(&item.repo))) { (item.repo) }
+                                        a href=(format!("/{}", url_encode(&item.repo))) { (labels.get(item.repo.as_str()).copied().unwrap_or(item.repo.as_str())) }
                                         " " span class="verb" { "— " (item.kind.describe()) }
                                     }
                                 }
@@ -580,12 +596,17 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         set.spawn(async move {
             // A fetch error hides the repo rather than showing it: fail
             // closed on a privacy check, not open.
-            storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await
+            let (config, etag) = storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await?;
+            // First uid-based load of a repo predating `display_name`
+            // backfills it (and its slug, if drifted) — see
+            // `domain::repo::backfill_slug`'s own doc comment for why this
+            // has to happen on a listing rather than on a resolve-by-path.
+            anyhow::Ok(domain::repo::backfill_slug(backend, cipher, &uid, config, etag).await)
         });
     }
     let mut visible = Vec::new();
     while let Some(result) = set.join_next().await {
-        let Ok(Ok((config, _etag))) = result else { continue };
+        let Ok(Ok(config)) = result else { continue };
         let show = match config.visibility {
             Visibility::Public => true,
             Visibility::Limited => viewer_logged_in,
@@ -593,6 +614,7 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         };
         if show {
             visible.push(IndexRepo {
+                label: crate::webui::repo_label(&config.full_name, config.display_name.as_deref()),
                 name: config.full_name,
                 description: config.description,
                 archived: config.archived,
@@ -608,15 +630,19 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
     Ok(visible)
 }
 
-/// Just the names out of [`list_visible_repos`] — what `search::web` needs
-/// to fan a cross-repo search out over, without exposing [`IndexRepo`]
-/// (private to this module, and its `archived`/`topics`/`star_count` fields
-/// are index-page-only concerns search has no use for).
-pub(crate) async fn visible_repo_names(ctx: &AppContext, viewer_logged_in: bool) -> Result<Vec<String>> {
+/// Just the `(full_name, label)` pairs out of [`list_visible_repos`] — what
+/// `search::web` needs to fan a cross-repo search out over (the name) and to
+/// label the hits it gets back, without exposing [`IndexRepo`] (private to
+/// this module, and its `archived`/`topics`/`star_count` fields are
+/// index-page-only concerns search has no use for).
+pub(crate) async fn visible_searchable_repos(
+    ctx: &AppContext,
+    viewer_logged_in: bool,
+) -> Result<Vec<(String, String)>> {
     Ok(list_visible_repos(ctx, viewer_logged_in)
         .await?
         .into_iter()
-        .map(|r| r.name)
+        .map(|r| (r.name, r.label))
         .collect())
 }
 
@@ -763,6 +789,7 @@ pub(crate) async fn handler_repo(
             "settings",
             HeaderExtras {
                 description,
+                display_name: config.display_name.as_deref(),
                 archived: config.archived,
                 visibility: config.visibility,
                 branches: &[],
@@ -804,7 +831,7 @@ pub(crate) async fn handler_repo(
         )
         .into_string();
         return Ok(Html(layout(
-            &name,
+            &repo_label(&name, config.display_name.as_deref()),
             &header,
             &body,
             &topnav,
@@ -840,6 +867,7 @@ pub(crate) async fn handler_repo(
             "about",
             HeaderExtras {
                 description,
+                display_name: config.display_name.as_deref(),
                 archived: config.archived,
                 visibility: config.visibility,
                 branches: &[],
@@ -851,7 +879,7 @@ pub(crate) async fn handler_repo(
         );
         let body = empty_repo_body(&ctx, &name, &headers).await?;
         return Ok(Html(layout(
-            &name,
+            &repo_label(&name, config.display_name.as_deref()),
             &header,
             &body,
             &topnav,
@@ -973,6 +1001,7 @@ async fn render_repo_view(
         active_tab,
         HeaderExtras {
             description,
+            display_name: config.display_name.as_deref(),
             archived: config.archived,
             visibility: config.visibility,
             branches: &branches,
@@ -989,15 +1018,37 @@ async fn render_repo_view(
         "summary" => render_summary(ctx, &mirror.path, &name, rev, headers).await?,
         "activity" => render_activity(ctx, &mirror.path, &name, rev, locale).await?,
         "refs" => render_refs(ctx, &mirror.path, &name, headers, None, None, locale).await?,
-        "tree" => render_tree(ctx, &mirror.path, &name, rev, path, locale).await?,
-        "blob" => render_blob(&mirror.path, &name, rev, path, locale).await?,
+        "tree" => {
+            render_tree(
+                ctx,
+                &mirror.path,
+                &name,
+                config.display_name.as_deref(),
+                rev,
+                path,
+                locale,
+            )
+            .await?
+        }
+        "blob" => render_blob(&mirror.path, &name, config.display_name.as_deref(), rev, path, locale).await?,
         "log" => {
             let q = params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
             if let Some(q) = q {
                 validate::validate_query(q).map_err(AppError::bad_request)?;
             }
             let skip: usize = params.get("skip").and_then(|s| s.parse().ok()).unwrap_or(0);
-            render_log(ctx, &mirror.path, &name, rev, path, q, skip, locale).await?
+            render_log(
+                ctx,
+                &mirror.path,
+                &name,
+                config.display_name.as_deref(),
+                rev,
+                path,
+                q,
+                skip,
+                locale,
+            )
+            .await?
         }
         "commit" => {
             let sha = require_sha(params, locale)?;
@@ -1041,6 +1092,7 @@ async fn render_repo_view(
             let template = read_repo_template(&resolved, &mirror.path, "MERGE_REQUEST_TEMPLATE.md").await;
             render_new_merge_form(
                 &name,
+                &resolved.uid,
                 &ref_names,
                 template.as_deref(),
                 NewMergeFormValues {
@@ -1063,7 +1115,7 @@ async fn render_repo_view(
                     gitquarry_i18n::shared::repo::blame_requires_path(locale)
                 )));
             }
-            render_blame(&mirror.path, &name, rev, path, locale).await?
+            render_blame(&mirror.path, &name, config.display_name.as_deref(), rev, path, locale).await?
         }
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
@@ -1072,7 +1124,10 @@ async fn render_repo_view(
             )));
         }
     };
-    Ok(Html(layout(&name, &header, &body, topnav, theme, density, locale)).into_response())
+    // The browser tab reads the repo's public name, same as the heading —
+    // the slug is already in the url right next to it.
+    let title = repo_label(&name, config.display_name.as_deref());
+    Ok(Html(layout(&title, &header, &body, topnav, theme, density, locale)).into_response())
 }
 
 /// `git push` never happened yet (see [`git::browse::resolve_head`]) — same

@@ -16,6 +16,7 @@ futures = "0.3.33"
 rand = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
+tracing = "0.1.44"
 
 [features]
 # Un-gates otherwise-private items for this crate's own tests/*.rs — same

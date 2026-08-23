@@ -74,6 +74,7 @@ gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 flate2 = "1.1.5"
 tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tracing = "0.1.44"
 
 [features]
 # Un-gates anything normally #[cfg(test)] (which only applies to this

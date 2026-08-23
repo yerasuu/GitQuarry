@@ -115,6 +115,22 @@ async fn fetch_repo_configs(
     out
 }
 
+/// One row of a favorites list: `name` is the `full_name` every href and
+/// hidden form field is built from, `display_name` is what the row renders
+/// ([`crate::webui::repo_label::repo_label`]) — a struct rather than a third
+/// tuple slot so neither can be passed for the other.
+pub struct StarredRepo {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub stars: u32,
+}
+
+impl StarredRepo {
+    fn label(&self) -> String {
+        crate::webui::repo_label::repo_label(&self.name, self.display_name.as_deref())
+    }
+}
+
 /// Every one of `starred`'s own repos (that still exist), paired with its
 /// current `RepoConfig::star_count` — unlike [`visible_starred`], nothing
 /// else is filtered out here: this is the owner's own list, shown in full
@@ -122,14 +138,18 @@ async fn fetch_repo_configs(
 async fn own_starred_with_counts(
     ctx: &AppContext,
     starred: &std::collections::BTreeSet<gitquarry_core::storage::uid::Uid>,
-) -> Vec<(String, u32)> {
-    let mut pairs: Vec<(String, u32)> = fetch_repo_configs(ctx, starred.iter().cloned())
+) -> Vec<StarredRepo> {
+    let mut repos: Vec<StarredRepo> = fetch_repo_configs(ctx, starred.iter().cloned())
         .await
         .into_iter()
-        .map(|c| (c.full_name, c.star_count))
+        .map(|c| StarredRepo {
+            name: c.full_name,
+            display_name: c.display_name,
+            stars: c.star_count,
+        })
         .collect();
-    pairs.sort();
-    pairs
+    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    repos
 }
 
 /// `starred` filtered down to what `headers`' viewer (anonymous or not) can
@@ -143,14 +163,18 @@ async fn visible_starred(
     ctx: &AppContext,
     headers: &HeaderMap,
     starred: &std::collections::BTreeSet<gitquarry_core::storage::uid::Uid>,
-) -> Result<Vec<(String, u32)>, AppError> {
+) -> Result<Vec<StarredRepo>, AppError> {
     let mut visible = Vec::new();
     for config in fetch_repo_configs(ctx, starred.iter().cloned()).await {
         if can_view_repo(ctx, headers, &config.full_name, config.visibility).await? {
-            visible.push((config.full_name, config.star_count));
+            visible.push(StarredRepo {
+                name: config.full_name,
+                display_name: config.display_name,
+                stars: config.star_count,
+            });
         }
     }
-    visible.sort();
+    visible.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(visible)
 }
 
@@ -345,9 +369,15 @@ pub(crate) async fn handler_account_favorites_post(
     // and `style/app.js`'s `data-async-extra-target` swaps this second
     // fragment into `#community-stats` independently of the button swap.
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
-        let button = crate::webui::star_button_html("/_account/favorites", &repo, &csrf_field(&headers), now_starred);
+        let button = crate::webui::star_button_html(
+            "/_account/favorites",
+            &repo,
+            &resolved.uid,
+            &csrf_field(&headers),
+            now_starred,
+        );
         let (fresh_config, _etag) = resolved.remote.get_repo_config().await?;
-        let stats = crate::webui::repo::community_stats_html(&fresh_config, locale).into_string();
+        let stats = crate::webui::repo::community_stats_html(&fresh_config, &resolved.uid, locale).into_string();
         return Ok(Html(format!("{button}{stats}")).into_response());
     }
     // Only a same-origin relative path is honored — `return_to` is
@@ -398,7 +428,7 @@ pub fn render_favorites_page(
     user: &User,
     csrf: &str,
     message: Option<Flash>,
-    starred: &[(String, u32)],
+    starred: &[StarredRepo],
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
     let action_url = "/_account/favorites";
@@ -427,12 +457,12 @@ pub fn render_favorites_page(
             } @else {
                 table class="list" {
                     tr { th { (gitquarry_i18n::web::auth::favorites::repo_column_header(locale)) } th {} }
-                    @for (repo, stars) in starred {
+                    @for repo in starred {
                         tr {
                             td {
-                                a href=(format!("/{}", url_encode(repo))) { (repo) }
-                                @if *stars > 0 {
-                                    " " span class="muted" { (stars) " \u{2605}" }
+                                a href=(format!("/{}", url_encode(&repo.name))) { (repo.label()) }
+                                @if repo.stars > 0 {
+                                    " " span class="muted" { (repo.stars) " \u{2605}" }
                                 }
                             }
                             td {
@@ -453,7 +483,7 @@ pub fn render_favorites_page(
                                     // `handler_account_favorites_post`'s own
                                     // doc comment.
                                     input type="hidden" name="favorites_action" value="remove_from_list";
-                                    input type="hidden" name="repo" value=(repo);
+                                    input type="hidden" name="repo" value=(repo.name);
                                     button type="submit" { (gitquarry_i18n::web::auth::favorites::remove_button_label(locale)) }
                                 }
                             }
@@ -470,7 +500,7 @@ pub fn render_favorites_page(
 /// isn't `username` themselves — no unstar buttons, no csrf, just `repos`
 /// (already [`visible_starred`]-filtered, so every entry here is safe to
 /// show this particular viewer).
-pub fn render_public_favorites_page(username: &str, repos: &[(String, u32)], locale: gitquarry_i18n::Locale) -> Markup {
+pub fn render_public_favorites_page(username: &str, repos: &[StarredRepo], locale: gitquarry_i18n::Locale) -> Markup {
     html! {
         p class="muted" {
             (gitquarry_i18n::web::auth::favorites::public_favorites_of_prefix(locale)) strong { (username) } "."
@@ -483,12 +513,12 @@ pub fn render_public_favorites_page(username: &str, repos: &[(String, u32)], loc
         } @else {
             table class="list" {
                 tr { th { (gitquarry_i18n::web::auth::favorites::repo_column_header(locale)) } }
-                @for (repo, stars) in repos {
+                @for repo in repos {
                     tr {
                         td {
-                            a href=(format!("/{}", url_encode(repo))) { (repo) }
-                            @if *stars > 0 {
-                                " " span class="muted" { (stars) " \u{2605}" }
+                            a href=(format!("/{}", url_encode(&repo.name))) { (repo.label()) }
+                            @if repo.stars > 0 {
+                                " " span class="muted" { (repo.stars) " \u{2605}" }
                             }
                         }
                     }

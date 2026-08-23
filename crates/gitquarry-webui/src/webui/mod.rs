@@ -106,8 +106,10 @@ pub mod identicon;
 pub mod license;
 pub mod markdown;
 pub mod repo;
+pub mod repo_label;
 pub mod repo_new;
 pub mod repo_settings;
+pub mod repos;
 pub mod watch;
 
 mod actions;
@@ -192,10 +194,11 @@ pub use page_chrome::layout;
 // calls the former once at startup, right after resolving `ServerSettings`.
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
-    permission_badge_class, settings_section, tab_links, topic_badges,
+    permission_badge_class, permission_label, settings_section, tab_links, topic_badges,
 };
 pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};
+pub(crate) use repo_label::repo_label;
 pub(crate) use repo_link::{github_blob_link, repo_link};
 pub(crate) use text_size::{TextSize, effective_text_size, handler_toggle_text_size, render_text_size_buttons};
 pub(crate) use theme_pref::{effective_theme, handler_toggle_theme};
@@ -204,9 +207,10 @@ use anyhow::{Context, Result};
 use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use gitquarry_core::app::AppContext;
 use std::sync::Arc;
+use tracing::info;
 
 pub(crate) type State_ = axum::extract::State<Arc<AppContext>>;
 
@@ -328,6 +332,15 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             get(crate::settings::web::handler_settings_oidc_get).post(crate::settings::web::handler_settings_oidc_post),
         )
         .route(
+            "/_settings/backup",
+            get(crate::settings::web::handler_settings_backup_get)
+                .post(crate::settings::web::handler_settings_backup_post),
+        )
+        .route(
+            "/_settings/backup/run",
+            post(crate::settings::web::handler_settings_backup_run_post),
+        )
+        .route(
             "/_users",
             get(crate::auth::web::users::handler_users_get).post(crate::auth::web::users::handler_users_post),
         )
@@ -335,6 +348,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             "/_groups",
             get(crate::auth::web::groups::handler_groups_get).post(crate::auth::web::groups::handler_groups_post),
         )
+        .route("/_group/{*path}", get(crate::auth::web::group::handler_group_get))
         .route("/_audit", get(audit::handler_audit_get))
         .route("/_changelog", get(changelog::handler_changelog_get))
         .route("/_license", get(license::handler_license_get))
@@ -342,6 +356,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_fork", axum::routing::post(fork::handler_fork_post))
         .route("/_watch", axum::routing::post(watch::handler_watch_post))
         .route("/_new", get(repo_new::handler_new_get).post(repo_new::handler_new_post))
+        .route("/_repos", get(repos::handler_repos_get))
         .route(
             "/_profile/{username}",
             get(crate::auth::web::profile::handler_profile_get),
@@ -504,8 +519,8 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("couldn't listen on {bind_addr}"))?;
-    eprintln!(
-        "gitquarry: web UI on http://{bind_addr} -> bucket '{}' (mirrors in {})",
+    info!(
+        "web UI on http://{bind_addr} -> bucket '{}' (mirrors in {})",
         ctx.bucket,
         ctx.mirrors_root.display()
     );

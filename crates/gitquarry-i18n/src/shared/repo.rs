@@ -5,8 +5,7 @@ use super::super::{Locale, msg};
 
 msg!(
     /// A repo name that doesn't resolve to any existing repo — confirmed
-    /// duplicated verbatim across `auth::domain::group::parse_team_repos`,
-    /// `auth::domain::user::{parse_repos_field,set_repo_perm}`, `webui::fork`,
+    /// duplicated verbatim across `auth::domain::user::{parse_repos_field,set_repo_perm}`, `webui::fork`,
     /// `webui::repo::releases`, `auth::web::favorites`.
     repo_not_found(repo: &str) {
         Locale::Es => "repo '{repo}' no existe",
@@ -15,10 +14,9 @@ msg!(
 );
 
 msg!(
-    /// Placeholder for a uid-keyed repo reference (`Team::repos`/
-    /// `User::repos`) whose `RepoConfig` no longer resolves — confirmed
-    /// duplicated verbatim across `auth::web::groups::render_team`,
-    /// `auth::web::users::render_user`.
+    /// Placeholder for a uid-keyed repo reference (`User::repos`) whose
+    /// `RepoConfig` no longer resolves — single call site
+    /// (`auth::web::users::render_user`).
     repo_deleted() {
         Locale::Es => "(repo eliminado)",
         Locale::En => "(deleted repo)",

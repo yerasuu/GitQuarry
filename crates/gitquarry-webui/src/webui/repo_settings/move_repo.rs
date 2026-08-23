@@ -44,7 +44,14 @@ pub(super) async fn move_repo(
             new_namespace,
         )));
     };
-    let new_name = match validate::sanitize_path(&format!("{new_namespace}/{}", form.new_local_name)) {
+    let new_display_name = match validate::validate_repo_display_name(&form.new_local_name) {
+        Ok(n) => n,
+        Err(e) => return Ok(Err(e.to_string())),
+    };
+    let Some(slug) = domain::repo::slugify_repo_name(&new_display_name) else {
+        return Ok(Err("name must contain at least one letter or digit.".to_string()));
+    };
+    let new_name = match validate::sanitize_path(&format!("{new_namespace}/{slug}")) {
         Ok(new_name) => new_name,
         Err(e) => return Ok(Err(e.to_string())),
     };
@@ -52,7 +59,17 @@ pub(super) async fn move_repo(
         return Ok(Err(gitquarry_i18n::shared::repo::destination_is_same_repo(locale)));
     }
 
-    let renamed = match domain::repo::rename(ctx, resolved, name, &new_name, new_owner, locale).await {
+    let renamed = match domain::repo::rename(
+        ctx,
+        resolved,
+        name,
+        &new_name,
+        new_owner,
+        Some(new_display_name),
+        locale,
+    )
+    .await
+    {
         Ok(renamed) => renamed,
         Err(e) => return Ok(Err(e.to_string())),
     };
@@ -105,6 +122,7 @@ pub fn render_move_repo_form(
             div class="field" {
                 label { (t::new_name_label(locale)) }
                 input name="new_local_name" value=(new_local_name) required size="30" placeholder=(t::new_name_placeholder(locale));
+                span class="hint" { (t::new_name_hint(locale)) }
             }
             div class="field" {
                 label { (t::confirm_label(locale)) }

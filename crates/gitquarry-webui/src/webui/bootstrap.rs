@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::info;
 
 #[cfg(any(test, feature = "test-util"))]
 pub const BOOTSTRAP_COOKIE: &str = "bootstrap-grant";
@@ -148,10 +149,10 @@ pub async fn print_hint(ctx: &AppContext, web_bind: &str) {
     if crate::auth::web::login::login_enforced(ctx).await {
         return;
     }
-    eprintln!(
-        "gitquarry: no login method configured yet — the admin pages are closed until you visit\n\
-         gitquarry:   http://{web_bind}/_bootstrap?token={}\n\
-         gitquarry: create the first admin account there; this token dies with the process.",
+    info!(
+        "no login method configured yet — the admin pages are closed until you visit \
+         http://{web_bind}/_bootstrap?token={} to create the first admin account; \
+         this token dies with the process",
         *TOKEN
     );
 }

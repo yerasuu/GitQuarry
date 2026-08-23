@@ -1,7 +1,7 @@
 //! `.conf/global.json`-backed server settings (network binds, mirrors cache,
-//! external-mirror allowlist, OIDC) — one real page per concern under
+//! external-mirror allowlist, OIDC, backup) — one real page per concern under
 //! `/_settings/<section>` (`footer`/`network`/`mirrors-cache`/
-//! `external-mirrors`/`oidc`), same shape [`crate::webui::account_settings_page`]
+//! `external-mirrors`/`oidc`/`backup`), same shape [`crate::webui::account_settings_page`]
 //! already gives `/_account/*`: a save's CAS/validation stays scoped to the
 //! section that actually submitted, instead of one giant form covering
 //! every field at once. [`require_admin`] is the shared admin-page gate —
@@ -9,6 +9,7 @@
 //! which is why it lives here rather than in either of those.
 
 use crate::auth::web::login;
+use crate::webui::repo::relative_time_ago;
 use crate::webui::{
     AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
     non_empty, render_flash, require_csrf, settings_section,
@@ -17,11 +18,17 @@ use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use gitquarry_core::app::AppContext;
+use gitquarry_core::backup::dest::Dest;
+use gitquarry_core::backup::inventory::Selection;
+use gitquarry_core::backup::report::{self, BackupRun, Outcome, Trigger};
+use gitquarry_core::backup::schedule;
 use gitquarry_core::storage;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::ServerSettings;
 use gitquarry_i18n::web::chrome;
 use maud::{Markup, PreEscaped, html};
+use std::sync::Arc;
+use tracing::warn;
 
 /// `None` if this request may proceed to render an admin page
 /// (`/_settings/*`, `/_users`, a repo's "settings" tab); `Some(response)` is
@@ -78,7 +85,7 @@ fn login_redirect(return_to: &str) -> Response {
 /// page the way [`crate::webui::repo_settings::settings_sections`]'s
 /// `?view=` split still has to (that split predates per-section routes in
 /// this app and hasn't been revisited yet).
-fn settings_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 5] {
+fn settings_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 6] {
     use gitquarry_i18n::web::settings as t;
     [
         ("footer", "/_settings/footer", t::settings_footer_heading(locale)),
@@ -94,6 +101,7 @@ fn settings_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static
             t::settings_external_mirrors_heading(locale),
         ),
         ("oidc", "/_settings/oidc", t::settings_oidc_heading(locale)),
+        ("backup", "/_settings/backup", t::settings_backup_heading(locale)),
     ]
 }
 
@@ -689,6 +697,401 @@ pub(crate) async fn handler_settings_oidc_post(
     Ok(render_page(&ctx, &headers, "oidc", content, locale).await)
 }
 
+// ---------------------------------------------------------------- backup --
+
+#[derive(serde::Deserialize)]
+pub(crate) struct BackupForm {
+    #[serde(default)]
+    backup_dest: String,
+    // Unchecked checkboxes aren't submitted at all, so every toggle here is
+    // an `Option`: `Some` means checked, `None` means the box was cleared.
+    #[serde(default)]
+    enabled: Option<String>,
+    #[serde(default)]
+    interval: String,
+    #[serde(default)]
+    snapshot: Option<String>,
+    #[serde(default)]
+    class_git: Option<String>,
+    #[serde(default)]
+    class_lfs: Option<String>,
+    #[serde(default)]
+    class_releases: Option<String>,
+    #[serde(default)]
+    class_avatars: Option<String>,
+    #[serde(default)]
+    class_entities: Option<String>,
+    #[serde(default)]
+    class_audit: Option<String>,
+    #[serde(default)]
+    class_derived: Option<String>,
+    #[serde(default)]
+    keep: String,
+    #[serde(default)]
+    audit_keep_months: String,
+    #[serde(default)]
+    delete_grace_days: String,
+    #[serde(default)]
+    concurrency: String,
+    #[serde(default)]
+    csrf: String,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct BackupRunForm {
+    #[serde(default)]
+    csrf: String,
+}
+
+fn checked(field: &Option<String>) -> bool {
+    field.is_some()
+}
+
+fn num_field(v: Option<u32>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_default()
+}
+
+/// Empty means "unset", which every one of these fields treats as its own
+/// documented default — so a blank box is a real answer here, not a
+/// validation error.
+fn parse_optional_u32(raw: &str, what: &str) -> Result<Option<u32>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    raw.parse::<u32>()
+        .map(Some)
+        .map_err(|_| format!("{what}: not a number"))
+}
+
+/// Byte counts in a run report span "a few JSON objects" to "a night of
+/// packs", so they're rendered in whichever unit keeps them readable.
+fn bytes_human(n: u64) -> String {
+    const UNITS: [(u64, &str); 4] = [(1 << 30, "G"), (1 << 20, "M"), (1 << 10, "K"), (1, "B")];
+    for (scale, suffix) in UNITS {
+        if n >= scale {
+            // One decimal below 10 of a unit, none above: "1.4G" is useful,
+            // "941.7M" is noise.
+            let value = n as f64 / scale as f64;
+            return if value < 10.0 && scale > 1 {
+                format!("{value:.1}{suffix}")
+            } else {
+                format!("{}{suffix}", value.round() as u64)
+            };
+        }
+    }
+    "0B".to_string()
+}
+
+fn outcome_label(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Running => "running",
+        Outcome::Ok => "ok",
+        Outcome::Partial => "partial",
+        Outcome::Failed => "failed",
+    }
+}
+
+fn trigger_label(trigger: Trigger) -> &'static str {
+    match trigger {
+        Trigger::Scheduled => "scheduled",
+        Trigger::Manual => "manual",
+        Trigger::Cli => "cli",
+    }
+}
+
+fn render_backup_page(
+    settings: &ServerSettings,
+    runs: &[BackupRun],
+    csrf: &str,
+    message: Option<Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    use gitquarry_i18n::web::settings as t;
+    let selection = Selection::from_settings(settings);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    html! {
+        div id="backup-body" {
+            (saved_in_bucket_prose(locale))
+            (PreEscaped(render_flash(message, locale)))
+            (settings_section(&t::settings_backup_heading(locale), Some(&t::settings_backup_prose(locale)), html! {
+                form method="post" action="/_settings/backup" data-async data-async-target="#backup-body" {
+                    (PreEscaped(csrf))
+                    div class="field" {
+                        label { (t::settings_backup_dest_label(locale)) }
+                        input name="backup_dest" value=(field(&settings.backup_dest))
+                            placeholder=(t::settings_backup_dest_placeholder(locale));
+                        p class="muted" { (t::settings_backup_dest_hint(locale)) }
+                    }
+                    div class="field" {
+                        label {
+                            input type="checkbox" name="enabled" value="1" checked[settings.backup_enabled];
+                            " " (t::settings_backup_enabled_hint(locale))
+                        }
+                    }
+                    div class="field" {
+                        label { (t::settings_backup_interval_label(locale)) }
+                        input name="interval" value=(field(&settings.backup_interval))
+                            placeholder=(t::settings_backup_interval_placeholder(locale));
+                    }
+                    div class="field" {
+                        label {
+                            input type="checkbox" name="snapshot" value="1"
+                                checked[settings.backup_snapshot.unwrap_or(true)];
+                            " " (t::settings_backup_snapshot_hint(locale))
+                        }
+                    }
+
+                    h4 { (t::settings_backup_classes_heading(locale)) }
+                    @for (name, on, hint) in [
+                        ("class_git", selection.git, t::settings_backup_class_git_hint(locale)),
+                        ("class_lfs", selection.lfs, t::settings_backup_class_lfs_hint(locale)),
+                        ("class_releases", selection.releases, t::settings_backup_class_releases_hint(locale)),
+                        ("class_avatars", selection.avatars, t::settings_backup_class_avatars_hint(locale)),
+                        ("class_entities", selection.entities, t::settings_backup_class_entities_hint(locale)),
+                        ("class_audit", selection.audit, t::settings_backup_class_audit_hint(locale)),
+                        ("class_derived", selection.derived, t::settings_backup_class_derived_hint(locale)),
+                    ] {
+                        div class="field" {
+                            label {
+                                input type="checkbox" name=(name) value="1" checked[on];
+                                " " (hint)
+                            }
+                        }
+                    }
+
+                    h4 { (t::settings_backup_retention_heading(locale)) }
+                    div class="field" {
+                        label { (t::settings_backup_keep_label(locale)) }
+                        input name="keep" value=(num_field(settings.backup_keep))
+                            placeholder=(t::settings_backup_keep_placeholder(locale));
+                    }
+                    div class="field" {
+                        label { (t::settings_backup_audit_keep_label(locale)) }
+                        input name="audit_keep_months" value=(num_field(settings.backup_audit_keep_months))
+                            placeholder=(t::settings_backup_audit_keep_placeholder(locale));
+                    }
+                    div class="field" {
+                        label { (t::settings_backup_delete_grace_label(locale)) }
+                        input name="delete_grace_days" value=(num_field(settings.backup_delete_grace_days))
+                            placeholder=(t::settings_backup_delete_grace_placeholder(locale));
+                        p class="muted" { (t::settings_backup_delete_grace_hint(locale)) }
+                    }
+                    div class="field" {
+                        label { (t::settings_backup_concurrency_label(locale)) }
+                        input name="concurrency" value=(num_field(settings.backup_concurrency))
+                            placeholder=(t::settings_backup_concurrency_placeholder(locale));
+                    }
+                    p { button type="submit" { (t::settings_save_button(locale)) } }
+                }
+                p class="muted" { (t::settings_backup_secrets_warning(locale)) }
+                // Its own form, not a second button in the one above: "run
+                // now" must never carry unsaved edits into a run.
+                form method="post" action="/_settings/backup/run" {
+                    (PreEscaped(csrf))
+                    p { button type="submit" { (t::settings_backup_run_now_button(locale)) } }
+                }
+            }))
+            (settings_section(&t::settings_backup_runs_heading(locale), None, html! {
+                @if runs.is_empty() {
+                    p class="muted" { (t::settings_backup_runs_empty(locale)) }
+                } @else {
+                    table {
+                        thead {
+                            tr {
+                                th { (t::settings_backup_col_started(locale)) }
+                                th { (t::settings_backup_col_outcome(locale)) }
+                                th { (t::settings_backup_col_trigger(locale)) }
+                                th { (t::settings_backup_col_duration(locale)) }
+                                th { (t::settings_backup_col_copied(locale)) }
+                                th { (t::settings_backup_col_skipped(locale)) }
+                                th { (t::settings_backup_col_failed(locale)) }
+                            }
+                        }
+                        tbody {
+                            @for run in runs {
+                                @let totals = run.totals();
+                                tr {
+                                    td { (relative_time_ago(run.started_at, now)) }
+                                    td { (outcome_label(run.outcome)) }
+                                    td { (trigger_label(run.trigger)) }
+                                    td {
+                                        @match run.duration_secs() {
+                                            Some(secs) => (format!("{secs}s")),
+                                            None => "-",
+                                        }
+                                    }
+                                    td { (format!("{} ({})", totals.copied, bytes_human(totals.bytes_copied))) }
+                                    td { (totals.skipped) }
+                                    td { (run.failures_total) }
+                                }
+                            }
+                        }
+                    }
+                    // Everything below is per-run detail that only exists
+                    // when something needs an operator's attention.
+                    @for run in runs {
+                        @if let Some(error) = &run.error {
+                            p class="flash flash-err" { (error) }
+                        }
+                        @if !run.unknown_keys.is_empty() {
+                            p class="muted" {
+                                (t::settings_backup_unknown_warning(locale))
+                                @for key in &run.unknown_keys { " " code { (key) } }
+                            }
+                        }
+                        @if !run.failures.is_empty() {
+                            details {
+                                summary { (t::settings_backup_failures_heading(locale)) " (" (run.failures_total) ")" }
+                                ul { @for failure in &run.failures { li { code { (failure) } } } }
+                            }
+                        }
+                    }
+                }
+            }))
+        }
+    }
+}
+
+pub(crate) async fn handler_settings_backup_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
+    if let Some(resp) = require_admin(&ctx, &headers, "/_settings/backup").await {
+        return Ok(resp);
+    }
+    let (settings, _etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+    let runs = report::list_recent(ctx.backend().as_ref(), &ctx.cipher, report::LIST_LIMIT).await?;
+    let locale = effective_locale(&ctx, &headers).await;
+    let content = render_backup_page(&settings, &runs, &csrf_field(&headers), None, locale);
+    Ok(render_page(&ctx, &headers, "backup", content, locale).await)
+}
+
+pub(crate) async fn handler_settings_backup_post(
+    State(ctx): State_,
+    headers: HeaderMap,
+    Form(form): Form<BackupForm>,
+) -> Result<Response, AppError> {
+    if let Some(resp) = require_admin(&ctx, &headers, "/_settings/backup").await {
+        return Ok(resp);
+    }
+    require_csrf(&headers, &form.csrf)?;
+    let locale = effective_locale(&ctx, &headers).await;
+    let (current, etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+
+    // Everything that can be checked without touching the network is checked
+    // here, so a typo is an error next to the field rather than a schedule
+    // that quietly never works. `Dest::validate_against` re-reads
+    // `gitquarry.toml` for exactly that reason.
+    let settings = match build_backup_settings(&ctx, form, current.clone()) {
+        Ok(settings) => settings,
+        Err(message) => {
+            let content = render_backup_page(&current, &[], &csrf_field(&headers), Some(Flash::Err(&message)), locale);
+            if is_async(&headers) {
+                return Ok(axum::response::Html(content.into_string()).into_response());
+            }
+            return Ok(render_page(&ctx, &headers, "backup", content, locale).await);
+        }
+    };
+
+    let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
+    let flash =
+        match storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher).await? {
+            Cas::Ok => Flash::Ok("saved to the bucket."),
+            Cas::Conflict => Flash::Err(&cas_conflict_msg),
+        };
+    let runs = report::list_recent(ctx.backend().as_ref(), &ctx.cipher, report::LIST_LIMIT).await?;
+    let content = render_backup_page(&settings, &runs, &csrf_field(&headers), Some(flash), locale);
+    if is_async(&headers) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
+    Ok(render_page(&ctx, &headers, "backup", content, locale).await)
+}
+
+/// Turns a submitted form into the settings to store, or into the one
+/// message to show instead. `Err(String)` rather than `anyhow`: every one of
+/// these is something an admin typed and can fix in the field it came from.
+fn build_backup_settings(
+    ctx: &AppContext,
+    form: BackupForm,
+    current: ServerSettings,
+) -> Result<ServerSettings, String> {
+    let dest = non_empty(form.backup_dest);
+    if let Some(raw) = &dest {
+        let target = Dest::parse(raw).map_err(|e| format!("{e:#}"))?;
+        let config = gitquarry_core::config::Config::load_from(&ctx.config_path).map_err(|e| format!("{e:#}"))?;
+        target
+            .validate_against(&config, &ctx.bucket)
+            .map_err(|e| format!("{e:#}"))?;
+    }
+    // Validated the same way the job itself would, so an interval that
+    // wouldn't parse is refused here rather than silently falling back to
+    // the default on every run.
+    let interval = non_empty(form.interval);
+    if let Some(raw) = &interval {
+        gitquarry_core::mirror::gc::parse_age(raw).map_err(|e| format!("interval: {e:#}"))?;
+    }
+
+    Ok(ServerSettings {
+        backup_dest: dest,
+        backup_enabled: checked(&form.enabled),
+        backup_interval: interval,
+        backup_snapshot: Some(checked(&form.snapshot)),
+        backup_include_git: Some(checked(&form.class_git)),
+        backup_include_lfs: Some(checked(&form.class_lfs)),
+        backup_include_releases: Some(checked(&form.class_releases)),
+        backup_include_avatars: Some(checked(&form.class_avatars)),
+        backup_include_entities: Some(checked(&form.class_entities)),
+        backup_include_audit: Some(checked(&form.class_audit)),
+        backup_include_derived: Some(checked(&form.class_derived)),
+        backup_keep: parse_optional_u32(&form.keep, "snapshots to keep")?,
+        backup_audit_keep_months: parse_optional_u32(&form.audit_keep_months, "audit months")?,
+        backup_delete_grace_days: parse_optional_u32(&form.delete_grace_days, "delete grace days")?,
+        backup_concurrency: parse_optional_u32(&form.concurrency, "concurrency")?,
+        ..current
+    })
+}
+
+/// Starts a run and returns immediately. A backup walks the whole bucket and
+/// can take hours — tying it to the lifetime of an HTTP request would mean a
+/// proxy timeout kills it half-done. The run records itself in the bucket
+/// (`Outcome::Running` from the start), so reloading the page is how an
+/// admin watches it.
+pub(crate) async fn handler_settings_backup_run_post(
+    State(ctx): State_,
+    headers: HeaderMap,
+    Form(form): Form<BackupRunForm>,
+) -> Result<Response, AppError> {
+    if let Some(resp) = require_admin(&ctx, &headers, "/_settings/backup").await {
+        return Ok(resp);
+    }
+    require_csrf(&headers, &form.csrf)?;
+    let detached = Arc::clone(&ctx);
+    tokio::spawn(async move {
+        match schedule::run_once(&detached, Trigger::Manual).await {
+            Ok(run) if run.outcome == Outcome::Failed => warn!(
+                reason = run.error.as_deref().unwrap_or("no reason recorded"),
+                "manual backup failed"
+            ),
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "manual backup couldn't be recorded"),
+        }
+    });
+
+    let locale = effective_locale(&ctx, &headers).await;
+    let (settings, _etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+    let runs = report::list_recent(ctx.backend().as_ref(), &ctx.cipher, report::LIST_LIMIT).await?;
+    let started = gitquarry_i18n::web::settings::settings_backup_run_started(locale);
+    let content = render_backup_page(
+        &settings,
+        &runs,
+        &csrf_field(&headers),
+        Some(Flash::Ok(&started)),
+        locale,
+    );
+    Ok(render_page(&ctx, &headers, "backup", content, locale).await)
+}
+
 // Only called by `settings_body`/`settings_full_page`, both test-only
 // helpers — dead outside `test-util`, which is what `cargo check` flags.
 #[cfg(any(test, feature = "test-util"))]
@@ -705,6 +1108,10 @@ fn render_section(
         "mirrors-cache" => render_mirrors_cache_page(settings, csrf, message, locale),
         "external-mirrors" => render_external_mirrors_page(settings, csrf, message, locale),
         "oidc" => render_oidc_page(settings, csrf, message, locale),
+        // No run history in this test-only path: the recent-runs table is
+        // rendered from a separate read the real handler does, and a caller
+        // asking for "the backup section's markup" is asking about the form.
+        "backup" => render_backup_page(settings, &[], csrf, message, locale),
         other => panic!("unknown settings section: {other}"),
     }
 }
@@ -721,6 +1128,20 @@ pub fn settings_body(
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
     render_section(section, settings, csrf, message, locale)
+}
+
+/// The backup section with a run history, which [`settings_body`] can't
+/// reach: that one dispatches on a section name and only has the settings
+/// object, while the recent-runs table comes from a separate read.
+#[cfg(any(test, feature = "test-util"))]
+pub fn settings_backup_body(
+    settings: &ServerSettings,
+    runs: &[BackupRun],
+    csrf: &str,
+    message: Option<Flash>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_backup_page(settings, runs, csrf, message, locale)
 }
 
 /// The section's fragment wrapped in the sidebar shell [`settings_page`]

@@ -16,7 +16,9 @@ fn render_user_lists_each_repo_with_a_remove_button() {
     let proyecto_a = Uid::from("projectA".to_string());
     let mut repos = BTreeMap::new();
     repos.insert(proyecto_a.clone(), Permission::Developer);
-    let repo_names = HashMap::from([(proyecto_a, "projectA".to_string())]);
+    // Label and `full_name`: the row shows the former, its remove form
+    // submits the latter.
+    let repo_names = HashMap::from([(proyecto_a, ("acme/project-a".to_string(), "acme/Project A".to_string()))]);
     let user = User {
         uid: Default::default(),
         username: "alice".to_string(),
@@ -44,7 +46,8 @@ fn render_user_lists_each_repo_with_a_remove_button() {
         secondary_emails: Default::default(),
     };
     let html = render_user(&user, &repo_names, "tok", gitquarry_i18n::Locale::Es).into_string();
-    assert!(html.contains("<code>projectA</code>"));
+    assert!(html.contains("<code>acme/Project A</code>"));
+    assert!(html.contains(r#"name="repo" value="acme/project-a""#), "{html}");
     assert!(html.contains(">desarrollador<"));
     assert!(html.contains("<code>*</code>"));
     assert!(html.contains(">lector<"));

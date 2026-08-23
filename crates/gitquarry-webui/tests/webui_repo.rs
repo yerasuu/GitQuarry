@@ -79,20 +79,30 @@ async fn renders_full_repo_views_against_real_git() {
 
     let ctx = test_ctx(dir.path());
 
-    let tree = render_tree(&ctx, &git_dir, "repo", "main", "", gitquarry_i18n::Locale::En)
+    let tree = render_tree(&ctx, &git_dir, "repo", None, "main", "", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
     assert!(tree.contains("README.md"), "tree: {tree}");
     assert!(tree.contains("src.rs"), "tree: {tree}");
 
-    let blob = render_blob(&git_dir, "repo", "main", "src.rs", gitquarry_i18n::Locale::En)
+    let blob = render_blob(&git_dir, "repo", None, "main", "src.rs", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
     assert!(blob.contains("fn"), "blob: {blob}");
 
-    let log = render_log(&ctx, &git_dir, "repo", "main", "", None, 0, gitquarry_i18n::Locale::En)
-        .await
-        .unwrap();
+    let log = render_log(
+        &ctx,
+        &git_dir,
+        "repo",
+        None,
+        "main",
+        "",
+        None,
+        0,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    .unwrap();
     assert!(log.contains("initial commit"), "log: {log}");
     let refs = render_refs(
         &ctx,
@@ -139,7 +149,7 @@ async fn renders_full_repo_views_against_real_git() {
     assert!(split_html.contains("println"), "split: {split_html}");
     assert!(split_html.contains("size-btn active"), "split: {split_html}");
 
-    let blame = render_blame(&git_dir, "repo", "main", "src.rs", gitquarry_i18n::Locale::En)
+    let blame = render_blame(&git_dir, "repo", None, "main", "src.rs", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
     assert!(blame.contains("Test Author"), "blame: {blame}");
@@ -189,7 +199,7 @@ async fn renders_full_repo_views_against_real_git() {
         "application/gzip"
     );
 
-    let atom_resp = export::atom(&git_dir, "repo", "main").await.unwrap();
+    let atom_resp = export::atom(&git_dir, "repo", None, "main").await.unwrap();
     assert_eq!(
         atom_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
         "application/atom+xml; charset=utf-8"

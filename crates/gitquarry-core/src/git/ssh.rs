@@ -27,6 +27,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::process::ChildStdin;
+use tracing::{debug, error, info, warn};
 
 const HOST_KEY: Singleton = Singleton::new(".conf/ssh_host_key.json");
 /// Size of the read buffers when pumping git's stdout/stderr to the SSH
@@ -53,10 +54,11 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
     let socket = TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("couldn't listen on {bind_addr}"))?;
-    eprintln!(
-        "gitquarry: ssh:// listening on {bind_addr} -> bucket '{}' (mirrors in {})",
-        ctx.bucket,
-        ctx.mirrors_root.display()
+    info!(
+        bind_addr,
+        bucket = %ctx.bucket,
+        mirrors_root = %ctx.mirrors_root.display(),
+        "ssh:// listening"
     );
 
     let mut server = SshServer { ctx };
@@ -147,8 +149,8 @@ impl server::Server for SshServer {
     /// genuine protocol/auth failure) still gets the full `{error:#}`.
     fn handle_session_error(&mut self, error: <Self::Handler as server::Handler>::Error) {
         match benign_disconnect_reason(&error) {
-            Some(io_err) => eprintln!("gitquarry: SSH client disconnected before finishing (io error: {io_err})"),
-            None => eprintln!("gitquarry: SSH session failed: {error:#}"),
+            Some(io_err) => debug!(error = %io_err, "SSH client disconnected before finishing"),
+            None => error!(error = %error, "SSH session failed"),
         }
     }
 }
@@ -210,7 +212,7 @@ impl server::Handler for ConnHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if let Err(e) = self.start_git_service(channel, data, session).await {
-            eprintln!("gitquarry: ssh: request rejected: {e:#}");
+            warn!(error = %e, "ssh request rejected");
             let _ = session
                 .handle()
                 .extended_data(channel, 1, format!("gitquarry: {e:#}\n").into_bytes())
@@ -290,11 +292,11 @@ impl ConnHandler {
             // those list by `RepoConfig::full_name`, which nothing used to
             // write for this path.
             None if git_subcmd == "receive-pack" && self.ctx.allow_push_create => {
-                let owner = match name.split_once('/') {
+                let owner = match name.rsplit_once('/') {
                     Some((namespace, _)) => domain::repo::resolve_owner_ref(&self.ctx, namespace).await?,
                     None => None,
                 };
-                domain::repo::create(&self.ctx, &name, owner, None, Visibility::default())
+                domain::repo::create(&self.ctx, &name, None, owner, None, Visibility::default())
                     .await?
                     .with_context(|| format!("couldn't create '{name}'"))?
             }
@@ -365,7 +367,7 @@ impl ConnHandler {
                 // mirror just in case (another concurrent push, deleted
                 // refs, etc), same as git smart-HTTP does after a push.
                 if let Err(e) = sync_bare_repo_from_s3(&mirror.remote, &mirror.path).await {
-                    eprintln!("gitquarry: ssh: couldn't re-sync after push: {e:#}");
+                    warn!(error = %e, "ssh: couldn't re-sync after push");
                 }
                 // Detached: see `domain::repo::update_primary_language`'s
                 // own doc comment for why it takes a fresh lock instead of

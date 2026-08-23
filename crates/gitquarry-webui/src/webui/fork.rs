@@ -17,7 +17,6 @@ use crate::auth::web::login;
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use gitquarry_core::auth::access;
 use gitquarry_core::domain;
 use gitquarry_core::storage::entities::OwnerRef;
 use gitquarry_core::validate;
@@ -89,7 +88,10 @@ async fn fork_error_page(
     message: &str,
 ) -> Result<Response, AppError> {
     let locale = effective_locale(ctx, headers).await;
-    let groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
+    // Only the groups `me` actually belongs to (plus their subgroups), read
+    // from the `user-group` index — not every group in the bucket, which
+    // this used to list just to filter almost all of it back out.
+    let groups = crate::auth::web::groups::visible_groups(ctx, me).await?;
     let topnav = login::topnav(ctx, headers).await;
     let body = html! {
         p class="alert alert-err" { (message) }
@@ -98,8 +100,8 @@ async fn fork_error_page(
             input type="hidden" name="source" value=(source);
             select name="namespace" {
                 option value=(me.username) selected[namespace == me.username] { (me.username) }
-                @for group in groups.iter().filter(|g| me.is_admin || g.owners.contains(&me.uid)) {
-                    option value=(group.name) selected[namespace == group.name] { (group.name) }
+                @for name in crate::auth::web::groups::manageable_group_names(&groups, &me.uid, me.is_admin) {
+                    option value=(name) selected[namespace == name] { (name) }
                 }
             }
             input name="name" size="20" value=(name);
@@ -156,7 +158,15 @@ pub(crate) async fn handler_fork_post(
             return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
         }
     };
-    let dest = match validate::sanitize_path(&format!("{namespace}/{}", form.name)) {
+    let dest_display_name = match validate::validate_repo_display_name(&form.name) {
+        Ok(n) => n,
+        Err(e) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &e.to_string()).await,
+    };
+    let Some(slug) = domain::repo::slugify_repo_name(&dest_display_name) else {
+        let msg = "name must contain at least one letter or digit.";
+        return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, msg).await;
+    };
+    let dest = match validate::sanitize_path(&format!("{namespace}/{slug}")) {
         Ok(dest) => dest,
         Err(e) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &e.to_string()).await,
     };
@@ -164,7 +174,16 @@ pub(crate) async fn handler_fork_post(
         let msg = gitquarry_i18n::shared::repo::destination_is_same_repo(locale);
         return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
     }
-    let Some(_dest_resolved) = domain::repo::fork(&ctx, &source_resolved, &dest, dest_owner, locale).await? else {
+    let Some(_dest_resolved) = domain::repo::fork(
+        &ctx,
+        &source_resolved,
+        &dest,
+        Some(dest_display_name),
+        dest_owner,
+        locale,
+    )
+    .await?
+    else {
         let msg = gitquarry_i18n::shared::repo::repo_already_exists_at(locale, &dest);
         return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
     };

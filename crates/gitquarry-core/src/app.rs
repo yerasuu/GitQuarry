@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tracing::warn;
 
 tokio::task_local! {
     /// Per-request `s3db::RequestCache`-wrapped backend, scoped by
@@ -433,9 +434,15 @@ impl AppContext {
     /// squatted by a since-deleted repo (see
     /// `storage::settings::claim_repo_name_self_healing`) — the "new repo
     /// identity" primitive shared by `/_new`, fork's destination, and SSH's
-    /// implicit create-on-first-push. `None` only if `full_name` is
-    /// genuinely claimed by a repo that still exists.
+    /// implicit create-on-first-push. `None` if `full_name` is genuinely
+    /// claimed by a repo that still exists, or if it names a user/group
+    /// namespace: a repo at `acme/team` and a subgroup called `acme/team`
+    /// would both answer to `/acme/team`, so whichever exists first wins
+    /// (see `auth::access::namespace_reserved`).
     pub async fn create_repo(&self, full_name: &str) -> Result<Option<ResolvedRepo>> {
+        if crate::auth::access::namespace_reserved(self.backend().as_ref(), &self.cipher, full_name).await? {
+            return Ok(None);
+        }
         let uid = Uid::new();
         let claimed = crate::storage::settings::claim_repo_name_self_healing(
             self.backend().as_ref(),
@@ -476,7 +483,7 @@ impl AppContext {
         // unsigned rather than verified. That's a worse-looking page, never
         // a broken repository, and must not stop a clone or a push.
         if let Err(e) = install_instance_allowed_signers(self, &path).await {
-            eprintln!("warning: couldn't teach the mirror this instance's signing key: {e:#}");
+            warn!(error = %e, "couldn't teach the mirror this instance's signing key");
         }
         crate::mirror::sync_bare_repo_from_s3(remote, &path).await?;
         // Marks this mirror as just-queried so the periodic sweep
@@ -484,7 +491,7 @@ impl AppContext {
         // here would just make this mirror a slightly earlier eviction
         // candidate, not worth failing the whole request over.
         if let Err(e) = crate::mirror::gc::touch_last_access(&path).await {
-            eprintln!("warning: {e:#}");
+            warn!(error = %e, "couldn't touch mirror last-access marker");
         }
         Ok((path, guard))
     }

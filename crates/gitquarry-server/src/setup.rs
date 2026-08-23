@@ -37,6 +37,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+use tracing::{info, warn};
 
 /// What `run` hands back to [`crate::serve::run`] once the wizard succeeds —
 /// exactly what it would otherwise have loaded from an existing
@@ -89,8 +90,8 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
     let listener = tokio::net::TcpListener::bind(web_bind)
         .await
         .with_context(|| format!("couldn't listen on {web_bind} for the setup wizard"))?;
-    eprintln!(
-        "gitquarry: {} — open http://{web_bind} to {}",
+    info!(
+        "{} — open http://{web_bind} to {}",
         if is_prefilled {
             format!("{} connects but has no admin user yet", config_path.display())
         } else {
@@ -267,7 +268,7 @@ async fn handler_post(State(state): State_, Form(form): Form<WizardForm>) -> Res
             .into_response()
         }
         Err(e) => {
-            eprintln!("setup wizard: {e:#}");
+            warn!("setup wizard: {e:#}");
             (
                 StatusCode::BAD_REQUEST,
                 Html(render_form(Some(&format!("{e:#}")), state.prefill.as_ref())),

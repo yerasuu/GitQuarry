@@ -2,6 +2,7 @@
 
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
+use tracing::error;
 
 /// A handler error, with its matching status. Defaults to 500; anything
 /// coming from validating client input is marked 400 and anything missing
@@ -57,7 +58,7 @@ impl AppError {
     #[cfg(any(test, feature = "test-util"))]
     pub fn into_plain_response(self) -> Response {
         if self.status.is_server_error() {
-            eprintln!("gitquarry: UI web: {:#}", self.error);
+            error!(error = %self.error, "UI web request failed");
         }
         let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
         (self.status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], msg).into_response()
@@ -65,7 +66,7 @@ impl AppError {
     #[cfg(not(any(test, feature = "test-util")))]
     pub(crate) fn into_plain_response(self) -> Response {
         if self.status.is_server_error() {
-            eprintln!("gitquarry: UI web: {:#}", self.error);
+            error!(error = %self.error, "UI web request failed");
         }
         let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
         (self.status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], msg).into_response()
@@ -84,7 +85,7 @@ impl AppError {
     /// means *any* stray error becomes one, so the chain is whatever
     /// happened to bubble up — git's stderr (which quotes `GIT_DIR` paths),
     /// an S3 key, a bucket name, a backend endpoint URL. The full chain
-    /// still reaches the operator through the `eprintln!` next to every
+    /// still reaches the operator through the `error!` log next to every
     /// call of this; the client gets a fixed sentence.
     fn client_message(&self, locale: gitquarry_i18n::Locale) -> String {
         if self.status.is_server_error() {
@@ -98,7 +99,7 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         if self.status.is_server_error() {
-            eprintln!("gitquarry: UI web: {:#}", self.error);
+            error!(error = %self.error, "UI web request failed");
         }
         // No `HeaderMap` reaches this conversion, so the explicit theme/
         // density cookies can't be read here — falls back to

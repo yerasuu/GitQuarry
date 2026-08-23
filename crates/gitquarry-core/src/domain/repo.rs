@@ -21,12 +21,14 @@
 use crate::app::{AppContext, ResolvedRepo};
 use crate::auth::access;
 use crate::auth::entities::Permission;
+use crate::crypto::Cipher;
 use crate::storage::entities::{Label, OwnerRef, RepoConfig, Visibility};
-use crate::storage::remote::Manifest;
+use crate::storage::remote::{Manifest, Remote};
 use crate::storage::uid::Uid;
-use crate::storage::{self, Cas};
+use crate::storage::{self, Backend, Cas};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How long a soft-deleted repo (`RepoConfig::deleted_at` set) survives
@@ -93,6 +95,7 @@ pub async fn resolve_owner_ref(ctx: &AppContext, namespace: &str) -> Result<Opti
 pub async fn create(
     ctx: &AppContext,
     full_name: &str,
+    display_name: Option<String>,
     owner: Option<OwnerRef>,
     description: Option<String>,
     visibility: Visibility,
@@ -109,6 +112,7 @@ pub async fn create(
     let config = RepoConfig {
         uid: resolved.uid.clone(),
         full_name: full_name.to_string(),
+        display_name,
         description,
         owner,
         visibility,
@@ -156,8 +160,15 @@ pub async fn rename(
     current_full_name: &str,
     new_full_name: &str,
     new_owner: OwnerRef,
+    new_display_name: Option<String>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<String>> {
+    // Same rule `AppContext::create_repo` applies to a fresh repo: a repo
+    // path and a group path share one URL space, so a rename can't move a
+    // repo onto a name a group namespace already holds.
+    if crate::auth::access::namespace_reserved(ctx.backend().as_ref(), &ctx.cipher, new_full_name).await? {
+        return Ok(None);
+    }
     let claimed = storage::settings::claim_repo_name_self_healing(
         ctx.backend().as_ref(),
         &ctx.cipher,
@@ -177,6 +188,7 @@ pub async fn rename(
     let new_config = RepoConfig {
         full_name: new_full_name.to_string(),
         owner: Some(new_owner),
+        display_name: new_display_name,
         ..current_config
     };
     match storage::settings::put_repo_config(
@@ -341,6 +353,7 @@ pub async fn fork(
     ctx: &AppContext,
     source: &ResolvedRepo,
     dest_full_name: &str,
+    dest_display_name: Option<String>,
     dest_owner: OwnerRef,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<ResolvedRepo>> {
@@ -361,6 +374,7 @@ pub async fn fork(
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: dest_display_name,
         description: source_config.description.clone(),
         owner: Some(dest_owner),
         visibility: source_config.visibility,
@@ -462,6 +476,7 @@ pub async fn create_from_template(
     ctx: &AppContext,
     source: &ResolvedRepo,
     dest_full_name: &str,
+    dest_display_name: Option<String>,
     dest_owner: OwnerRef,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<ResolvedRepo>> {
@@ -485,6 +500,7 @@ pub async fn create_from_template(
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: dest_display_name,
         description: source_config.description.clone(),
         owner: Some(dest_owner),
         visibility: source_config.visibility,
@@ -810,6 +826,132 @@ pub fn normalize_topic(raw: &str) -> Option<String> {
         .take(32)
         .collect();
     (!normalized.is_empty()).then_some(normalized)
+}
+
+const MAX_REPO_SLUG_LEN: usize = 100;
+
+/// Derives a `sanitize_path`-safe local-name segment from a repo's free-text
+/// `display_name` — unlike [`normalize_topic`], case is preserved (a repo
+/// slug isn't a search facet, no reason to force it lowercase) and the
+/// result is meant to round-trip back through `sanitize_path` unchanged, not
+/// just be safe to drop into a link. Characters already in
+/// `sanitize_path`'s allowed set (`[A-Za-z0-9._~-]`) pass through; anything
+/// else (spaces, symbols, non-ASCII) becomes `-`, runs of `-` collapse to
+/// one, and leading/trailing `-`/`.` are trimmed (a leading `-` would
+/// otherwise look like a flag to `sanitize_path`, and to `git` itself
+/// downstream). `None` if nothing survives — a name that's pure emoji/CJK/
+/// punctuation has no safe slug to offer; the caller treats that as a
+/// rejected name, same as an empty one.
+pub fn slugify_repo_name(display_name: &str) -> Option<String> {
+    let mut out = String::with_capacity(display_name.len());
+    let mut last_was_dash = false;
+    for c in display_name.trim().chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '~') {
+            out.push(c);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches(|c| c == '-' || c == '.');
+    let capped = trimmed.get(..trimmed.len().min(MAX_REPO_SLUG_LEN)).unwrap_or(trimmed);
+    let capped = capped.trim_matches(|c| c == '-' || c == '.');
+    (!capped.is_empty()).then(|| capped.to_string())
+}
+
+/// Best-effort backfill for a repo that predates `RepoConfig::display_name`
+/// (or whose slug has otherwise drifted from it): the current `full_name`'s
+/// local segment becomes the public `display_name` (preserved exactly, even
+/// if it has characters `sanitize_path` would now reject), and a clean slug
+/// is derived from it. Never propagates an error — a cosmetic migration
+/// failing must never break the listing page that triggered it (same
+/// fail-quiet spirit `webui::repo::list_visible_repos`'s own doc comment
+/// already applies to privacy checks); a lost race or a name collision on
+/// the derived slug just leaves `config` as it was, retried on the next load.
+///
+/// Deliberately only called from the uid-based listing paths (home index,
+/// profile, group pages) — not from `AppContext::resolve_repo` or any
+/// ssh/http request path, since those resolve a repo by its *current*
+/// `full_name` string, which a legacy repo with an invalid slug can never
+/// again be reached by after `sanitize_path` tightened its charset. A
+/// listing enumerates by uid instead, so it's the one place that can find
+/// such a repo at all in order to fix it.
+pub async fn backfill_slug(
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
+    uid: &Uid,
+    config: RepoConfig,
+    etag: Option<String>,
+) -> RepoConfig {
+    let (namespace, current_local) = config
+        .full_name
+        .rsplit_once('/')
+        .unwrap_or(("", config.full_name.as_str()));
+    if let Some(display_name) = &config.display_name
+        && slugify_repo_name(display_name).as_deref() == Some(current_local)
+    {
+        return config;
+    }
+    let display_name = config.display_name.clone().unwrap_or_else(|| current_local.to_string());
+    let Some(slug) = slugify_repo_name(&display_name) else {
+        return config;
+    };
+    let namespace = namespace.to_string();
+
+    if slug == current_local {
+        // Path's already clean — only `display_name` was missing.
+        let mut updated = config.clone();
+        updated.display_name = Some(display_name);
+        return match storage::settings::put_repo_config(
+            backend.as_ref(),
+            uid.as_str(),
+            &updated,
+            etag.as_deref(),
+            &cipher,
+        )
+        .await
+        {
+            Ok(Cas::Ok) => updated,
+            _ => config,
+        };
+    }
+
+    let new_full_name = if namespace.is_empty() {
+        slug
+    } else {
+        format!("{namespace}/{slug}")
+    };
+    let claimed = storage::settings::claim_repo_name_self_healing(backend.as_ref(), &cipher, &new_full_name, uid, {
+        let backend = Arc::clone(&backend);
+        let cipher = Arc::clone(&cipher);
+        move |existing_uid| {
+            let remote = Remote::new(
+                Arc::clone(&backend),
+                format!("{}/{existing_uid}", crate::storage::REPOS_PREFIX),
+                Arc::clone(&cipher),
+            );
+            async move { remote.exists().await }
+        }
+    })
+    .await;
+    if !matches!(claimed, Ok(true)) {
+        return config;
+    }
+
+    let mut updated = config.clone();
+    updated.full_name = new_full_name.clone();
+    updated.display_name = Some(display_name);
+    match storage::settings::put_repo_config(backend.as_ref(), uid.as_str(), &updated, etag.as_deref(), &cipher).await {
+        Ok(Cas::Ok) => {
+            storage::settings::release_repo_name(backend.as_ref(), &config.full_name).await;
+            updated
+        }
+        _ => {
+            storage::settings::release_repo_name(backend.as_ref(), &new_full_name).await;
+            config
+        }
+    }
 }
 
 /// Topics are cosmetic (discovery/categorization), so unlike

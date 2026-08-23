@@ -69,6 +69,72 @@ pub struct ServerSettings {
     /// so an address check would be a TOCTOU with DNS rebinding behind it.
     #[serde(default, alias = "mirror_allowed_hosts")]
     pub mirror_extra_hosts: Vec<String>,
+    /// Where scheduled backups go — `bucket:<name>` (a section of the local
+    /// `gitquarry.toml`), `path:/abs/dir`, or `self`. Parsed by
+    /// [`crate::backup::dest::Dest::parse`]; never credentials, since this
+    /// object lives inside the very bucket being backed up (see that
+    /// module's own doc comment).
+    #[serde(default)]
+    pub backup_dest: Option<String>,
+    /// Whether the periodic backup job runs at all. Off by default: a
+    /// backup writes to somewhere an operator hasn't necessarily chosen yet,
+    /// so it starts only once someone says so.
+    #[serde(default)]
+    pub backup_enabled: bool,
+    /// `crate::mirror::gc::parse_age` syntax (`"24h"`, `"7d"`, ...), same as
+    /// [`Self::mirrors_max_age`]. `None` uses
+    /// `crate::backup::schedule::DEFAULT_INTERVAL`.
+    #[serde(default)]
+    pub backup_interval: Option<String>,
+    /// Per-class opt-outs. `None` means "whatever
+    /// [`crate::backup::inventory::Selection::default`] says", which is
+    /// everything except the derived classes — so an instance that never
+    /// touches these gets a sensible backup, and a `false` here is always a
+    /// deliberate choice someone made.
+    #[serde(default)]
+    pub backup_include_git: Option<bool>,
+    #[serde(default)]
+    pub backup_include_lfs: Option<bool>,
+    #[serde(default)]
+    pub backup_include_releases: Option<bool>,
+    #[serde(default)]
+    pub backup_include_avatars: Option<bool>,
+    #[serde(default)]
+    pub backup_include_entities: Option<bool>,
+    #[serde(default)]
+    pub backup_include_audit: Option<bool>,
+    /// Caches and rebuildable indexes (`search-index/`, `commit-sig/`, the
+    /// four indexes `backfill-repo-index` repopulates). Off unless set: a
+    /// restore pairs with that command plus a re-index instead, which is
+    /// much cheaper than carrying one cache object per commit on every run.
+    #[serde(default)]
+    pub backup_include_derived: Option<bool>,
+    /// Whether each run also takes a re-sealed snapshot
+    /// (`crate::backup::snapshot`) of the mutable config set. `None` means
+    /// yes: it's the only half of the backup that keeps *history*, and it's
+    /// small.
+    #[serde(default)]
+    pub backup_snapshot: Option<bool>,
+    /// How many snapshots to keep. `None` keeps every one — deleting a
+    /// snapshot destroys the only copy of what the live data used to be, so
+    /// it doesn't happen unless an operator asks for it.
+    #[serde(default)]
+    pub backup_keep: Option<u32>,
+    /// How many months of `.conf/audit/` to keep at the destination. `None`
+    /// keeps all of them. The audit trail is the one class that grows without
+    /// bound, which is why it gets a retention knob the other classes don't.
+    #[serde(default)]
+    pub backup_audit_keep_months: Option<u32>,
+    /// How long a key deleted at the source survives at the replica before
+    /// the (opt-in) prune pass removes it. `None` disables that pass
+    /// entirely, which is the default: never propagating a deletion is what
+    /// makes an accidental purge recoverable from the backup at all.
+    #[serde(default)]
+    pub backup_delete_grace_days: Option<u32>,
+    /// Concurrent object copies per run. `None` uses
+    /// `crate::backup::replica::DEFAULT_CONCURRENCY`.
+    #[serde(default)]
+    pub backup_concurrency: Option<u32>,
     /// The footer's "source" link — either an absolute `http(s)://` URL, or
     /// a `namespace/name` repo already hosted on this instance (rendered as
     /// `/namespace/name`). `None` hides the link entirely rather than
@@ -133,12 +199,24 @@ pub struct RepoConfig {
     #[serde(default)]
     #[entity(key)]
     pub uid: Uid,
-    /// Canonical current display name (`namespace/local-name`). Once the
-    /// physical layout is uid-keyed this is the only place a repo's name
-    /// lives — renaming/moving becomes rewriting this field plus the
-    /// `repo-name` index below, never relocating any git data.
+    /// Canonical current path (`namespace/slug`) — the repo-name index key,
+    /// the ssh/http clone path segment, and the S3-prefix-adjacent name.
+    /// Always [`crate::validate::sanitize_path`]-clean; free-text naming
+    /// lives in `display_name` below, derived into this via
+    /// `domain::repo::slugify_repo_name`. Once the physical layout is
+    /// uid-keyed this is the only place a repo's path lives — renaming/
+    /// moving becomes rewriting this field plus the `repo-name` index,
+    /// never relocating any git data.
     #[serde(default)]
     pub full_name: String,
+    /// Free-text public name shown as the repo's page heading — any
+    /// characters, unlike `full_name`. `None` for a repo that predates this
+    /// field: `domain::repo::backfill_slug` fills it in (from the current
+    /// `full_name`'s local segment) the first time that repo is loaded by a
+    /// uid-based listing, since it can't be reached by path if `full_name`
+    /// itself has since become invalid under `sanitize_path`'s charset.
+    #[serde(default)]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     /// The user or group this repo belongs to — a uid, not a name, so a

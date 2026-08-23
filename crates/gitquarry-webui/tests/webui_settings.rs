@@ -16,6 +16,7 @@ fn each_section_wraps_the_flash_and_form_in_one_async_target() {
         ("mirrors-cache", "/_settings/mirrors-cache"),
         ("external-mirrors", "/_settings/external-mirrors"),
         ("oidc", "/_settings/oidc"),
+        ("backup", "/_settings/backup"),
     ];
     for (id, action) in cases {
         let html = settings_body(id, &settings, "tok", None, gitquarry_i18n::Locale::En).into_string();
@@ -53,6 +54,7 @@ fn settings_page_uses_the_standard_sidebar_layout() {
         ("mirrors-cache", "/_settings/mirrors-cache", "mirrors cache"),
         ("external-mirrors", "/_settings/external-mirrors", "external mirrors"),
         ("oidc", "/_settings/oidc", "OIDC login"),
+        ("backup", "/_settings/backup", "backup"),
     ] {
         assert!(
             html.contains(&format!(r##"<a href="{href}">{label}</a>"##))

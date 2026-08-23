@@ -11,7 +11,6 @@ use crate::webui::{
 use anyhow::{Context, Result};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
-use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::{Group, User};
 use gitquarry_core::git;
 use gitquarry_core::storage;
@@ -110,12 +109,15 @@ pub(super) async fn render_about(
     // etag (source deleted) or errors just omits the line below, instead of
     // rendering a dead link. Recovers the source's current name too, so
     // this line survives the source being renamed any number of times.
-    let forked_from_name = match &config.forked_from {
+    let forked_from = match &config.forked_from {
         Some(uid) => storage::settings::get_repo_config(ctx.backend().as_ref(), uid.as_str(), &ctx.cipher)
             .await
             .ok()
             .filter(|(_, etag)| etag.is_some())
-            .map(|(source_config, _etag)| source_config.full_name),
+            .map(|(source_config, _etag)| {
+                let label = crate::webui::repo_label(&source_config.full_name, source_config.display_name.as_deref());
+                (source_config.full_name, label)
+            }),
         None => None,
     };
     // Fetched once and threaded through both calls below: `render_readme`
@@ -153,8 +155,8 @@ pub(super) async fn render_about(
                         " · "
                         a href=(raw_link("snapshot", repo_name, rev).fmt("zip").to_string()) { (gitquarry_i18n::shared::repo::snapshot_zip(locale)) }
                     }
-                    @if let Some(source_name) = &forked_from_name {
-                        p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_name) } }
+                    @if let Some((source_name, source_label)) = &forked_from {
+                        p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_label) } }
                     }
 
                     @if let Some(readme) = &readme {
@@ -413,23 +415,30 @@ async fn render_readme_from_entries(
     Ok(Some(format!("<div id=\"readme\" class=\"readme\">{rendered}</div>")))
 }
 
-/// The star/watch/fork count row alone, `id="community-stats"` so the
-/// star/watch buttons' async toggle response (see `actions.rs`'s
+/// The star/watch/fork count row alone, `id="community-stats-{repo_uid}"` so
+/// the star/watch buttons' async toggle response (see `actions.rs`'s
 /// `data-async-extra-target`) can replace just this row in place — without
 /// an id to swap by, a click on either button would flip the button's own
 /// label but leave this row showing the pre-toggle count until a full
 /// reload, since the button (in the header) and this row (in the sidebar)
 /// are two different subtrees the single-target `data-async` swap can't
-/// reach at once.
-pub(crate) fn community_stats_html(config: &RepoConfig, locale: gitquarry_i18n::Locale) -> Markup {
+/// reach at once. `repo_uid` in every id here, not a fixed string: this is
+/// the entity `actions.rs`'s buttons resolve against too, so a page that
+/// ever ends up rendering more than one repo's stats (a list, not just this
+/// single-repo sidebar) still bumps the right one's count.
+pub(crate) fn community_stats_html(
+    config: &RepoConfig,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
     html! {
-        div id="community-stats" class="community-stats" {
-            // `id="star-count-value"`/`id="watcher-count-value"` around the
-            // number alone (not the icon/label): `actions.rs`'s
+        div id=(format!("community-stats-{repo_uid}")) class="community-stats" {
+            // `id="star-count-value-{repo_uid}"`/`"watcher-count-value-{repo_uid}"`
+            // around the number alone (not the icon/label): `actions.rs`'s
             // `data-optimistic-target` needs to bump just the digits, in
             // place, the instant star/watch is clicked.
-            span class="community-stat" { (icons::star()) " " span id="star-count-value" { (config.star_count) } " " (t::stars_label(locale)) }
-            span class="community-stat" { (icons::eye()) " " span id="watcher-count-value" { (config.watcher_count) } " " (t::watchers_label(locale)) }
+            span class="community-stat" { (icons::star()) " " span id=(format!("star-count-value-{repo_uid}")) { (config.star_count) } " " (t::stars_label(locale)) }
+            span class="community-stat" { (icons::eye()) " " span id=(format!("watcher-count-value-{repo_uid}")) { (config.watcher_count) } " " (t::watchers_label(locale)) }
             span class="community-stat" { (icons::fork()) " " (config.fork_count) " " (t::forks_label(locale)) }
         }
     }
@@ -476,13 +485,12 @@ async fn render_sidebar(
         None => None,
     };
     let viewer = login::current_user(ctx, headers).await;
-    // Only needed now for the fork form's namespace list ("every group I
-    // can manage") — the star count no longer depends on this fetch at all,
-    // and enumerating groups is unavoidable here: there's no reverse index
-    // from user to "groups I own", so the fork form has to look at all of
-    // them.
+    // Only needed for the fork form's namespace list ("every group I can
+    // manage") — read from the `user-group` index rather than by
+    // enumerating every group in the bucket, which is what this had to do
+    // before that index existed.
     let groups = match &viewer {
-        Some(_) => Some(access::list_all_groups(&ctx.backend(), &ctx.cipher).await?),
+        Some(me) => Some(crate::auth::web::groups::visible_groups(ctx, me).await?),
         None => None,
     };
     let release_count = resolved.remote.list_release_tags().await?.len();
@@ -510,7 +518,7 @@ async fn render_sidebar(
             // follows that same "only show what exists" convention for
             // readme/contributing/license), then a plain vertical list of
             // icon+link rows instead of a two-column label/value table.
-            (community_stats_html(config, locale))
+            (community_stats_html(config, &resolved.uid, locale))
             ul class="community-list" {
                 @if readme_exists {
                     li { (icons::book()) " " a href="#readme" { (t::readme_label(locale)) } }
@@ -726,8 +734,8 @@ fn render_fork_form(
             input type="hidden" name="source" value=(repo_name);
             select name="namespace" {
                 option value=(viewer.username) { (viewer.username) " " (t::you_suffix(locale)) }
-                @for group in groups.iter().filter(|g| viewer.is_admin || g.owners.contains(&viewer.uid)) {
-                    option value=(group.name) { (group.name) }
+                @for name in crate::auth::web::groups::manageable_group_names(groups, &viewer.uid, viewer.is_admin) {
+                    option value=(name) { (name) }
                 }
             }
             input name="name" size="20" value=(name_value) placeholder=(t::name_placeholder(locale));

@@ -12,13 +12,16 @@
 //! other than the account owner, see that module's own doc comment.
 //! [`login`] (`/_login`, `/_login_oidc`, `/_callback`, `/_logout`, session
 //! cookies), [`profile`] (`/_profile/<username>`, public repo listing),
-//! [`users`] (`/_users`, admin), [`groups`] (`/_groups`, shared namespaces).
+//! [`users`] (`/_users`, admin), [`groups`] (`/_groups`, shared namespaces),
+//! [`group`] (`/_group/<path>`, one group's own public page — repos,
+//! subgroups, members).
 //! Routed from [`crate::webui::run_server`]'s own route table, same as any
 //! other `webui::*` handler module.
 
 pub mod appearance;
 pub mod avatar;
 pub mod favorites;
+pub mod group;
 pub mod groups;
 pub mod keys;
 pub mod login;

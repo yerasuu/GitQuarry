@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
+use tracing::warn;
 
 /// Name of the object that acts as a repo's source of truth: refs + HEAD.
 /// Always updated via compare-and-swap on its etag.
@@ -561,9 +562,12 @@ async fn fetch_decrypted(backend: &dyn Backend, key: &str, cipher: &Cipher, plai
         .await;
         match result {
             Ok(()) => return Ok(()),
-            Err(e) if attempt < LOCAL_IO_RETRIES => eprintln!(
-                "warning: attempt {attempt}/{LOCAL_IO_RETRIES} to download {key} \
-                 failed, retrying: {e:#}"
+            Err(e) if attempt < LOCAL_IO_RETRIES => warn!(
+                attempt,
+                max_attempts = LOCAL_IO_RETRIES,
+                %key,
+                error = %e,
+                "download failed, retrying"
             ),
             Err(e) => return Err(e),
         }
@@ -589,9 +593,12 @@ async fn seal_and_upload(backend: &dyn Backend, key: &str, cipher: &Cipher, plai
         .await;
         match result {
             Ok(()) => return Ok(()),
-            Err(e) if attempt < LOCAL_IO_RETRIES => eprintln!(
-                "warning: attempt {attempt}/{LOCAL_IO_RETRIES} to upload {key} \
-                 failed, retrying: {e:#}"
+            Err(e) if attempt < LOCAL_IO_RETRIES => warn!(
+                attempt,
+                max_attempts = LOCAL_IO_RETRIES,
+                %key,
+                error = %e,
+                "upload failed, retrying"
             ),
             Err(e) => return Err(e),
         }

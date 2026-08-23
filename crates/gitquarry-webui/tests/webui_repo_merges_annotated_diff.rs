@@ -1,9 +1,18 @@
 use axum::http::HeaderMap;
 use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MrComment};
+use gitquarry_core::storage::uid::Uid;
 use gitquarry_i18n::Locale;
 use gitquarry_webui::webui::repo::merges::annotated_diff::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::OnceLock;
+
+/// One fixture uid, shared by every `view`/`view_as` call — its value is
+/// arbitrary, only its identity as *the same* uid across a test matters.
+fn fixture_repo_uid() -> &'static Uid {
+    static UID: OnceLock<Uid> = OnceLock::new();
+    UID.get_or_init(|| Uid::from("test-repo-uid".to_string()))
+}
 
 /// Written as a `concat!` rather than a `\`-continued literal: the leading
 /// space on a context line is significant, and a line continuation eats it.
@@ -49,6 +58,7 @@ fn view_as<'a>(
     View {
         comment_bodies: bodies,
         repo_name: "team/proj",
+        repo_uid: fixture_repo_uid(),
         number: 1,
         can_comment,
         active,

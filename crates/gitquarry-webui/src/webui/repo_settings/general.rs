@@ -30,7 +30,7 @@ pub(super) async fn save_conf(
     form: &RepoConfForm,
     actor: &str,
 ) -> Result<FlashOutcome, AppError> {
-    let namespace = name.split_once('/').map(|(ns, _)| ns).unwrap_or(name);
+    let namespace = name.rsplit_once('/').map(|(ns, _)| ns).unwrap_or(name);
     let new_owner = domain::repo::resolve_owner_ref(ctx, namespace).await?;
     let visibility = match form.visibility.as_str() {
         "limited" => Visibility::Limited,

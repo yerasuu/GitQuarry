@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 // Which storage driver a bucket uses, and that driver's connection
 // parameters, now live in the `s3db` crate (it needs them to build a
@@ -207,12 +208,10 @@ pub fn warn_if_world_readable(path: &Path) {
         if let Ok(meta) = std::fs::metadata(path) {
             let mode = meta.permissions().mode();
             if mode & 0o077 != 0 {
-                eprintln!(
-                    "gitquarry: warning: {} has permissions {:o} and holds credentials; \
-                     consider `chmod 600 {}`",
-                    path.display(),
-                    mode & 0o777,
-                    path.display()
+                warn!(
+                    path = %path.display(),
+                    mode = %format_args!("{:o}", mode & 0o777),
+                    "config file holds credentials but is not private; consider `chmod 600`"
                 );
             }
         }

@@ -9,6 +9,7 @@ use gitquarry_core::mirror::MirrorSyncHook;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 /// Bound on [`MirrorExternalHook::sync_before_serving`]'s wait — an
 /// external forge being slow or unreachable must never turn into an
@@ -71,14 +72,14 @@ impl MirrorSyncHook for MirrorExternalHook {
         {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                eprintln!(
-                    "gitquarry: warning: pre-serve mirror sync for {} failed, serving with what's local: {e:#}",
+                warn!(
+                    "pre-serve mirror sync for {} failed, serving with what's local: {e:#}",
                     resolved.uid
                 );
             }
             Err(_elapsed) => {
-                eprintln!(
-                    "gitquarry: warning: pre-serve mirror sync for {} timed out after {SYNC_BEFORE_SERVE_TIMEOUT:?}, \
+                warn!(
+                    "pre-serve mirror sync for {} timed out after {SYNC_BEFORE_SERVE_TIMEOUT:?}, \
                      serving with what's local",
                     resolved.uid
                 );

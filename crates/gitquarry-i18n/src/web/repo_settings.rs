@@ -158,6 +158,10 @@ msg!(move_repo_prose_intro() {
 msg!(new_namespace_label() { Locale::Es => "nuevo namespace", Locale::En => "new namespace" });
 msg!(new_name_label() { Locale::Es => "nuevo nombre", Locale::En => "new name" });
 msg!(new_name_placeholder() { Locale::Es => "proyecto", Locale::En => "project" });
+msg!(new_name_hint() {
+    Locale::Es => "cualquier texto vale; la url se genera a partir de este nombre.",
+    Locale::En => "any text works; the url is generated from this name."
+});
 msg!(confirm_label() { Locale::Es => "confirmar", Locale::En => "confirm" });
 msg!(move_button() { Locale::Es => "mover", Locale::En => "move" });
 

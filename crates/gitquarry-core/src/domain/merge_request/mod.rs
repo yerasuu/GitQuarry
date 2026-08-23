@@ -30,6 +30,7 @@ use anyhow::{Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 fn now_stamp() -> String {
     let secs = SystemTime::now()
@@ -424,6 +425,12 @@ pub async fn edit_metadata(
             gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
         );
     };
+    if mr.status != MrStatus::Open {
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_wrong_status(locale)
+        );
+    }
     mr.title = title;
     mr.description = edit.description.to_string();
     mr.labels = labels;
@@ -1192,8 +1199,9 @@ pub async fn merge(
     if merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, mr_etag.as_deref()).await?
         == Cas::Conflict
     {
-        eprintln!(
-            "gitquarry: warning: merge request #{number} merged but its metadata CAS conflicted (concurrent edit) — status may not show as merged"
+        warn!(
+            number,
+            "merge request merged but its metadata CAS conflicted (concurrent edit) — status may not show as merged"
         );
     }
 

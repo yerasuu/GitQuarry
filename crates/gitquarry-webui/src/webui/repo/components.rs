@@ -653,6 +653,7 @@ pub(crate) async fn resolve_number_mentions(
 pub(crate) fn comment_edit_delete_controls(
     mutation_prefix: &str,
     repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
     number: u64,
     comment_id: &str,
     body: &str,
@@ -672,6 +673,7 @@ pub(crate) fn comment_edit_delete_controls(
                 form method="post" action=(format!("{mutation_prefix}/comment/edit")) {
                     (PreEscaped(&csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
+                    input type="hidden" name="repo_uid" value=(repo_uid);
                     input type="hidden" name="number" value=(number);
                     input type="hidden" name="comment_id" value=(comment_id);
                     textarea name="body" rows="4" cols="60" { (body) }
@@ -683,6 +685,7 @@ pub(crate) fn comment_edit_delete_controls(
             form method="post" action=(format!("{mutation_prefix}/comment/delete")) style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
                 (PreEscaped(&csrf_html))
                 input type="hidden" name="repo" value=(repo_name);
+                input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);
                 input type="hidden" name="comment_id" value=(comment_id);
                 button type="submit" { (t::delete_comment_button(locale)) }

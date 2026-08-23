@@ -299,6 +299,11 @@ pub(crate) fn field(label: &str, hint: Option<&str>, control: maud::Markup) -> m
 /// own doc comment): adding `locale` as an 8th positional arg would trip
 /// clippy's `too_many_arguments`.
 pub(crate) struct HeaderExtras<'a> {
+    /// The repo's free-text public name (`RepoConfig::display_name`) — shown
+    /// as the page heading in place of the raw slug when set. `None` for a
+    /// repo not yet backfilled (`domain::repo::backfill_slug`) or predating
+    /// the field, in which case [`header_bar`] falls back to `bare_name`.
+    pub(crate) display_name: Option<&'a str>,
     pub(crate) description: Option<&'a str>,
     pub(crate) archived: bool,
     pub(crate) visibility: gitquarry_core::storage::entities::Visibility,
@@ -335,6 +340,7 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     // (always `<namespace>/<repo>`, see [`gitquarry_core::validate`]'s own
     // invariant), not from this separately-resolved display name.
     let HeaderExtras {
+        display_name,
         description,
         archived,
         visibility,
@@ -414,8 +420,9 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     // separately-resolved owner string through just for this.
     let (owner_slug, bare_name) = repo_name.rsplit_once('/').unwrap_or(("", repo_name));
     let owner_slug = (!owner_slug.is_empty()).then_some(owner_slug);
+    let title = display_name.unwrap_or(bare_name);
     maud::html! {
-        (title_bar(bare_name, owner_slug, badge, Some(&atom_link), ref_switcher, sub))
+        (title_bar(title, owner_slug, badge, Some(&atom_link), ref_switcher, sub))
         (below_header)
         (tabs_bar(&tabs, active, &menu_extra, &chrome::page_tabs_nav_label(locale), &chrome::page_tabs_toggle_label(locale)))
         (sub_tabs)
@@ -423,11 +430,16 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     .into_string()
 }
 
+/// `display_name`: the repo's `RepoConfig::display_name`, rendered as the
+/// first crumb in place of the slug the crumb's own href still uses — same
+/// split [`header_bar`] makes for the title above it.
+///
 /// `leaf_view`: view to use for the link of the last segment (the actual
 /// file/folder being shown) — "tree" while navigating folders, "blob" while
 /// viewing a file. Intermediate segments are always folders.
 pub(crate) fn breadcrumbs(
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     leaf_view: &str,
@@ -460,7 +472,7 @@ pub(crate) fn breadcrumbs(
         nav aria-label=(chrome::breadcrumb_nav_label(locale)) {
             ol class="breadcrumb" {
                 li class="breadcrumb-item" {
-                    a href=(repo_link(repo_name, "tree", rev).to_string()) { (repo_name) }
+                    a href=(repo_link(repo_name, "tree", rev).to_string()) { (super::repo_label(repo_name, display_name)) }
                 }
                 @for (i, (href, seg)) in crumbs.iter().enumerate() {
                     li class="breadcrumb-sep" aria-hidden="true" { "/" }
@@ -493,6 +505,24 @@ pub(crate) fn permission_badge_class(perm: gitquarry_core::auth::entities::Permi
         Permission::Developer => "decoration decoration-developer",
         Permission::Maintainer => "decoration decoration-maintainer",
         Permission::Owner => "badge accent",
+    }
+}
+
+/// The translated name of a [`gitquarry_core::auth::entities::Permission`]
+/// tier — shared by every page that shows a tier to a reader
+/// (`auth::web::groups`' member rows, `auth::web::group`'s member list), so
+/// the five words are translated in exactly one place.
+pub(crate) fn permission_label(
+    perm: gitquarry_core::auth::entities::Permission,
+    locale: gitquarry_i18n::Locale,
+) -> String {
+    use gitquarry_core::auth::entities::Permission;
+    match perm {
+        Permission::Guest => gitquarry_i18n::web::auth::groups::groups_permission_guest(locale),
+        Permission::Reporter => gitquarry_i18n::web::auth::groups::groups_permission_reporter(locale),
+        Permission::Developer => gitquarry_i18n::web::auth::groups::groups_permission_developer(locale),
+        Permission::Maintainer => gitquarry_i18n::web::auth::groups::groups_permission_maintainer(locale),
+        Permission::Owner => gitquarry_i18n::web::auth::groups::groups_permission_owner(locale),
     }
 }
 
