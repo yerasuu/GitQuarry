@@ -86,9 +86,9 @@ pub(crate) async fn handler_groups_get(
 pub(crate) async fn visible_groups(
     ctx: &gitquarry_core::app::AppContext,
     me: &User,
-) -> Result<Vec<gitquarry_core::auth::entities::Group>, AppError> {
+) -> anyhow::Result<Vec<gitquarry_core::auth::entities::Group>> {
     if me.is_admin {
-        return Ok(access::list_all_groups(&ctx.backend(), &ctx.cipher).await?);
+        return access::list_all_groups(&ctx.backend(), &ctx.cipher).await;
     }
     let direct = access::list_groups_for_user(ctx.backend().as_ref(), &ctx.cipher, &me.uid).await?;
     let mut groups = Vec::new();
@@ -479,11 +479,7 @@ pub fn render_groups_page(
     let PageChrome { csrf, message, locale } = chrome;
     // Every group this viewer may nest a subgroup under. Full paths, so the
     // `<option>` value is exactly what `full_group_path` prepends.
-    let manageable: Vec<&str> = groups
-        .iter()
-        .filter(|g| is_admin || g.role_of(viewer) >= Some(Permission::Owner))
-        .map(|g| g.name.as_str())
-        .collect();
+    let manageable = manageable_group_names(groups, viewer, is_admin);
     html! {
         p class="muted" {
             (gitquarry_i18n::web::auth::groups::groups_prose_stored_in(locale)) code { ".conf/groups/<name>.json" }
@@ -526,6 +522,39 @@ pub fn render_groups_page(
             }
         }
     }
+}
+
+/// Every group in `groups` the viewer may create inside — a new subgroup, a
+/// new repo, a fork's destination. That is `Permission::Owner` in the group
+/// itself *or* in any group it is nested under, since
+/// `access::can_manage_group` (which the POST handlers actually enforce)
+/// walks the same chain: an `Owner` of `acme` runs `acme/team` too.
+///
+/// Chain membership is read off the names rather than fetched: a group's
+/// name is its full path, so an ancestor of `acme/team` is exactly a group
+/// whose name is a `/`-boundary prefix of it. `groups` is what
+/// [`visible_groups`] returned, which already contains every ancestor the
+/// viewer belongs to.
+///
+/// `pub` (not `pub(crate)`) so `tests/auth_web_groups.rs`, which links this
+/// crate as an external consumer, can exercise the chain rule directly —
+/// same reasoning as the `render_*` helpers around it.
+pub fn manageable_group_names<'a>(groups: &'a [Group], viewer: &Uid, is_admin: bool) -> Vec<&'a str> {
+    let owned: Vec<&str> = groups
+        .iter()
+        .filter(|g| g.role_of(viewer) >= Some(Permission::Owner))
+        .map(|g| g.name.as_str())
+        .collect();
+    groups
+        .iter()
+        .filter(|g| {
+            is_admin
+                || owned
+                    .iter()
+                    .any(|owned| g.name == *owned || g.name.starts_with(&format!("{owned}/")))
+        })
+        .map(|g| g.name.as_str())
+        .collect()
 }
 
 /// The path `add_group` is about to claim: a group's stored `name` is its

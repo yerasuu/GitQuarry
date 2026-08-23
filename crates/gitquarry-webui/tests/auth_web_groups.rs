@@ -231,3 +231,45 @@ fn groups_page_offers_a_parent_only_where_the_viewer_may_create() {
     .into_string();
     assert!(!member_view.contains(r#"value="add_group""#));
 }
+
+/// The bar for "may create here" is `Owner` in the group *or* in any group
+/// above it — the same chain `access::can_manage_group` enforces on the
+/// POST, so the picker can't offer less (a missing option) or more (an
+/// option every submit rejects) than the server accepts.
+#[test]
+fn manageable_group_names_follows_the_ownership_chain() {
+    let alice = Uid::new();
+    let bob = Uid::new();
+    let groups = vec![
+        Group {
+            name: "acme".to_string(),
+            members: BTreeMap::from([
+                (alice.clone(), Permission::Owner),
+                (bob.clone(), Permission::Maintainer),
+            ]),
+            ..Default::default()
+        },
+        Group {
+            name: "acme/team".to_string(),
+            ..Default::default()
+        },
+        // Not a subgroup of `acme` — a sibling whose name merely starts with
+        // the same letters, which a plain `starts_with` would wrongly admit.
+        Group {
+            name: "acmeworks".to_string(),
+            ..Default::default()
+        },
+        Group {
+            name: "widgets".to_string(),
+            ..Default::default()
+        },
+    ];
+    assert_eq!(
+        manageable_group_names(&groups, &alice, false),
+        vec!["acme", "acme/team"]
+    );
+    // `Maintainer` manages each repo's settings, never the membership that
+    // hands those repos out — so nowhere to create.
+    assert!(manageable_group_names(&groups, &bob, false).is_empty());
+    assert_eq!(manageable_group_names(&groups, &bob, true).len(), 4);
+}

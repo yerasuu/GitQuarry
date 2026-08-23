@@ -62,7 +62,12 @@ pub(crate) async fn handler_repos_get(
     let page = html! {
         h3 { (gitquarry_i18n::web::repos::repos_title(locale)) }
         (tab_links(None, &tabs(locale), tab))
-        p class="muted" { a href="/_new" { (gitquarry_i18n::web::repos::repos_new_link(locale)) } }
+        // `/_new` is admin-only (repo creation is an operator action on this
+        // instance, see `settings::web::require_admin`) — linking it to
+        // everyone else would just hand them a 403.
+        @if me.is_admin {
+            p class="muted" { a href="/_new" { (gitquarry_i18n::web::repos::repos_new_link(locale)) } }
+        }
         (body)
     }
     .into_string();
