@@ -15,6 +15,7 @@ use s3db::Collection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 /// Collection-prefix root (no trailing slash — [`Collection::new_owned`]
 /// adds the `/` itself). One [`Collection`] per month bucket, built at
@@ -188,12 +189,9 @@ pub async fn record(
     match coll.put(backend, cipher, &name, &entry, None).await {
         Ok(Cas::Ok) => {}
         Ok(Cas::Conflict) => {
-            eprintln!(
-                "gitquarry: warning: key collision in audit log ({}), entry lost",
-                coll.key(&name).unwrap_or(name)
-            )
+            warn!(key = %coll.key(&name).unwrap_or(name), "key collision in audit log, entry lost")
         }
-        Err(e) => eprintln!("gitquarry: warning: couldn't write audit log: {e:#}"),
+        Err(e) => warn!(error = %e, "couldn't write audit log"),
     }
 }
 

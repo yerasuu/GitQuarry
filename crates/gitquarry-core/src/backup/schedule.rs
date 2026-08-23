@@ -16,6 +16,7 @@ use crate::storage::entities::ServerSettings;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::{info, warn};
 
 /// How often a backup runs when nothing says otherwise.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -43,7 +44,7 @@ pub fn interval(settings: &ServerSettings) -> Duration {
         .and_then(|raw| match crate::mirror::gc::parse_age(raw) {
             Ok(d) => Some(d),
             Err(e) => {
-                eprintln!("gitquarry: warning: invalid backup_interval {raw:?} ({e:#}), using the default");
+                warn!(backup_interval = ?raw, error = %e, "invalid backup_interval, using the default");
                 None
             }
         })
@@ -100,7 +101,7 @@ pub async fn run_for(
     // Best-effort: a report collection that didn't get trimmed is untidy,
     // never wrong, and must not turn a successful backup into a failed one.
     if let Err(e) = report::prune_old_runs(backend.as_ref(), source.cipher).await {
-        eprintln!("gitquarry: warning: couldn't prune old backup run records: {e:#}");
+        warn!(error = %e, "couldn't prune old backup run records");
     }
     Ok(run)
 }
@@ -180,9 +181,11 @@ async fn execute(
         )
         .await?;
         if outcome.deleted > 0 || outcome.noted > 0 {
-            println!(
-                "gitquarry: backup retention: {} deleted, {} newly orphaned, {} back at the source",
-                outcome.deleted, outcome.noted, outcome.cleared
+            info!(
+                deleted = outcome.deleted,
+                noted = outcome.noted,
+                cleared = outcome.cleared,
+                "backup retention applied"
             );
         }
     }
@@ -207,15 +210,15 @@ pub async fn run_periodic(ctx: Arc<AppContext>) {
             Ok(false) => continue,
             Ok(true) => match run_once(&ctx, Trigger::Scheduled).await {
                 Ok(run) if run.outcome == Outcome::Failed => {
-                    eprintln!(
-                        "gitquarry: warning: scheduled backup failed: {}",
-                        run.error.as_deref().unwrap_or("no reason recorded")
+                    warn!(
+                        reason = run.error.as_deref().unwrap_or("no reason recorded"),
+                        "scheduled backup failed"
                     );
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("gitquarry: warning: scheduled backup couldn't be recorded: {e:#}"),
+                Err(e) => warn!(error = %e, "scheduled backup couldn't be recorded"),
             },
-            Err(e) => eprintln!("gitquarry: warning: couldn't tell whether a backup is due: {e:#}"),
+            Err(e) => warn!(error = %e, "couldn't tell whether a backup is due"),
         }
     }
 }

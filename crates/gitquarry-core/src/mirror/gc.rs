@@ -14,6 +14,7 @@ use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use tracing::{info, warn};
 
 /// Touched every time a mirror is opened; its mtime is the "last queried"
 /// signal the sweep uses. A dedicated file instead of one of git's own
@@ -90,7 +91,7 @@ pub async fn run_periodic_sweep(ctx: Arc<AppContext>) {
     loop {
         ticker.tick().await;
         if let Err(e) = sweep_once(&ctx).await {
-            eprintln!("gitquarry: warning: mirror sweep failed: {e:#}");
+            warn!(error = %e, "mirror sweep failed");
         }
     }
 }
@@ -117,7 +118,7 @@ pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
     let mirrors = match list_mirrors(&ctx.mirrors_root).await {
         Ok(mirrors) => mirrors,
         Err(e) => {
-            eprintln!("gitquarry: warning: couldn't list mirrors to prewarm, continuing: {e:#}");
+            warn!(error = %e, "couldn't list mirrors to prewarm, continuing");
             return;
         }
     };
@@ -129,7 +130,7 @@ pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
     if recent.is_empty() {
         return;
     }
-    eprintln!("gitquarry: prewarming {} recently-used mirror(s)", recent.len());
+    info!(count = recent.len(), "prewarming recently-used mirrors");
 
     stream::iter(recent)
         .for_each_concurrent(Some(PREWARM_CONCURRENCY), |m| {
@@ -142,10 +143,7 @@ pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
                 let _guard = ctx.locks.lock(&m.repo_name).await;
                 let remote = ctx.remote_for_uid(&crate::storage::uid::Uid::from(m.repo_name.clone()));
                 if let Err(e) = crate::mirror::sync_bare_repo_from_s3(&remote, &m.path).await {
-                    eprintln!(
-                        "gitquarry: warning: prewarm sync failed for mirror '{}': {e:#}",
-                        m.repo_name
-                    );
+                    warn!(repo = %m.repo_name, error = %e, "prewarm sync failed for mirror");
                 }
             }
         })
@@ -205,14 +203,12 @@ async fn evict(ctx: &AppContext, mirror: &MirrorInfo) {
         return;
     }
     match tokio::fs::remove_dir_all(&mirror.path).await {
-        Ok(()) => eprintln!(
-            "gitquarry: mirror '{}' cleaned from cache ({} bytes freed)",
-            mirror.repo_name, mirror.size_bytes
-        ),
-        Err(e) => eprintln!(
-            "gitquarry: warning: couldn't clean up mirror of '{}' ({}): {e:#}",
-            mirror.repo_name,
-            mirror.path.display()
+        Ok(()) => info!(repo = %mirror.repo_name, bytes_freed = mirror.size_bytes, "mirror cleaned from cache"),
+        Err(e) => warn!(
+            repo = %mirror.repo_name,
+            path = %mirror.path.display(),
+            error = %e,
+            "couldn't clean up mirror"
         ),
     }
 }
