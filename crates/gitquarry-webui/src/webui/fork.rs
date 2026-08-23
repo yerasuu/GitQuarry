@@ -18,6 +18,7 @@ use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::auth::access;
+use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::domain;
 use gitquarry_core::storage::entities::OwnerRef;
 use gitquarry_core::validate;
@@ -98,7 +99,7 @@ async fn fork_error_page(
             input type="hidden" name="source" value=(source);
             select name="namespace" {
                 option value=(me.username) selected[namespace == me.username] { (me.username) }
-                @for group in groups.iter().filter(|g| me.is_admin || g.owners.contains(&me.uid)) {
+                @for group in groups.iter().filter(|g| me.is_admin || g.role_of(&me.uid) >= Some(Permission::Owner)) {
                     option value=(group.name) selected[namespace == group.name] { (group.name) }
                 }
             }

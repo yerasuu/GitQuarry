@@ -1,9 +1,20 @@
 use gitquarry_webui::auth::web::groups::*;
-use std::collections::BTreeSet;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use gitquarry_core::auth::entities::{Group, Permission, Team};
 use gitquarry_core::storage::uid::Uid;
+
+fn names_with(uid: &Uid, username: &str) -> HashMap<Uid, String> {
+    HashMap::from([(uid.clone(), username.to_string())])
+}
+
+fn group_with(name: &str, members: &[(&Uid, Permission)]) -> Group {
+    Group {
+        name: name.to_string(),
+        members: members.iter().map(|(u, p)| ((*u).clone(), *p)).collect(),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn render_groups_page_echoes_the_search_query_in_the_input() {
@@ -12,7 +23,6 @@ fn render_groups_page_echoes_the_search_query_in_the_input() {
         &root,
         true,
         &[],
-        &HashMap::new(),
         &HashMap::new(),
         "acme",
         PageChrome {
@@ -25,77 +35,15 @@ fn render_groups_page_echoes_the_search_query_in_the_input() {
     assert!(html.contains(r#"input name="q" value="acme""#));
 }
 
-/// `repos` labels double as deterministic test uids via `Uid`'s
-/// `From<String>` — the matching `repo_names` map (built by
-/// [`repo_names_with`]) has to use the same raw label as its key.
-fn team(name: &str, members: &[&Uid], permission: Permission, repos: Option<&[&str]>) -> Team {
-    Team {
-        name: name.to_string(),
-        members: members.iter().map(|&m| m.clone()).collect(),
-        permission,
-        repos: repos.map(|rs| rs.iter().map(|r| Uid::from(r.to_string())).collect()),
-    }
-}
-
-fn names_with(uid: &Uid, username: &str) -> HashMap<Uid, String> {
-    HashMap::from([(uid.clone(), username.to_string())])
-}
-
-fn repo_names_with(label: &str, full_name: &str) -> HashMap<Uid, String> {
-    HashMap::from([(Uid::from(label.to_string()), full_name.to_string())])
-}
-
-#[test]
-fn render_team_shows_scope_and_members() {
-    let alice = Uid::new();
-    let t = team("frontend", &[&alice], Permission::Developer, Some(&["web"]));
-    let html = render_team(
-        "acme",
-        &t,
-        &names_with(&alice, "alice"),
-        &repo_names_with("web", "acme/web"),
-        "tok",
-        gitquarry_i18n::Locale::Es,
-    )
-    .into_string();
-    assert!(html.contains("alice"));
-    assert!(html.contains("desarrollador"));
-    assert!(html.contains("web"));
-    assert!(html.contains(r#"value="remove_team_member""#));
-}
-
-#[test]
-fn render_team_shows_all_repos_when_unscoped() {
-    let t = team("everyone", &[], Permission::Reporter, None);
-    assert!(
-        render_team(
-            "acme",
-            &t,
-            &HashMap::new(),
-            &HashMap::new(),
-            "tok",
-            gitquarry_i18n::Locale::Es
-        )
-        .into_string()
-        .contains("todos los repos del grupo")
-    );
-}
-
 #[test]
 fn render_group_hides_delete_button_for_non_admin() {
-    let group = Group {
-        uid: Default::default(),
-        name: "acme".to_string(),
-        description: None,
-        owners: BTreeSet::new(),
-        teams: vec![],
-        storage_quota_bytes: None,
-    };
+    let group = group_with("acme", &[]);
+    let viewer = Uid::new();
     assert!(
         render_group(
             &group,
+            &viewer,
             true,
-            &HashMap::new(),
             &HashMap::new(),
             "tok",
             gitquarry_i18n::Locale::Es
@@ -106,8 +54,8 @@ fn render_group_hides_delete_button_for_non_admin() {
     assert!(
         !render_group(
             &group,
+            &viewer,
             false,
-            &HashMap::new(),
             &HashMap::new(),
             "tok",
             gitquarry_i18n::Locale::Es
@@ -117,68 +65,104 @@ fn render_group_hides_delete_button_for_non_admin() {
     );
 }
 
-/// Regression: every form on this page — including the row-level
-/// `remove_owner`, which used to be deliberately left out of the async
-/// swap (`group_action_row`'s own doc comment, before
-/// `handler_groups_post` learned to async-render every action, not just
-/// `delete_group`/`delete_team`/`remove_team_member`) — now targets the
-/// same `#groups-list`. Losing any one of them quietly brings back the
-/// browser's "confirm resubmission" dialog on F5 for that specific action.
+/// A member's tier is shown to everyone in the group, but only a viewer who
+/// may manage it gets the forms that change it — otherwise a `Developer`
+/// would be shown controls every submit is going to reject with a 403.
 #[test]
-fn every_group_and_team_form_targets_groups_list() {
+fn render_group_shows_member_forms_only_to_a_manager() {
     let alice = Uid::new();
-    let t = team("frontend", &[&alice], Permission::Developer, None);
-    let mut owners = BTreeSet::new();
-    owners.insert(alice.clone());
-    let group = Group {
-        uid: Default::default(),
-        name: "acme".to_string(),
-        description: None,
-        owners,
-        teams: vec![t],
-        storage_quota_bytes: None,
-    };
-    let html = render_group(
+    let bob = Uid::new();
+    let group = group_with("acme", &[(&alice, Permission::Owner), (&bob, Permission::Developer)]);
+    let names = HashMap::from([(alice.clone(), "alice".to_string()), (bob.clone(), "bob".to_string())]);
+
+    let owner_view = render_group(&group, &alice, false, &names, "tok", gitquarry_i18n::Locale::En).into_string();
+    assert!(owner_view.contains(r#"value="set_member""#));
+    assert!(owner_view.contains(r#"value="remove_member""#));
+
+    let member_view = render_group(&group, &bob, false, &names, "tok", gitquarry_i18n::Locale::En).into_string();
+    assert!(member_view.contains("bob"));
+    assert!(!member_view.contains(r#"value="set_member""#));
+    assert!(!member_view.contains(r#"value="remove_member""#));
+}
+
+/// The legacy fields still grant access until `migrate-group-members` runs,
+/// and a team scoped to only some repos can't be shown as a group-wide role
+/// — so the page has to say so rather than render a member table that looks
+/// complete but isn't.
+#[test]
+fn render_group_warns_while_legacy_owners_or_teams_remain() {
+    let alice = Uid::new();
+    let mut group = group_with("acme", &[(&alice, Permission::Owner)]);
+    let clean = render_group(
         &group,
-        true,
+        &alice,
+        false,
         &names_with(&alice, "alice"),
-        &HashMap::new(),
         "tok",
         gitquarry_i18n::Locale::En,
     )
     .into_string();
-    // set_description, set_storage_quota, remove_owner (row), add_owner,
-    // add_team_member, delete_team, remove_team_member (row), add_team,
-    // delete_group.
+    assert!(!clean.contains("migrate-group-members"));
+
+    group.legacy_teams = vec![Team {
+        name: "frontend".to_string(),
+        members: BTreeSet::from([alice.clone()]),
+        permission: Permission::Developer,
+        repos: Some(BTreeSet::from([Uid::from("acme/web".to_string())])),
+    }];
+    let stale = render_group(
+        &group,
+        &alice,
+        false,
+        &names_with(&alice, "alice"),
+        "tok",
+        gitquarry_i18n::Locale::En,
+    )
+    .into_string();
+    assert!(stale.contains("migrate-group-members"));
+}
+
+/// Regression: every form on this page targets the same `#groups-list`.
+/// Losing any one of them quietly brings back the browser's "confirm
+/// resubmission" dialog on F5 for that specific action.
+#[test]
+fn every_group_form_targets_groups_list() {
+    let alice = Uid::new();
+    let group = group_with("acme", &[(&alice, Permission::Owner)]);
+    let html = render_group(
+        &group,
+        &alice,
+        true,
+        &names_with(&alice, "alice"),
+        "tok",
+        gitquarry_i18n::Locale::En,
+    )
+    .into_string();
+    // set_description, set_storage_quota, set_member (row), remove_member
+    // (row), set_member (add), delete_group.
     assert_eq!(
         html.matches(r##"data-async data-async-target="#groups-list""##).count(),
-        9,
+        6,
         "{html}"
     );
 }
 
+/// Membership, not ownership, is what puts a group on this page: a
+/// `Developer` has to be able to find the group they belong to. Anything
+/// they aren't a member of stays hidden unless they're a global admin.
 #[test]
-fn groups_page_lists_only_groups_the_viewer_owns_unless_admin() {
+fn groups_page_lists_the_groups_the_viewer_belongs_to_unless_admin() {
     let alice = Uid::new();
     let root = Uid::new();
-    let mut alice_owned = BTreeSet::new();
-    alice_owned.insert(alice.clone());
     let groups = vec![
         Group {
-            uid: Default::default(),
             name: "acme".to_string(),
-            description: None,
-            owners: alice_owned,
-            teams: vec![],
-            storage_quota_bytes: None,
+            members: BTreeMap::from([(alice.clone(), Permission::Developer)]),
+            ..Default::default()
         },
         Group {
-            uid: Default::default(),
             name: "widgets".to_string(),
-            description: None,
-            owners: BTreeSet::new(),
-            teams: vec![],
-            storage_quota_bytes: None,
+            ..Default::default()
         },
     ];
     let names = names_with(&alice, "alice");
@@ -187,7 +171,6 @@ fn groups_page_lists_only_groups_the_viewer_owns_unless_admin() {
         false,
         &groups,
         &names,
-        &HashMap::new(),
         "",
         PageChrome {
             csrf: "tok",
@@ -204,7 +187,6 @@ fn groups_page_lists_only_groups_the_viewer_owns_unless_admin() {
         true,
         &groups,
         &names,
-        &HashMap::new(),
         "",
         PageChrome {
             csrf: "tok",

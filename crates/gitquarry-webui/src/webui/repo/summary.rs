@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::access;
-use gitquarry_core::auth::entities::{Group, User};
+use gitquarry_core::auth::entities::{Group, Permission, User};
 use gitquarry_core::git;
 use gitquarry_core::storage;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -729,7 +729,7 @@ fn render_fork_form(
             input type="hidden" name="source" value=(repo_name);
             select name="namespace" {
                 option value=(viewer.username) { (viewer.username) " " (t::you_suffix(locale)) }
-                @for group in groups.iter().filter(|g| viewer.is_admin || g.owners.contains(&viewer.uid)) {
+                @for group in groups.iter().filter(|g| viewer.is_admin || g.role_of(&viewer.uid) >= Some(Permission::Owner)) {
                     option value=(group.name) { (group.name) }
                 }
             }

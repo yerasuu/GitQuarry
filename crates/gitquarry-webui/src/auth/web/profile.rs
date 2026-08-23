@@ -39,14 +39,11 @@ pub(crate) async fn handler_profile_get(
     let group = access::get_group(ctx.backend().as_ref(), &ctx.cipher, &name).await?.0;
     let can_see_private = match &viewer {
         Some(u) if u.username == name => true,
-        // Owner or on any team — any relationship to the group is "close
-        // enough" to see its private repos listed here, same as membership
-        // was before teams existed. The repo's own access check (via
-        // `effective_permission`) still applies independently once you
-        // actually open one.
-        Some(u) => group
-            .as_ref()
-            .is_some_and(|g| g.owners.contains(&u.uid) || g.teams.iter().any(|t| t.members.contains(&u.uid))),
+        // Any group membership at all, whatever the tier — being in the
+        // group is "close enough" to see its private repos listed here. The
+        // repo's own access check (via `effective_permission`) still applies
+        // independently once you actually open one.
+        Some(u) => group.as_ref().is_some_and(|g| g.role_of(&u.uid).is_some()),
         None => false,
     };
     // `name` names a user xor a group (see `access::reserve_namespace`) —

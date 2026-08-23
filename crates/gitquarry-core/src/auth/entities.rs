@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 /// Access level for a repo, low to high. `Ord` (declaration order) is load-
-/// bearing: a user in multiple teams that disagree on a repo's permission
-/// gets the highest one via `.max()` in `effective_permission`, and every
+/// bearing: a user whose group tier and legacy team grants disagree on a
+/// repo gets the highest one via `.max()` in `effective_permission`, and every
 /// `>=`/`<` gate elsewhere (push, release upload, settings management)
 /// compares against this same order.
 ///
@@ -58,7 +58,7 @@ pub struct GpgKeyEntry {
 #[entity(collection = ".conf/users")]
 pub struct User {
     /// Stable id, minted once at `add_user` time and never changed — what
-    /// other entities (`RepoConfig::owner`, `Group::owners`, ...) will
+    /// other entities (`RepoConfig::owner`, `Group::members`, ...) will
     /// reference instead of `username`, so a future rename can't strand
     /// them. Resolved back to the current `username` via [`Self::UID_INDEX`]
     /// (`.conf/users.index/uid/<uid>.json`), see `access::resolve_user_uid`.
@@ -277,7 +277,7 @@ pub struct PersonalAccessToken {
     #[entity(key)]
     pub uid: Uid,
     /// [`User::uid`], not username — a renamed owner keeps the token
-    /// working, same reasoning as [`Group::owners`].
+    /// working, same reasoning as [`Group::members`].
     #[serde(default)]
     pub owner_uid: Uid,
     /// Display-only, chosen by the owner — never parsed.
@@ -310,15 +310,13 @@ pub struct PersonalAccessToken {
 }
 
 /// A shared namespace multiple users can push into — a repo lives at
-/// `<group-name>/<repo>` the same way a personal one lives at
-/// `<username>/<repo>`. Repo access flows through [`Team`]s, not a flat
-/// member list: a `Team` grants its members one `Permission` on either
-/// every repo in the group or an explicit subset, so different teams can
-/// see different slices of the same group (Forgejo calls this the same
-/// thing). `owners` is separate from team membership — it's about managing
-/// the group itself (see `access::can_manage_group_for`), not repo access;
-/// an owner isn't automatically on any team, but gets implicit `Owner`
-/// everywhere in the group regardless — see `access::effective_permission_for`.
+/// `<group>/<repo>` the same way a personal one lives at
+/// `<username>/<repo>`. Membership is direct and GitLab-shaped:
+/// [`Self::members`] maps a user uid to the one [`Permission`] they hold on
+/// *every* repo in the group, with no per-repo entry for any of them.
+/// [`Permission::Owner`] in that map is also what "may run the group
+/// itself" means (see `access::can_manage_group`), so there is no separate
+/// owner list beside it.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/groups")]
 pub struct Group {
@@ -332,28 +330,97 @@ pub struct Group {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// User uids, not usernames — a deleted user simply stops resolving
-    /// (via `access::resolve_user_uid`) instead of a stale username silently
+    /// User uid → the tier that user holds across the whole group, not
+    /// usernames: a deleted user simply stops resolving (via
+    /// `access::resolve_user_uid`) instead of a stale username silently
     /// matching whichever *different* user later claims that name.
     #[serde(default)]
-    pub owners: BTreeSet<Uid>,
-    #[serde(default)]
-    pub teams: Vec<Team>,
+    pub members: BTreeMap<Uid, Permission>,
     /// Same cap as [`User::storage_quota_bytes`], for every repo this group
     /// owns instead of a personal namespace.
     #[serde(default)]
     pub storage_quota_bytes: Option<u64>,
+    /// Pre-[`Self::members`] membership, kept only so that upgrading a
+    /// bucket doesn't silently revoke everyone: [`Self::role_of`] still
+    /// honors it, and `gitquarry migrate-group-members` folds it into
+    /// `members` (subset-scoped teams become explicit per-repo grants on
+    /// each member's own `User::repos`, which is the only lossless place for
+    /// them) and clears both fields. Renamed rather than dropped so every
+    /// call site that used to read them is a compile error instead of
+    /// silently reading an empty default.
+    #[serde(default, rename = "owners", skip_serializing_if = "BTreeSet::is_empty")]
+    pub legacy_owners: BTreeSet<Uid>,
+    /// See [`Self::legacy_owners`].
+    #[serde(default, rename = "teams", skip_serializing_if = "Vec::is_empty")]
+    pub legacy_teams: Vec<Team>,
 }
 
-/// A subset of a [`Group`]'s members sharing one [`Permission`] on either
-/// every repo in the group (`repos: None`) or a specific list of them
-/// (`repos: Some(..)`, repo uids — no longer names relative to the group's
-/// own namespace: a uid is already globally unique, so there's no "local to
-/// this group" scheme left to keep).
+impl Group {
+    /// `user_uid`'s tier across every repo in this group — the direct
+    /// [`Self::members`] entry, raised by whatever the legacy fields still
+    /// grant: a `legacy_owners` entry reads as [`Permission::Owner`], and a
+    /// legacy team covering *every* repo in the group (`Team::repos` unset)
+    /// reads as that team's own tier. A legacy team scoped to a subset of
+    /// repos is deliberately absent here — group-wide is not what it
+    /// granted; see [`Self::legacy_repo_role`].
+    pub fn role_of(&self, user_uid: &Uid) -> Option<Permission> {
+        let legacy_owner = self.legacy_owners.contains(user_uid).then_some(Permission::Owner);
+        let legacy_team = self
+            .legacy_teams
+            .iter()
+            .filter(|t| t.repos.is_none() && t.members.contains(user_uid))
+            .map(|t| t.permission)
+            .max();
+        [self.members.get(user_uid).copied(), legacy_owner, legacy_team]
+            .into_iter()
+            .flatten()
+            .max()
+    }
+
+    /// Every user with a group-wide tier here, [`Self::members`] raised by
+    /// whatever the legacy fields still grant — what the group page renders
+    /// and what `migrate-group-members` writes back into `members`. A user
+    /// whose only legacy grant is a subset-scoped team is deliberately
+    /// absent: they hold no group-wide tier at all (see
+    /// [`Self::legacy_repo_role`]).
+    pub fn effective_members(&self) -> BTreeMap<Uid, Permission> {
+        let mut out = self.members.clone();
+        let legacy = self
+            .legacy_owners
+            .iter()
+            .chain(self.legacy_teams.iter().flat_map(|t| t.members.iter()));
+        for uid in legacy {
+            // `role_of` already folds this user's own `members` entry in, so
+            // whatever it returns is never lower than what's already there.
+            if let Some(perm) = self.role_of(uid) {
+                out.insert(uid.clone(), perm);
+            }
+        }
+        out
+    }
+
+    /// What the legacy subset-scoped teams alone grant `user_uid` on one
+    /// specific repo — the half of [`Self::legacy_teams`] that
+    /// [`Self::role_of`] can't express, since it applies to `repo_uid` and
+    /// nothing else in the group.
+    pub fn legacy_repo_role(&self, user_uid: &Uid, repo_uid: &Uid) -> Option<Permission> {
+        self.legacy_teams
+            .iter()
+            .filter(|t| t.members.contains(user_uid))
+            .filter(|t| t.repos.as_ref().is_some_and(|set| set.contains(repo_uid)))
+            .map(|t| t.permission)
+            .max()
+    }
+}
+
+/// Pre-[`Group::members`] membership: a subset of a group's members sharing
+/// one [`Permission`] on either every repo in the group (`repos: None`) or a
+/// specific list of them (`repos: Some(..)`, repo uids). Nothing creates
+/// these any more — see [`Group::legacy_teams`] for why they're still read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Team {
     pub name: String,
-    /// User uids — see [`Group::owners`]'s doc comment for why not usernames.
+    /// User uids — see [`Group::members`]'s doc comment for why not usernames.
     #[serde(default)]
     pub members: BTreeSet<Uid>,
     pub permission: Permission,

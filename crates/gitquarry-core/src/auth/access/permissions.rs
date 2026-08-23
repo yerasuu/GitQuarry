@@ -11,51 +11,30 @@ use crate::storage::uid::Uid;
 use anyhow::Result;
 
 /// `username`'s effective permission for `repo` (identified by both its
-/// display path, for namespace/group/team matching, and its stable
-/// `repo_uid`, for the explicit-grant/default lookups on `user.repos`),
-/// given their own `User` record and — only if `repo`'s namespace names a
-/// [`Group`] — that one group's record. Resolves namespace/group/team
-/// inheritance: an explicit per-repo grant on the user wins first; then —
-/// per this module's "namespace is a username or a group, never both"
-/// invariant — implicit `Owner` if `repo`'s namespace *is* `username`
-/// itself (their own personal repo, same as creating it through `/_new`
-/// already assumes — they can delete/transfer it, not just push); else,
-/// implicit `Owner` if `username` owns the group,
-/// else the highest [`Permission`] among the group's teams `username`
-/// belongs to that also cover this repo (`Team::repos` unset means "every
-/// repo in the group"); then the user's own `default_permission`. Pure/sync
-/// so it stays unit-testable without a live per-entity fetch —
+/// display path, for namespace/group matching, and its stable `repo_uid`,
+/// for the explicit-grant/default lookups on `user.repos`), given their own
+/// `User` record and — only if `repo`'s namespace names a [`Group`] — that
+/// one group's record. Resolves namespace/group inheritance: an explicit
+/// per-repo grant on the user wins first; then — per this module's
+/// "namespace is a username or a group, never both" invariant — implicit
+/// `Owner` if `repo`'s namespace *is* `username` itself (their own personal
+/// repo, same as creating it through `/_new` already assumes — they can
+/// delete/transfer it, not just push); else whatever the group grants them,
+/// which is their [`Group::role_of`] tier (group-wide, GitLab-shaped) raised
+/// by any legacy team still scoped to this one repo
+/// ([`Group::legacy_repo_role`]); then the user's own `default_permission`.
+/// Pure/sync so it stays unit-testable without a live per-entity fetch —
 /// [`effective_permission_for`] is the async wrapper that actually fetches
 /// `user`/`group`/`repo_uid` and calls this.
 #[cfg(any(test, feature = "test-util"))]
 pub fn effective_permission(user: &User, group: Option<&Group>, repo: &str, repo_uid: &Uid) -> Option<Permission> {
-    if let Some(perm) = user.repos.get(repo_uid) {
-        return Some(*perm);
-    }
-    if let Some((namespace, _repo_local)) = repo.split_once('/') {
-        if namespace == user.username {
-            return Some(Permission::Owner);
-        }
-        if let Some(group) = group {
-            if group.owners.contains(&user.uid) {
-                return Some(Permission::Owner);
-            }
-            let team_perm = group
-                .teams
-                .iter()
-                .filter(|t| t.members.contains(&user.uid))
-                .filter(|t| t.repos.as_ref().is_none_or(|set| set.contains(repo_uid)))
-                .map(|t| t.permission)
-                .max();
-            if team_perm.is_some() {
-                return team_perm;
-            }
-        }
-    }
-    user.default_permission
+    effective_permission_impl(user, group, repo, repo_uid)
 }
 #[cfg(not(any(test, feature = "test-util")))]
 fn effective_permission(user: &User, group: Option<&Group>, repo: &str, repo_uid: &Uid) -> Option<Permission> {
+    effective_permission_impl(user, group, repo, repo_uid)
+}
+fn effective_permission_impl(user: &User, group: Option<&Group>, repo: &str, repo_uid: &Uid) -> Option<Permission> {
     if let Some(perm) = user.repos.get(repo_uid) {
         return Some(*perm);
     }
@@ -64,43 +43,41 @@ fn effective_permission(user: &User, group: Option<&Group>, repo: &str, repo_uid
             return Some(Permission::Owner);
         }
         if let Some(group) = group {
-            if group.owners.contains(&user.uid) {
-                return Some(Permission::Owner);
-            }
-            let team_perm = group
-                .teams
-                .iter()
-                .filter(|t| t.members.contains(&user.uid))
-                .filter(|t| t.repos.as_ref().is_none_or(|set| set.contains(repo_uid)))
-                .map(|t| t.permission)
+            let inherited = [group.role_of(&user.uid), group.legacy_repo_role(&user.uid, repo_uid)]
+                .into_iter()
+                .flatten()
                 .max();
-            if team_perm.is_some() {
-                return team_perm;
+            if inherited.is_some() {
+                return inherited;
             }
         }
     }
     user.default_permission
 }
 
-/// `true` if `user` can manage `group` itself — add/remove owners,
-/// create/delete teams, edit team membership/scope. Global admins always
-/// can, without needing to be listed in `owners` too. Distinct from repo
-/// *access* inside the group, which goes through [`effective_permission`]
-/// instead. Pure/sync, same reasoning as [`effective_permission`] —
+/// `true` if `user` can manage `group` itself — add/remove members, change
+/// a member's tier, edit the group's own settings. That is exactly
+/// "[`Permission::Owner`] in [`Group::members`]", not a separate owner list:
+/// group-wide `Owner` already implies delete/transfer on every repo in the
+/// group (see [`can_manage_repo_members`]), so a second, weaker notion of
+/// "runs the group" would have nothing left to withhold. Global admins
+/// always can, without being a member at all. Distinct from repo *access*
+/// inside the group, which goes through [`effective_permission`] instead.
+/// Pure/sync, same reasoning as [`effective_permission`] —
 /// [`can_manage_group_for`] is the async wrapper.
 #[cfg(any(test, feature = "test-util"))]
 pub fn can_manage_group(user: Option<&User>, group: Option<&Group>) -> bool {
-    if user.is_some_and(|u| u.is_admin) {
-        return true;
-    }
-    user.is_some_and(|u| group.is_some_and(|g| g.owners.contains(&u.uid)))
+    can_manage_group_impl(user, group)
 }
 #[cfg(not(any(test, feature = "test-util")))]
 fn can_manage_group(user: Option<&User>, group: Option<&Group>) -> bool {
+    can_manage_group_impl(user, group)
+}
+fn can_manage_group_impl(user: Option<&User>, group: Option<&Group>) -> bool {
     if user.is_some_and(|u| u.is_admin) {
         return true;
     }
-    user.is_some_and(|u| group.is_some_and(|g| g.owners.contains(&u.uid)))
+    user.is_some_and(|u| group.is_some_and(|g| g.role_of(&u.uid) >= Some(Permission::Owner)))
 }
 
 /// `true` if `perm` (the caller's [`effective_permission`] on some repo)
