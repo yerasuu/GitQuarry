@@ -317,6 +317,15 @@ pub struct PersonalAccessToken {
 /// [`Permission::Owner`] in that map is also what "may run the group
 /// itself" means (see `access::can_manage_group`), so there is no separate
 /// owner list beside it.
+///
+/// [`Self::name`] is the group's *full path* (`parent/child` for a
+/// subgroup), which is simultaneously its repo namespace and its own
+/// storage key — so the ancestor chain of any group is readable straight off
+/// the name (`access::ancestor_group_names`) instead of walking
+/// [`Self::parent`] pointers on a permission check, which is a hot path.
+/// `parent` is still stored: it keys the child-group index
+/// (`access::add_child_group_index`), which is the only way to enumerate a
+/// group's subgroups without scanning every group in the bucket.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/groups")]
 pub struct Group {
@@ -336,8 +345,17 @@ pub struct Group {
     /// matching whichever *different* user later claims that name.
     #[serde(default)]
     pub members: BTreeMap<Uid, Permission>,
+    /// The enclosing group's uid, `None` for a top-level group. Only ever
+    /// set at creation (`auth::domain::group::create`) — there is no
+    /// move-subgroup flow, since [`Self::name`] carries the path and moving
+    /// one would mean rewriting every descendant's name, namespace claim and
+    /// owned repos' `full_name` in one non-atomic sweep.
+    #[serde(default)]
+    pub parent: Option<Uid>,
     /// Same cap as [`User::storage_quota_bytes`], for every repo this group
-    /// owns instead of a personal namespace.
+    /// owns instead of a personal namespace. Not inherited by a subgroup,
+    /// which owns its own repos: `access::quota::check` compares against
+    /// whichever group actually owns the repo being pushed to.
     #[serde(default)]
     pub storage_quota_bytes: Option<u64>,
     /// Pre-[`Self::members`] membership, kept only so that upgrading a

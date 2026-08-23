@@ -86,7 +86,7 @@ async fn make_user(ctx: &AppContext, username: &str, quota_bytes: Option<u64>) -
 }
 
 async fn make_group(ctx: &AppContext, name: &str, quota_bytes: Option<u64>) -> OwnerRef {
-    domain::group::create(ctx, name, None, Uid::new())
+    domain::group::create(ctx, name, None, Uid::new(), None, gitquarry_i18n::Locale::En)
         .await
         .unwrap()
         .unwrap();

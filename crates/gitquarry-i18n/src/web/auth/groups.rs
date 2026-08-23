@@ -37,6 +37,7 @@ msg!(groups_search_button() { Locale::Es => "buscar", Locale::En => "search" });
 msg!(groups_create_heading() { Locale::Es => "crear grupo", Locale::En => "create group" });
 msg!(groups_name_placeholder() { Locale::Es => "acme", Locale::En => "acme" });
 msg!(groups_description_placeholder() { Locale::Es => "descripción (opcional)", Locale::En => "description (optional)" });
+msg!(groups_parent_none() { Locale::Es => "(grupo de primer nivel)", Locale::En => "(top-level group)" });
 msg!(groups_create_button() { Locale::Es => "crear", Locale::En => "create" });
 
 msg!(groups_save_button() { Locale::Es => "guardar", Locale::En => "save" });

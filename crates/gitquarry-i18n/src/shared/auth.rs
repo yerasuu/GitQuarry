@@ -311,3 +311,25 @@ msg!(
         Locale::En => "corrupt cookie",
     }
 );
+
+msg!(
+    /// A subgroup that would nest past `access::MAX_GROUP_DEPTH` — single
+    /// call site (`auth::domain::group::create`), rejected there because
+    /// `ancestor_group_names` would stop short of the new group and silently
+    /// drop its members from every permission check on its repos.
+    group_nesting_too_deep(max: usize) {
+        Locale::Es => "grupos anidados demasiado profundo (maximo {max} niveles)",
+        Locale::En => "groups nested too deep (max {max} levels)",
+    }
+);
+
+msg!(
+    /// Deleting a group that still has subgroups — single call site
+    /// (`auth::domain::group::delete`); their names are paths under this
+    /// one, so freeing the namespace would let someone else claim it and
+    /// inherit membership over them.
+    group_still_has_subgroups(count: usize) {
+        Locale::Es => "el grupo todavia tiene {count} subgrupo(s) — eliminalos primero",
+        Locale::En => "this group still has {count} subgroup(s) — delete those first",
+    }
+);

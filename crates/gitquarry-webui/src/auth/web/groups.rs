@@ -12,7 +12,9 @@
 //! members needs the `Owner` tier in it (`access::can_manage_group`), so a
 //! `Developer` member sees their group listed read-only. Creating/deleting
 //! a group outright stays admin-only — reserving or freeing a whole
-//! namespace is an operator decision.
+//! namespace is an operator decision — but a *subgroup* only extends a path
+//! its parent already owns, so anyone who may manage that parent may create
+//! one under it.
 
 use super::login;
 use crate::webui::{
@@ -115,6 +117,12 @@ pub(crate) struct GroupsForm {
     /// way to change it afterward).
     #[serde(default)]
     description: String,
+    /// Only read by `add_group`: the full path of an existing group to nest
+    /// the new one under, or empty for a top-level group. A `<select>` in the
+    /// rendered form, never trusted as-is — `apply_groups_action` re-checks
+    /// that the submitter may manage whatever it names.
+    #[serde(default)]
+    parent: String,
     /// `mirror::gc::parse_size` syntax (e.g. `"5G"`) — only read by
     /// `set_storage_quota`. Empty clears the limit (unlimited).
     #[serde(default)]
@@ -190,12 +198,17 @@ pub(crate) async fn handler_groups_post(
     // synthesize the row we already know we just wrote instead of trusting
     // the LIST to have it, so the new group never *looks* like creating it
     // silently failed.
-    if form.action == "add_group" && !groups.iter().any(|g| g.name == form.name.trim()) {
+    if form.action == "add_group"
+        && !groups
+            .iter()
+            .any(|g| g.name == full_group_path(&form.parent, &form.name))
+    {
         groups.push(Group {
             uid: Uid::new(),
-            name: form.name.trim().to_string(),
+            name: full_group_path(&form.parent, &form.name),
             description: non_empty(form.description.clone()),
             members: std::collections::BTreeMap::from([(me.uid.clone(), Permission::Owner)]),
+            parent: None,
             storage_quota_bytes: None,
             legacy_owners: std::collections::BTreeSet::new(),
             legacy_teams: Vec::new(),
@@ -258,19 +271,55 @@ async fn apply_groups_action(
 ) -> Result<Result<Cas, String>, AppError> {
     match form.action.as_str() {
         "add_group" => {
-            if !me.is_admin {
-                return Err(AppError::forbidden(anyhow::anyhow!(
-                    "{}",
-                    gitquarry_i18n::shared::auth::only_admin_creates_groups(locale)
-                )));
-            }
-            let name = form.name.trim();
-            let cas = match domain::group::create(ctx, name, non_empty(form.description.clone()), me.uid.clone()).await
+            // A top-level group reserves a brand-new namespace, which stays
+            // an operator decision; a subgroup only extends a path its
+            // parent already holds, so managing that parent is enough.
+            let parent = match non_empty(form.parent.trim().to_string()) {
+                Some(parent_name) => {
+                    if !access::can_manage_group_for(ctx.backend().as_ref(), &ctx.cipher, &me.username, &parent_name)
+                        .await?
+                    {
+                        return Err(AppError::forbidden(anyhow::anyhow!(
+                            "{}",
+                            gitquarry_i18n::shared::auth::you_dont_manage_group(locale, &parent_name)
+                        )));
+                    }
+                    match access::get_group(ctx.backend().as_ref(), &ctx.cipher, &parent_name)
+                        .await?
+                        .0
+                    {
+                        Some(parent) => Some(parent),
+                        None => {
+                            return Ok(Err(gitquarry_i18n::shared::auth::group_not_found(locale, &parent_name)));
+                        }
+                    }
+                }
+                None => {
+                    if !me.is_admin {
+                        return Err(AppError::forbidden(anyhow::anyhow!(
+                            "{}",
+                            gitquarry_i18n::shared::auth::only_admin_creates_groups(locale)
+                        )));
+                    }
+                    None
+                }
+            };
+            let segment = form.name.trim();
+            let cas = match domain::group::create(
+                ctx,
+                segment,
+                non_empty(form.description.clone()),
+                me.uid.clone(),
+                parent.as_ref(),
+                locale,
+            )
+            .await
             {
                 Ok(cas) => cas,
                 Err(e) => return Ok(Err(e.to_string())),
             };
-            Ok(cas.ok_or_else(|| gitquarry_i18n::shared::auth::name_already_taken(locale, name)))
+            let path = full_group_path(&form.parent, &form.name);
+            Ok(cas.ok_or_else(|| gitquarry_i18n::shared::auth::name_already_taken(locale, &path)))
         }
         "delete_group" => {
             if !me.is_admin {
@@ -279,7 +328,9 @@ async fn apply_groups_action(
                     gitquarry_i18n::shared::auth::only_admin_deletes_groups(locale)
                 )));
             }
-            domain::group::delete(ctx, &form.name).await?;
+            if let Err(e) = domain::group::delete(ctx, &form.name, locale).await {
+                return Ok(Err(e.to_string()));
+            }
             Ok(Ok(Cas::Ok))
         }
         // Admin-only, unlike the owner-manageable actions below: a group's
@@ -390,6 +441,13 @@ pub fn render_groups_page(
     chrome: PageChrome<'_>,
 ) -> Markup {
     let PageChrome { csrf, message, locale } = chrome;
+    // Every group this viewer may nest a subgroup under. Full paths, so the
+    // `<option>` value is exactly what `full_group_path` prepends.
+    let manageable: Vec<&str> = groups
+        .iter()
+        .filter(|g| is_admin || g.role_of(viewer) >= Some(Permission::Owner))
+        .map(|g| g.name.as_str())
+        .collect();
     html! {
         p class="muted" {
             (gitquarry_i18n::web::auth::groups::groups_prose_stored_in(locale)) code { ".conf/groups/<name>.json" }
@@ -410,16 +468,41 @@ pub fn render_groups_page(
 
         (render_groups_list(viewer, is_admin, groups, names, csrf, locale))
 
-        @if is_admin {
+        // A non-admin still gets this form as long as they own at least one
+        // group to nest under — the `<select>` below is what decides whether
+        // there's anywhere they may create.
+        @if is_admin || !manageable.is_empty() {
             h4 { (gitquarry_i18n::web::auth::groups::groups_create_heading(locale)) }
             form method="post" action="/_groups" data-async data-async-target="#groups-list" {
                 (PreEscaped(csrf))
                 input type="hidden" name="group_action" value="add_group";
+                select name="parent" {
+                    @if is_admin {
+                        option value="" { (gitquarry_i18n::web::auth::groups::groups_parent_none(locale)) }
+                    }
+                    @for name in &manageable {
+                        option value=(name) { (name) "/" }
+                    }
+                }
                 input name="name" size="30" placeholder=(gitquarry_i18n::web::auth::groups::groups_name_placeholder(locale));
                 input name="description" size="40" placeholder=(gitquarry_i18n::web::auth::groups::groups_description_placeholder(locale));
                 button type="submit" { (gitquarry_i18n::web::auth::groups::groups_create_button(locale)) }
             }
         }
+    }
+}
+
+/// The path `add_group` is about to claim: a group's stored `name` is its
+/// full path, so a subgroup's is its parent's plus the submitted segment.
+/// Used for the optimistically-synthesized row and the "name already taken"
+/// message, both of which have to name the same thing
+/// `domain::group::create` did.
+fn full_group_path(parent: &str, segment: &str) -> String {
+    let (parent, segment) = (parent.trim(), segment.trim());
+    if parent.is_empty() {
+        segment.to_string()
+    } else {
+        format!("{parent}/{segment}")
     }
 }
 

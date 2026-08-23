@@ -22,8 +22,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// names) and writes the group object in one create-only [`txn::run`]
 /// transaction — same reasoning as [`crate::auth::domain::user::create`]: either
 /// both land or neither does, no manual rollback-on-failure in between.
-/// `None` if `name` is already taken (by a user, a group, or a stray
-/// namespace entry).
+/// `None` if the resulting path is already taken (by a user, a group, or a
+/// stray namespace entry).
+///
+/// `parent` nests this group inside an existing one: the stored `name`
+/// becomes `<parent>/<segment>` — a group's name *is* its full path (see
+/// [`Group`]'s doc comment) — and members of `parent` inherit their tier
+/// here (`access::effective_permission`). `None` creates a top-level group.
 ///
 /// `creator` starts as the group's sole [`Permission::Owner`] member —
 /// without this, a group admin creates comes out with no members at all,
@@ -34,20 +39,55 @@ use std::collections::{BTreeMap, BTreeSet};
 /// one already needs to manage the group). Every other forge
 /// (GitLab/GitHub/Codeberg groups and orgs, ...) makes the creator an owner
 /// for the same reason.
-pub async fn create(ctx: &AppContext, name: &str, description: Option<String>, creator: Uid) -> Result<Option<Cas>> {
-    access::validate_username(name)?; // same charset rules as a username
+pub async fn create(
+    ctx: &AppContext,
+    segment: &str,
+    description: Option<String>,
+    creator: Uid,
+    parent: Option<&Group>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Option<Cas>> {
+    access::validate_username(segment)?; // same charset rules as a username
+    let name = match parent {
+        Some(parent) => {
+            // `+ 1` for the segment about to be appended: the cap is on the
+            // resulting path, and past it `ancestor_group_names` would stop
+            // short of the new group, silently dropping its own members from
+            // every permission check on its repos.
+            if access::ancestor_group_names(&parent.name).len() + 1 > access::MAX_GROUP_DEPTH {
+                bail!(
+                    "{}",
+                    gitquarry_i18n::shared::auth::group_nesting_too_deep(locale, access::MAX_GROUP_DEPTH)
+                );
+            }
+            format!("{}/{segment}", parent.name)
+        }
+        None => segment.to_string(),
+    };
+    // A group path and a repo path share one URL space (`/<namespace>/<name>`),
+    // so a subgroup can't take a name a repo already holds — the namespace
+    // reservation below only guards against other users/groups, which is the
+    // other half of the same rule (`access::namespace_reserved`, checked by
+    // `AppContext::create_repo`).
+    if crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, &name)
+        .await?
+        .is_some()
+    {
+        return Ok(None);
+    }
     let group = Group {
         uid: Uid::new(),
-        name: name.to_string(),
+        name,
         description,
         members: BTreeMap::from([(creator, Permission::Owner)]),
+        parent: parent.map(|p| p.uid.clone()),
         storage_quota_bytes: None,
         legacy_owners: BTreeSet::new(),
         legacy_teams: Vec::new(),
     };
     let ops = vec![
         TxnOp::create(
-            access::NAMESPACE_INDEX.key(name)?,
+            access::namespace_reservation_key(&group.name)?,
             &access::NamespaceReservation {
                 kind: "group".to_string(),
             },
@@ -59,13 +99,33 @@ pub async fn create(ctx: &AppContext, name: &str, description: Option<String>, c
         return Ok(None);
     }
     let _ = group.claim_uid(ctx.backend().as_ref(), &ctx.cipher).await;
+    if let Some(parent_uid) = &group.parent {
+        access::add_child_group_index(ctx.backend().as_ref(), &ctx.cipher, parent_uid, &group.uid).await;
+    }
     Ok(Some(cas))
 }
 
-/// Best-effort: deletes the group object then releases its uid/namespace
-/// index entries. A no-op if `name` doesn't exist.
-pub async fn delete(ctx: &AppContext, name: &str) -> Result<()> {
+/// Best-effort: deletes the group object then releases its uid/namespace/
+/// child index entries. A no-op if `name` doesn't exist.
+///
+/// `Err` while the group still has subgroups: their own names are paths
+/// under this one (`<name>/<child>`), so freeing this namespace would let a
+/// *different* user or group claim `name` and inherit membership over
+/// descendants nobody meant to hand them. The operator deletes the
+/// subgroups first — nothing here deletes a tree recursively, same as
+/// nothing deletes a group's repos for it.
+pub async fn delete(ctx: &AppContext, name: &str, locale: gitquarry_i18n::Locale) -> Result<()> {
     if let Some(group) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, name).await?.0 {
+        let children = access::list_child_groups(ctx.backend().as_ref(), &ctx.cipher, &group.uid).await?;
+        if !children.is_empty() {
+            bail!(
+                "{}",
+                gitquarry_i18n::shared::auth::group_still_has_subgroups(locale, children.len())
+            );
+        }
+        if let Some(parent_uid) = &group.parent {
+            access::remove_child_group_index(ctx.backend().as_ref(), &ctx.cipher, parent_uid, &group.uid).await;
+        }
         let _ = group.release_uid(ctx.backend().as_ref()).await;
     }
     access::delete_group_object(ctx.backend().as_ref(), &ctx.cipher, name).await;

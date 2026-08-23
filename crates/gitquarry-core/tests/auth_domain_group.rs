@@ -63,7 +63,10 @@ async fn create_makes_the_creator_the_sole_owner_member() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let ctx = test_ctx(backend, cipher);
     let creator = Uid::new();
-    create(&ctx, "acme", None, creator.clone()).await.unwrap().unwrap();
+    create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
     let (group, _etag) = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
         .await
         .unwrap();
@@ -137,4 +140,129 @@ async fn remove_member_also_strips_the_legacy_grants() {
     };
     remove_member(&ctx, &mut group, "alice").await.unwrap();
     assert_eq!(group.role_of(&alice.uid), None);
+}
+
+/// A subgroup's stored `name` is its full path — that's what makes it a repo
+/// namespace and what `access::ancestor_group_names` reads the inheritance
+/// chain off of.
+#[tokio::test]
+async fn create_nests_a_subgroup_under_its_parent_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let ctx = test_ctx(backend, cipher);
+    let creator = Uid::new();
+    create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    let parent = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    create(&ctx, "team", None, creator, Some(&parent), gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    let child = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme/team")
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    assert_eq!(child.name, "acme/team");
+    assert_eq!(child.parent, Some(parent.uid.clone()));
+    // The child index is the only way to enumerate subgroups without
+    // listing every group in the bucket.
+    let children = gitquarry_core::auth::access::list_child_groups(ctx.backend().as_ref(), &ctx.cipher, &parent.uid)
+        .await
+        .unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "acme/team");
+}
+
+/// A group path and a repo path share one URL space, so `/acme/team` can't
+/// mean both a subgroup and a repo.
+#[tokio::test]
+async fn create_refuses_a_path_an_existing_repo_already_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    gitquarry_core::storage::settings::claim_repo_name(&backend, &cipher, "acme/team", &Uid::new(), None)
+        .await
+        .unwrap();
+    let ctx = test_ctx(backend, cipher);
+    let creator = Uid::new();
+    create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    let parent = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    assert!(
+        create(&ctx, "team", None, creator, Some(&parent), gitquarry_i18n::Locale::En)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Deleting a parent while its subgroups still exist would free a namespace
+/// whose descendants' names are paths under it — someone else could then
+/// claim it and inherit membership over repos nobody meant to hand them.
+#[tokio::test]
+async fn delete_refuses_while_subgroups_remain() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let ctx = test_ctx(backend, cipher);
+    let creator = Uid::new();
+    create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    let parent = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    create(&ctx, "team", None, creator, Some(&parent), gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(delete(&ctx, "acme", gitquarry_i18n::Locale::En).await.is_err());
+    delete(&ctx, "acme/team", gitquarry_i18n::Locale::En).await.unwrap();
+    delete(&ctx, "acme", gitquarry_i18n::Locale::En).await.unwrap();
+    assert!(
+        gitquarry_core::auth::access::list_child_groups(ctx.backend().as_ref(), &ctx.cipher, &parent.uid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// The other half of the same rule: a repo can't take a path a group
+/// namespace already holds, or `/acme/team` would answer to both.
+#[tokio::test]
+async fn create_repo_refuses_a_path_a_subgroup_already_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let ctx = test_ctx(backend, cipher);
+    let creator = Uid::new();
+    create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    let parent = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    create(&ctx, "team", None, creator, Some(&parent), gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ctx.create_repo("acme/team").await.unwrap().is_none());
+    // A path the subgroup doesn't hold is unaffected.
+    assert!(ctx.create_repo("acme/team/web").await.unwrap().is_some());
 }

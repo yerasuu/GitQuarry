@@ -93,6 +93,47 @@ pub async fn delete_group_object(backend: &dyn Backend, cipher: &Cipher, name: &
     let _ = Group::delete(backend, cipher, name).await;
 }
 
+fn child_group_index(parent_uid: &Uid) -> s3db::Collection {
+    s3db::Collection::new_owned(format!("{}/group-child/{parent_uid}", crate::storage::INDEX_PREFIX))
+}
+
+/// Marks `child_uid` as nested directly under `parent_uid` — content
+/// unused, existence is the fact, same shape as
+/// `storage::settings`'s repo-owner index. The only way to enumerate a
+/// group's subgroups without listing every group in the bucket, which at any
+/// real group count is exactly the scan these indexes exist to avoid.
+/// Best-effort, same tolerance as every other index here: a missed write
+/// hides a subgroup from its parent's page until something touches it again,
+/// never a correctness problem — permission resolution reads the chain off
+/// the group's own `name` ([`ancestor_group_names`]), never this index.
+pub async fn add_child_group_index(backend: &dyn Backend, cipher: &Cipher, parent_uid: &Uid, child_uid: &Uid) {
+    let _ = child_group_index(parent_uid)
+        .put(backend, cipher, child_uid.as_str(), &(), None)
+        .await;
+}
+
+pub async fn remove_child_group_index(backend: &dyn Backend, cipher: &Cipher, parent_uid: &Uid, child_uid: &Uid) {
+    let _ = child_group_index(parent_uid)
+        .delete(backend, cipher, child_uid.as_str())
+        .await;
+}
+
+/// The groups nested directly under `parent_uid` — one level, not the whole
+/// subtree (a page renders one level at a time, and a recursive walk would
+/// be unbounded fan-out). A stale index entry pointing at a deleted group
+/// resolves to nothing and is skipped, same "hint, not a fact" doctrine
+/// [`resolve_group_uid`] already follows for its own pointer.
+pub async fn list_child_groups(backend: &dyn Backend, cipher: &Cipher, parent_uid: &Uid) -> Result<Vec<Group>> {
+    let mut children = Vec::new();
+    for name in child_group_index(parent_uid).list_names(backend).await? {
+        if let Some(group) = resolve_group_uid(backend, cipher, &Uid::from(name)).await? {
+            children.push(group);
+        }
+    }
+    children.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(children)
+}
+
 /// [`super::users::list_usernames`], for [`Group`]s.
 pub async fn list_group_names(backend: &dyn Backend) -> Result<Vec<String>> {
     Group::list_keys(backend).await
