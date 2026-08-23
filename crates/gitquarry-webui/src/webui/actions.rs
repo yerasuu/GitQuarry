@@ -12,25 +12,39 @@ use axum::http::HeaderMap;
 /// scratch (which would risk reading a request-scoped cached `User` from
 /// *before* the toggle it just performed — see `app::REQUEST_BACKEND`'s own
 /// doc comment on why that cache exists and how it's scoped).
-pub(crate) fn star_button_html(favorites_url: &str, repo_name: &str, csrf_html: &str, starred: bool) -> String {
+pub(crate) fn star_button_html(
+    favorites_url: &str,
+    repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
+    csrf_html: &str,
+    starred: bool,
+) -> String {
     let (label, toggle_label, delta) = if starred {
         ("unstar", "star", "-1")
     } else {
         ("star", "unstar", "1")
     };
+    // ids/selectors carry `repo_uid`, not just `star-count-value`: this
+    // button and `repo::summary::community_stats_html`'s row are the only
+    // two places on a page today, but a fixed id would silently bump the
+    // wrong repo's count the moment either renders more than once per page
+    // (a multi-repo list, say) — the uid keeps every instance unambiguous
+    // regardless of where it ends up rendered.
+    let count_target = format!("#star-count-value-{repo_uid}");
+    let stats_target = format!("#community-stats-{repo_uid}");
     maud::html! {
         // `data-toggle-label`/`data-optimistic-target`/`data-optimistic-delta`:
         // `style/app.js`'s submit handler flips the button's own label and
-        // bumps `#star-count-value` by `delta` *before* the fetch, not after
-        // -- the round trip (~½s over a real network) would otherwise be
-        // visible lag on every click. The real response still lands moments
-        // later and fully replaces this form/the count (`data-async`/
+        // bumps the count by `delta` *before* the fetch, not after -- the
+        // round trip (~½s over a real network) would otherwise be visible
+        // lag on every click. The real response still lands moments later
+        // and fully replaces this form/the count (`data-async`/
         // `data-async-extra-target`), so a wrong optimistic guess (a lost
         // CAS race, a second tab) self-corrects within the same round trip
         // instead of drifting.
         form method="post" action=(favorites_url) style="display:inline" data-async
-            data-async-extra-target="#community-stats"
-            data-toggle-label=(toggle_label) data-optimistic-target="#star-count-value" data-optimistic-delta=(delta) {
+            data-async-extra-target=(stats_target)
+            data-toggle-label=(toggle_label) data-optimistic-target=(count_target) data-optimistic-delta=(delta) {
             (maud::PreEscaped(csrf_html))
             // NOT `name="action"`: `HTMLFormElement` is `[OverrideBuiltins]`,
             // so a control literally named `action` shadows the form's own
@@ -69,25 +83,40 @@ pub(crate) async fn render_star_button(
         return String::new();
     };
     let starred = me.starred.contains(repo_uid);
-    star_button_html("/_account/favorites", repo_name, &csrf_field(headers), starred)
+    star_button_html(
+        "/_account/favorites",
+        repo_name,
+        repo_uid,
+        &csrf_field(headers),
+        starred,
+    )
 }
 
 /// Pure markup for the watch/unwatch form — same reasoning as
 /// [`star_button_html`], reused by
 /// `webui::watch::handler_watch_post`'s async response.
-pub(crate) fn watch_button_html(repo_name: &str, csrf_html: &str, watched: bool) -> String {
+pub(crate) fn watch_button_html(
+    repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
+    csrf_html: &str,
+    watched: bool,
+) -> String {
     let (label, toggle_label, delta) = if watched {
         ("unwatch", "watch", "-1")
     } else {
         ("watch", "unwatch", "1")
     };
+    // Same `repo_uid`-scoped ids as `star_button_html` -- see its own doc
+    // comment on why a fixed id isn't safe to reuse across repos.
+    let count_target = format!("#watcher-count-value-{repo_uid}");
+    let stats_target = format!("#community-stats-{repo_uid}");
     maud::html! {
         // Optimistic label/count flip -- see `star_button_html`'s own doc
         // comment on `data-toggle-label`/`data-optimistic-target`/
         // `data-optimistic-delta`.
         form method="post" action="/_watch" style="display:inline" data-async
-            data-async-extra-target="#community-stats"
-            data-toggle-label=(toggle_label) data-optimistic-target="#watcher-count-value" data-optimistic-delta=(delta) {
+            data-async-extra-target=(stats_target)
+            data-toggle-label=(toggle_label) data-optimistic-target=(count_target) data-optimistic-delta=(delta) {
             (maud::PreEscaped(csrf_html))
             input type="hidden" name="repo" value=(repo_name);
             button type="submit" class="action-btn" {
@@ -115,7 +144,7 @@ pub(crate) async fn render_watch_button(
         return String::new();
     };
     let watched = me.watched.contains(repo_uid);
-    watch_button_html(repo_name, &csrf_field(headers), watched)
+    watch_button_html(repo_name, repo_uid, &csrf_field(headers), watched)
 }
 
 /// [`render_star_button`] + [`render_watch_button`] concatenated — every
