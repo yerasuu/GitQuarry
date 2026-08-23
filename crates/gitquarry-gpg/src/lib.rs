@@ -23,6 +23,7 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::process::Command;
+use tracing::error;
 
 /// Same tempdir every call here starts from — `0700` explicitly rather
 /// than relying on the process umask, since `gpg` itself warns (and some
@@ -55,9 +56,9 @@ static WARNED_MISSING: AtomicBool = AtomicBool::new(false);
 fn spawn_error(action: &str, err: std::io::Error) -> anyhow::Error {
     if err.kind() == std::io::ErrorKind::NotFound {
         if !WARNED_MISSING.swap(true, Ordering::Relaxed) {
-            eprintln!(
-                "gitquarry: `gpg` isn't on PATH — GPG key registration fails and no commit or \
-                 release signature can be verified. Install gnupg in the deploy image."
+            error!(
+                "`gpg` isn't on PATH — GPG key registration fails and no commit or release \
+                 signature can be verified. Install gnupg in the deploy image."
             );
         }
         return anyhow::anyhow!("`gpg` isn't installed on this server, so {action} can't be checked");
