@@ -146,7 +146,7 @@ pub fn relative_time_ago(then: u64, now: u64) -> String {
     relative_time_ago_impl(then, now)
 }
 #[cfg(not(any(test, feature = "test-util")))]
-fn relative_time_ago(then: u64, now: u64) -> String {
+pub(crate) fn relative_time_ago(then: u64, now: u64) -> String {
     relative_time_ago_impl(then, now)
 }
 fn relative_time_ago_impl(then: u64, now: u64) -> String {

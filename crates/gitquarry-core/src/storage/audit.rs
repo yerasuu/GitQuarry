@@ -21,6 +21,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// [`audit_collection`] — see [`month_bucket`] for why entries are split
 /// this way instead of one flat collection.
 const AUDIT_ROOT: &str = ".conf/audit";
+/// Same value as [`AUDIT_ROOT`], public because the backup retention pass
+/// (`crate::backup::prune`) deletes whole month prefixes under it at a
+/// *destination* bucket, and hardcoding the string in a second place is how
+/// the two would eventually disagree.
+pub const AUDIT_ROOT_PUBLIC: &str = AUDIT_ROOT;
 #[cfg(any(test, feature = "test-util"))]
 pub const AUDIT_PREFIX: &str = ".conf/audit/";
 #[cfg(not(any(test, feature = "test-util")))]
