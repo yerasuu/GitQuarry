@@ -276,6 +276,12 @@ async fn async_mr_actions_response(
     let can_manage = super::can_manage(ctx, headers, repo_name, &mr.author).await?;
     let can_merge = super::can_merge(ctx, headers, repo_name).await?;
     let is_same_repo = mr.source_repo == resolved.uid;
+    let source_branch_protected = if is_same_repo {
+        let (config, _etag) = resolved.remote.get_repo_config().await?;
+        config.protected_branches.contains(mr.source_branch.as_str())
+    } else {
+        false
+    };
     // Re-probed rather than carried over from the page that rendered the
     // form: this fragment is swapped in *after* an action landed, and the
     // one that most obviously changes the answer is the merge itself.
@@ -291,6 +297,7 @@ async fn async_mr_actions_response(
             can_manage,
             can_merge,
             is_same_repo,
+            source_branch_protected,
             fast_forwardable,
             repo_name,
             &resolved.uid,
