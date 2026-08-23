@@ -36,17 +36,12 @@
 //! separate, opt-in, grace-guarded prune.
 
 use crate::backup::inventory::{self, Class, Selection};
+use crate::backup::pager::KeyPages;
 use crate::backup::report::BackupRun;
 use crate::storage::Backend;
 use anyhow::{Context, Result, bail};
 use futures::stream::{self, StreamExt};
-use std::collections::VecDeque;
 use std::sync::Arc;
-
-/// Keys per listing page. Big enough that a large bucket doesn't spend its
-/// life in LIST round trips, small enough that two pages in memory is
-/// nothing. Matches S3's own natural page size.
-const PAGE_SIZE: usize = 1000;
 
 /// Objects at or under this size are copied through memory and compared
 /// byte-for-byte; bigger ones stream through a scratch file and are compared
@@ -300,45 +295,4 @@ async fn copy_streaming(src: &dyn Backend, dest: &dyn Backend, work: &Work) -> R
         .context("writing the destination object")?;
     let written = tokio::fs::metadata(&tmp).await.map(|m| m.len()).unwrap_or(work.size);
     Ok(Some(written))
-}
-
-/// A paged key listing, handed out one `(key, size)` at a time.
-///
-/// Holds one page. Every driver that matters overrides `Backend::list_page`
-/// natively (S3, local files, redb, plus the resilience and cache wrappers);
-/// the ones that don't fall back to `s3db`'s default, which re-lists and
-/// slices per page — correct, just not cheap, which is worth knowing before
-/// pointing a very large bucket's backup at one of those drivers.
-struct KeyPages {
-    backend: Arc<dyn Backend>,
-    prefix: String,
-    buf: VecDeque<(String, u64)>,
-    after: Option<String>,
-    exhausted: bool,
-}
-
-impl KeyPages {
-    fn new(backend: Arc<dyn Backend>, prefix: &str) -> Self {
-        KeyPages {
-            backend,
-            prefix: prefix.to_string(),
-            buf: VecDeque::new(),
-            after: None,
-            exhausted: false,
-        }
-    }
-
-    async fn next(&mut self) -> Result<Option<(String, u64)>> {
-        while self.buf.is_empty() && !self.exhausted {
-            let page = self
-                .backend
-                .list_page(&self.prefix, self.after.as_deref(), PAGE_SIZE)
-                .await
-                .with_context(|| format!("listing '{}'", self.prefix))?;
-            self.after = page.next_after.clone();
-            self.exhausted = page.next_after.is_none();
-            self.buf.extend(page.entries);
-        }
-        Ok(self.buf.pop_front())
-    }
 }

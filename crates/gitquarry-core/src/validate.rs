@@ -247,3 +247,31 @@ pub fn validate_query(q: &str) -> Result<()> {
     }
     Ok(())
 }
+
+const MAX_BACKUP_ID_LEN: usize = 64;
+
+/// Validates a snapshot id before it becomes a key segment under
+/// `.conf/backups/`. An id reaches this from an operator's command line
+/// (`gitquarry backup --id`, `gitquarry restore <id>`), which is enough for
+/// it to need checking: an id of `..` or `../repos` wouldn't produce an
+/// oddly-named snapshot, it would write into live data's namespace. Same
+/// one-flat-segment rule as [`validate_asset_filename`], plus no leading
+/// `.` — `s3db`'s own collection listing treats a dot-prefixed first
+/// component as its internal bookkeeping and would skip such a snapshot
+/// entirely.
+pub fn validate_backup_id(id: &str) -> Result<String> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > MAX_BACKUP_ID_LEN {
+        bail!("empty or too-long backup id (max {MAX_BACKUP_ID_LEN} bytes)");
+    }
+    if id.starts_with('.') {
+        bail!("invalid backup id (can't start with '.'): {id}");
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        bail!("invalid backup id (allowed: letters, digits, '-', '_', '.'): {id}");
+    }
+    Ok(id.to_string())
+}
