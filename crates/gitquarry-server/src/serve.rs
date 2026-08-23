@@ -18,6 +18,7 @@ use gitquarry_core::{config, storage};
 use gitquarry_webui::webui;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 const DEFAULT_WEB_BIND: &str = "0.0.0.0:8080";
 const DEFAULT_SSH_BIND: &str = "0.0.0.0:2222";
@@ -196,7 +197,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let settings = match storage::settings::get_settings(backend.as_ref(), &cipher).await {
         Ok((settings, _etag)) => settings,
         Err(e) => {
-            eprintln!("gitquarry: warning: couldn't read the bucket config, using defaults: {e:#}");
+            warn!("couldn't read the bucket config, using defaults: {e:#}");
             storage::entities::ServerSettings::default()
         }
     };
@@ -215,7 +216,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let oidc = match oidc::discover(&oidc_settings).await {
         Ok(client) => client,
         Err(e) => {
-            eprintln!("gitquarry: warning: OIDC unavailable, continuing without login: {e:#}");
+            warn!("OIDC unavailable, continuing without login: {e:#}");
             None
         }
     };
@@ -273,8 +274,8 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // treatment as the settings/OIDC fetches just above.
     match s3db::txn::recover_stale(backend.as_ref(), &cipher, std::time::Duration::from_secs(600)).await {
         Ok(0) => {}
-        Ok(n) => eprintln!("gitquarry: recovered {n} stale transaction(s) left by a previous crash"),
-        Err(e) => eprintln!("gitquarry: warning: stale-transaction recovery sweep failed, continuing: {e:#}"),
+        Ok(n) => info!("recovered {n} stale transaction(s) left by a previous crash"),
+        Err(e) => warn!("stale-transaction recovery sweep failed, continuing: {e:#}"),
     }
 
     // Bucket data migrations, before either server accepts a connection:
@@ -291,13 +292,13 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // exactly what it did before, so the server starts and the next
     // startup, or `gitquarry migrate --apply`, picks up the rest.
     for (migration, outcome) in gitquarry_core::migrations::run_pending(&backend, &cipher).await? {
-        eprintln!(
-            "gitquarry: applied data migration {} ({}): {}",
+        info!(
+            "applied data migration {} ({}): {}",
             migration.version, migration.name, outcome.summary
         );
         if outcome.incomplete > 0 {
-            eprintln!(
-                "gitquarry: warning: data migration {} left {} item(s) alone (changed concurrently) -- \
+            warn!(
+                "data migration {} left {} item(s) alone (changed concurrently) -- \
                  rerun with 'gitquarry migrate --apply' or restart",
                 migration.version, outcome.incomplete
             );
@@ -368,7 +369,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // whatever's already there instead. Best-effort: a failure here just
     // means the first real request pays for it instead, same as today.
     if let Err(e) = ctx.visible_repo_uids().await {
-        eprintln!("gitquarry: warning: couldn't warm the visible-repo cache at startup, continuing: {e:#}");
+        warn!("couldn't warm the visible-repo cache at startup, continuing: {e:#}");
     }
 
     // Before either server accepts a connection: an instance with no login
@@ -404,7 +405,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             r.context("the web UI failed")
         }
         () = shutdown_signal() => {
-            eprintln!("gitquarry: shutdown signal received, closing");
+            info!("shutdown signal received, closing");
             Ok(())
         }
     }
