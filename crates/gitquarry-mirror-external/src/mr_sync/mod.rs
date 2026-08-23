@@ -25,6 +25,7 @@ use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::merge_requests::{self, MrComment, MrStatus};
 use gitquarry_forge_clients::{self as forge, ForgeApi, MrPatch, NewRemoteMr, RemoteMr, RemoteMrState};
 use std::collections::{BTreeSet, HashMap};
+use tracing::{info, warn};
 
 /// What a local comment's body looks like on the external side. A plain
 /// thread comment goes out verbatim; a line comment gets its `path:line`
@@ -137,16 +138,16 @@ pub async fn sync_merge_requests_once_with(
                 linked_by_external.insert(remote_mr.number, local_number);
                 linked_locals.insert(local_number);
             }
-            Err(e) => eprintln!(
-                "gitquarry: warning: couldn't mirror external MR #{} (mirror '{}') locally: {e:#}",
+            Err(e) => warn!(
+                "couldn't mirror external MR #{} (mirror '{}') locally: {e:#}",
                 remote_mr.number, mirror.label
             ),
         }
     }
 
     if unmirrored_branches > 0 {
-        eprintln!(
-            "gitquarry: {unmirrored_branches} merge request(s) on mirror '{}' aren't importable: their branches aren't mirrored here (an MR opened from a fork can't be)",
+        info!(
+            "{unmirrored_branches} merge request(s) on mirror '{}' aren't importable: their branches aren't mirrored here (an MR opened from a fork can't be)",
             mirror.label
         );
     }
@@ -178,21 +179,21 @@ pub async fn sync_merge_requests_once_with(
                 // a *second* one on the external side.
                 match access::put_mr_link(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, &link, None).await {
                     Ok(Cas::Ok) => {}
-                    Ok(Cas::Conflict) => eprintln!(
-                        "gitquarry: warning: created MR #{} on mirror '{}' but a link for it already existed — \
+                    Ok(Cas::Conflict) => warn!(
+                        "created MR #{} on mirror '{}' but a link for it already existed — \
                          it won't be synced, remove the stale link to recover",
                         mr.number, mirror.label
                     ),
-                    Err(e) => eprintln!(
-                        "gitquarry: warning: created MR #{} on mirror '{}' but couldn't persist its link: {e:#}",
+                    Err(e) => warn!(
+                        "created MR #{} on mirror '{}' but couldn't persist its link: {e:#}",
                         mr.number, mirror.label
                     ),
                 }
                 linked_by_external.insert(created.number, mr.number);
                 linked_locals.insert(mr.number);
             }
-            Err(e) => eprintln!(
-                "gitquarry: warning: couldn't create MR #{} (mirror '{}') on the external side: {e:#}",
+            Err(e) => warn!(
+                "couldn't create MR #{} (mirror '{}') on the external side: {e:#}",
                 mr.number, mirror.label
             ),
         }
@@ -200,10 +201,7 @@ pub async fn sync_merge_requests_once_with(
 
     for local_number in linked_locals {
         if let Err(e) = sync_one_linked_mr(ctx, resolved, mirror, forge, local_number).await {
-            eprintln!(
-                "gitquarry: warning: MR #{local_number} sync failed (mirror '{}'): {e:#}",
-                mirror.label
-            );
+            warn!("MR #{local_number} sync failed (mirror '{}'): {e:#}", mirror.label);
         }
     }
     Ok(())
@@ -300,8 +298,8 @@ async fn record_synced_comment(
     )
     .await;
     if let Err(e) = outcome {
-        eprintln!(
-            "gitquarry: warning: a comment on MR #{local_number} synced with mirror '{}' but recording it failed, it may be synced twice: {e:#}",
+        warn!(
+            "a comment on MR #{local_number} synced with mirror '{}' but recording it failed, it may be synced twice: {e:#}",
             mirror.label
         );
     }
@@ -352,8 +350,8 @@ pub async fn sync_one_linked_mr(
         // tolerance `domain::merge_request::merge`'s own CAS-conflict warning
         // already applies to its metadata write).
         if let Err(e) = forge.accept_merge_request(link.external_number).await {
-            eprintln!(
-                "gitquarry: warning: couldn't propagate merge of MR #{local_number} (mirror '{}') externally: {e:#}",
+            warn!(
+                "couldn't propagate merge of MR #{local_number} (mirror '{}') externally: {e:#}",
                 mirror.label
             );
         }
@@ -382,8 +380,8 @@ pub async fn sync_one_linked_mr(
             .await?
                 == Cas::Conflict
             {
-                eprintln!(
-                    "gitquarry: warning: MR #{local_number} field sync from mirror '{}' hit a concurrent local edit, retrying next tick",
+                warn!(
+                    "MR #{local_number} field sync from mirror '{}' hit a concurrent local edit, retrying next tick",
                     mirror.label
                 );
             }
@@ -404,8 +402,8 @@ pub async fn sync_one_linked_mr(
                 )
                 .await
             {
-                eprintln!(
-                    "gitquarry: warning: couldn't push MR #{local_number} field edits to mirror '{}': {e:#}",
+                warn!(
+                    "couldn't push MR #{local_number} field edits to mirror '{}': {e:#}",
                     mirror.label
                 );
             }
@@ -439,8 +437,8 @@ pub async fn sync_one_linked_mr(
                 // again on the next tick.
                 record_synced_comment(ctx, uid, mirror, local_number, Some(key), remote_comment.id).await;
             }
-            Err(e) => eprintln!(
-                "gitquarry: warning: couldn't export a comment on MR #{local_number} to mirror '{}': {e:#}",
+            Err(e) => warn!(
+                "couldn't export a comment on MR #{local_number} to mirror '{}': {e:#}",
                 mirror.label
             ),
         }
@@ -469,8 +467,8 @@ pub async fn sync_one_linked_mr(
         if let Err(e) =
             merge_requests::add_mr_comment(ctx.backend().as_ref(), &ctx.cipher, uid, local_number, &comment).await
         {
-            eprintln!(
-                "gitquarry: warning: couldn't import a comment on MR #{local_number} from mirror '{}': {e:#}",
+            warn!(
+                "couldn't import a comment on MR #{local_number} from mirror '{}': {e:#}",
                 mirror.label
             );
             continue;
