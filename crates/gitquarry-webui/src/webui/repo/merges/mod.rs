@@ -712,7 +712,7 @@ async fn render_merge_detail_impl(
     } else {
         let (source_config, etag) = ctx.remote_for_uid(&mr.source_repo).get_repo_config().await?;
         let repo_label = if etag.is_some() {
-            source_config.full_name
+            crate::webui::repo_label(&source_config.full_name, source_config.display_name.as_deref())
         } else {
             mr.source_repo.to_string()
         };

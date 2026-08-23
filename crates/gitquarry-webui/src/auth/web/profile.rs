@@ -19,6 +19,7 @@ use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
+use gitquarry_core::domain;
 use gitquarry_core::storage;
 use gitquarry_core::storage::entities::{OwnerRef, RepoConfig, Visibility};
 use maud::{Markup, PreEscaped, html};
@@ -124,12 +125,16 @@ async fn list_owned_repos(
         set.spawn(async move {
             // A fetch error hides the repo rather than showing it — same
             // fail-closed choice as the global index.
-            storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await
+            let (config, etag) = storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await?;
+            // See `domain::repo::backfill_slug`'s own doc comment: this is a
+            // uid-based listing, one of the few places that can find and fix
+            // a repo predating `display_name`/a drifted slug.
+            anyhow::Ok(domain::repo::backfill_slug(backend, cipher, &uid, config, etag).await)
         });
     }
     let mut owned = Vec::new();
     while let Some(result) = set.join_next().await {
-        let Ok(Ok((config, _etag))) = result else { continue };
+        let Ok(Ok(config)) = result else { continue };
         if config.owner.as_ref() != Some(owner_ref) {
             continue;
         }
@@ -187,7 +192,7 @@ pub fn render_profile(
             @for (name, config) in repos {
                 tr {
                     td {
-                        a href=(format!("/{}", url_encode(name))) { (name) }
+                        a href=(format!("/{}", url_encode(name))) { (crate::webui::repo_label::repo_label(name, config.display_name.as_deref())) }
                         @match config.visibility {
                             Visibility::Public => {}
                             Visibility::Limited => { " " span class="badge" { "limited" } }

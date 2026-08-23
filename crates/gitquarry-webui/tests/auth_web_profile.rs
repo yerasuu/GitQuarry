@@ -7,6 +7,7 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
         RepoConfig {
             uid: Default::default(),
             full_name: name.to_string(),
+            display_name: None,
             description: None,
             owner: None,
             visibility,
@@ -32,6 +33,24 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
             labels: Default::default(),
         },
     )
+}
+
+#[test]
+fn profile_row_shows_the_display_name_and_links_the_slug() {
+    let (name, mut config) = repo("alice/my-proj", Visibility::Public);
+    config.display_name = Some("My Proj!".to_string());
+    let html = render_profile(
+        "alice",
+        None,
+        &[(name, config)],
+        true,
+        false,
+        None,
+        gitquarry_i18n::Locale::Es,
+    )
+    .into_string();
+    assert!(html.contains(r#"href="/alice/my-proj""#));
+    assert!(html.contains("alice/My Proj!"));
 }
 
 #[test]

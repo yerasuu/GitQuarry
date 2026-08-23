@@ -106,6 +106,7 @@ pub mod identicon;
 pub mod license;
 pub mod markdown;
 pub mod repo;
+pub mod repo_label;
 pub mod repo_new;
 pub mod repo_settings;
 pub mod watch;
@@ -196,6 +197,7 @@ pub(crate) use page_chrome::{
 };
 pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};
+pub(crate) use repo_label::repo_label;
 pub(crate) use repo_link::{github_blob_link, repo_link};
 pub(crate) use text_size::{TextSize, effective_text_size, handler_toggle_text_size, render_text_size_buttons};
 pub(crate) use theme_pref::{effective_theme, handler_toggle_theme};

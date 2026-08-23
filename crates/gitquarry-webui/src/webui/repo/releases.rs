@@ -448,6 +448,7 @@ pub(crate) async fn handler_create_post(
                 "releases",
                 HeaderExtras {
                     description: config.description.as_deref(),
+                    display_name: config.display_name.as_deref(),
                     archived: config.archived,
                     visibility: config.visibility,
                     branches: &[],
@@ -578,6 +579,7 @@ pub(crate) async fn handler_generate_notes_post(
         "releases",
         HeaderExtras {
             description: config.description.as_deref(),
+            display_name: config.display_name.as_deref(),
             archived: config.archived,
             visibility: config.visibility,
             branches: &[],

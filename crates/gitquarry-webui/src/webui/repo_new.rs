@@ -94,7 +94,25 @@ pub(crate) async fn handler_new_post(
         return Ok(error_page(&ctx, &headers, &me.username, &group_names, "invalid namespace.").await);
     };
 
-    let name = match validate::sanitize_path(&format!("{namespace}/{}", form.name)) {
+    let display_name = match validate::validate_repo_display_name(&form.name) {
+        Ok(n) => n,
+        Err(e) => {
+            let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
+            return Ok(error_page(&ctx, &headers, &me.username, &group_names, &e.to_string()).await);
+        }
+    };
+    let Some(slug) = domain::repo::slugify_repo_name(&display_name) else {
+        let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
+        return Ok(error_page(
+            &ctx,
+            &headers,
+            &me.username,
+            &group_names,
+            "name must contain at least one letter or digit.",
+        )
+        .await);
+    };
+    let name = match validate::sanitize_path(&format!("{namespace}/{slug}")) {
         Ok(name) => name,
         Err(e) => {
             let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
@@ -108,14 +126,22 @@ pub(crate) async fn handler_new_post(
             "private" => Visibility::Private,
             _ => Visibility::Public,
         };
-        domain::repo::create(&ctx, &name, Some(owner), non_empty(form.description), visibility).await?
+        domain::repo::create(
+            &ctx,
+            &name,
+            Some(display_name),
+            Some(owner),
+            non_empty(form.description),
+            visibility,
+        )
+        .await?
     } else {
         let locale = effective_locale(&ctx, &headers).await;
         let Some(source) = ctx.resolve_repo(template).await? else {
             let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
             return Ok(error_page(&ctx, &headers, &me.username, &group_names, "template repo not found.").await);
         };
-        match domain::repo::create_from_template(&ctx, &source, &name, owner, locale).await {
+        match domain::repo::create_from_template(&ctx, &source, &name, Some(display_name), owner, locale).await {
             Ok(created) => created,
             Err(e) => {
                 let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
@@ -235,6 +261,7 @@ pub fn render_new_form(
             div class="field" {
                 label { (repo_new_name_label(locale)) }
                 input name="name" size="40" placeholder=(repo_new_name_placeholder(locale)) required autofocus;
+                span class="hint" { (repo_new_name_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_description_label(locale)) }
@@ -293,6 +320,7 @@ fn render_new_form(
             div class="field" {
                 label { (repo_new_name_label(locale)) }
                 input name="name" size="40" placeholder=(repo_new_name_placeholder(locale)) required autofocus;
+                span class="hint" { (repo_new_name_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_description_label(locale)) }

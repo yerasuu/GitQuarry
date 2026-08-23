@@ -17,6 +17,7 @@ pub async fn render_log(
     ctx: &AppContext,
     bare_repo: &FsPath,
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     q: Option<&str>,
@@ -45,7 +46,7 @@ pub async fn render_log(
         // redundant here, the repo's already named in the page header right
         // above this tab.
         @if !path.is_empty() {
-            (PreEscaped(breadcrumbs(repo_name, rev, path, "tree", locale)))
+            (PreEscaped(breadcrumbs(repo_name, display_name, rev, path, "tree", locale)))
         }
         form method="get" action=(format!("/{}", url_encode(repo_name))) {
             input type="hidden" name="view" value="log";

@@ -110,12 +110,15 @@ pub(super) async fn render_about(
     // etag (source deleted) or errors just omits the line below, instead of
     // rendering a dead link. Recovers the source's current name too, so
     // this line survives the source being renamed any number of times.
-    let forked_from_name = match &config.forked_from {
+    let forked_from = match &config.forked_from {
         Some(uid) => storage::settings::get_repo_config(ctx.backend().as_ref(), uid.as_str(), &ctx.cipher)
             .await
             .ok()
             .filter(|(_, etag)| etag.is_some())
-            .map(|(source_config, _etag)| source_config.full_name),
+            .map(|(source_config, _etag)| {
+                let label = crate::webui::repo_label(&source_config.full_name, source_config.display_name.as_deref());
+                (source_config.full_name, label)
+            }),
         None => None,
     };
     // Fetched once and threaded through both calls below: `render_readme`
@@ -153,8 +156,8 @@ pub(super) async fn render_about(
                         " · "
                         a href=(raw_link("snapshot", repo_name, rev).fmt("zip").to_string()) { (gitquarry_i18n::shared::repo::snapshot_zip(locale)) }
                     }
-                    @if let Some(source_name) = &forked_from_name {
-                        p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_name) } }
+                    @if let Some((source_name, source_label)) = &forked_from {
+                        p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_label) } }
                     }
 
                     @if let Some(readme) = &readme {

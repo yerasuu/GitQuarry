@@ -179,14 +179,24 @@ const ATOM_ENTRY_LIMIT: usize = 20;
 /// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
 /// under `test-util`; see [`plain`]'s doc comment for why.
 #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn atom(bare_repo: &Path, repo_name: &str, rev: &str) -> Result<Response, AppError> {
+pub async fn atom(
+    bare_repo: &Path,
+    repo_name: &str,
+    display_name: Option<&str>,
+    rev: &str,
+) -> Result<Response, AppError> {
     let commits = git::browse::log(bare_repo, rev, ATOM_ENTRY_LIMIT, None).await?;
     let updated = commits.first().map_or("1970-01-01T00:00:00Z", |c| c.date.as_str());
     let log_link = esc(&repo_link(repo_name, "log", "").to_string());
 
     let mut xml = String::from(r#"<?xml version="1.0" encoding="utf-8"?>"#);
     xml.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\">");
-    xml.push_str(&format!("<title>{}</title>", esc(repo_name)));
+    // Title is the repo's public name; the `<id>` stays keyed on the slug —
+    // a feed id has to be stable across a repo being renamed for display.
+    xml.push_str(&format!(
+        "<title>{}</title>",
+        esc(&crate::webui::repo_label(repo_name, display_name))
+    ));
     xml.push_str(&format!("<id>urn:gitquarry:{}</id>", esc(repo_name)));
     xml.push_str(&format!("<updated>{}</updated>", esc(updated)));
     xml.push_str(&format!("<link rel=\"alternate\" href=\"{log_link}\"/>"));

@@ -47,7 +47,7 @@ pub(crate) async fn handler_groups_get(
     let q_lower = q.to_ascii_lowercase();
     groups.retain(|g| q.is_empty() || g.name.to_ascii_lowercase().contains(&q_lower));
     let names = uid_to_username_map(&ctx.backend(), &ctx.cipher).await?;
-    let repo_names = repo_uid_to_name_map(&ctx, &groups).await;
+    let repo_labels = repo_uid_to_label_map(&ctx, &groups).await;
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let body = render_groups_page(
@@ -55,7 +55,7 @@ pub(crate) async fn handler_groups_get(
         me.is_admin,
         &groups,
         &names,
-        &repo_names,
+        &repo_labels,
         &q,
         PageChrome {
             csrf: &csrf_field(&headers),
@@ -91,11 +91,13 @@ async fn uid_to_username_map(
 }
 
 /// Every distinct repo uid referenced across `groups`' teams' `repos` sets,
-/// resolved to its current `full_name` — for rendering `Team::repos`
-/// (uid-keyed) as names instead of raw hex. A repo uid that no longer
-/// resolves (deleted) is just absent; [`render_team`] falls back to
-/// "(repo deleted)" for those.
-async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, groups: &[Group]) -> HashMap<Uid, String> {
+/// resolved to its current display label ([`crate::webui::repo_label::repo_label`],
+/// so a team scope reads as the repo's public name, not its url slug) — for
+/// rendering `Team::repos` (uid-keyed) as names instead of raw hex. Values
+/// here are display-only, never hrefs. A repo uid that no longer resolves
+/// (deleted) is just absent; [`render_team`] falls back to "(repo deleted)"
+/// for those.
+async fn repo_uid_to_label_map(ctx: &gitquarry_core::app::AppContext, groups: &[Group]) -> HashMap<Uid, String> {
     let uids: std::collections::BTreeSet<Uid> = groups
         .iter()
         .flat_map(|g| g.teams.iter())
@@ -107,10 +109,22 @@ async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, groups: &[G
         let backend = ctx.backend();
         let cipher = std::sync::Arc::clone(&ctx.cipher);
         set.spawn(async move {
-            let name = gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher)
+            let name = match gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher)
                 .await
-                .ok()
-                .map(|(config, _etag)| config.full_name);
+            {
+                Ok((config, etag)) => {
+                    // See `domain::repo::backfill_slug`'s own doc comment:
+                    // this is a uid-based listing, one of the few places
+                    // that can find and fix a repo predating `display_name`/
+                    // a drifted slug.
+                    let config = gitquarry_core::domain::repo::backfill_slug(backend, cipher, &uid, config, etag).await;
+                    Some(crate::webui::repo_label::repo_label(
+                        &config.full_name,
+                        config.display_name.as_deref(),
+                    ))
+                }
+                Err(_) => None,
+            };
             (uid, name)
         });
     }
@@ -247,7 +261,7 @@ pub(crate) async fn handler_groups_post(
         groups.sort_by(|a, b| a.name.cmp(&b.name));
     }
     let names = uid_to_username_map(&ctx.backend(), &ctx.cipher).await?;
-    let repo_names = repo_uid_to_name_map(&ctx, &groups).await;
+    let repo_labels = repo_uid_to_label_map(&ctx, &groups).await;
     // `action_result` is `Ok` past this point (both error arms above
     // already returned) — every successful action refreshes the whole
     // `#groups-list` fragment from a fresh fetch rather than trying to
@@ -259,7 +273,7 @@ pub(crate) async fn handler_groups_post(
                 me.is_admin,
                 &groups,
                 &names,
-                &repo_names,
+                &repo_labels,
                 &csrf_field(&headers),
                 locale,
             )
@@ -273,7 +287,7 @@ pub(crate) async fn handler_groups_post(
         me.is_admin,
         &groups,
         &names,
-        &repo_names,
+        &repo_labels,
         "",
         PageChrome {
             csrf: &csrf_field(&headers),
@@ -451,7 +465,7 @@ pub fn render_groups_page(
     is_admin: bool,
     groups: &[Group],
     names: &HashMap<Uid, String>,
-    repo_names: &HashMap<Uid, String>,
+    repo_labels: &HashMap<Uid, String>,
     q: &str,
     chrome: PageChrome<'_>,
 ) -> Markup {
@@ -474,7 +488,7 @@ pub fn render_groups_page(
             button type="submit" { (gitquarry_i18n::web::auth::groups::groups_search_button(locale)) }
         }
 
-        (render_groups_list(viewer, is_admin, groups, names, repo_names, csrf, locale))
+        (render_groups_list(viewer, is_admin, groups, names, repo_labels, csrf, locale))
 
         @if is_admin {
             h4 { (gitquarry_i18n::web::auth::groups::groups_create_heading(locale)) }
@@ -508,7 +522,7 @@ fn render_groups_list(
     is_admin: bool,
     groups: &[Group],
     names: &HashMap<Uid, String>,
-    repo_names: &HashMap<Uid, String>,
+    repo_labels: &HashMap<Uid, String>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
@@ -522,7 +536,7 @@ fn render_groups_list(
                 div class="empty-state" { div class="empty-state-title" { (gitquarry_i18n::web::auth::groups::groups_empty_hint(locale)) } }
             }
             @for group in &visible {
-                (render_group(group, is_admin, names, repo_names, csrf, locale))
+                (render_group(group, is_admin, names, repo_labels, csrf, locale))
             }
         }
     }
@@ -532,7 +546,7 @@ pub fn render_group(
     group: &Group,
     is_admin: bool,
     names: &HashMap<Uid, String>,
-    repo_names: &HashMap<Uid, String>,
+    repo_labels: &HashMap<Uid, String>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
@@ -583,7 +597,7 @@ pub fn render_group(
             }
 
             @for team in &group.teams {
-                (render_team(&group.name, team, names, repo_names, csrf, locale))
+                (render_team(&group.name, team, names, repo_labels, csrf, locale))
             }
             h4 style="border-bottom:none" { (gitquarry_i18n::web::auth::groups::groups_new_team_heading(locale)) }
             form method="post" action="/_groups" data-async data-async-target="#groups-list" {
@@ -638,7 +652,7 @@ pub fn render_team(
     group_name: &str,
     team: &Team,
     names: &HashMap<Uid, String>,
-    repo_names: &HashMap<Uid, String>,
+    repo_labels: &HashMap<Uid, String>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
@@ -648,11 +662,12 @@ pub fn render_team(
         None => gitquarry_i18n::web::auth::groups::all_group_repos_scope(locale),
         Some(repos) => repos
             .iter()
-            .map(|uid| match resolve_name(repo_names, uid) {
+            .map(|uid| match resolve_name(repo_labels, uid) {
                 // Displayed relative to the group, same as the form field
                 // that set it — `strip_prefix` just undoes the
                 // `format!("{group_name}/{local}")` `parse_team_repos` did.
-                Some(full_name) => full_name.strip_prefix(&group_prefix).unwrap_or(full_name).to_string(),
+                // A repo from another namespace keeps its own prefix.
+                Some(label) => label.strip_prefix(&group_prefix).unwrap_or(label).to_string(),
                 None => gitquarry_i18n::shared::repo::repo_deleted(locale),
             })
             .collect::<Vec<_>>()

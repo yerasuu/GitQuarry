@@ -45,6 +45,7 @@ async fn set_required_reviewers_rejects_an_unknown_username() {
         "team/proj",
         None,
         None,
+        None,
         gitquarry_core::storage::entities::Visibility::Public,
     )
     .await
@@ -67,6 +68,7 @@ async fn set_required_reviewers_stores_every_real_username() {
     let resolved = repo::create(
         &ctx,
         "team/proj",
+        None,
         None,
         None,
         gitquarry_core::storage::entities::Visibility::Public,

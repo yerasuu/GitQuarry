@@ -47,7 +47,7 @@ fn now_secs() -> u64 {
 async fn delete_hides_the_repo_then_restore_undoes_it() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let resolved = repo::create(&ctx, "team/proj", None, None, Visibility::Public)
+    let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
@@ -89,7 +89,7 @@ async fn delete_hides_the_repo_then_restore_undoes_it() {
 async fn delete_twice_and_restore_without_deleting_both_reject() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let resolved = repo::create(&ctx, "team/proj", None, None, Visibility::Public)
+    let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
@@ -103,7 +103,7 @@ async fn delete_twice_and_restore_without_deleting_both_reject() {
 async fn purge_wipes_the_repo_and_frees_its_name() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let resolved = repo::create(&ctx, "team/proj", None, None, Visibility::Public)
+    let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
@@ -115,7 +115,7 @@ async fn purge_wipes_the_repo_and_frees_its_name() {
     assert!(ctx.resolve_repo("team/proj").await.unwrap().is_none());
     // The name claim was released -- a brand-new repo can take it again.
     assert!(
-        repo::create(&ctx, "team/proj", None, None, Visibility::Public)
+        repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
             .await
             .unwrap()
             .is_some()
@@ -126,7 +126,7 @@ async fn purge_wipes_the_repo_and_frees_its_name() {
 async fn purge_on_a_live_repo_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let resolved = repo::create(&ctx, "team/proj", None, None, Visibility::Public)
+    let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
@@ -143,7 +143,7 @@ async fn sweep_purges_only_repos_past_their_grace_window() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
 
-    let expired = repo::create(&ctx, "team/expired", None, None, Visibility::Public)
+    let expired = repo::create(&ctx, "team/expired", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
@@ -166,7 +166,7 @@ async fn sweep_purges_only_repos_past_their_grace_window() {
     .await
     .unwrap();
 
-    let fresh = repo::create(&ctx, "team/fresh", None, None, Visibility::Public)
+    let fresh = repo::create(&ctx, "team/fresh", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
