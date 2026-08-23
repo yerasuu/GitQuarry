@@ -23,4 +23,5 @@
 //! only place that knows the bucket's full layout.
 
 pub mod inventory;
+pub mod replica;
 pub mod report;

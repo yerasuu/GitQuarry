@@ -211,6 +211,35 @@ fn classify_index(rest: &str) -> Class {
     Class::Entities
 }
 
+/// Whether `key` names an object that, once written, is never rewritten in
+/// place — which is what makes "already at the destination, same size" a
+/// sound reason to skip it.
+///
+/// Deliberately per *key*, not per class: `Class::Git` covers both
+/// `objects/pack/*` (named after its own content hash, so a same-named pack
+/// is the same pack) and `refs.json` (rewritten on every single push).
+/// Getting this wrong in the permissive direction is the worst bug this
+/// system can have — a mutable object wrongly called immutable stops being
+/// copied the moment its size happens to match, and the replica goes
+/// silently stale — so anything not positively known to be immutable is
+/// treated as mutable and re-copied every run.
+pub fn is_immutable(key: &str) -> bool {
+    if let Some(rest) = key.strip_prefix("repos/") {
+        let Some((_uid, tail)) = rest.split_once('/') else {
+            return false;
+        };
+        // Packs and their indexes are named `pack-<sha>`; LFS objects by
+        // their own oid; release assets are frozen under an immutable tag.
+        return tail.starts_with("objects/pack/")
+            || tail.starts_with("lfs/")
+            || (tail.starts_with("releases/") && !tail.ends_with("/meta.json"));
+    }
+    // Audit entries are create-only, one key per event
+    // (`storage::audit::record`) — never read-modify-written like every
+    // other `.conf/` object.
+    key.starts_with(".conf/audit/")
+}
+
 /// Which classes a run copies, derived from `ServerSettings`' own
 /// `backup_include_*` fields at the call site rather than read from them
 /// here: this crate's backup modules take a `Selection`, so a CLI run
