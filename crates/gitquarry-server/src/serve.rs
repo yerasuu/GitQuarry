@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use gitquarry_auth_crypto::oidc;
 use gitquarry_core::app::{AppContext, Locks};
 use gitquarry_core::auth::access;
+use gitquarry_core::backup;
 use gitquarry_core::events::RepoEvent;
 use gitquarry_core::git::ssh;
 use gitquarry_core::mirror::{deleted_repo_sweep, gc};
@@ -354,6 +355,9 @@ pub async fn run(rest: &[String]) -> Result<()> {
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
     tokio::spawn(gitquarry_mirror_external::engine::run_periodic_sync(Arc::clone(&ctx)));
+    // Same detached treatment, and it stays a no-op on every tick until an
+    // admin configures a destination and turns it on (`backup_enabled`).
+    tokio::spawn(backup::schedule::run_periodic(Arc::clone(&ctx)));
     // The two servers are infinite loops: if either returns, it's an error
     // and there's no point serving just the other. `shutdown_signal`
     // resolving is not an error: it's how `docker stop`/`podman stop` (SIGTERM)

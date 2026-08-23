@@ -64,7 +64,7 @@ const INLINE_MAX_BYTES: u64 = 1 << 20;
 /// absent — they're immutable, so the replica already keeps every version
 /// there has ever been, and re-sealing them here would double the cost of a
 /// backup for no added recoverability.
-pub const DEFAULT_CLASSES: [Class; 2] = [Class::Entities, Class::Bootstrap];
+pub const DEFAULT_CLASSES: [Class; 1] = [Class::Entities];
 
 /// What one snapshot captured. Stored under [`MANIFEST_PREFIX`], a sibling
 /// of every snapshot's own directory rather than inside one: listing the
@@ -126,6 +126,16 @@ pub async fn capture(
     concurrency: usize,
     run: &mut BackupRun,
 ) -> Result<SnapshotManifest> {
+    if classes.contains(&Class::Bootstrap) {
+        // `.conf/encryption.json` is the one object in the bucket that isn't
+        // sealed under the data key — it's what *holds* that key, wrapped
+        // under the passphrase. There's nothing to open and re-seal, and a
+        // snapshot doesn't need it either way: its objects are sealed under
+        // the destination's own cipher, so restoring them needs the
+        // destination's encryption config, which the destination already has.
+        // Carrying it is the replica's job (see `replica::ensure_same_data_key`).
+        bail!("the encryption config can't be snapshotted (it isn't sealed under the data key)");
+    }
     let prefix = snapshot_prefix(id)?;
     let started_at = now_secs();
     let mut manifest = SnapshotManifest {

@@ -27,4 +27,5 @@ pub mod inventory;
 mod pager;
 pub mod replica;
 pub mod report;
+pub mod schedule;
 pub mod snapshot;

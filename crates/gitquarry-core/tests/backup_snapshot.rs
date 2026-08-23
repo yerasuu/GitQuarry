@@ -311,3 +311,21 @@ async fn a_snapshot_can_be_asked_for_a_blob_class_explicitly() {
         b"lfsdata"
     );
 }
+
+#[tokio::test]
+async fn the_encryption_config_is_refused_as_a_snapshot_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = backend(dir.path());
+    let c = cipher(1);
+    let mut run = fresh_run();
+
+    // It isn't sealed under the data key, so there's nothing to open and
+    // re-seal -- carrying it is the replica's job.
+    let err = snapshot::capture(&src, &c, &src, &c, "snap1", &[Class::Bootstrap], 2, &mut run)
+        .await
+        .expect_err("the encryption config must not be snapshotted");
+    assert!(
+        format!("{err:#}").contains("encryption config"),
+        "unexpected error: {err:#}"
+    );
+}
