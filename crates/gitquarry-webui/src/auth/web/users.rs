@@ -55,11 +55,14 @@ pub(crate) async fn handler_users_get(
 }
 
 /// Every distinct repo uid referenced across `users`' `repos` maps,
-/// resolved to its current `full_name` — for rendering `User::repos`
-/// (uid-keyed) as clickable/typeable names instead of raw hex. A repo uid
+/// resolved to its current `full_name` paired with its display label
+/// ([`crate::webui::repo_label::repo_label`]) — for rendering `User::repos`
+/// (uid-keyed) as names instead of raw hex. Both halves are needed: the row
+/// shows the label, while its remove form still submits the `full_name`,
+/// which is the only string `auth::domain::user` can resolve. A repo uid
 /// that no longer resolves (deleted) is just absent from the map;
 /// `render_user` falls back to "(deleted repo)" for those.
-async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, users: &[User]) -> HashMap<Uid, String> {
+async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, users: &[User]) -> HashMap<Uid, (String, String)> {
     let uids: BTreeSet<Uid> = users.iter().flat_map(|u| u.repos.keys().cloned()).collect();
     let mut set = JoinSet::new();
     for uid in uids {
@@ -69,7 +72,10 @@ async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, users: &[Us
             let name = gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher)
                 .await
                 .ok()
-                .map(|(config, _etag)| config.full_name);
+                .map(|(config, _etag)| {
+                    let label = crate::webui::repo_label(&config.full_name, config.display_name.as_deref());
+                    (config.full_name, label)
+                });
             (uid, name)
         });
     }
@@ -371,7 +377,7 @@ pub async fn apply_users_action(
 #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_users_page(
     users: &[User],
-    repo_names: &HashMap<Uid, String>,
+    repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
     message: Option<Flash>,
     q: &str,
@@ -442,7 +448,7 @@ pub fn render_users_page(
 /// other action here, which targets the one card it stays contained in.
 fn render_users_list(
     users: &[User],
-    repo_names: &HashMap<Uid, String>,
+    repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
@@ -461,7 +467,7 @@ fn render_users_list(
 
 pub fn render_user(
     user: &User,
-    repo_names: &HashMap<Uid, String>,
+    repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
@@ -512,7 +518,7 @@ pub fn render_user(
                 }
                 @for (repo_uid, perm) in &user.repos {
                     @match repo_names.get(repo_uid) {
-                        Some(name) => (repo_perm_row(user, name, name, *perm, csrf, &card_target, locale)),
+                        Some((name, label)) => (repo_perm_row(user, label, name, *perm, csrf, &card_target, locale)),
                         None => tr { td colspan="3" { em { (gitquarry_i18n::shared::repo::repo_deleted(locale)) } } },
                     }
                 }
