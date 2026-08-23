@@ -8,6 +8,7 @@
 
 pub mod app;
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod crypto;
 pub mod domain;
