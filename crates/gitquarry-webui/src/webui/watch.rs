@@ -93,9 +93,9 @@ pub(crate) async fn handler_watch_post(
     // `bump_watcher_count` already wrote it) and its own swap, since it
     // lives outside the button's own subtree.
     if headers.contains_key(ASYNC_HEADER) {
-        let button = super::watch_button_html(&repo, &csrf_field(&headers), now_watched);
+        let button = super::watch_button_html(&repo, &resolved.uid, &csrf_field(&headers), now_watched);
         let (fresh_config, _etag) = resolved.remote.get_repo_config().await?;
-        let stats = super::repo::community_stats_html(&fresh_config, locale).into_string();
+        let stats = super::repo::community_stats_html(&fresh_config, &resolved.uid, locale).into_string();
         return Ok(Html(format!("{button}{stats}")).into_response());
     }
 

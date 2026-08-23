@@ -415,23 +415,30 @@ async fn render_readme_from_entries(
     Ok(Some(format!("<div id=\"readme\" class=\"readme\">{rendered}</div>")))
 }
 
-/// The star/watch/fork count row alone, `id="community-stats"` so the
-/// star/watch buttons' async toggle response (see `actions.rs`'s
+/// The star/watch/fork count row alone, `id="community-stats-{repo_uid}"` so
+/// the star/watch buttons' async toggle response (see `actions.rs`'s
 /// `data-async-extra-target`) can replace just this row in place — without
 /// an id to swap by, a click on either button would flip the button's own
 /// label but leave this row showing the pre-toggle count until a full
 /// reload, since the button (in the header) and this row (in the sidebar)
 /// are two different subtrees the single-target `data-async` swap can't
-/// reach at once.
-pub(crate) fn community_stats_html(config: &RepoConfig, locale: gitquarry_i18n::Locale) -> Markup {
+/// reach at once. `repo_uid` in every id here, not a fixed string: this is
+/// the entity `actions.rs`'s buttons resolve against too, so a page that
+/// ever ends up rendering more than one repo's stats (a list, not just this
+/// single-repo sidebar) still bumps the right one's count.
+pub(crate) fn community_stats_html(
+    config: &RepoConfig,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
     html! {
-        div id="community-stats" class="community-stats" {
-            // `id="star-count-value"`/`id="watcher-count-value"` around the
-            // number alone (not the icon/label): `actions.rs`'s
+        div id=(format!("community-stats-{repo_uid}")) class="community-stats" {
+            // `id="star-count-value-{repo_uid}"`/`"watcher-count-value-{repo_uid}"`
+            // around the number alone (not the icon/label): `actions.rs`'s
             // `data-optimistic-target` needs to bump just the digits, in
             // place, the instant star/watch is clicked.
-            span class="community-stat" { (icons::star()) " " span id="star-count-value" { (config.star_count) } " " (t::stars_label(locale)) }
-            span class="community-stat" { (icons::eye()) " " span id="watcher-count-value" { (config.watcher_count) } " " (t::watchers_label(locale)) }
+            span class="community-stat" { (icons::star()) " " span id=(format!("star-count-value-{repo_uid}")) { (config.star_count) } " " (t::stars_label(locale)) }
+            span class="community-stat" { (icons::eye()) " " span id=(format!("watcher-count-value-{repo_uid}")) { (config.watcher_count) } " " (t::watchers_label(locale)) }
             span class="community-stat" { (icons::fork()) " " (config.fork_count) " " (t::forks_label(locale)) }
         }
     }
@@ -511,7 +518,7 @@ async fn render_sidebar(
             // follows that same "only show what exists" convention for
             // readme/contributing/license), then a plain vertical list of
             // icon+link rows instead of a two-column label/value table.
-            (community_stats_html(config, locale))
+            (community_stats_html(config, &resolved.uid, locale))
             ul class="community-list" {
                 @if readme_exists {
                     li { (icons::book()) " " a href="#readme" { (t::readme_label(locale)) } }

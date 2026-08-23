@@ -369,9 +369,15 @@ pub(crate) async fn handler_account_favorites_post(
     // and `style/app.js`'s `data-async-extra-target` swaps this second
     // fragment into `#community-stats` independently of the button swap.
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
-        let button = crate::webui::star_button_html("/_account/favorites", &repo, &csrf_field(&headers), now_starred);
+        let button = crate::webui::star_button_html(
+            "/_account/favorites",
+            &repo,
+            &resolved.uid,
+            &csrf_field(&headers),
+            now_starred,
+        );
         let (fresh_config, _etag) = resolved.remote.get_repo_config().await?;
-        let stats = crate::webui::repo::community_stats_html(&fresh_config, locale).into_string();
+        let stats = crate::webui::repo::community_stats_html(&fresh_config, &resolved.uid, locale).into_string();
         return Ok(Html(format!("{button}{stats}")).into_response());
     }
     // Only a same-origin relative path is honored — `return_to` is
