@@ -290,7 +290,7 @@ impl ConnHandler {
             // those list by `RepoConfig::full_name`, which nothing used to
             // write for this path.
             None if git_subcmd == "receive-pack" && self.ctx.allow_push_create => {
-                let owner = match name.split_once('/') {
+                let owner = match name.rsplit_once('/') {
                     Some((namespace, _)) => domain::repo::resolve_owner_ref(&self.ctx, namespace).await?,
                     None => None,
                 };

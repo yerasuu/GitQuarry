@@ -163,6 +163,12 @@ pub async fn rename(
     new_display_name: Option<String>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<String>> {
+    // Same rule `AppContext::create_repo` applies to a fresh repo: a repo
+    // path and a group path share one URL space, so a rename can't move a
+    // repo onto a name a group namespace already holds.
+    if crate::auth::access::namespace_reserved(ctx.backend().as_ref(), &ctx.cipher, new_full_name).await? {
+        return Ok(None);
+    }
     let claimed = storage::settings::claim_repo_name_self_healing(
         ctx.backend().as_ref(),
         &ctx.cipher,

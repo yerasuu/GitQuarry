@@ -433,9 +433,15 @@ impl AppContext {
     /// squatted by a since-deleted repo (see
     /// `storage::settings::claim_repo_name_self_healing`) — the "new repo
     /// identity" primitive shared by `/_new`, fork's destination, and SSH's
-    /// implicit create-on-first-push. `None` only if `full_name` is
-    /// genuinely claimed by a repo that still exists.
+    /// implicit create-on-first-push. `None` if `full_name` is genuinely
+    /// claimed by a repo that still exists, or if it names a user/group
+    /// namespace: a repo at `acme/team` and a subgroup called `acme/team`
+    /// would both answer to `/acme/team`, so whichever exists first wins
+    /// (see `auth::access::namespace_reserved`).
     pub async fn create_repo(&self, full_name: &str) -> Result<Option<ResolvedRepo>> {
+        if crate::auth::access::namespace_reserved(self.backend().as_ref(), &self.cipher, full_name).await? {
+            return Ok(None);
+        }
         let uid = Uid::new();
         let claimed = crate::storage::settings::claim_repo_name_self_healing(
             self.backend().as_ref(),

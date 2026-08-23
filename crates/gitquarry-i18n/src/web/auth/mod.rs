@@ -4,6 +4,7 @@
 pub mod appearance;
 pub mod avatar;
 pub mod favorites;
+pub mod group;
 pub mod groups;
 pub mod login;
 pub mod pat;

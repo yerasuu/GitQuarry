@@ -18,5 +18,6 @@ pub mod chrome;
 pub mod repo;
 pub mod repo_new;
 pub mod repo_settings;
+pub mod repos;
 pub mod search;
 pub mod settings;

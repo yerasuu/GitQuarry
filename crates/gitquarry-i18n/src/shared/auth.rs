@@ -16,8 +16,8 @@ msg!(
 msg!(
     /// Placeholder for a uid-keyed reference (`Group::owners`/
     /// `Team::members`) whose `User` no longer resolves — confirmed
-    /// duplicated verbatim across `auth::web::groups` (owner list, team member
-    /// list, both via `render_group`/`render_team`).
+    /// duplicated verbatim across `auth::web::groups`'s member list
+    /// (`render_group`) and `auth::web::users`'s own rows.
     user_deleted() {
         Locale::Es => "(usuario eliminado)",
         Locale::En => "(deleted user)",
@@ -56,22 +56,11 @@ msg!(
 msg!(
     /// A `perm` form field that isn't one of the five
     /// `auth::access::Permission` tier names — confirmed
-    /// duplicated verbatim across `auth::domain::group::add_team`,
+    /// duplicated verbatim across `auth::domain::group::set_member`,
     /// `auth::domain::user::parse_repos_field`.
     invalid_permission(other: &str) {
         Locale::Es => "permiso invalido '{other}' (usar guest, reporter, developer, maintainer u owner)",
         Locale::En => "invalid permission '{other}' (use guest, reporter, developer, maintainer, or owner)",
-    }
-);
-
-msg!(
-    /// A team name already taken within the same group — single call site
-    /// (`auth::domain::group::add_team`), converted alongside its sibling
-    /// [`invalid_permission`] check in the same function rather than left
-    /// half-converted.
-    team_already_exists(name: &str) {
-        Locale::Es => "ya existe un equipo '{name}' en este grupo",
-        Locale::En => "a team named '{name}' already exists in this group",
     }
 );
 
@@ -101,16 +90,6 @@ msg!(
     no_pending_totp_enrollment() {
         Locale::Es => "no hay una inscripcion 2FA pendiente",
         Locale::En => "no pending 2FA enrollment",
-    }
-);
-
-msg!(
-    /// A team name that doesn't exist on a group — confirmed duplicated
-    /// verbatim across `auth::domain::group::find_team_mut`'s two callers
-    /// (`add_team_member`, `remove_team_member`).
-    team_not_found(team: &str) {
-        Locale::Es => "equipo '{team}' no existe",
-        Locale::En => "team '{team}' doesn't exist",
     }
 );
 
@@ -330,5 +309,27 @@ msg!(
     corrupt_totp_cookie() {
         Locale::Es => "cookie corrupta",
         Locale::En => "corrupt cookie",
+    }
+);
+
+msg!(
+    /// A subgroup that would nest past `access::MAX_GROUP_DEPTH` — single
+    /// call site (`auth::domain::group::create`), rejected there because
+    /// `ancestor_group_names` would stop short of the new group and silently
+    /// drop its members from every permission check on its repos.
+    group_nesting_too_deep(max: usize) {
+        Locale::Es => "grupos anidados demasiado profundo (maximo {max} niveles)",
+        Locale::En => "groups nested too deep (max {max} levels)",
+    }
+);
+
+msg!(
+    /// Deleting a group that still has subgroups — single call site
+    /// (`auth::domain::group::delete`); their names are paths under this
+    /// one, so freeing the namespace would let someone else claim it and
+    /// inherit membership over them.
+    group_still_has_subgroups(count: usize) {
+        Locale::Es => "el grupo todavia tiene {count} subgrupo(s) — eliminalos primero",
+        Locale::En => "this group still has {count} subgroup(s) — delete those first",
     }
 );

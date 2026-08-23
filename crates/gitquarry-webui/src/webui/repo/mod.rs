@@ -299,7 +299,7 @@ pub(crate) async fn handler_index(
     let repo_count = repos.len();
     let ns_count = repos
         .iter()
-        .filter_map(|r| r.name.split_once('/').map(|(ns, _)| ns))
+        .filter_map(|r| r.name.rsplit_once('/').map(|(ns, _)| ns))
         .collect::<HashSet<_>>()
         .len();
 
@@ -326,7 +326,7 @@ pub(crate) async fn handler_index(
     let rows: Vec<(Option<&str>, &IndexRepo)> = filtered
         .iter()
         .map(|repo| {
-            let ns = repo.name.split_once('/').map(|(ns, _)| ns);
+            let ns = repo.name.rsplit_once('/').map(|(ns, _)| ns);
             let header = if ns != last_ns { ns } else { None };
             last_ns = ns;
             (header, *repo)

@@ -109,6 +109,7 @@ pub mod repo;
 pub mod repo_label;
 pub mod repo_new;
 pub mod repo_settings;
+pub mod repos;
 pub mod watch;
 
 mod actions;
@@ -193,7 +194,7 @@ pub use page_chrome::layout;
 // calls the former once at startup, right after resolving `ServerSettings`.
 pub(crate) use page_chrome::{
     HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
-    permission_badge_class, settings_section, tab_links, topic_badges,
+    permission_badge_class, permission_label, settings_section, tab_links, topic_badges,
 };
 pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};
@@ -346,6 +347,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             "/_groups",
             get(crate::auth::web::groups::handler_groups_get).post(crate::auth::web::groups::handler_groups_post),
         )
+        .route("/_group/{*path}", get(crate::auth::web::group::handler_group_get))
         .route("/_audit", get(audit::handler_audit_get))
         .route("/_changelog", get(changelog::handler_changelog_get))
         .route("/_license", get(license::handler_license_get))
@@ -353,6 +355,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_fork", axum::routing::post(fork::handler_fork_post))
         .route("/_watch", axum::routing::post(watch::handler_watch_post))
         .route("/_new", get(repo_new::handler_new_get).post(repo_new::handler_new_post))
+        .route("/_repos", get(repos::handler_repos_get))
         .route(
             "/_profile/{username}",
             get(crate::auth::web::profile::handler_profile_get),

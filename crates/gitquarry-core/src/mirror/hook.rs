@@ -107,10 +107,10 @@ async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> 
 }
 
 /// Whether `actor` may push directly to a protected branch: a global admin,
-/// the repo's own owner (user-owned repo), or an owner of the group that
-/// owns it — the same "who runs this namespace" set
+/// the repo's own owner (user-owned repo), or a `Permission::Owner` member
+/// of the group that owns it — the same "who runs this namespace" set
 /// `auth::web::groups`/`webui::repo_settings` already use, never just plain
-/// `Permission::Developer` (which team members also have). Fetches only the
+/// `Permission::Developer` (which most group members have). Fetches only the
 /// actor's own record, plus (if the owner names a group) that one group's,
 /// never the rest of the bucket's users/groups. Split from
 /// [`can_push_protected_decision`] so the actual decision logic stays
@@ -142,7 +142,9 @@ pub fn can_push_protected_decision(
     }
     match owner {
         Some(OwnerRef::User(owner_uid)) => user.is_some_and(|u| &u.uid == owner_uid),
-        Some(OwnerRef::Group(_)) => user.is_some_and(|u| owner_group.is_some_and(|g| g.owners.contains(&u.uid))),
+        Some(OwnerRef::Group(_)) => user.is_some_and(|u| {
+            owner_group.is_some_and(|g| g.role_of(&u.uid) >= Some(crate::auth::entities::Permission::Owner))
+        }),
         None => false,
     }
 }
@@ -158,7 +160,9 @@ fn can_push_protected_decision(
     }
     match owner {
         Some(OwnerRef::User(owner_uid)) => user.is_some_and(|u| &u.uid == owner_uid),
-        Some(OwnerRef::Group(_)) => user.is_some_and(|u| owner_group.is_some_and(|g| g.owners.contains(&u.uid))),
+        Some(OwnerRef::Group(_)) => user.is_some_and(|u| {
+            owner_group.is_some_and(|g| g.role_of(&u.uid) >= Some(crate::auth::entities::Permission::Owner))
+        }),
         None => false,
     }
 }

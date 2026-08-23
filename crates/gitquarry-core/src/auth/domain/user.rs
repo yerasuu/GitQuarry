@@ -59,7 +59,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
     };
 
     let mut ops = vec![TxnOp::create(
-        access::NAMESPACE_INDEX.key(username)?,
+        access::namespace_reservation_key(username)?,
         &access::NamespaceReservation {
             kind: "user".to_string(),
         },

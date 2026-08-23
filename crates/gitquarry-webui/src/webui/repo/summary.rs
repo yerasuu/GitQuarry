@@ -11,7 +11,6 @@ use crate::webui::{
 use anyhow::{Context, Result};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
-use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::{Group, User};
 use gitquarry_core::git;
 use gitquarry_core::storage;
@@ -479,13 +478,12 @@ async fn render_sidebar(
         None => None,
     };
     let viewer = login::current_user(ctx, headers).await;
-    // Only needed now for the fork form's namespace list ("every group I
-    // can manage") — the star count no longer depends on this fetch at all,
-    // and enumerating groups is unavoidable here: there's no reverse index
-    // from user to "groups I own", so the fork form has to look at all of
-    // them.
+    // Only needed for the fork form's namespace list ("every group I can
+    // manage") — read from the `user-group` index rather than by
+    // enumerating every group in the bucket, which is what this had to do
+    // before that index existed.
     let groups = match &viewer {
-        Some(_) => Some(access::list_all_groups(&ctx.backend(), &ctx.cipher).await?),
+        Some(me) => Some(crate::auth::web::groups::visible_groups(ctx, me).await?),
         None => None,
     };
     let release_count = resolved.remote.list_release_tags().await?.len();
@@ -729,8 +727,8 @@ fn render_fork_form(
             input type="hidden" name="source" value=(repo_name);
             select name="namespace" {
                 option value=(viewer.username) { (viewer.username) " " (t::you_suffix(locale)) }
-                @for group in groups.iter().filter(|g| viewer.is_admin || g.owners.contains(&viewer.uid)) {
-                    option value=(group.name) { (group.name) }
+                @for name in crate::auth::web::groups::manageable_group_names(groups, &viewer.uid, viewer.is_admin) {
+                    option value=(name) { (name) }
                 }
             }
             input name="name" size="20" value=(name_value) placeholder=(t::name_placeholder(locale));

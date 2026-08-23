@@ -508,6 +508,24 @@ pub(crate) fn permission_badge_class(perm: gitquarry_core::auth::entities::Permi
     }
 }
 
+/// The translated name of a [`gitquarry_core::auth::entities::Permission`]
+/// tier — shared by every page that shows a tier to a reader
+/// (`auth::web::groups`' member rows, `auth::web::group`'s member list), so
+/// the five words are translated in exactly one place.
+pub(crate) fn permission_label(
+    perm: gitquarry_core::auth::entities::Permission,
+    locale: gitquarry_i18n::Locale,
+) -> String {
+    use gitquarry_core::auth::entities::Permission;
+    match perm {
+        Permission::Guest => gitquarry_i18n::web::auth::groups::groups_permission_guest(locale),
+        Permission::Reporter => gitquarry_i18n::web::auth::groups::groups_permission_reporter(locale),
+        Permission::Developer => gitquarry_i18n::web::auth::groups::groups_permission_developer(locale),
+        Permission::Maintainer => gitquarry_i18n::web::auth::groups::groups_permission_maintainer(locale),
+        Permission::Owner => gitquarry_i18n::web::auth::groups::groups_permission_owner(locale),
+    }
+}
+
 /// Each topic as a small link to `/?q=<topic>` — reuses the repo index's own
 /// search box as the filter (it already matches topics, not just names), so
 /// there's no separate `?topic=` param to validate/parse. Shared by the

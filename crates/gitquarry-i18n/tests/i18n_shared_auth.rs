@@ -93,21 +93,8 @@ fn too_many_failed_attempts_differs_by_locale() {
 }
 
 #[test]
-fn team_not_found_carries_the_team_name() {
-    assert_eq!(team_not_found(Locale::Es, "frontend"), "equipo 'frontend' no existe");
-}
-
-#[test]
 fn invalid_entry_carries_the_entry() {
     assert!(invalid_entry(Locale::Es, "bad").contains("bad"));
-}
-
-#[test]
-fn team_already_exists_carries_the_team_name() {
-    assert_eq!(
-        team_already_exists(Locale::Es, "frontend"),
-        "ya existe un equipo 'frontend' en este grupo"
-    );
 }
 
 #[test]

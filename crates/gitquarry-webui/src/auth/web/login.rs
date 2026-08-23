@@ -956,6 +956,7 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
             // dropdown this pass adds.
             format!(
                 " · <details class=\"dropdown\"><summary>{}{}</summary><div class=\"dropdown-menu\">\
+                 <a href=\"/_repos\">{}</a>\
                  <a href=\"/_profile/{u}\">{}</a>\
                  <a href=\"/_account/favorites\">{}</a>\
                  <a href=\"/_account/security\">{}</a>\
@@ -965,6 +966,7 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
                 crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref())
                     .into_string(),
                 esc(&user.username),
+                gitquarry_i18n::web::repos::repos_title(locale),
                 gitquarry_i18n::web::chrome::profile_tab(locale),
                 gitquarry_i18n::web::chrome::favorites_tab(locale),
                 gitquarry_i18n::web::chrome::security_tab(locale),

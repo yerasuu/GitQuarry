@@ -1,15 +1,18 @@
-//! `/_profile/<name>`: public list of a user's or a group's repos (`name`
-//! is looked up as a username first, then a group name — mutually
-//! exclusive, see [`gitquarry_core::auth::access::reserve_namespace`]) —
-//! reachable from wherever an owner name shows up (a repo header's
-//! "owner:" line, see [`crate::webui::header_bar`]). No login gate, unlike every
-//! other `/_*` page: anyone can look. What differs per viewer is which
-//! repos show up — `visibility: public` ones always do, `private` ones
-//! only when the viewer is logged in as that same user, or (for a group
-//! profile) is a member of that group — not admins, not anyone with an
-//! explicit grant on one specific repo: this is a profile listing, not the
-//! repo's own access check, which still applies independently once you
-//! actually open a private repo's page.
+//! `/_profile/<name>`: public list of one user's repos — reachable from
+//! wherever an owner name shows up (a repo header's "owner:" line, see
+//! [`crate::webui::header_bar`]). A `name` that turns out to be a group
+//! redirects to [`super::group`], which has a real page for one: those two
+//! kinds of namespace are mutually exclusive (see
+//! [`gitquarry_core::auth::access::reserve_namespace`]), so a single link
+//! shape keeps working for both.
+//!
+//! No login gate, unlike every other `/_*` page: anyone can look. What
+//! differs per viewer is which repos show up — `visibility: public` ones
+//! always do, `private` ones only when the viewer is logged in as that same
+//! user — not admins, not anyone with an explicit grant on one specific
+//! repo: this is a profile listing, not the repo's own access check, which
+//! still applies independently once you actually open a private repo's
+//! page.
 
 use super::login;
 use crate::webui::{State_, effective_density, effective_locale, effective_theme, identicon, layout, url_encode};
@@ -35,30 +38,28 @@ pub(crate) async fn handler_profile_get(
     // `name` is either a username or a group name, never both (see
     // `access::reserve_namespace`) — only one of these two point lookups
     // ever finds something, cheap either way compared to the old whole-blob
-    // fetch this replaced.
-    let group = access::get_group(ctx.backend().as_ref(), &ctx.cipher, &name).await?.0;
-    let can_see_private = match &viewer {
-        Some(u) if u.username == name => true,
-        // Owner or on any team — any relationship to the group is "close
-        // enough" to see its private repos listed here, same as membership
-        // was before teams existed. The repo's own access check (via
-        // `effective_permission`) still applies independently once you
-        // actually open one.
-        Some(u) => group
-            .as_ref()
-            .is_some_and(|g| g.owners.contains(&u.uid) || g.teams.iter().any(|t| t.members.contains(&u.uid))),
-        None => false,
-    };
-    // `name` names a user xor a group (see `access::reserve_namespace`) —
-    // `group` already answers that; only fetch the `User` when it isn't one.
-    let owner_ref = match &group {
-        Some(g) => Some(OwnerRef::Group(g.uid.clone())),
-        None => access::get_user(ctx.backend().as_ref(), &ctx.cipher, &name)
-            .await?
-            .0
-            .map(|u| OwnerRef::User(u.uid)),
-    };
-    let description = group.and_then(|g| g.description);
+    // fetch this replaced. A group has its own richer page (members,
+    // subgroups): redirect rather than render a second, poorer listing of
+    // the same repos, which is what this page used to do. Every
+    // `RepoConfig::owner` link in the UI points here regardless of which
+    // kind the owner is, so the redirect is what keeps that one link shape
+    // working for both.
+    if access::get_group(ctx.backend().as_ref(), &ctx.cipher, &name)
+        .await?
+        .0
+        .is_some()
+    {
+        return Ok(axum::response::Redirect::to(&format!("/_group/{}", url_encode(&name))).into_response());
+    }
+    // Only this account's own session sees its private repos listed here —
+    // not admins, not someone holding an explicit grant on one of them. The
+    // repo's own access check (via `effective_permission`) still applies
+    // independently once you actually open one.
+    let can_see_private = viewer.as_ref().is_some_and(|u| u.username == name);
+    let owner_ref = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &name)
+        .await?
+        .0
+        .map(|u| OwnerRef::User(u.uid));
     let repos = list_owned_repos(&ctx, owner_ref.as_ref(), viewer.is_some(), can_see_private).await?;
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
@@ -77,7 +78,6 @@ pub(crate) async fn handler_profile_get(
     };
     let body = render_profile(
         &name,
-        description.as_deref(),
         &repos,
         is_own_profile,
         favorites_public,
@@ -108,7 +108,7 @@ pub(crate) async fn handler_profile_get(
 /// (not just trusted from the index) since that index is a hint, not a
 /// fact: a stale entry from a lost race on a rename/transfer could point at
 /// a repo that moved to a different owner since.
-async fn list_owned_repos(
+pub(crate) async fn list_owned_repos(
     ctx: &AppContext,
     owner_ref: Option<&OwnerRef>,
     viewer_logged_in: bool,
@@ -164,7 +164,6 @@ async fn list_owned_repos(
 /// reachable by guessing the URL.
 pub fn render_profile(
     username: &str,
-    description: Option<&str>,
     repos: &[(String, RepoConfig)],
     is_own_profile: bool,
     favorites_public: bool,
@@ -176,14 +175,21 @@ pub fn render_profile(
         @if is_own_profile {
             p class="muted" { a href="/_account/profile" { (gitquarry_i18n::web::auth::profile::account_settings_link(locale)) } }
         }
-        @if let Some(description) = description {
-            p class="muted" { (description) }
-        }
         @if favorites_public {
             p class="muted" {
                 a href=(format!("/_profile/{}/favorites", url_encode(username))) { "view favorites" }
             }
         }
+        (render_repo_table(repos, locale))
+    }
+}
+
+/// The `(name, config)` rows [`list_owned_repos`] returns, as a table —
+/// shared with [`super::group`], which lists a group's repos with the same
+/// badges and the same "nothing here is visible to you" fallback. Callers
+/// have already applied the visibility filter; this only renders.
+pub(crate) fn render_repo_table(repos: &[(String, RepoConfig)], locale: gitquarry_i18n::Locale) -> Markup {
+    html! {
         table class="list" {
             tr { th { "repo" } th { "description" } }
             @if repos.is_empty() {
