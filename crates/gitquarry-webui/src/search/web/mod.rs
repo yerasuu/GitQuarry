@@ -64,15 +64,12 @@ pub(crate) async fn handler_search_get(
         // A hit only carries the repo's `full_name` (that's what the scan
         // was keyed on, and what its links need), so the labels the rows
         // render come back alongside it as a lookup rather than per hit.
-        let labels: HashMap<String, String> = repos
-            .iter()
-            .filter_map(|(name, display_name)| {
-                display_name
-                    .as_deref()
-                    .map(|d| (name.clone(), crate::webui::repo_label::repo_label(name, Some(d))))
-            })
-            .collect();
-        let repo_names: Vec<String> = repos.into_iter().map(|(name, _)| name).collect();
+        let mut repo_names = Vec::with_capacity(repos.len());
+        let mut labels = HashMap::with_capacity(repos.len());
+        for (name, label) in repos {
+            repo_names.push(name.clone());
+            labels.insert(name, label);
+        }
         let (file_hits, files_truncated) = filenames::search_all(&ctx, &repo_names, &q).await;
         let (commit_hits, commits_truncated) = commits::search_all(&ctx, &repo_names, &q).await;
         Some(SearchResults {
@@ -131,9 +128,9 @@ pub struct SearchResults {
     pub files_truncated: bool,
     pub commit_hits: Vec<commits::CommitHit>,
     pub commits_truncated: bool,
-    /// `full_name` -> the label its rows render, for the repos that have a
-    /// `display_name` (absent means "render the name as-is"). Built once per
-    /// request instead of per hit: one repo answers many hits.
+    /// `full_name` -> the label its rows render (absent means "render the
+    /// name as-is"). Built once per request instead of per hit: one repo
+    /// answers many hits.
     pub labels: HashMap<String, String>,
 }
 #[cfg(not(any(test, feature = "test-util")))]

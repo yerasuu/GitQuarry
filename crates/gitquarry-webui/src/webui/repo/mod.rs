@@ -119,10 +119,11 @@ const MAX_BLOB_BYTES: u64 = 1 << 20;
 /// repo's own page, not the list of all of them.
 struct IndexRepo {
     name: String,
-    /// `RepoConfig::display_name` — what every row renders, while `name`
-    /// above stays the string the row's href is built from. See
-    /// [`crate::webui::repo_label::repo_label`].
-    display_name: Option<String>,
+    /// What every row renders ([`crate::webui::repo_label::repo_label`]),
+    /// while `name` above stays the string the row's href is built from.
+    /// Derived once here rather than per render site: this page renders each
+    /// row twice (cards and the compact table), sorts and filters on it too.
+    label: String,
     description: Option<String>,
     archived: bool,
     topics: std::collections::BTreeSet<String>,
@@ -289,7 +290,10 @@ pub(crate) async fn handler_index(
 ) -> Page {
     let viewer_logged_in = login::current_user(&ctx, &headers).await.is_some();
     let mut repos = list_visible_repos(&ctx, viewer_logged_in).await?;
-    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sorted on the label, not the slug: the rows below are ordered by what
+    // the reader can actually see. Namespaces stay contiguous either way —
+    // a label keeps its `<namespace>/` prefix.
+    repos.sort_by(|a, b| a.label.cmp(&b.label));
     // Both stay unaffected by `?q=` below: they describe the whole visible
     // set, not the current search/filter.
     let repo_count = repos.len();
@@ -308,9 +312,9 @@ pub(crate) async fn handler_index(
         .filter(|r| {
             q.is_empty()
                 || r.name.to_ascii_lowercase().contains(&q_lower)
-                // Rows render `display_name`, so the box has to match on it
-                // too — otherwise typing what's on screen finds nothing.
-                || r.display_name.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains(&q_lower))
+                // Matched on the label too, not just the slug — otherwise
+                // typing what's on screen finds nothing.
+                || r.label.to_ascii_lowercase().contains(&q_lower)
                 || r.topics.iter().any(|t| t.contains(&q_lower))
         })
         .collect();
@@ -360,7 +364,7 @@ pub(crate) async fn handler_index(
                 }
                 div class="card card-pad repo-card" {
                     div class="repo-card-title" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo_label(&repo.name, repo.display_name.as_deref())) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.label) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
@@ -403,7 +407,7 @@ pub(crate) async fn handler_index(
                 }
                 div class="rl-row" {
                     div class="rl-name" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo_label(&repo.name, repo.display_name.as_deref())) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.label) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
@@ -501,12 +505,9 @@ pub(crate) async fn handler_index(
     }
     let recent_activity = top_recent_activity(activity, 5);
     // `ActivityItem::repo` is a `full_name` (it's also built from audit
-    // targets, which only ever carry that), so the sidebar looks its
-    // display name back up here rather than carrying one per item.
-    let display_names: HashMap<&str, &str> = repos
-        .iter()
-        .filter_map(|r| r.display_name.as_deref().map(|d| (r.name.as_str(), d)))
-        .collect();
+    // targets, which only ever carry that), so the sidebar looks its label
+    // back up here rather than carrying one per item.
+    let labels: HashMap<&str, &str> = repos.iter().map(|r| (r.name.as_str(), r.label.as_str())).collect();
     let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
         div class="stats-strip" {
@@ -536,7 +537,7 @@ pub(crate) async fn handler_index(
                                 li {
                                     time { (relative_time_ago(item.at, now_unix)) }
                                     div {
-                                        a href=(format!("/{}", url_encode(&item.repo))) { (repo_label(&item.repo, display_names.get(item.repo.as_str()).copied())) }
+                                        a href=(format!("/{}", url_encode(&item.repo))) { (labels.get(item.repo.as_str()).copied().unwrap_or(item.repo.as_str())) }
                                         " " span class="verb" { "— " (item.kind.describe()) }
                                     }
                                 }
@@ -613,8 +614,8 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         };
         if show {
             visible.push(IndexRepo {
+                label: crate::webui::repo_label(&config.full_name, config.display_name.as_deref()),
                 name: config.full_name,
-                display_name: config.display_name,
                 description: config.description,
                 archived: config.archived,
                 topics: config.topics,
@@ -629,20 +630,19 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
     Ok(visible)
 }
 
-/// Just the names out of [`list_visible_repos`], each with its
-/// `display_name` — what `search::web` needs to fan a cross-repo search out
-/// over (the name) and to label the hits it gets back (the display name),
-/// without exposing [`IndexRepo`] (private to this module, and its
-/// `archived`/`topics`/`star_count` fields are index-page-only concerns
-/// search has no use for).
+/// Just the `(full_name, label)` pairs out of [`list_visible_repos`] — what
+/// `search::web` needs to fan a cross-repo search out over (the name) and to
+/// label the hits it gets back, without exposing [`IndexRepo`] (private to
+/// this module, and its `archived`/`topics`/`star_count` fields are
+/// index-page-only concerns search has no use for).
 pub(crate) async fn visible_searchable_repos(
     ctx: &AppContext,
     viewer_logged_in: bool,
-) -> Result<Vec<(String, Option<String>)>> {
+) -> Result<Vec<(String, String)>> {
     Ok(list_visible_repos(ctx, viewer_logged_in)
         .await?
         .into_iter()
-        .map(|r| (r.name, r.display_name))
+        .map(|r| (r.name, r.label))
         .collect())
 }
 
