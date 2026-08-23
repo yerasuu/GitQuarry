@@ -28,6 +28,7 @@ use gitquarry_core::storage::entities::ServerSettings;
 use gitquarry_i18n::web::chrome;
 use maud::{Markup, PreEscaped, html};
 use std::sync::Arc;
+use tracing::warn;
 
 /// `None` if this request may proceed to render an admin page
 /// (`/_settings/*`, `/_users`, a repo's "settings" tab); `Some(response)` is
@@ -1068,12 +1069,12 @@ pub(crate) async fn handler_settings_backup_run_post(
     let detached = Arc::clone(&ctx);
     tokio::spawn(async move {
         match schedule::run_once(&detached, Trigger::Manual).await {
-            Ok(run) if run.outcome == Outcome::Failed => eprintln!(
-                "gitquarry: warning: manual backup failed: {}",
-                run.error.as_deref().unwrap_or("no reason recorded")
+            Ok(run) if run.outcome == Outcome::Failed => warn!(
+                reason = run.error.as_deref().unwrap_or("no reason recorded"),
+                "manual backup failed"
             ),
             Ok(_) => {}
-            Err(e) => eprintln!("gitquarry: warning: manual backup couldn't be recorded: {e:#}"),
+            Err(e) => warn!(error = %e, "manual backup couldn't be recorded"),
         }
     });
 

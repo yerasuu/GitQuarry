@@ -210,6 +210,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use gitquarry_core::app::AppContext;
 use std::sync::Arc;
+use tracing::info;
 
 pub(crate) type State_ = axum::extract::State<Arc<AppContext>>;
 
@@ -518,8 +519,8 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("couldn't listen on {bind_addr}"))?;
-    eprintln!(
-        "gitquarry: web UI on http://{bind_addr} -> bucket '{}' (mirrors in {})",
+    info!(
+        "web UI on http://{bind_addr} -> bucket '{}' (mirrors in {})",
         ctx.bucket,
         ctx.mirrors_root.display()
     );

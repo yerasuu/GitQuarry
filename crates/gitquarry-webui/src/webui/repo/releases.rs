@@ -28,6 +28,7 @@ use maud::{Markup, PreEscaped, html};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tracing::warn;
 
 /// `true` if the current session has at least `Write` on `repo_name` — what
 /// gates showing the create/edit/delete/upload forms at all. The actual
@@ -526,7 +527,7 @@ pub(crate) async fn handler_create_post(
             release::generate_source_archives(&ctx_bg, &resolved_bg, &repo_name_bg, &tag_bg, &uploaded_by_bg, locale)
                 .await
         {
-            eprintln!("warning: release source archives for {repo_name_bg}@{tag_bg} failed: {e:#}");
+            warn!(repo = %repo_name_bg, tag = %tag_bg, error = %e, "release source archives failed");
         }
     });
 
