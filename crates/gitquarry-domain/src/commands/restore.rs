@@ -20,6 +20,7 @@ use anyhow::{Context, Result, bail};
 use gitquarry_core::backup::dest::{self, Dest, Source};
 use gitquarry_core::backup::snapshot;
 use gitquarry_core::{config, storage};
+use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
@@ -128,12 +129,12 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let available = snapshot::list(&resolved.backend, &resolved.cipher).await?;
     if list {
         if available.is_empty() {
-            println!("gitquarry: no snapshots at {configured}");
+            info!("gitquarry: no snapshots at {configured}");
             return Ok(());
         }
-        println!("snapshots at {configured} (newest first):");
+        info!("snapshots at {configured} (newest first):");
         for manifest in &available {
-            println!(
+            info!(
                 "  {}  {} object(s), {} bytes{}",
                 manifest.id,
                 manifest.objects,
@@ -158,32 +159,32 @@ pub async fn run(rest: &[String]) -> Result<()> {
     if !report.manifest.complete {
         // Restoring a partial snapshot is allowed — it's still the best copy
         // available — but it must never look like a full one.
-        println!("warning: snapshot {id} is INCOMPLETE (some objects failed to capture)");
+        warn!("warning: snapshot {id} is INCOMPLETE (some objects failed to capture)");
     }
     if !apply {
-        println!(
+        info!(
             "gitquarry: would restore {} object(s) ({} bytes) from snapshot {id} over the live data in {bucket}.",
             report.restored, report.bytes
         );
-        println!("(dry-run -- run again with --apply to actually overwrite them)");
+        info!("(dry-run -- run again with --apply to actually overwrite them)");
         return Ok(());
     }
 
-    println!(
+    info!(
         "gitquarry: restored {} object(s) ({} bytes) from snapshot {id}.",
         report.restored, report.bytes
     );
     if !report.failures.is_empty() {
-        println!("failures ({}):", report.failures.len());
+        warn!("failures ({}):", report.failures.len());
         for failure in &report.failures {
-            println!("  - {failure}");
+            warn!("  - {failure}");
         }
     }
     // The derived indexes aren't in a snapshot (see `backup::inventory`),
     // and a restored entity set can disagree with whatever they currently
     // hold — saying so here is the difference between a working restore and
     // a repo that exists but shows up nowhere.
-    println!("next: run 'gitquarry backfill-repo-index --apply' to rebuild the derived indexes.");
+    info!("next: run 'gitquarry backfill-repo-index --apply' to rebuild the derived indexes.");
     if !report.failures.is_empty() {
         bail!("{} object(s) failed to restore", report.failures.len());
     }

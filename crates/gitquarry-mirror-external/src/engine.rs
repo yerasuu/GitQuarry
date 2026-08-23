@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::warn;
 
 /// How many CAS-conflict retries [`persist_pulled_ref_to_s3`] attempts
 /// before giving up — same bound `storage::merge_requests::next_mr_number`
@@ -40,7 +41,7 @@ pub async fn run_periodic_sync(ctx: Arc<AppContext>) {
     loop {
         ticker.tick().await;
         if let Err(e) = sync_all_repos_once(&ctx).await {
-            eprintln!("gitquarry-mirror-external: warning: sync tick failed: {e:#}");
+            warn!("sync tick failed: {e:#}");
         }
     }
 }
@@ -69,7 +70,7 @@ async fn sync_all_repos_once(ctx: &AppContext) -> Result<()> {
                 uid: uid.clone(),
             };
             if let Err(e) = sync_repo_mirrors(ctx, &resolved).await {
-                eprintln!("gitquarry-mirror-external: warning: sync failed for repo {uid}: {e:#}");
+                warn!("sync failed for repo {uid}: {e:#}");
             }
             Ok(())
         })
@@ -127,10 +128,7 @@ pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Res
             // nothing moved" has to be read off.
             Ok(report) => report.failure_summary(),
             Err(e) => {
-                eprintln!(
-                    "gitquarry-mirror-external: warning: mirror '{}' ({}) sync failed: {e:#}",
-                    mirror.label, mirror.id
-                );
+                warn!("mirror '{}' ({}) sync failed: {e:#}", mirror.label, mirror.id);
                 Some(format!("{e:#}"))
             }
         };
@@ -140,10 +138,7 @@ pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Res
         if mirror.sync_merge_requests
             && let Err(e) = crate::mr_sync::sync_merge_requests_once(ctx, resolved, &mirror).await
         {
-            eprintln!(
-                "gitquarry-mirror-external: warning: MR sync for mirror '{}' ({}) failed: {e:#}",
-                mirror.label, mirror.id
-            );
+            warn!("MR sync for mirror '{}' ({}) failed: {e:#}", mirror.label, mirror.id);
             // Only if the ref sync above didn't already fail: that one is
             // the more fundamental failure, and it's usually the cause of
             // this one rather than a second, separate problem.
@@ -164,7 +159,7 @@ pub async fn sync_repo_mirrors(ctx: &AppContext, resolved: &ResolvedRepo) -> Res
 /// aborting the sweep over the remaining mirrors.
 async fn record_sync_outcome(ctx: &AppContext, uid: &Uid, mirror_id: &str, failure: Option<String>) {
     if let Err(e) = access::set_mirror_error(ctx.backend().as_ref(), &ctx.cipher, uid, mirror_id, failure).await {
-        eprintln!("gitquarry-mirror-external: warning: couldn't record sync status for mirror {mirror_id}: {e:#}");
+        warn!("couldn't record sync status for mirror {mirror_id}: {e:#}");
     }
 }
 
@@ -470,10 +465,7 @@ async fn record_ref_status(
     )
     .await
     {
-        eprintln!(
-            "gitquarry-mirror-external: warning: couldn't record status for '{ref_name}' on mirror {}: {e:#}",
-            mirror.id
-        );
+        warn!("couldn't record status for '{ref_name}' on mirror {}: {e:#}", mirror.id);
     }
 }
 
@@ -634,8 +626,8 @@ pub async fn sync_mirror_once(
                 )
                 .await
                 {
-                    eprintln!(
-                        "gitquarry-mirror-external: warning: '{ref_name}' synced but recording it on mirror {} failed: {e:#}",
+                    warn!(
+                        "'{ref_name}' synced but recording it on mirror {} failed: {e:#}",
                         mirror.id
                     );
                 }

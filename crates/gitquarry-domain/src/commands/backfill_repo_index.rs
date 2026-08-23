@@ -32,6 +32,7 @@ use gitquarry_core::storage::uid::Uid;
 use gitquarry_core::{config, storage};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
@@ -176,14 +177,14 @@ pub async fn run(rest: &[String]) -> Result<()> {
     }
 
     if unset_owners > 0 {
-        println!(
+        warn!(
             "gitquarry: warning: {unset_owners} repo(s) have an 'owner' with an empty uid (the \"unassigned\" \
              sentinel, not a real owner) -- not indexed, review by hand from each one's settings tab."
         );
     }
 
     if needs_owner.is_empty() && needs_visible.is_empty() && needs_permission.is_empty() && needs_name.is_empty() {
-        println!(
+        info!(
             "gitquarry: {} repo(s) and {} user(s) checked, indexes already up to date.",
             configs.len(),
             users.len()
@@ -191,7 +192,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    println!(
+    info!(
         "gitquarry: {} repo(s) and {} user(s) checked -- {} owner-index entries, {} visible-index, {} \
          permission-index, and {} repo-name entries missing.",
         configs.len(),
@@ -203,7 +204,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     );
 
     if !apply {
-        println!("(dry-run -- run again with --apply to write the indexes)");
+        info!("(dry-run -- run again with --apply to write the indexes)");
         return Ok(());
     }
 
@@ -235,9 +236,9 @@ pub async fn run(rest: &[String]) -> Result<()> {
         })
         .await?;
         if !claimed {
-            println!("gitquarry: warning: '{full_name}' is still claimed by another live repo, left alone.");
+            warn!("gitquarry: warning: '{full_name}' is still claimed by another live repo, left alone.");
         }
     }
-    println!("gitquarry: indexes rebuilt.");
+    info!("gitquarry: indexes rebuilt.");
     Ok(())
 }

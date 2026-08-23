@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tracing::warn;
 
 tokio::task_local! {
     /// Per-request `s3db::RequestCache`-wrapped backend, scoped by
@@ -482,7 +483,7 @@ impl AppContext {
         // unsigned rather than verified. That's a worse-looking page, never
         // a broken repository, and must not stop a clone or a push.
         if let Err(e) = install_instance_allowed_signers(self, &path).await {
-            eprintln!("warning: couldn't teach the mirror this instance's signing key: {e:#}");
+            warn!(error = %e, "couldn't teach the mirror this instance's signing key");
         }
         crate::mirror::sync_bare_repo_from_s3(remote, &path).await?;
         // Marks this mirror as just-queried so the periodic sweep
@@ -490,7 +491,7 @@ impl AppContext {
         // here would just make this mirror a slightly earlier eviction
         // candidate, not worth failing the whole request over.
         if let Err(e) = crate::mirror::gc::touch_last_access(&path).await {
-            eprintln!("warning: {e:#}");
+            warn!(error = %e, "couldn't touch mirror last-access marker");
         }
         Ok((path, guard))
     }

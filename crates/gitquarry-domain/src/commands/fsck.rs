@@ -17,6 +17,7 @@ use anyhow::{Context, Result, bail};
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::remote::MANIFEST_SUFFIX;
 use gitquarry_core::{config, storage};
+use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
@@ -88,34 +89,34 @@ pub async fn run(rest: &[String]) -> Result<()> {
     }
 
     if markers.is_empty() && unexpected.is_empty() {
-        println!("gitquarry: fsck clean -- {} repo(s) checked, nothing odd.", repos.len());
+        info!("gitquarry: fsck clean -- {} repo(s) checked, nothing odd.", repos.len());
         return Ok(());
     }
 
     if !markers.is_empty() {
-        println!("empty-folder placeholders (0 bytes, key ending in '/'):");
+        info!("empty-folder placeholders (0 bytes, key ending in '/'):");
         for key in &markers {
-            println!("  - {key}");
+            info!("  - {key}");
         }
     }
     if !unexpected.is_empty() {
-        println!("unexpected objects (NOT auto-deleted, review by hand):");
+        warn!("unexpected objects (NOT auto-deleted, review by hand):");
         for key in &unexpected {
-            println!("  - {key}");
+            warn!("  - {key}");
         }
     }
 
     if !apply {
-        println!("\n(dry-run -- run again with --apply to delete the placeholders)");
+        info!("(dry-run -- run again with --apply to delete the placeholders)");
         return Ok(());
     }
     if markers.is_empty() {
-        println!("\nnothing --apply can delete (only unexpected objects, untouched).");
+        info!("nothing --apply can delete (only unexpected objects, untouched).");
         return Ok(());
     }
 
     backend.delete_many(&markers).await.context("deleting placeholders")?;
-    println!("\ngitquarry: {} placeholder(s) deleted.", markers.len());
+    info!("gitquarry: {} placeholder(s) deleted.", markers.len());
     Ok(())
 }
 

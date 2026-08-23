@@ -9,6 +9,7 @@ use super::{ForgeApi, MrPatch, NewRemoteMr, RemoteComment, RemoteMr, RemoteMrSta
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::warn;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// One request's page size, and how many pages a list call will walk
@@ -242,7 +243,7 @@ impl ForgeApi for CodebergForge {
                 return Ok(out);
             }
         }
-        eprintln!("gitquarry: warning: stopped listing Gitea MRs after {MAX_PAGES} pages, older ones not synced");
+        warn!("stopped listing Gitea MRs after {MAX_PAGES} pages, older ones not synced");
         Ok(out)
     }
 
@@ -340,9 +341,7 @@ impl ForgeApi for CodebergForge {
                 return Ok(out);
             }
         }
-        eprintln!(
-            "gitquarry: warning: stopped listing comments on Gitea MR #{number} after {MAX_PAGES} pages, the rest wasn't imported"
-        );
+        warn!("stopped listing comments on Gitea MR #{number} after {MAX_PAGES} pages, the rest wasn't imported");
         Ok(out)
     }
 

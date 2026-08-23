@@ -13,6 +13,7 @@ use gitquarry_core::backup::inventory::{Class, Selection};
 use gitquarry_core::backup::report::{BackupRun, Outcome, Trigger};
 use gitquarry_core::backup::schedule;
 use gitquarry_core::{config, storage};
+use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
@@ -129,15 +130,15 @@ pub async fn run(rest: &[String]) -> Result<()> {
 
 fn print_report(run: &BackupRun) {
     let totals = run.totals();
-    println!("gitquarry: backup {} -> {}", run.id, run.dest);
+    info!("gitquarry: backup {} -> {}", run.id, run.dest);
     if let Some(secs) = run.duration_secs() {
-        println!("  took {secs}s");
+        info!("  took {secs}s");
     }
     for class in Class::REPORTABLE {
         let Some(stat) = run.classes.get(class.label()) else {
             continue;
         };
-        println!(
+        info!(
             "  {:<10} copied {:>7}  skipped {:>7}  failed {:>5}  ({} bytes)",
             class.label(),
             stat.copied,
@@ -146,29 +147,29 @@ fn print_report(run: &BackupRun) {
             stat.bytes_copied
         );
     }
-    println!(
+    info!(
         "  total      copied {:>7}  skipped {:>7}  failed {:>5}",
         totals.copied, totals.skipped, totals.failed
     );
     if let Some(id) = &run.snapshot_id {
-        println!("  snapshot   {id}");
+        info!("  snapshot   {id}");
     }
     if !run.unknown_keys.is_empty() {
         // Copied regardless — this is the nudge to go classify them in
         // `backup::inventory`, not a warning that anything was lost.
-        println!("  unclassified objects copied (worth classifying):");
+        info!("  unclassified objects copied (worth classifying):");
         for key in &run.unknown_keys {
-            println!("    - {key}");
+            info!("    - {key}");
         }
     }
     if !run.failures.is_empty() {
-        println!(
+        warn!(
             "  failures ({} total, first {}):",
             run.failures_total,
             run.failures.len()
         );
         for failure in &run.failures {
-            println!("    - {failure}");
+            warn!("    - {failure}");
         }
     }
 }

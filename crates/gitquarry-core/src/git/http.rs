@@ -36,6 +36,7 @@ use gitquarry_auth_crypto::password;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
+use tracing::{error, warn};
 
 /// Request bodies for `POST .../info/lfs/objects/batch` only ever list
 /// oids/sizes, never file content — a generous cap, well above any real
@@ -215,7 +216,7 @@ pub async fn middleware(
     match handle(&ctx, &repo, kind, oid.as_deref(), client, req).await {
         Ok(resp) => resp,
         Err(e) => {
-            eprintln!("gitquarry: git-http: {e:#}");
+            error!(error = %e, "git-http request failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
         }
     }
@@ -304,7 +305,7 @@ async fn handle(
                     // refreshes the local mirror for the next reader, same as
                     // `ssh.rs` does after a push.
                     if let Err(e) = mirror::sync_bare_repo_from_s3(&mirror.remote, &mirror.path).await {
-                        eprintln!("gitquarry: http: couldn't re-sync after push: {e:#}");
+                        warn!(error = %e, "http: couldn't re-sync after push");
                     }
                     // Detached, same reasoning as `ssh.rs`'s own call to
                     // this: `domain::repo::update_primary_language` takes

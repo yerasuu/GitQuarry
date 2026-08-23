@@ -22,6 +22,7 @@ use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::remote::Remote;
 use gitquarry_core::{config, git, storage, validate};
 use std::sync::Arc;
+use tracing::info;
 
 const USAGE: &str = "\
 usage:
@@ -88,15 +89,15 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let old_packs = remote.list_pack_names().await?;
     let (pack_count, total_bytes) = pack_stats(backend.as_ref(), &repo_uid).await?;
     if old_packs.len() <= 1 {
-        println!("gitquarry: '{repo}' already has {pack_count} pack(s), nothing to consolidate.");
+        info!("gitquarry: '{repo}' already has {pack_count} pack(s), nothing to consolidate.");
         return Ok(());
     }
-    println!(
+    info!(
         "gitquarry: '{repo}' has {pack_count} packs ({} total).",
         human_bytes(total_bytes)
     );
     if !apply {
-        println!("(dry-run -- run again with --apply to consolidate)");
+        info!("(dry-run -- run again with --apply to consolidate)");
         return Ok(());
     }
 
@@ -104,7 +105,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let mirror_path = tmp.path();
     git::init_bare(mirror_path).await?;
     gitquarry_core::mirror::sync_bare_repo_from_s3(&remote, mirror_path).await?;
-    println!("gitquarry: running git repack...");
+    info!("gitquarry: running git repack...");
     git::repack(mirror_path).await?;
 
     let new_packs = git::local_pack_names(mirror_path).await?;
@@ -143,7 +144,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     }
 
     let (new_count, new_bytes) = pack_stats(backend.as_ref(), &repo_uid).await?;
-    println!(
+    info!(
         "gitquarry: done -- {pack_count} packs ({}) -> {new_count} packs ({}), {deleted} old one(s) deleted.",
         human_bytes(total_bytes),
         human_bytes(new_bytes),

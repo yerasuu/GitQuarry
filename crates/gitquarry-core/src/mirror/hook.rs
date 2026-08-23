@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
+use tracing::warn;
 
 /// Zero sha: git uses it in the hook for "this ref didn't exist" (creation)
 /// or "doesn't exist anymore" (deletion).
@@ -332,19 +333,21 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
 
     let (repo_config, _) = remote.get_repo_config().await?;
     if repo_config.deleted_at.is_some() {
-        eprintln!("gitquarry: repo is deleted, rejecting pushes.");
+        warn!("repo is deleted, rejecting pushes");
         return Ok(false);
     }
     if repo_config.archived {
-        eprintln!("gitquarry: repo is archived, rejecting pushes.");
+        warn!("repo is archived, rejecting pushes");
         return Ok(false);
     }
     if let Some((used, limit)) =
         crate::auth::access::check_quota(hook_ctx.backend.as_ref(), &hook_ctx.cipher, repo_config.owner.as_ref())
             .await?
     {
-        eprintln!(
-            "gitquarry: push rejected -- owner is over their storage quota ({used} of {limit} bytes used). Free up space or ask an admin to raise the limit."
+        warn!(
+            used_bytes = used,
+            limit_bytes = limit,
+            "push rejected: owner is over their storage quota (free up space or ask an admin to raise the limit)"
         );
         return Ok(false);
     }
@@ -385,11 +388,11 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
         )
         .await?
         {
-            eprintln!("gitquarry: {msg}");
+            warn!("{msg}");
             return Ok(false);
         }
         if let Some(msg) = check_protected(Path::new(&git_dir), &tags_touched, allowed, false, "protected tag").await? {
-            eprintln!("gitquarry: {msg}");
+            warn!("{msg}");
             return Ok(false);
         }
     }
@@ -407,7 +410,7 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
         )
         .await?
         {
-            eprintln!("gitquarry: {msg}");
+            warn!("{msg}");
             return Ok(false);
         }
     }
@@ -419,9 +422,11 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
             .cloned()
             .unwrap_or_else(|| zero_sha_like(&update.new));
         if manifest_sha != update.old {
-            eprintln!(
-                "gitquarry: '{}' changed in S3 since the last fetch (expected {}, currently at {manifest_sha}). Fetch and retry.",
-                update.refname, update.old
+            warn!(
+                refname = %update.refname,
+                expected = %update.old,
+                current = %manifest_sha,
+                "ref changed in S3 since the last fetch, fetch and retry"
             );
             return Ok(false);
         }
@@ -439,11 +444,11 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
             }
             let oversized = git::oversized_new_blobs(Path::new(&git_dir), &update.new, &check_tips, max_size).await?;
             if !oversized.is_empty() {
-                eprintln!("gitquarry: push rejected, blob(s) over {raw_limit} without LFS:");
+                warn!(limit = %raw_limit, "push rejected, blob(s) over the limit without LFS");
                 for (path, size) in &oversized {
-                    eprintln!("  {path} ({size} bytes)");
+                    warn!(%path, size, "oversized blob");
                 }
-                eprintln!("gitquarry: track these with `git lfs track` and re-commit before pushing.");
+                warn!("track these with `git lfs track` and re-commit before pushing");
                 return Ok(false);
             }
             check_tips.push(update.new.clone());
@@ -539,7 +544,7 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
             Ok(true)
         }
         Cas::Conflict => {
-            eprintln!("gitquarry: conflict updating refs.json in S3 (another push won the race). Retry.");
+            warn!("conflict updating refs.json in S3 (another push won the race), retry");
             Ok(false)
         }
     }

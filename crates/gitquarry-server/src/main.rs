@@ -33,13 +33,30 @@ use gitquarry::serve;
 use gitquarry_core::mirror;
 use gitquarry_domain::commands;
 use std::process::ExitCode;
+use tracing::error;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // The one place this initializes: every subcommand below (server, hooks,
+    // fsck/repack/backfill/migrate/backup/restore) shares this process and
+    // this filter. `RUST_LOG` overrides; otherwise `info` — errors/warnings
+    // plus the normal lifecycle events, not per-item debug noise.
+    //
+    // Writer is stderr, not the crate default stdout: `pre-receive-hook`
+    // runs as a subprocess git spawns on every push, and only what it writes
+    // to stderr is guaranteed (across git versions) to reach the pushing
+    // client as a "remote: ..." line -- a rejection logged to stdout instead
+    // could go unseen by the very person who needs to read it.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
+
     match dispatch().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("gitquarry: {e:#}");
+            error!("{e:#}");
             ExitCode::FAILURE
         }
     }
@@ -63,7 +80,7 @@ async fn run_hook() -> Result<()> {
     if mirror::run_pre_receive_hook().await? {
         Ok(())
     } else {
-        // The reason was already printed with detail; exit != 0 so git
+        // The reason was already logged with detail; exit != 0 so git
         // rejects the push.
         std::process::exit(1);
     }
