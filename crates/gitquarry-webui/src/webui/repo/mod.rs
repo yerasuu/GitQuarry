@@ -83,7 +83,8 @@ use tree::render_tree;
 
 use super::{
     AppError, HeaderExtras, Page, State_, compound_path, effective_density, effective_locale, effective_theme,
-    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_link, repo_settings, url_encode,
+    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_label, repo_link, repo_settings,
+    url_encode,
 };
 use crate::auth::web::login;
 use crate::settings::web::require_admin;
@@ -118,6 +119,10 @@ const MAX_BLOB_BYTES: u64 = 1 << 20;
 /// repo's own page, not the list of all of them.
 struct IndexRepo {
     name: String,
+    /// `RepoConfig::display_name` — what every row renders, while `name`
+    /// above stays the string the row's href is built from. See
+    /// [`crate::webui::repo_label::repo_label`].
+    display_name: Option<String>,
     description: Option<String>,
     archived: bool,
     topics: std::collections::BTreeSet<String>,
@@ -303,6 +308,9 @@ pub(crate) async fn handler_index(
         .filter(|r| {
             q.is_empty()
                 || r.name.to_ascii_lowercase().contains(&q_lower)
+                // Rows render `display_name`, so the box has to match on it
+                // too — otherwise typing what's on screen finds nothing.
+                || r.display_name.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains(&q_lower))
                 || r.topics.iter().any(|t| t.contains(&q_lower))
         })
         .collect();
@@ -352,7 +360,7 @@ pub(crate) async fn handler_index(
                 }
                 div class="card card-pad repo-card" {
                     div class="repo-card-title" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo_label(&repo.name, repo.display_name.as_deref())) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
@@ -395,7 +403,7 @@ pub(crate) async fn handler_index(
                 }
                 div class="rl-row" {
                     div class="rl-name" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo_label(&repo.name, repo.display_name.as_deref())) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
@@ -492,6 +500,13 @@ pub(crate) async fn handler_index(
         }
     }
     let recent_activity = top_recent_activity(activity, 5);
+    // `ActivityItem::repo` is a `full_name` (it's also built from audit
+    // targets, which only ever carry that), so the sidebar looks its
+    // display name back up here rather than carrying one per item.
+    let display_names: HashMap<&str, &str> = repos
+        .iter()
+        .filter_map(|r| r.display_name.as_deref().map(|d| (r.name.as_str(), d)))
+        .collect();
     let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
     let body = maud::html! {
         div class="stats-strip" {
@@ -521,7 +536,7 @@ pub(crate) async fn handler_index(
                                 li {
                                     time { (relative_time_ago(item.at, now_unix)) }
                                     div {
-                                        a href=(format!("/{}", url_encode(&item.repo))) { (item.repo) }
+                                        a href=(format!("/{}", url_encode(&item.repo))) { (repo_label(&item.repo, display_names.get(item.repo.as_str()).copied())) }
                                         " " span class="verb" { "— " (item.kind.describe()) }
                                     }
                                 }
@@ -599,6 +614,7 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         if show {
             visible.push(IndexRepo {
                 name: config.full_name,
+                display_name: config.display_name,
                 description: config.description,
                 archived: config.archived,
                 topics: config.topics,
