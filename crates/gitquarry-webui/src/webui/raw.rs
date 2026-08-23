@@ -21,7 +21,7 @@ async fn resolve_visible_repo(
     headers: &HeaderMap,
     raw_repo: &str,
     locale: gitquarry_i18n::Locale,
-) -> Result<(String, ResolvedRepo), AppError> {
+) -> Result<(String, Option<String>, ResolvedRepo), AppError> {
     let name = validate::sanitize_path(raw_repo).map_err(AppError::bad_request)?;
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
@@ -38,7 +38,10 @@ async fn resolve_visible_repo(
             gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     }
-    Ok((name, resolved))
+    // `display_name` comes back too rather than being dropped with the rest
+    // of the config: the atom feed's own title needs it, and re-fetching the
+    // config there would double the reads a polling feed reader costs.
+    Ok((name, config.display_name, resolved))
 }
 
 /// Opens the mirror and resolves its default branch — every raw kind that
@@ -75,7 +78,7 @@ pub(crate) async fn handler_raw_plain(
         if let Some(compound) = resolve_compound_path(&ctx, &headers, &raw_repo, &["refs", "heads"]).await? {
             return export::plain(&compound.mirror.path, &compound.branch, &compound.path, locale).await;
         }
-        let (name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
+        let (name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
         let (mirror, default_rev) = resolve_mirror_and_default_rev(&ctx, &resolved, &name, locale).await?;
         let rev = params.get("ref").map_or(default_rev.as_str(), String::as_str);
         let path = params.get("path").map_or("", String::as_str);
@@ -95,7 +98,7 @@ pub(crate) async fn handler_raw_patch(
 ) -> Response {
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
-        let (_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
+        let (_name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
         let mirror = ctx.open_mirror(&resolved).await?;
         let sha = require_sha(&params, locale)?;
         export::patch(&mirror.path, sha).await
@@ -112,7 +115,7 @@ pub(crate) async fn handler_raw_rawdiff(
 ) -> Response {
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
-        let (_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
+        let (_name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
         let mirror = ctx.open_mirror(&resolved).await?;
         let sha = require_sha(&params, locale)?;
         export::rawdiff(&mirror.path, sha).await
@@ -129,7 +132,7 @@ pub(crate) async fn handler_raw_snapshot(
 ) -> Response {
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
-        let (name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
+        let (name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
         let (mirror, default_rev) = resolve_mirror_and_default_rev(&ctx, &resolved, &name, locale).await?;
         let rev = params.get("ref").map_or(default_rev.as_str(), String::as_str);
         let fmt = params.get("fmt").map_or("tar.gz", String::as_str);
@@ -149,9 +152,9 @@ pub(crate) async fn handler_raw_snapshot(
 pub(crate) async fn handler_raw_atom(State(ctx): State_, Path(raw_repo): Path<String>, headers: HeaderMap) -> Response {
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
-        let (name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
+        let (name, display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
         let (mirror, default_rev) = resolve_mirror_and_default_rev(&ctx, &resolved, &name, locale).await?;
-        export::atom(&mirror.path, &name, &default_rev).await
+        export::atom(&mirror.path, &name, display_name.as_deref(), &default_rev).await
     }
     .await;
     result.unwrap_or_else(AppError::into_plain_response)
@@ -165,7 +168,7 @@ pub(crate) async fn handler_raw_release_asset(
 ) -> Response {
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
-        let (_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
+        let (_name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
         let tag = require_tag(&params, locale)?;
         let filename = require_filename(&params, locale)?;
         export::release_asset(&resolved.remote, tag, filename, locale).await

@@ -199,7 +199,7 @@ async fn renders_full_repo_views_against_real_git() {
         "application/gzip"
     );
 
-    let atom_resp = export::atom(&git_dir, "repo", "main").await.unwrap();
+    let atom_resp = export::atom(&git_dir, "repo", None, "main").await.unwrap();
     assert_eq!(
         atom_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
         "application/atom+xml; charset=utf-8"
