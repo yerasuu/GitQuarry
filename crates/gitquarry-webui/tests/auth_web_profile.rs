@@ -36,6 +36,24 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
 }
 
 #[test]
+fn profile_row_shows_the_display_name_and_links_the_slug() {
+    let (name, mut config) = repo("alice/my-proj", Visibility::Public);
+    config.display_name = Some("My Proj!".to_string());
+    let html = render_profile(
+        "alice",
+        None,
+        &[(name, config)],
+        true,
+        false,
+        None,
+        gitquarry_i18n::Locale::Es,
+    )
+    .into_string();
+    assert!(html.contains(r#"href="/alice/my-proj""#));
+    assert!(html.contains("alice/My Proj!"));
+}
+
+#[test]
 fn profile_marks_private_repos_and_lists_public_ones() {
     let repos = vec![
         repo("alice/public-one", Visibility::Public),

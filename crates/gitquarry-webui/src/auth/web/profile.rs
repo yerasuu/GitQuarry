@@ -192,7 +192,7 @@ pub fn render_profile(
             @for (name, config) in repos {
                 tr {
                     td {
-                        a href=(format!("/{}", url_encode(name))) { (name) }
+                        a href=(format!("/{}", url_encode(name))) { (crate::webui::repo_label::repo_label(name, config.display_name.as_deref())) }
                         @match config.visibility {
                             Visibility::Public => {}
                             Visibility::Limited => { " " span class="badge" { "limited" } }
