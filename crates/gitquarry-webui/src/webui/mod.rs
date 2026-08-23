@@ -204,7 +204,7 @@ use anyhow::{Context, Result};
 use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use gitquarry_core::app::AppContext;
 use std::sync::Arc;
 
@@ -326,6 +326,15 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route(
             "/_settings/oidc",
             get(crate::settings::web::handler_settings_oidc_get).post(crate::settings::web::handler_settings_oidc_post),
+        )
+        .route(
+            "/_settings/backup",
+            get(crate::settings::web::handler_settings_backup_get)
+                .post(crate::settings::web::handler_settings_backup_post),
+        )
+        .route(
+            "/_settings/backup/run",
+            post(crate::settings::web::handler_settings_backup_run_post),
         )
         .route(
             "/_users",
