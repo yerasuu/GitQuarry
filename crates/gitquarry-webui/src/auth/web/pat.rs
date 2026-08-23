@@ -49,10 +49,11 @@ pub(crate) async fn handler_pat_get(State(ctx): State_, headers: HeaderMap) -> R
 }
 
 /// Every repo uid referenced across `tokens`' `scopes` maps, resolved to
-/// its current `full_name` — same purpose as `super::users`'s own
+/// its display label ([`crate::webui::repo_label::repo_label`], so a scope
+/// reads as the repo's public name) — same purpose as `super::users`'s own
 /// `repo_uid_to_name_map`, just scoped to one user's own tokens (expected
 /// to stay small, so a plain sequential resolve is fine, no `JoinSet`
-/// needed).
+/// needed) and display-only: nothing here is submitted back.
 async fn repo_uid_to_name_map(
     ctx: &gitquarry_core::app::AppContext,
     tokens: &[PersonalAccessToken],
@@ -62,7 +63,10 @@ async fn repo_uid_to_name_map(
     for uid in uids {
         if let Ok((config, _etag)) = settings::get_repo_config(ctx.backend().as_ref(), uid.as_str(), &ctx.cipher).await
         {
-            map.insert(uid, config.full_name);
+            map.insert(
+                uid,
+                crate::webui::repo_label(&config.full_name, config.display_name.as_deref()),
+            );
         }
     }
     map
