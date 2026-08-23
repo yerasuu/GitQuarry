@@ -10,6 +10,7 @@
 use anyhow::{Context, Result, bail};
 use gitquarry_core::{config, migrations, storage};
 use std::sync::Arc;
+use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
@@ -54,7 +55,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     );
 
     let stored = migrations::stored_version(backend.as_ref(), &cipher).await?;
-    println!(
+    info!(
         "gitquarry: bucket '{bucket}' is at data version {} of {}.",
         stored.version,
         migrations::CURRENT_DATA_VERSION
@@ -65,23 +66,23 @@ pub async fn run(rest: &[String]) -> Result<()> {
         migrations::plan(&backend, &cipher).await?
     };
     if outcomes.is_empty() {
-        println!("gitquarry: nothing pending.");
+        info!("gitquarry: nothing pending.");
         return Ok(());
     }
     for (migration, outcome) in &outcomes {
-        println!(
+        info!(
             "gitquarry: {} ({}): {}",
             migration.version, migration.name, outcome.summary
         );
         if outcome.incomplete > 0 {
-            println!(
+            warn!(
                 "gitquarry: warning: {} item(s) were changed concurrently and left alone -- run again.",
                 outcome.incomplete
             );
         }
     }
     if !apply {
-        println!("(dry-run -- run again with --apply, or just restart the server, to write the changes)");
+        info!("(dry-run -- run again with --apply, or just restart the server, to write the changes)");
     }
     Ok(())
 }
