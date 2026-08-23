@@ -94,6 +94,9 @@ on a per-release versioning scheme.
 - Security hardening: CSRF double-submit tokens on authenticated forms,
   standard security response headers (CSP, X-Frame-Options, etc.), and
   per-username login rate limiting.
+- Groups drop the old team abstraction for direct members with a role, and
+  can now nest as subgroups under an existing group. A permission granted on
+  a parent group reaches every subgroup and repo underneath it.
 
 ## Repos & organizations
 
@@ -126,6 +129,10 @@ on a per-release versioning scheme.
   the conflicting files and the commands to resolve them locally, instead of
   turning the merge button into an error page.
 - A merged MR still renders after its source branch is deleted.
+- Repos dashboard split into personal, group and granted-access sections.
+- A repo can carry a free-text display name alongside its URL slug, shown
+  everywhere a repo is listed or titled; existing repos get one backfilled
+  automatically the first time they're listed.
 
 ## External mirroring
 
@@ -162,6 +169,16 @@ on a per-release versioning scheme.
 - First-run setup wizard, including storage-driver selection and a
   double-entry admin password confirmation.
 
+## Backup & disaster recovery
+
+- Replicate the whole bucket to another bucket at the same keys, or snapshot
+  it as a versioned point-in-time copy — configurable per-instance and
+  scheduled, or triggered once by hand.
+- Retention pruning on the backup destination, so scheduled runs don't grow
+  it unbounded.
+- `gitquarry backup`/`gitquarry restore` operator commands, and a matching
+  backup settings section in the web UI to configure and trigger it.
+
 ## Search
 
 - Instance-wide search across filenames and commit messages.
@@ -186,6 +203,8 @@ on a per-release versioning scheme.
   instead of the proxy's own. Off unless the proxy owns that header.
 - `gitquarry fsck` to detect stray objects in a repo.
 - `gitquarry repack` to consolidate a repo's packs.
+- `gitquarry migrate` to run pending bucket data-version migrations by hand;
+  the server applies the same migrations to itself automatically at startup.
 - Audit log of admin and repo actions, now including a `repo.push` entry for
   every real git push, not just webui-driven actions.
 - Idle- and size-based eviction of local repo mirrors.
