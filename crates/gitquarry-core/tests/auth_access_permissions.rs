@@ -85,7 +85,7 @@ fn effective_permission_prefers_explicit_repo_grant_over_group() {
     let alice = user_with_repos("alice", &[("acme/proj", Permission::Developer)]);
     let acme = group("acme", &[(&alice, Permission::Reporter)]);
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/proj", &ruid("acme/proj")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
         Some(Permission::Developer)
     );
 }
@@ -97,14 +97,11 @@ fn effective_permission_own_namespace_gets_implicit_owner() {
     let alice = user_with_repos("alice", &[]);
     let bob = user_with_repos("bob", &[]);
     assert_eq!(
-        effective_permission(&alice, None, "alice/proj", &ruid("alice/proj")),
+        effective_permission(&alice, &[], "alice/proj", &ruid("alice/proj")),
         Some(Permission::Owner)
     );
     // Someone else's personal namespace grants nothing.
-    assert_eq!(
-        effective_permission(&bob, None, "alice/proj", &ruid("alice/proj")),
-        None
-    );
+    assert_eq!(effective_permission(&bob, &[], "alice/proj", &ruid("alice/proj")), None);
 }
 
 /// The whole point of the direct-membership model: one entry on the group,
@@ -114,11 +111,11 @@ fn effective_permission_applies_a_group_role_to_every_repo_in_the_group() {
     let alice = user_with_repos("alice", &[]);
     let acme = group("acme", &[(&alice, Permission::Developer)]);
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/web", &ruid("acme/web")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/web", &ruid("acme/web")),
         Some(Permission::Developer)
     );
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/api", &ruid("acme/api")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/api", &ruid("acme/api")),
         Some(Permission::Developer)
     );
 }
@@ -129,7 +126,7 @@ fn effective_permission_grants_nothing_to_a_non_member() {
     let bob = user_with_repos("bob", &[]);
     let acme = group("acme", &[(&alice, Permission::Developer)]);
     assert_eq!(
-        effective_permission(&bob, Some(&acme), "acme/proj", &ruid("acme/proj")),
+        effective_permission(&bob, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
         None
     );
 }
@@ -142,7 +139,7 @@ fn effective_permission_still_honors_a_legacy_owner() {
     let alice = user_with_repos("alice", &[]);
     let acme = legacy_group("acme", &[&alice], vec![]);
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/proj", &ruid("acme/proj")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
         Some(Permission::Owner)
     );
 }
@@ -156,7 +153,7 @@ fn effective_permission_still_honors_an_unscoped_legacy_team() {
         vec![team("everyone", &[&alice], Permission::Developer, None)],
     );
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/proj", &ruid("acme/proj")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
         Some(Permission::Developer)
     );
 }
@@ -173,11 +170,16 @@ fn effective_permission_keeps_a_scoped_legacy_team_scoped() {
         vec![team("frontend", &[&alice], Permission::Developer, Some(&["acme/web"]))],
     );
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/web", &ruid("acme/web")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/web", &ruid("acme/web")),
         Some(Permission::Developer)
     );
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/backend", &ruid("acme/backend")),
+        effective_permission(
+            &alice,
+            std::slice::from_ref(&acme),
+            "acme/backend",
+            &ruid("acme/backend")
+        ),
         None
     );
 }
@@ -188,14 +190,59 @@ fn effective_permission_picks_the_highest_of_the_role_and_the_legacy_grants() {
     let mut acme = group("acme", &[(&alice, Permission::Reporter)]);
     acme.legacy_teams = vec![team("writers", &[&alice], Permission::Developer, Some(&["acme/proj"]))];
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/proj", &ruid("acme/proj")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
         Some(Permission::Developer)
     );
     // Outside the scoped team's repo list, the group-wide role is all
     // that's left.
     assert_eq!(
-        effective_permission(&alice, Some(&acme), "acme/other", &ruid("acme/other")),
+        effective_permission(&alice, std::slice::from_ref(&acme), "acme/other", &ruid("acme/other")),
         Some(Permission::Reporter)
+    );
+}
+
+/// A repo inside a subgroup: membership in the outer group carries down, so
+/// `acme`'s developers can push `acme/team/web` without being listed on the
+/// subgroup at all — that inheritance is the whole reason subgroups exist.
+#[test]
+fn effective_permission_inherits_a_role_from_an_ancestor_group() {
+    let alice = user_with_repos("alice", &[]);
+    let acme = group("acme", &[(&alice, Permission::Developer)]);
+    let team = group("acme/team", &[]);
+    assert_eq!(
+        effective_permission(&alice, &[acme, team], "acme/team/web", &ruid("acme/team/web")),
+        Some(Permission::Developer)
+    );
+}
+
+/// The innermost group wins when it grants more — a subgroup can raise a
+/// member above what they hold in the parent, never lower it (the chain is
+/// a `.max()`, same as every other grant source here).
+#[test]
+fn effective_permission_takes_the_highest_tier_in_the_chain() {
+    let alice = user_with_repos("alice", &[]);
+    let acme = group("acme", &[(&alice, Permission::Reporter)]);
+    let team = group("acme/team", &[(&alice, Permission::Maintainer)]);
+    assert_eq!(
+        effective_permission(&alice, &[acme, team], "acme/team/web", &ruid("acme/team/web")),
+        Some(Permission::Maintainer)
+    );
+}
+
+/// Regression: a repo's namespace is everything before its *last* `/`. Split
+/// on the first one instead and `acme/team/web` resolves against a namespace
+/// of `acme`, which for a personal path (`alice/team/web`) would hand out
+/// implicit `Owner` to whoever happens to be named `alice`.
+#[test]
+fn effective_permission_reads_the_namespace_up_to_the_last_slash() {
+    let alice = user_with_repos("alice", &[]);
+    assert_eq!(
+        effective_permission(&alice, &[], "alice/proj", &ruid("alice/proj")),
+        Some(Permission::Owner)
+    );
+    assert_eq!(
+        effective_permission(&alice, &[], "alice/team/proj", &ruid("alice/team/proj")),
+        None
     );
 }
 
@@ -204,7 +251,7 @@ fn effective_permission_falls_back_to_default_permission_when_no_group_matches()
     let mut alice = user_with_repos("alice", &[]);
     alice.default_permission = Some(Permission::Reporter);
     assert_eq!(
-        effective_permission(&alice, None, "someone/proj", &ruid("someone/proj")),
+        effective_permission(&alice, &[], "someone/proj", &ruid("someone/proj")),
         Some(Permission::Reporter)
     );
 }
@@ -220,17 +267,27 @@ fn can_manage_group_allows_admin_and_owner_members_only() {
     let mia = user_with_repos("mia", &[]);
     let bob = user_with_repos("bob", &[]);
     let acme = group("acme", &[(&alice, Permission::Owner), (&mia, Permission::Maintainer)]);
-    assert!(can_manage_group(Some(&root), Some(&acme))); // global admin
-    assert!(can_manage_group(Some(&alice), Some(&acme))); // owner member
-    assert!(!can_manage_group(Some(&mia), Some(&acme))); // maintainer member
-    assert!(!can_manage_group(Some(&bob), Some(&acme))); // not a member
+    assert!(can_manage_group(Some(&root), std::slice::from_ref(&acme))); // global admin
+    assert!(can_manage_group(Some(&alice), std::slice::from_ref(&acme))); // owner member
+    assert!(!can_manage_group(Some(&mia), std::slice::from_ref(&acme))); // maintainer member
+    assert!(!can_manage_group(Some(&bob), std::slice::from_ref(&acme))); // not a member
+}
+
+/// An `Owner` of the parent runs its subgroups too — otherwise a subgroup
+/// could lock the group that contains it out of itself.
+#[test]
+fn can_manage_group_allows_an_owner_of_an_ancestor() {
+    let alice = user_with_repos("alice", &[]);
+    let acme = group("acme", &[(&alice, Permission::Owner)]);
+    let team = group("acme/team", &[]);
+    assert!(can_manage_group(Some(&alice), &[acme, team]));
 }
 
 #[test]
 fn can_manage_group_still_honors_a_legacy_owner() {
     let alice = user_with_repos("alice", &[]);
     let acme = legacy_group("acme", &[&alice], vec![]);
-    assert!(can_manage_group(Some(&alice), Some(&acme)));
+    assert!(can_manage_group(Some(&alice), std::slice::from_ref(&acme)));
 }
 
 /// `effective_members` is what the group page renders and what
