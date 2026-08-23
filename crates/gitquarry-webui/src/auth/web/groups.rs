@@ -492,7 +492,7 @@ pub fn render_groups_page(
             (gitquarry_i18n::web::auth::groups::groups_prose_access_via_members(locale))
             @for (i, p) in PERMISSION_TIERS.iter().enumerate() {
                 @if i > 0 { "/" }
-                code { (permission_label(*p, locale)) }
+                code { (crate::webui::permission_label(*p, locale)) }
             }
             (gitquarry_i18n::web::auth::groups::groups_prose_role_applies_to_every_repo(locale))
         }
@@ -643,7 +643,7 @@ pub fn render_group(
                         Some(username) => (member_row(&group.name, username, *perm, can_manage, csrf, locale)),
                         None => tr {
                             td { em { (gitquarry_i18n::shared::auth::user_deleted(locale)) } }
-                            td { span class=(crate::webui::permission_badge_class(*perm)) { (permission_label(*perm, locale)) } }
+                            td { span class=(crate::webui::permission_badge_class(*perm)) { (crate::webui::permission_label(*perm, locale)) } }
                             td {}
                         },
                     }
@@ -685,7 +685,7 @@ const PERMISSION_TIERS: [Permission; 5] = [
 
 /// The `perm` field's wire value — the same five lowercase tier names
 /// `domain::group::set_member` parses back. Deliberately not
-/// [`permission_label`], which is translated and would stop round-tripping
+/// `crate::webui::permission_label`, which is translated and would stop round-tripping
 /// the moment the page renders in Spanish.
 fn permission_value(perm: Permission) -> &'static str {
     match perm {
@@ -697,21 +697,11 @@ fn permission_value(perm: Permission) -> &'static str {
     }
 }
 
-fn permission_label(perm: Permission, locale: gitquarry_i18n::Locale) -> String {
-    match perm {
-        Permission::Guest => gitquarry_i18n::web::auth::groups::groups_permission_guest(locale),
-        Permission::Reporter => gitquarry_i18n::web::auth::groups::groups_permission_reporter(locale),
-        Permission::Developer => gitquarry_i18n::web::auth::groups::groups_permission_developer(locale),
-        Permission::Maintainer => gitquarry_i18n::web::auth::groups::groups_permission_maintainer(locale),
-        Permission::Owner => gitquarry_i18n::web::auth::groups::groups_permission_owner(locale),
-    }
-}
-
 fn permission_select(selected: Permission, locale: gitquarry_i18n::Locale) -> Markup {
     html! {
         select name="perm" {
             @for tier in PERMISSION_TIERS {
-                option value=(permission_value(tier)) selected[tier == selected] { (permission_label(tier, locale)) }
+                option value=(permission_value(tier)) selected[tier == selected] { (crate::webui::permission_label(tier, locale)) }
             }
         }
     }
@@ -744,7 +734,7 @@ fn member_row(
                         button type="submit" { (gitquarry_i18n::web::auth::groups::groups_set_role_button(locale)) }
                     }
                 } @else {
-                    span class=(crate::webui::permission_badge_class(perm)) { (permission_label(perm, locale)) }
+                    span class=(crate::webui::permission_badge_class(perm)) { (crate::webui::permission_label(perm, locale)) }
                 }
             }
             td {

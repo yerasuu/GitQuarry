@@ -74,15 +74,12 @@ fn effective_permission_impl(user: &User, chain: &[Group], repo: &str, repo_uid:
 /// member at all. Distinct from repo *access* inside the group, which goes
 /// through [`effective_permission`] instead. Pure/sync, same reasoning as
 /// [`effective_permission`] — [`can_manage_group_for`] is the async wrapper.
-#[cfg(any(test, feature = "test-util"))]
+///
+/// Unconditionally `pub`, unlike [`effective_permission`]'s test-only
+/// export: `webui::auth::web::group` already holds the chain it rendered the
+/// page from, so going through the async wrapper there would re-fetch every
+/// group in it just to answer a question the caller can already answer.
 pub fn can_manage_group(user: Option<&User>, chain: &[Group]) -> bool {
-    can_manage_group_impl(user, chain)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn can_manage_group(user: Option<&User>, chain: &[Group]) -> bool {
-    can_manage_group_impl(user, chain)
-}
-fn can_manage_group_impl(user: Option<&User>, chain: &[Group]) -> bool {
     if user.is_some_and(|u| u.is_admin) {
         return true;
     }
