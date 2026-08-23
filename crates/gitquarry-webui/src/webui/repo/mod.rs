@@ -831,7 +831,7 @@ pub(crate) async fn handler_repo(
         )
         .into_string();
         return Ok(Html(layout(
-            &name,
+            &repo_label(&name, config.display_name.as_deref()),
             &header,
             &body,
             &topnav,
@@ -879,7 +879,7 @@ pub(crate) async fn handler_repo(
         );
         let body = empty_repo_body(&ctx, &name, &headers).await?;
         return Ok(Html(layout(
-            &name,
+            &repo_label(&name, config.display_name.as_deref()),
             &header,
             &body,
             &topnav,
@@ -1123,7 +1123,10 @@ async fn render_repo_view(
             )));
         }
     };
-    Ok(Html(layout(&name, &header, &body, topnav, theme, density, locale)).into_response())
+    // The browser tab reads the repo's public name, same as the heading —
+    // the slug is already in the url right next to it.
+    let title = repo_label(&name, config.display_name.as_deref());
+    Ok(Html(layout(&title, &header, &body, topnav, theme, density, locale)).into_response())
 }
 
 /// `git push` never happened yet (see [`git::browse::resolve_head`]) — same
