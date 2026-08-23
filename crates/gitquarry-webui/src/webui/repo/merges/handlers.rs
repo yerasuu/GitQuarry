@@ -782,6 +782,8 @@ pub(crate) struct EditPrMetadataForm {
 /// title/description/labels/assignees/reviewers is metadata management,
 /// not a write to the repo itself, but still not something a bare
 /// `Reporter` viewer should be able to do to someone else's MR.
+/// `domain::merge_request::edit_metadata` also rejects a non-`Open` MR —
+/// closed/merged MRs aren't editable even by the author or a maintainer.
 pub(crate) async fn handler_edit_metadata_post(
     State(ctx): State_,
     headers: HeaderMap,

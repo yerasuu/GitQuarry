@@ -779,7 +779,7 @@ async fn render_merge_detail_impl(
             locale,
         ))
 
-        @if can_manage {
+        @if can_manage && mr.status == MrStatus::Open {
             h4 { (t::edit_metadata_heading(locale)) }
             form method="post" action="/_merges/edit_metadata" {
                 (PreEscaped(csrf_field(headers)))

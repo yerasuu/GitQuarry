@@ -424,6 +424,12 @@ pub async fn edit_metadata(
             gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
         );
     };
+    if mr.status != MrStatus::Open {
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_wrong_status(locale)
+        );
+    }
     mr.title = title;
     mr.description = edit.description.to_string();
     mr.labels = labels;
