@@ -122,6 +122,7 @@ pub fn render_move_repo_form(
             div class="field" {
                 label { (t::new_name_label(locale)) }
                 input name="new_local_name" value=(new_local_name) required size="30" placeholder=(t::new_name_placeholder(locale));
+                span class="hint" { (t::new_name_hint(locale)) }
             }
             div class="field" {
                 label { (t::confirm_label(locale)) }

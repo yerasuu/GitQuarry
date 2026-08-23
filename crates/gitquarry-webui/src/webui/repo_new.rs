@@ -261,6 +261,7 @@ pub fn render_new_form(
             div class="field" {
                 label { (repo_new_name_label(locale)) }
                 input name="name" size="40" placeholder=(repo_new_name_placeholder(locale)) required autofocus;
+                span class="hint" { (repo_new_name_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_description_label(locale)) }
@@ -319,6 +320,7 @@ fn render_new_form(
             div class="field" {
                 label { (repo_new_name_label(locale)) }
                 input name="name" size="40" placeholder=(repo_new_name_placeholder(locale)) required autofocus;
+                span class="hint" { (repo_new_name_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_description_label(locale)) }
