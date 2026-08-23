@@ -147,13 +147,14 @@ fn every_group_form_targets_groups_list() {
     );
 }
 
-/// Membership, not ownership, is what puts a group on this page: a
-/// `Developer` has to be able to find the group they belong to. Anything
-/// they aren't a member of stays hidden unless they're a global admin.
+/// Which groups reach this page is `visible_groups`' decision (the
+/// `user-group` index for a member, the whole bucket for an admin) — the
+/// renderer draws every row it is handed, including a subgroup reached
+/// through a parent's membership, which has no member entry of its own to
+/// test.
 #[test]
-fn groups_page_lists_the_groups_the_viewer_belongs_to_unless_admin() {
+fn groups_page_renders_every_group_it_is_handed() {
     let alice = Uid::new();
-    let root = Uid::new();
     let groups = vec![
         Group {
             name: "acme".to_string(),
@@ -161,12 +162,43 @@ fn groups_page_lists_the_groups_the_viewer_belongs_to_unless_admin() {
             ..Default::default()
         },
         Group {
-            name: "widgets".to_string(),
+            name: "acme/team".to_string(),
             ..Default::default()
         },
     ];
-    let names = names_with(&alice, "alice");
-    let alice_view = render_groups_page(
+    let view = render_groups_page(
+        &alice,
+        false,
+        &groups,
+        &names_with(&alice, "alice"),
+        "",
+        PageChrome {
+            csrf: "tok",
+            message: None,
+            locale: gitquarry_i18n::Locale::Es,
+        },
+    )
+    .into_string();
+    assert!(view.contains("acme"));
+    assert!(view.contains("acme/team"));
+}
+
+/// A subgroup can only be created under a group the viewer may manage, so a
+/// plain `Developer` gets no parent to pick and no create form at all, while
+/// an `Owner` gets their own group offered as a parent — without being a
+/// global admin, who alone may claim a brand-new top-level namespace.
+#[test]
+fn groups_page_offers_a_parent_only_where_the_viewer_may_create() {
+    let alice = Uid::new();
+    let bob = Uid::new();
+    let groups = vec![Group {
+        name: "acme".to_string(),
+        members: BTreeMap::from([(alice.clone(), Permission::Owner), (bob.clone(), Permission::Developer)]),
+        ..Default::default()
+    }];
+    let names = HashMap::from([(alice.clone(), "alice".to_string()), (bob.clone(), "bob".to_string())]);
+
+    let owner_view = render_groups_page(
         &alice,
         false,
         &groups,
@@ -175,26 +207,27 @@ fn groups_page_lists_the_groups_the_viewer_belongs_to_unless_admin() {
         PageChrome {
             csrf: "tok",
             message: None,
-            locale: gitquarry_i18n::Locale::Es,
+            locale: gitquarry_i18n::Locale::En,
         },
     )
     .into_string();
-    assert!(alice_view.contains("acme"));
-    assert!(!alice_view.contains("widgets"));
+    assert!(owner_view.contains(r#"value="add_group""#));
+    assert!(owner_view.contains(r#"<option value="acme">"#));
+    // Only an admin may create outside an existing group.
+    assert!(!owner_view.contains(r#"<option value="">"#));
 
-    let admin_view = render_groups_page(
-        &root,
-        true,
+    let member_view = render_groups_page(
+        &bob,
+        false,
         &groups,
         &names,
         "",
         PageChrome {
             csrf: "tok",
             message: None,
-            locale: gitquarry_i18n::Locale::Es,
+            locale: gitquarry_i18n::Locale::En,
         },
     )
     .into_string();
-    assert!(admin_view.contains("acme"));
-    assert!(admin_view.contains("widgets"));
+    assert!(!member_view.contains(r#"value="add_group""#));
 }

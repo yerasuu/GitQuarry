@@ -44,7 +44,7 @@ pub(crate) async fn handler_groups_get(
     let Some(me) = login::current_user(&ctx, &headers).await else {
         return Ok(login_redirect());
     };
-    let mut groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
+    let mut groups = visible_groups(&ctx, &me).await?;
     let q = params.get("q").cloned().unwrap_or_default();
     let q_lower = q.to_ascii_lowercase();
     groups.retain(|g| q.is_empty() || g.name.to_ascii_lowercase().contains(&q_lower));
@@ -74,6 +74,42 @@ pub(crate) async fn handler_groups_get(
         locale,
     ))
     .into_response())
+}
+
+/// The groups this page may show `me`: every group in the bucket for a
+/// global admin, and only the ones they actually belong to otherwise —
+/// read from `access::list_groups_for_user`, not by fetching every group and
+/// testing its member map, which is the whole-bucket scan the index exists
+/// to avoid. Subgroups of a group `me` belongs to are included: membership
+/// is inherited downward (`access::effective_permission`), so a group whose
+/// repos `me` can reach has to be reachable from this page too.
+async fn visible_groups(
+    ctx: &gitquarry_core::app::AppContext,
+    me: &User,
+) -> Result<Vec<gitquarry_core::auth::entities::Group>, AppError> {
+    if me.is_admin {
+        return Ok(access::list_all_groups(&ctx.backend(), &ctx.cipher).await?);
+    }
+    let direct = access::list_groups_for_user(ctx.backend().as_ref(), &ctx.cipher, &me.uid).await?;
+    let mut groups = Vec::new();
+    let mut frontier = direct;
+    // Breadth-first over the child index, bounded by `MAX_GROUP_DEPTH`
+    // levels the same way `ancestor_group_names` bounds the other
+    // direction — a subtree can be wide, but never deeper than a group
+    // path is allowed to be.
+    for _ in 0..access::MAX_GROUP_DEPTH {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for group in frontier {
+            next.extend(access::list_child_groups(ctx.backend().as_ref(), &ctx.cipher, &group.uid).await?);
+            groups.push(group);
+        }
+        frontier = next;
+    }
+    groups.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(groups)
 }
 
 /// Every user's `uid -> username`, for rendering [`Group::members`]
@@ -188,7 +224,7 @@ pub(crate) async fn handler_groups_post(
             Flash::Err(&invalid_msg)
         }
     };
-    let mut groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
+    let mut groups = visible_groups(&ctx, &me).await?;
     // A group this same request just created may not show up in the LIST
     // above yet — `create`'s own transaction already returned `Cas::Ok`
     // (the object write landed), but the object-store backend's LIST
@@ -533,10 +569,10 @@ fn render_groups_list(
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    let visible: Vec<&Group> = groups
-        .iter()
-        .filter(|g| is_admin || g.role_of(viewer).is_some())
-        .collect();
+    // No membership filter here: `visible_groups` already decided what this
+    // viewer may see, and a subgroup they reach through a parent's
+    // membership has no member entry of its own to test.
+    let visible: Vec<&Group> = groups.iter().collect();
     html! {
         div id="groups-list" {
             @if visible.is_empty() {

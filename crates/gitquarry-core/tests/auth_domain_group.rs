@@ -266,3 +266,58 @@ async fn create_repo_refuses_a_path_a_subgroup_already_holds() {
     // A path the subgroup doesn't hold is unaffected.
     assert!(ctx.create_repo("acme/team/web").await.unwrap().is_some());
 }
+
+/// "The groups I belong to" has to come off an index, not a scan of every
+/// group in the bucket — and a stale pointer (a lost CAS, a membership
+/// removed elsewhere) must be dropped on read rather than trusted.
+#[tokio::test]
+async fn list_groups_for_user_reads_the_index_and_drops_stale_pointers() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let ctx = test_ctx(backend, cipher);
+    let alice = stored_user(&ctx, "alice").await;
+    let creator = Uid::new();
+    create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
+    let (group, etag) = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap();
+    let mut group = group.unwrap();
+    set_member(&ctx, &mut group, "alice", "developer", gitquarry_i18n::Locale::En)
+        .await
+        .unwrap();
+    gitquarry_core::auth::access::put_group(ctx.backend().as_ref(), &ctx.cipher, &group, etag.as_deref())
+        .await
+        .unwrap();
+    let mine = gitquarry_core::auth::access::list_groups_for_user(ctx.backend().as_ref(), &ctx.cipher, &alice.uid)
+        .await
+        .unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].name, "acme");
+
+    // The creator's own pointer resolves too — `create` indexes every
+    // member it starts with, not just the ones added later.
+    let creators = gitquarry_core::auth::access::list_groups_for_user(ctx.backend().as_ref(), &ctx.cipher, &creator)
+        .await
+        .unwrap();
+    assert_eq!(creators.len(), 1);
+
+    // A pointer whose group no longer lists this user is stale, not a
+    // membership: dropped on read.
+    let (group, etag) = gitquarry_core::auth::access::get_group(ctx.backend().as_ref(), &ctx.cipher, "acme")
+        .await
+        .unwrap();
+    let mut group = group.unwrap();
+    group.members.remove(&alice.uid);
+    gitquarry_core::auth::access::put_group(ctx.backend().as_ref(), &ctx.cipher, &group, etag.as_deref())
+        .await
+        .unwrap();
+    assert!(
+        gitquarry_core::auth::access::list_groups_for_user(ctx.backend().as_ref(), &ctx.cipher, &alice.uid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

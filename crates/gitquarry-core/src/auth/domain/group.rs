@@ -102,6 +102,9 @@ pub async fn create(
     if let Some(parent_uid) = &group.parent {
         access::add_child_group_index(ctx.backend().as_ref(), &ctx.cipher, parent_uid, &group.uid).await;
     }
+    for member_uid in group.members.keys() {
+        access::add_user_group_index(ctx.backend().as_ref(), &ctx.cipher, member_uid, &group.uid).await;
+    }
     Ok(Some(cas))
 }
 
@@ -125,6 +128,13 @@ pub async fn delete(ctx: &AppContext, name: &str, locale: gitquarry_i18n::Locale
         }
         if let Some(parent_uid) = &group.parent {
             access::remove_child_group_index(ctx.backend().as_ref(), &ctx.cipher, parent_uid, &group.uid).await;
+        }
+        // Every member's own "groups I belong to" pointer, including the
+        // legacy ones: a leftover entry is harmless (`list_groups_for_user`
+        // drops what no longer resolves) but keeps a deleted group showing
+        // up in that listing's fetch cost forever.
+        for member_uid in group.effective_members().keys() {
+            access::remove_user_group_index(ctx.backend().as_ref(), &ctx.cipher, member_uid, &group.uid).await;
         }
         let _ = group.release_uid(ctx.backend().as_ref()).await;
     }
@@ -166,6 +176,7 @@ pub async fn set_member(
         .await?
         .0
         .with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
+    access::add_user_group_index(ctx.backend().as_ref(), &ctx.cipher, &user.uid, &group.uid).await;
     group.members.insert(user.uid, permission);
     Ok(())
 }
@@ -188,6 +199,7 @@ pub async fn remove_member(ctx: &AppContext, group: &mut Group, username: &str) 
         for team in &mut group.legacy_teams {
             team.members.remove(&user.uid);
         }
+        access::remove_user_group_index(ctx.backend().as_ref(), &ctx.cipher, &user.uid, &group.uid).await;
     }
     Ok(())
 }

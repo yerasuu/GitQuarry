@@ -93,6 +93,61 @@ pub async fn delete_group_object(backend: &dyn Backend, cipher: &Cipher, name: &
     let _ = Group::delete(backend, cipher, name).await;
 }
 
+fn user_group_index(user_uid: &Uid) -> s3db::Collection {
+    s3db::Collection::new_owned(format!("{}/user-group/{user_uid}", crate::storage::INDEX_PREFIX))
+}
+
+/// Marks `user_uid` as a member of `group_uid` — content unused, existence
+/// is the fact, same shape as the repo-owner index. Without it, "the groups
+/// I belong to" (the `/_groups` list, the group tab of the repos page, the
+/// namespaces `/_new` offers) can only be answered by fetching *every* group
+/// in the bucket and testing each one's member map, which is exactly the
+/// whole-bucket scan these indexes exist to avoid.
+///
+/// Best-effort, and written by the `&mut Group` mutators
+/// (`domain::group::set_member`) rather than after the group's own CAS
+/// lands: a lost CAS leaves an entry pointing at a membership that never
+/// happened, which [`list_groups_for_user`] filters out by re-reading the
+/// group's own member map — hint, never fact, same doctrine as every other
+/// index here.
+pub async fn add_user_group_index(backend: &dyn Backend, cipher: &Cipher, user_uid: &Uid, group_uid: &Uid) {
+    let _ = user_group_index(user_uid)
+        .put(backend, cipher, group_uid.as_str(), &(), None)
+        .await;
+}
+
+pub async fn remove_user_group_index(backend: &dyn Backend, cipher: &Cipher, user_uid: &Uid, group_uid: &Uid) {
+    let _ = user_group_index(user_uid)
+        .delete(backend, cipher, group_uid.as_str())
+        .await;
+}
+
+/// The groups `user_uid` is actually a member of, resolved through
+/// [`add_user_group_index`] rather than a bucket-wide group scan. A stale
+/// entry (a lost CAS on the group write, a membership since removed on a
+/// path that missed its index cleanup) resolves to a group whose own
+/// `role_of` no longer answers for this user and is dropped here rather than
+/// trusted.
+///
+/// Only *direct* membership: a member of `acme` inherits their tier in
+/// `acme/team` (`permissions::effective_permission` walks the name chain for
+/// that), but `acme/team` is not a group they belong to — it shows up under
+/// its parent, the way GitLab lists a subgroup inside the group rather than
+/// beside it.
+pub async fn list_groups_for_user(backend: &dyn Backend, cipher: &Cipher, user_uid: &Uid) -> Result<Vec<Group>> {
+    let mut groups = Vec::new();
+    for name in user_group_index(user_uid).list_names(backend).await? {
+        let Some(group) = resolve_group_uid(backend, cipher, &Uid::from(name)).await? else {
+            continue;
+        };
+        if group.role_of(user_uid).is_some() {
+            groups.push(group);
+        }
+    }
+    groups.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(groups)
+}
+
 fn child_group_index(parent_uid: &Uid) -> s3db::Collection {
     s3db::Collection::new_owned(format!("{}/group-child/{parent_uid}", crate::storage::INDEX_PREFIX))
 }
