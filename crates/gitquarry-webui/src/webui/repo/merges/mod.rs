@@ -112,6 +112,7 @@ fn render_mr_actions(
     can_manage: bool,
     can_merge: bool,
     is_same_repo: bool,
+    source_branch_protected: bool,
     fast_forwardable: bool,
     repo_name: &str,
     repo_uid: &gitquarry_core::storage::uid::Uid,
@@ -168,7 +169,7 @@ fn render_mr_actions(
                 }
             }
             @if can_merge && !mr.is_draft && mr.status == MrStatus::Open {
-                form method="post" action="/_merges/merge" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
+                form method="post" action="/_merges/merge" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo && !source_branch_protected { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
                     (PreEscaped(csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="number" value=(mr.number);
@@ -187,7 +188,7 @@ fn render_mr_actions(
                             @if !fast_forwardable { " " (t::merge_strategy_fast_forward_unavailable(locale)) }
                         }
                     }
-                    @if is_same_repo {
+                    @if is_same_repo && !source_branch_protected {
                         label {
                             input type="checkbox" name="delete_branch" value="1";
                             " " (t::delete_branch_checkbox_label(locale))
@@ -772,6 +773,7 @@ async fn render_merge_detail_impl(
             can_manage,
             can_merge,
             mr.source_repo == target.uid,
+            mr.source_repo == target.uid && target_config.protected_branches.contains(mr.source_branch.as_str()),
             fast_forwardable,
             repo_name,
             repo_uid,
