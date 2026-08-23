@@ -629,15 +629,20 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
     Ok(visible)
 }
 
-/// Just the names out of [`list_visible_repos`] — what `search::web` needs
-/// to fan a cross-repo search out over, without exposing [`IndexRepo`]
-/// (private to this module, and its `archived`/`topics`/`star_count` fields
-/// are index-page-only concerns search has no use for).
-pub(crate) async fn visible_repo_names(ctx: &AppContext, viewer_logged_in: bool) -> Result<Vec<String>> {
+/// Just the names out of [`list_visible_repos`], each with its
+/// `display_name` — what `search::web` needs to fan a cross-repo search out
+/// over (the name) and to label the hits it gets back (the display name),
+/// without exposing [`IndexRepo`] (private to this module, and its
+/// `archived`/`topics`/`star_count` fields are index-page-only concerns
+/// search has no use for).
+pub(crate) async fn visible_searchable_repos(
+    ctx: &AppContext,
+    viewer_logged_in: bool,
+) -> Result<Vec<(String, Option<String>)>> {
     Ok(list_visible_repos(ctx, viewer_logged_in)
         .await?
         .into_iter()
-        .map(|r| r.name)
+        .map(|r| (r.name, r.display_name))
         .collect())
 }
 
