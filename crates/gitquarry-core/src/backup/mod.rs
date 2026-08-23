@@ -22,6 +22,7 @@
 //! [`inventory`] is what decides which data goes through which, and is the
 //! only place that knows the bucket's full layout.
 
+pub mod dest;
 pub mod inventory;
 mod pager;
 pub mod replica;
