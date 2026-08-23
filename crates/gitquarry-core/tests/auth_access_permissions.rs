@@ -67,7 +67,7 @@ fn group(name: &str, members: &[(&User, Permission)]) -> Group {
 }
 
 /// A group whose stored record still predates `Group::members` — what a
-/// bucket looks like before `migrate-group-members` runs. Every test using
+/// bucket looks like before the `group-members` data migration runs. Every test using
 /// this is asserting that the upgrade doesn't silently revoke access.
 fn legacy_group(name: &str, owners: &[&User], teams: Vec<Team>) -> Group {
     Group {
@@ -133,7 +133,7 @@ fn effective_permission_grants_nothing_to_a_non_member() {
     );
 }
 
-/// Regression: a bucket upgraded before `migrate-group-members` runs still
+/// Regression: a bucket upgraded before the `group-members` data migration runs still
 /// has its membership in `owners`/`teams`, and those must keep granting —
 /// reading only `members` there would revoke everyone at once.
 #[test]
@@ -293,7 +293,7 @@ fn can_manage_group_still_honors_a_legacy_owner() {
 }
 
 /// `effective_members` is what the group page renders and what
-/// `migrate-group-members` writes back: the union, at the highest tier each
+/// the `group-members` data migration writes back: the union, at the highest tier each
 /// user reaches, minus anyone whose only grant is a scoped legacy team
 /// (they hold no group-wide tier at all).
 #[test]

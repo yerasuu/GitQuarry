@@ -183,7 +183,7 @@ pub async fn set_member(
 
 /// Drops `username` from the group entirely. Also strips them out of the
 /// legacy fields ([`Group::legacy_owners`]/[`Group::legacy_teams`]): those
-/// still grant access until `migrate-group-members` runs, so removing only
+/// still grant access until the `group-members` data migration runs, so removing only
 /// the [`Group::members`] entry would leave a removed member with their old
 /// tier intact — a silent no-op exactly where one is least acceptable.
 ///

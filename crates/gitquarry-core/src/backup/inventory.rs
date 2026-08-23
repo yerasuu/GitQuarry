@@ -166,7 +166,10 @@ fn classify_repo(rest: &str) -> Class {
 
 /// `rest` is everything after `.conf/`.
 fn classify_conf(rest: &str) -> Class {
-    if matches!(rest, "global.json" | "ssh_host_key.json" | "signing_key.json") {
+    if matches!(
+        rest,
+        "global.json" | "ssh_host_key.json" | "signing_key.json" | "data-version.json"
+    ) {
         return Class::Entities;
     }
     if rest.starts_with("users/") || rest.starts_with("groups/") || rest.starts_with("pat/") {

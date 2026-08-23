@@ -5,6 +5,6 @@
 pub mod backfill_repo_index;
 pub mod backup;
 pub mod fsck;
-pub mod migrate_group_members;
+pub mod migrate;
 pub mod repack;
 pub mod restore;

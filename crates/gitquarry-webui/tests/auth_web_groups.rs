@@ -85,7 +85,7 @@ fn render_group_shows_member_forms_only_to_a_manager() {
     assert!(!member_view.contains(r#"value="remove_member""#));
 }
 
-/// The legacy fields still grant access until `migrate-group-members` runs,
+/// The legacy fields still grant access until the `group-members` data migration runs,
 /// and a team scoped to only some repos can't be shown as a group-wide role
 /// — so the page has to say so rather than render a member table that looks
 /// complete but isn't.
@@ -102,7 +102,7 @@ fn render_group_warns_while_legacy_owners_or_teams_remain() {
         gitquarry_i18n::Locale::En,
     )
     .into_string();
-    assert!(!clean.contains("migrate-group-members"));
+    assert!(!clean.contains("gitquarry migrate"));
 
     group.legacy_teams = vec![Team {
         name: "frontend".to_string(),
@@ -119,7 +119,7 @@ fn render_group_warns_while_legacy_owners_or_teams_remain() {
         gitquarry_i18n::Locale::En,
     )
     .into_string();
-    assert!(stale.contains("migrate-group-members"));
+    assert!(stale.contains("gitquarry migrate"));
 }
 
 /// Regression: every form on this page targets the same `#groups-list`.

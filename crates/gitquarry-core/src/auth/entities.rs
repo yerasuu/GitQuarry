@@ -360,10 +360,10 @@ pub struct Group {
     pub storage_quota_bytes: Option<u64>,
     /// Pre-[`Self::members`] membership, kept only so that upgrading a
     /// bucket doesn't silently revoke everyone: [`Self::role_of`] still
-    /// honors it, and `gitquarry migrate-group-members` folds it into
-    /// `members` (subset-scoped teams become explicit per-repo grants on
-    /// each member's own `User::repos`, which is the only lossless place for
-    /// them) and clears both fields. Renamed rather than dropped so every
+    /// honors it, and `migrations::group_members` (applied automatically at
+    /// server startup) folds it into `members` — subset-scoped teams become
+    /// explicit per-repo grants on each member's own `User::repos`, the only
+    /// lossless place for them — then clears both fields. Renamed rather than dropped so every
     /// call site that used to read them is a compile error instead of
     /// silently reading an empty default.
     #[serde(default, rename = "owners", skip_serializing_if = "BTreeSet::is_empty")]
@@ -397,7 +397,7 @@ impl Group {
 
     /// Every user with a group-wide tier here, [`Self::members`] raised by
     /// whatever the legacy fields still grant — what the group page renders
-    /// and what `migrate-group-members` writes back into `members`. A user
+    /// and what the `group-members` data migration writes back into `members`. A user
     /// whose only legacy grant is a subset-scoped team is deliberately
     /// absent: they hold no group-wide tier at all (see
     /// [`Self::legacy_repo_role`]).

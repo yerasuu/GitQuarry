@@ -14,6 +14,7 @@ pub mod crypto;
 pub mod domain;
 pub mod events;
 pub mod git;
+pub mod migrations;
 pub mod mirror;
 pub mod storage;
 pub mod validate;

@@ -118,7 +118,7 @@ async fn set_member_rejects_an_unknown_tier_and_an_unknown_user() {
 }
 
 /// Regression: the legacy fields still grant access until
-/// `migrate-group-members` runs, so dropping only the `members` entry would
+/// the `group-members` data migration runs, so dropping only the `members` entry would
 /// leave a removed member with their old tier fully intact — a silent no-op
 /// exactly where one is least acceptable.
 #[tokio::test]

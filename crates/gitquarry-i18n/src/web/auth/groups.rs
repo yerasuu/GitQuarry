@@ -67,7 +67,7 @@ msg!(
     /// group-wide role, so the page says so instead of quietly listing an
     /// incomplete member table.
     groups_legacy_pending_warning() {
-    Locale::Es => "este grupo todavía tiene propietarios/equipos del modelo anterior: siguen dando acceso, pero un equipo limitado a algunos repos no aparece aquí. Ejecuta 'gitquarry migrate-group-members --apply' para convertirlos.",
-    Locale::En => "this group still carries owners/teams from the old model: they still grant access, but a team scoped to only some repos isn't listed here. Run 'gitquarry migrate-group-members --apply' to convert them.",
+    Locale::Es => "este grupo todavía tiene propietarios/equipos del modelo anterior: siguen dando acceso, pero un equipo limitado a algunos repos no aparece aquí. Se convierten solos al reiniciar el servidor, o con 'gitquarry migrate --apply'.",
+    Locale::En => "this group still carries owners/teams from the old model: they still grant access, but a team scoped to only some repos isn't listed here. Restarting the server converts them, as does 'gitquarry migrate --apply'.",
     }
 );

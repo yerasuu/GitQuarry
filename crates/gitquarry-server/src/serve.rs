@@ -277,6 +277,33 @@ pub async fn run(rest: &[String]) -> Result<()> {
         Err(e) => eprintln!("gitquarry: warning: stale-transaction recovery sweep failed, continuing: {e:#}"),
     }
 
+    // Bucket data migrations, before either server accepts a connection:
+    // this instance is about to serve pages that read the *migrated* shape
+    // (a group's member map, the user-group index), so a bucket written by
+    // an older release gets brought forward first rather than rendering as
+    // though its groups had no members. See `gitquarry_core::migrations`.
+    //
+    // A real failure here is fatal, deliberately: same reasoning as the
+    // wrong-passphrase check above — starting anyway would leave the
+    // operator diagnosing wrong-looking pages instead of reading one clear
+    // error. A pass that merely couldn't finish every item (a concurrent
+    // edit won a CAS) is not fatal: the pre-migration data still grants
+    // exactly what it did before, so the server starts and the next
+    // startup, or `gitquarry migrate --apply`, picks up the rest.
+    for (migration, outcome) in gitquarry_core::migrations::run_pending(&backend, &cipher).await? {
+        eprintln!(
+            "gitquarry: applied data migration {} ({}): {}",
+            migration.version, migration.name, outcome.summary
+        );
+        if outcome.incomplete > 0 {
+            eprintln!(
+                "gitquarry: warning: data migration {} left {} item(s) alone (changed concurrently) -- \
+                 rerun with 'gitquarry migrate --apply' or restart",
+                migration.version, outcome.incomplete
+            );
+        }
+    }
+
     let ctx = Arc::new(AppContext {
         bucket,
         ssh_bind: ssh_bind.clone(),
