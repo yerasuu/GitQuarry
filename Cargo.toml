@@ -30,5 +30,5 @@ version = "0.4.5"
 edition = "2024"
 # Raising this is a breaking change for anyone building from source, so it
 # moves deliberately and all at once -- never one crate at a time.
-rust-version = "1.97"
+rust-version = "1.98"
 license = "AGPL-3.0-or-later"
