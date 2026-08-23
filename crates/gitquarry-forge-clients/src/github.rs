@@ -6,6 +6,7 @@ use super::{ForgeApi, MrPatch, NewRemoteMr, RemoteComment, RemoteMr, RemoteMrSta
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::warn;
 
 /// github.com's API lives on its own host; every GitHub Enterprise Server
 /// instance serves it under `/api/v3` on the same host as the repos. Which
@@ -264,7 +265,7 @@ impl ForgeApi for GitHubForge {
                 return Ok(out);
             }
         }
-        eprintln!("gitquarry: warning: stopped listing GitHub MRs after {MAX_PAGES} pages, older ones not synced");
+        warn!("stopped listing GitHub MRs after {MAX_PAGES} pages, older ones not synced");
         Ok(out)
     }
 
@@ -367,9 +368,7 @@ impl ForgeApi for GitHubForge {
                 return Ok(out);
             }
         }
-        eprintln!(
-            "gitquarry: warning: stopped listing comments on GitHub MR #{number} after {MAX_PAGES} pages, the rest wasn't imported"
-        );
+        warn!("stopped listing comments on GitHub MR #{number} after {MAX_PAGES} pages, the rest wasn't imported");
         Ok(out)
     }
 
