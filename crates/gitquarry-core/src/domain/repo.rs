@@ -93,6 +93,7 @@ pub async fn resolve_owner_ref(ctx: &AppContext, namespace: &str) -> Result<Opti
 pub async fn create(
     ctx: &AppContext,
     full_name: &str,
+    display_name: Option<String>,
     owner: Option<OwnerRef>,
     description: Option<String>,
     visibility: Visibility,
@@ -109,6 +110,7 @@ pub async fn create(
     let config = RepoConfig {
         uid: resolved.uid.clone(),
         full_name: full_name.to_string(),
+        display_name,
         description,
         owner,
         visibility,
@@ -156,6 +158,7 @@ pub async fn rename(
     current_full_name: &str,
     new_full_name: &str,
     new_owner: OwnerRef,
+    new_display_name: Option<String>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<String>> {
     let claimed = storage::settings::claim_repo_name_self_healing(
@@ -177,6 +180,7 @@ pub async fn rename(
     let new_config = RepoConfig {
         full_name: new_full_name.to_string(),
         owner: Some(new_owner),
+        display_name: new_display_name,
         ..current_config
     };
     match storage::settings::put_repo_config(
@@ -341,6 +345,7 @@ pub async fn fork(
     ctx: &AppContext,
     source: &ResolvedRepo,
     dest_full_name: &str,
+    dest_display_name: Option<String>,
     dest_owner: OwnerRef,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<ResolvedRepo>> {
@@ -361,6 +366,7 @@ pub async fn fork(
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: dest_display_name,
         description: source_config.description.clone(),
         owner: Some(dest_owner),
         visibility: source_config.visibility,
@@ -462,6 +468,7 @@ pub async fn create_from_template(
     ctx: &AppContext,
     source: &ResolvedRepo,
     dest_full_name: &str,
+    dest_display_name: Option<String>,
     dest_owner: OwnerRef,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<ResolvedRepo>> {
@@ -485,6 +492,7 @@ pub async fn create_from_template(
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: dest_display_name,
         description: source_config.description.clone(),
         owner: Some(dest_owner),
         visibility: source_config.visibility,
@@ -810,6 +818,38 @@ pub fn normalize_topic(raw: &str) -> Option<String> {
         .take(32)
         .collect();
     (!normalized.is_empty()).then_some(normalized)
+}
+
+const MAX_REPO_SLUG_LEN: usize = 100;
+
+/// Derives a `sanitize_path`-safe local-name segment from a repo's free-text
+/// `display_name` — unlike [`normalize_topic`], case is preserved (a repo
+/// slug isn't a search facet, no reason to force it lowercase) and the
+/// result is meant to round-trip back through `sanitize_path` unchanged, not
+/// just be safe to drop into a link. Characters already in
+/// `sanitize_path`'s allowed set (`[A-Za-z0-9._~-]`) pass through; anything
+/// else (spaces, symbols, non-ASCII) becomes `-`, runs of `-` collapse to
+/// one, and leading/trailing `-`/`.` are trimmed (a leading `-` would
+/// otherwise look like a flag to `sanitize_path`, and to `git` itself
+/// downstream). `None` if nothing survives — a name that's pure emoji/CJK/
+/// punctuation has no safe slug to offer; the caller treats that as a
+/// rejected name, same as an empty one.
+pub fn slugify_repo_name(display_name: &str) -> Option<String> {
+    let mut out = String::with_capacity(display_name.len());
+    let mut last_was_dash = false;
+    for c in display_name.trim().chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '~') {
+            out.push(c);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches(|c| c == '-' || c == '.');
+    let capped = trimmed.get(..trimmed.len().min(MAX_REPO_SLUG_LEN)).unwrap_or(trimmed);
+    let capped = capped.trim_matches(|c| c == '-' || c == '.');
+    (!capped.is_empty()).then(|| capped.to_string())
 }
 
 /// Topics are cosmetic (discovery/categorization), so unlike

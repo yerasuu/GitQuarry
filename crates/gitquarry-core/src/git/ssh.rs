@@ -294,7 +294,7 @@ impl ConnHandler {
                     Some((namespace, _)) => domain::repo::resolve_owner_ref(&self.ctx, namespace).await?,
                     None => None,
                 };
-                domain::repo::create(&self.ctx, &name, owner, None, Visibility::default())
+                domain::repo::create(&self.ctx, &name, None, owner, None, Visibility::default())
                     .await?
                     .with_context(|| format!("couldn't create '{name}'"))?
             }

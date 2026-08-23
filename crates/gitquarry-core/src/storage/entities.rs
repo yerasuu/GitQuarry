@@ -133,12 +133,24 @@ pub struct RepoConfig {
     #[serde(default)]
     #[entity(key)]
     pub uid: Uid,
-    /// Canonical current display name (`namespace/local-name`). Once the
-    /// physical layout is uid-keyed this is the only place a repo's name
-    /// lives — renaming/moving becomes rewriting this field plus the
-    /// `repo-name` index below, never relocating any git data.
+    /// Canonical current path (`namespace/slug`) — the repo-name index key,
+    /// the ssh/http clone path segment, and the S3-prefix-adjacent name.
+    /// Always [`crate::validate::sanitize_path`]-clean; free-text naming
+    /// lives in `display_name` below, derived into this via
+    /// `domain::repo::slugify_repo_name`. Once the physical layout is
+    /// uid-keyed this is the only place a repo's path lives — renaming/
+    /// moving becomes rewriting this field plus the `repo-name` index,
+    /// never relocating any git data.
     #[serde(default)]
     pub full_name: String,
+    /// Free-text public name shown as the repo's page heading — any
+    /// characters, unlike `full_name`. `None` for a repo that predates this
+    /// field: `domain::repo::backfill_slug` fills it in (from the current
+    /// `full_name`'s local segment) the first time that repo is loaded by a
+    /// uid-based listing, since it can't be reached by path if `full_name`
+    /// itself has since become invalid under `sanitize_path`'s charset.
+    #[serde(default)]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     /// The user or group this repo belongs to — a uid, not a name, so a

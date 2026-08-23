@@ -7,6 +7,7 @@ fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
         RepoConfig {
             uid: Default::default(),
             full_name: name.to_string(),
+            display_name: None,
             description: None,
             owner: None,
             visibility,

@@ -151,6 +151,25 @@ pub fn validate_issue_title(title: &str) -> Result<String> {
     Ok(title.to_string())
 }
 
+const MAX_REPO_DISPLAY_NAME_LEN: usize = 256;
+
+/// Validates a repo's free-text `display_name` before it's stored — unlike
+/// [`sanitize_path`], no charset restriction: this is the cosmetic name
+/// shown as the repo's page heading, not the URL (`domain::repo::slugify_repo_name`
+/// derives that separately). Same shape as [`validate_issue_title`]: trimmed,
+/// non-empty, length-capped, control characters rejected (it still renders
+/// straight into HTML/page-title text).
+pub fn validate_repo_display_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_REPO_DISPLAY_NAME_LEN {
+        bail!("empty or too-long name (max {MAX_REPO_DISPLAY_NAME_LEN} bytes)");
+    }
+    if name.contains(|c: char| c.is_control()) {
+        bail!("invalid name (control characters)");
+    }
+    Ok(name.to_string())
+}
+
 /// Validates an issue-label color: `#` followed by exactly 6 hex digits.
 /// Unlike `topics`' silent-normalize-or-drop leniency, this hard-rejects a
 /// malformed value instead — a broken color isn't cosmetic, it breaks the

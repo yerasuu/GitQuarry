@@ -46,7 +46,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
 async fn a_fork_doesnt_inherit_the_sources_mirror_credential() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let source = gitquarry_core::domain::repo::create(&ctx, "alice/mirrored", None, None, Visibility::Public)
+    let source = gitquarry_core::domain::repo::create(&ctx, "alice/mirrored", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
@@ -69,6 +69,7 @@ async fn a_fork_doesnt_inherit_the_sources_mirror_credential() {
         &ctx,
         &source,
         "bob/mirrored",
+        None,
         OwnerRef::User(Uid::from("u-bob".to_string())),
         gitquarry_i18n::Locale::DEFAULT,
     )
