@@ -213,3 +213,55 @@ async fn the_snapshot_half_can_be_turned_off() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn snapshot_retention_applies_at_the_end_of_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    save_settings(
+        &ctx,
+        &ServerSettings {
+            backup_dest: Some("self".to_string()),
+            backup_keep: Some(1),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    for _ in 0..3 {
+        let run = schedule::run_once(&ctx, Trigger::Cli).await.unwrap();
+        assert_eq!(run.outcome, Outcome::Ok, "run failed: {:?}", run.error);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let snapshots = gitquarry_core::backup::snapshot::list(&ctx.backend(), &ctx.cipher)
+        .await
+        .unwrap();
+    assert_eq!(snapshots.len(), 1, "only the newest snapshot should survive");
+}
+
+#[tokio::test]
+async fn retention_is_off_unless_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    save_settings(
+        &ctx,
+        &ServerSettings {
+            backup_dest: Some("self".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    for _ in 0..3 {
+        schedule::run_once(&ctx, Trigger::Cli).await.unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // Nothing set means keep everything: deleting a snapshot destroys the
+    // only copy of what the live data used to be.
+    let snapshots = gitquarry_core::backup::snapshot::list(&ctx.backend(), &ctx.cipher)
+        .await
+        .unwrap();
+    assert_eq!(snapshots.len(), 3);
+}

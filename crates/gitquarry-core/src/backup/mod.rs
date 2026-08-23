@@ -25,6 +25,7 @@
 pub mod dest;
 pub mod inventory;
 mod pager;
+pub mod prune;
 pub mod replica;
 pub mod report;
 pub mod schedule;

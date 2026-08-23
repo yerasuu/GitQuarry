@@ -11,7 +11,7 @@ use crate::app::AppContext;
 use crate::backup::dest::{self, Dest, Source};
 use crate::backup::inventory::Selection;
 use crate::backup::report::{self, BackupRun, Outcome, Trigger};
-use crate::backup::{replica, snapshot};
+use crate::backup::{prune, replica, snapshot};
 use crate::storage::entities::ServerSettings;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -160,6 +160,37 @@ async fn execute(
         )
         .await?;
         run.snapshot_id = Some(manifest.id);
+    }
+
+    // Retention last, and only what's explicitly configured. Every branch
+    // here deletes real data at the destination, which is why none of them
+    // has a default: an unset field means "keep it", not "keep some
+    // reasonable amount".
+    if let Some(days) = settings.backup_delete_grace_days.filter(|_| resolved.replica) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let outcome = prune::prune_replica(
+            backend,
+            &resolved.backend,
+            &resolved.cipher,
+            u64::from(days) * 86400,
+            now,
+        )
+        .await?;
+        if outcome.deleted > 0 || outcome.noted > 0 {
+            println!(
+                "gitquarry: backup retention: {} deleted, {} newly orphaned, {} back at the source",
+                outcome.deleted, outcome.noted, outcome.cleared
+            );
+        }
+    }
+    if let Some(keep) = settings.backup_keep {
+        prune::prune_snapshots(&resolved.backend, &resolved.cipher, keep).await?;
+    }
+    if let Some(months) = settings.backup_audit_keep_months.filter(|_| resolved.replica) {
+        prune::prune_audit_months(&resolved.backend, months).await?;
     }
     Ok(())
 }

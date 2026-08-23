@@ -183,6 +183,11 @@ fn classify_conf(rest: &str) -> Class {
     }
     if rest.starts_with("backups/")
         || rest.starts_with("backup-runs/")
+        // The destination-side orphan ledger (`crate::backup::prune`). It
+        // only ever exists at a backup destination, but a replica promoted
+        // to a live bucket and backed up onward would otherwise carry it as
+        // real data.
+        || rest.starts_with("backup-orphans/")
         || rest.starts_with("snapshots/")
         || rest.starts_with("txn/")
         || rest.starts_with("wal/")
