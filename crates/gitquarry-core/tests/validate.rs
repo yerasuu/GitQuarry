@@ -19,6 +19,16 @@ fn rejects_traversal_and_empty() {
 }
 
 #[test]
+fn rejects_unescaped_url_characters() {
+    assert!(sanitize_path("my repo").is_err());
+    assert!(sanitize_path("team/repo name").is_err());
+    assert!(sanitize_path("repo?query").is_err());
+    assert!(sanitize_path("repo#frag").is_err());
+    assert!(sanitize_path("repo%20name").is_err());
+    assert_eq!(sanitize_path("my-repo_v1.0").unwrap(), "my-repo_v1.0");
+}
+
+#[test]
 fn rev_rejects_option_injection() {
     assert!(validate_rev("main").is_ok());
     assert!(validate_rev("refs/heads/main").is_ok());

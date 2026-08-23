@@ -22,7 +22,11 @@ const MAX_REV_LEN: usize = 255;
 /// Turns the path requested by the client (`/projectA`, `team/projectB.git`,
 /// `%2e%2e/etc`, ...) into a clean S3 prefix: no leading `/`, no `.`/`..`
 /// segments (anti path-traversal), no `.git` suffix on the last segment
-/// (usual convention of git clients).
+/// (usual convention of git clients), and each segment restricted to
+/// `[A-Za-z0-9._~-]` — a repo name doubles as a URL path segment and an
+/// `ssh://` clone-URL component, so anything needing escaping there (a
+/// space first among them) is rejected up front instead of surfacing later
+/// as a broken clone command or an inconsistently-encoded link.
 pub fn sanitize_path(pathname: &str) -> Result<String> {
     if pathname.len() > MAX_PATH_LEN {
         bail!("repo path too long (max {MAX_PATH_LEN} bytes)");
@@ -35,8 +39,16 @@ pub fn sanitize_path(pathname: &str) -> Result<String> {
             s if s.starts_with('-') => {
                 bail!("invalid repo path (segment starts with '-'): {pathname}")
             }
-            s if s.contains(|c: char| c.is_control() || c == '\\') => {
-                bail!("invalid repo path (disallowed characters): {pathname}")
+            // Same charset `url_encode` (gitquarry-webui) leaves unescaped: a
+            // name outside it would round-trip through a link as %XX-encoded
+            // while the raw clone-URL display (`ssh://host:port/<name>`,
+            // `repo::summary::render_clone_urls`) shows it verbatim — a space
+            // or other reserved char there breaks the copy-pasted command.
+            s if !s
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~')) =>
+            {
+                bail!("invalid repo path (only letters, digits, '-', '_', '.', '~' allowed): {pathname}")
             }
             s => segments.push(s),
         }
