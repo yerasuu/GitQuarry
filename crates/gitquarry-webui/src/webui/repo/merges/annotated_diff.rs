@@ -255,6 +255,7 @@ fn comment_row(
     comment: &MrComment,
     body_html: &str,
     repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
     number: u64,
     viewer: Option<&str>,
     can_moderate: bool,
@@ -270,6 +271,7 @@ fn comment_row(
                 (super::super::components::comment_edit_delete_controls(
                     "/_merges",
                     repo_name,
+                    repo_uid,
                     number,
                     comment_id,
                     &comment.body,
@@ -283,13 +285,21 @@ fn comment_row(
     }
 }
 
-fn form_row(repo_name: &str, number: u64, anchor: &CommentAnchor, headers: &HeaderMap, locale: Locale) -> Markup {
+fn form_row(
+    repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
+    number: u64,
+    anchor: &CommentAnchor,
+    headers: &HeaderMap,
+    locale: Locale,
+) -> Markup {
     html! {
         tr class="diff-comment" {
             td colspan="3" {
                 form method="post" action="/_merges/comment" {
                     (PreEscaped(csrf_field(headers)))
                     input type="hidden" name="repo" value=(repo_name);
+                    input type="hidden" name="repo_uid" value=(repo_uid);
                     input type="hidden" name="number" value=(number);
                     input type="hidden" name="anchor_path" value=(anchor.path);
                     input type="hidden" name="anchor_side" value=(side_param(anchor.side));
@@ -314,6 +324,7 @@ pub struct View<'a> {
     /// than panicking on a caller that got the lengths wrong.
     pub comment_bodies: &'a [String],
     pub repo_name: &'a str,
+    pub repo_uid: &'a gitquarry_core::storage::uid::Uid,
     pub number: u64,
     /// Whether to offer the per-line "comment here" link at all.
     pub can_comment: bool,
@@ -340,6 +351,7 @@ pub(super) struct View<'a> {
     /// than panicking on a caller that got the lengths wrong.
     pub(super) comment_bodies: &'a [String],
     pub(super) repo_name: &'a str,
+    pub(super) repo_uid: &'a gitquarry_core::storage::uid::Uid,
     pub(super) number: u64,
     /// Whether to offer the per-line "comment here" link at all.
     pub(super) can_comment: bool,
@@ -421,11 +433,11 @@ fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) ->
                         }
                         @for (index, (comment_id, comment)) in comments.iter().enumerate() {
                             @if comment.anchor.as_ref() == Some(anchor) && placed.insert(index) {
-                                (comment_row(comment_id, comment, view.comment_bodies.get(index).map_or("", String::as_str), view.repo_name, view.number, view.viewer, view.can_moderate, view.headers, view.locale))
+                                (comment_row(comment_id, comment, view.comment_bodies.get(index).map_or("", String::as_str), view.repo_name, view.repo_uid, view.number, view.viewer, view.can_moderate, view.headers, view.locale))
                             }
                         }
                         @if view.active == Some(anchor) {
-                            (form_row(view.repo_name, view.number, anchor, view.headers, view.locale))
+                            (form_row(view.repo_name, view.repo_uid, view.number, anchor, view.headers, view.locale))
                         }
                     }
                 }

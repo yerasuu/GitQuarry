@@ -114,6 +114,7 @@ fn render_mr_actions(
     is_same_repo: bool,
     fast_forwardable: bool,
     repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
     csrf_html: &str,
     locale: Locale,
 ) -> Markup {
@@ -132,6 +133,7 @@ fn render_mr_actions(
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                             button type="submit" { (t::close_button(locale)) }
                         }
                         " "
@@ -140,6 +142,7 @@ fn render_mr_actions(
                                 (PreEscaped(csrf_html))
                                 input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                                 button type="submit" { (t::mark_ready_button(locale)) }
                             }
                         } @else {
@@ -147,6 +150,7 @@ fn render_mr_actions(
                                 (PreEscaped(csrf_html))
                                 input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                                 button type="submit" { (t::mark_draft_button(locale)) }
                             }
                         }
@@ -156,6 +160,7 @@ fn render_mr_actions(
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                             button type="submit" { (t::reopen_button(locale)) }
                         }
                     }
@@ -167,6 +172,7 @@ fn render_mr_actions(
                     (PreEscaped(csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                     label for="merge-strategy" class="muted" { (t::merge_strategy_label(locale)) }
                     select id="merge-strategy" name="strategy" {
                         option value="Merge" { (t::merge_strategy_merge_option(locale)) }
@@ -235,6 +241,7 @@ fn render_reviews(
     reviews: &[MrReview],
     bodies: &[String],
     repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
     number: u64,
     viewer: Option<&str>,
     mr_author: &str,
@@ -269,6 +276,7 @@ fn render_reviews(
             form method="post" action="/_merges/review" {
                 (PreEscaped(csrf_field(headers)))
                 input type="hidden" name="repo" value=(repo_name);
+                input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);
                 @if is_own_mr {
                     p class="muted" { (t::own_merge_request_review_hint(locale)) }
@@ -407,6 +415,7 @@ async fn render_merges_list_impl(
             form method="post" action="/_merges/bulk" data-confirm=(t::bulk_apply_confirm(locale)) {
                 (PreEscaped(&csrf_html))
                 input type="hidden" name="repo" value=(repo_name);
+                input type="hidden" name="repo_uid" value=(target.uid);
                 div class="table-scroll" {
                 table class="list" {
                     tr {
@@ -487,6 +496,7 @@ pub(super) struct NewMergeFormValues<'a> {
 
 pub(super) fn render_new_merge_form(
     repo_name: &str,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
     ref_names: &[&str],
     template: Option<&str>,
     values: NewMergeFormValues<'_>,
@@ -506,6 +516,7 @@ pub(super) fn render_new_merge_form(
         form method="post" action="/_merges" {
             (PreEscaped(csrf_field(headers)))
             input type="hidden" name="repo" value=(repo_name);
+            input type="hidden" name="repo_uid" value=(repo_uid);
             div class="field" {
                 label { (t::source_repo_label(locale)) }
                 input name="source_repo" size="30" placeholder=(t::source_repo_placeholder(locale)) value=(values.source_repo);
@@ -625,6 +636,7 @@ async fn render_merge_detail_impl(
             gitquarry_i18n::shared::merge_request::merge_request_not_found(locale, number)
         )));
     };
+    let repo_uid = &target.uid;
     let can_manage = can_manage(ctx, headers, repo_name, &mr.author).await?;
     let can_merge = can_merge(ctx, headers, repo_name).await?;
     let (target_config, _etag) = target.remote.get_repo_config().await?;
@@ -678,6 +690,7 @@ async fn render_merge_detail_impl(
             &annotated_diff::View {
                 comment_bodies: &comment_bodies,
                 repo_name,
+                repo_uid,
                 number: mr.number,
                 can_comment: logged_in,
                 active: active_anchor.as_ref(),
@@ -761,6 +774,7 @@ async fn render_merge_detail_impl(
             mr.source_repo == target.uid,
             fast_forwardable,
             repo_name,
+            repo_uid,
             &csrf_field(headers),
             locale,
         ))
@@ -771,6 +785,7 @@ async fn render_merge_detail_impl(
                 (PreEscaped(csrf_field(headers)))
                 input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                 div class="field" {
                     label { (t::title_label(locale)) }
                     input name="title" size="40" value=(mr.title);
@@ -809,7 +824,7 @@ async fn render_merge_detail_impl(
             None => div class="scroll-x full-bleed" { (side_by_side_diff(&d.diff)) },
         }
 
-        (render_reviews(&reviews, &review_htmls, repo_name, mr.number, viewer.as_deref(), &mr.author, headers, locale))
+        (render_reviews(&reviews, &review_htmls, repo_name, repo_uid, mr.number, viewer.as_deref(), &mr.author, headers, locale))
 
         h4 { (t::comments_heading(locale)) }
         @if thread.is_empty() {
@@ -828,6 +843,7 @@ async fn render_merge_detail_impl(
                 (super::components::comment_edit_delete_controls(
                     "/_merges",
                     repo_name,
+                    repo_uid,
                     mr.number,
                     comment_id,
                     &comment.body,
@@ -843,6 +859,7 @@ async fn render_merge_detail_impl(
                 (PreEscaped(csrf_field(headers)))
                 input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="number" value=(mr.number);
+                            input type="hidden" name="repo_uid" value=(repo_uid);
                 textarea name="body" rows="4" cols="60" {}
                 p { button type="submit" { (t::comment_button(locale)) } }
             }

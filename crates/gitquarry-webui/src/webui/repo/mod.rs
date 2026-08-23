@@ -1092,6 +1092,7 @@ async fn render_repo_view(
             let template = read_repo_template(&resolved, &mirror.path, "MERGE_REQUEST_TEMPLATE.md").await;
             render_new_merge_form(
                 &name,
+                &resolved.uid,
                 &ref_names,
                 template.as_deref(),
                 NewMergeFormValues {

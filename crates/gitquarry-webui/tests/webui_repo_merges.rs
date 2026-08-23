@@ -1,14 +1,17 @@
 use axum::http::HeaderMap;
+use axum::response::IntoResponse;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::{Cipher, SALT_LEN};
 use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
+use gitquarry_core::domain::repo;
+use gitquarry_core::storage::entities::{OwnerRef, Visibility};
 use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_i18n::Locale;
-use gitquarry_webui::webui::repo::merges::handlers::parse_verdict;
+use gitquarry_webui::webui::repo::merges::handlers::{parse_verdict, resolve_target};
 use gitquarry_webui::webui::repo::merges::*;
 use std::sync::Arc;
 
@@ -647,4 +650,56 @@ async fn merge_detail_shows_draft_badge_and_hides_it_once_ready() {
     .await
     .unwrap();
     assert!(!ready_html.contains("draft"), "{ready_html}");
+}
+
+/// The bug this guards: an MR page left open across a rename must not have
+/// its close/merge/comment/etc. forms resolve to whatever repo now squats
+/// the name it last saw — `domain::repo::rename` frees the old name the
+/// moment it lands, so it's immediately claimable by an unrelated repo.
+#[tokio::test]
+async fn resolve_target_rejects_a_name_reclaimed_by_a_different_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+
+    let original = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
+        .await
+        .unwrap()
+        .unwrap();
+    let original_uid = original.uid.clone();
+
+    repo::rename(
+        &ctx,
+        &original,
+        "team/proj",
+        "team/proj-renamed",
+        OwnerRef::User(Uid::from("nobody".to_string())),
+        None,
+        Locale::En,
+    )
+    .await
+    .unwrap();
+
+    // An unrelated repo claims the name "team/proj" just gave up.
+    let impostor = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(original_uid, impostor.uid);
+
+    // A page rendered before the rename still carries `original_uid` in its
+    // hidden `repo_uid` field. Resolving "team/proj" by name alone would
+    // now hand the caller `impostor` -- a completely different repo.
+    let err = resolve_target(&ctx, &HeaderMap::new(), "team/proj", original_uid.as_str(), Locale::En)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.into_response().status(), axum::http::StatusCode::NOT_FOUND);
+
+    // The impostor's own current uid still resolves fine -- this isn't a
+    // blanket "team/proj" outage, only a rejection of the stale reference.
+    let (resolved, name) = resolve_target(&ctx, &HeaderMap::new(), "team/proj", impostor.uid.as_str(), Locale::En)
+        .await
+        .unwrap();
+    assert_eq!(resolved.uid, impostor.uid);
+    assert_eq!(name, "team/proj");
 }
