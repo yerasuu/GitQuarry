@@ -274,6 +274,23 @@ impl Default for Selection {
 }
 
 impl Selection {
+    /// The selection an instance's own settings ask for. Every unset field
+    /// falls back to [`Selection::default`]'s answer for that class, so a
+    /// bucket whose `global.json` predates these fields backs up exactly
+    /// what a freshly-configured one would.
+    pub fn from_settings(settings: &crate::storage::entities::ServerSettings) -> Self {
+        let d = Selection::default();
+        Selection {
+            git: settings.backup_include_git.unwrap_or(d.git),
+            lfs: settings.backup_include_lfs.unwrap_or(d.lfs),
+            releases: settings.backup_include_releases.unwrap_or(d.releases),
+            avatars: settings.backup_include_avatars.unwrap_or(d.avatars),
+            entities: settings.backup_include_entities.unwrap_or(d.entities),
+            audit: settings.backup_include_audit.unwrap_or(d.audit),
+            derived: settings.backup_include_derived.unwrap_or(d.derived),
+        }
+    }
+
     /// Only the classes needed to bring an instance back up, nothing that
     /// grows without bound — what `--minimal` on the CLI passes.
     pub fn minimal() -> Self {

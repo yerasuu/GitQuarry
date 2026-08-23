@@ -399,3 +399,23 @@ fn resolve_placeholders(raw: &str, args: &[String], path: &Path) -> String {
     out.push_str(rest);
     out.trim_end_matches('/').to_string()
 }
+
+#[test]
+fn a_selection_from_untouched_settings_matches_the_default() {
+    let settings = gitquarry_core::storage::entities::ServerSettings::default();
+    assert_eq!(Selection::from_settings(&settings), Selection::default());
+}
+
+#[test]
+fn settings_opt_outs_are_honored_one_class_at_a_time() {
+    let settings = gitquarry_core::storage::entities::ServerSettings {
+        backup_include_lfs: Some(false),
+        backup_include_derived: Some(true),
+        ..Default::default()
+    };
+    let selection = Selection::from_settings(&settings);
+    assert!(!selection.lfs);
+    assert!(selection.derived);
+    // Everything untouched still follows the default.
+    assert!(selection.git && selection.releases && selection.avatars && selection.entities && selection.audit);
+}
