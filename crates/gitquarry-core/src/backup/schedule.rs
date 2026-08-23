@@ -60,47 +60,70 @@ pub fn interval(settings: &ServerSettings) -> Duration {
 /// afterwards, not just something that logged once.
 pub async fn run_once(ctx: &AppContext, trigger: Trigger) -> Result<BackupRun> {
     let backend = ctx.backend();
-    let (settings, _etag) = crate::storage::settings::get_settings(backend.as_ref(), &ctx.cipher)
-        .await
-        .context("reading the instance settings")?;
-
-    let configured = settings.backup_dest.as_deref().unwrap_or_default();
-    let mut run = BackupRun::starting(configured, trigger);
-    report::save(backend.as_ref(), &ctx.cipher, &run).await?;
-
-    if let Err(e) = execute(ctx, &settings, &mut run).await {
-        run.fail(format!("{e:#}"));
-    } else {
-        run.finish();
-    }
-    report::save(backend.as_ref(), &ctx.cipher, &run).await?;
-    // Best-effort: a report collection that didn't get trimmed is untidy,
-    // never wrong, and must not turn a successful backup into a failed one.
-    if let Err(e) = report::prune_old_runs(backend.as_ref(), &ctx.cipher).await {
-        eprintln!("gitquarry: warning: couldn't prune old backup run records: {e:#}");
-    }
-    Ok(run)
-}
-
-/// The run itself. Split out so [`run_once`] has exactly one place to turn an
-/// error into a recorded failure.
-async fn execute(ctx: &AppContext, settings: &ServerSettings, run: &mut BackupRun) -> Result<()> {
-    let configured = settings
-        .backup_dest
-        .as_deref()
-        .filter(|raw| !raw.trim().is_empty())
-        .context("no backup destination configured (set one at /_settings/backup)")?;
-    let target = Dest::parse(configured)?;
-
-    let backend = ctx.backend();
     let source = Source {
         bucket_name: &ctx.bucket,
         backend: &backend,
         cipher: &ctx.cipher,
         config_path: &ctx.config_path,
     };
-    let resolved = dest::resolve(&target, &source).await?;
-    let selection = Selection::from_settings(settings);
+    run_for(&source, trigger, None, None).await
+}
+
+/// [`run_once`] without an [`AppContext`] — what `gitquarry backup` uses,
+/// since an operator command has a backend, a cipher and a config path but
+/// none of the rest of a running server (mirrors dir, ssh bind, event bus).
+///
+/// `dest_override` and `selection_override` are the CLI's own flags: a
+/// one-off backup somewhere other than the configured destination, without
+/// editing the instance's settings to get it.
+pub async fn run_for(
+    source: &Source<'_>,
+    trigger: Trigger,
+    dest_override: Option<&str>,
+    selection_override: Option<Selection>,
+) -> Result<BackupRun> {
+    let backend = source.backend;
+    let (settings, _etag) = crate::storage::settings::get_settings(backend.as_ref(), source.cipher)
+        .await
+        .context("reading the instance settings")?;
+
+    let configured = dest_override.unwrap_or(settings.backup_dest.as_deref().unwrap_or_default());
+    let mut run = BackupRun::starting(configured, trigger);
+    report::save(backend.as_ref(), source.cipher, &run).await?;
+
+    if let Err(e) = execute(source, &settings, dest_override, selection_override, &mut run).await {
+        run.fail(format!("{e:#}"));
+    } else {
+        run.finish();
+    }
+    report::save(backend.as_ref(), source.cipher, &run).await?;
+    // Best-effort: a report collection that didn't get trimmed is untidy,
+    // never wrong, and must not turn a successful backup into a failed one.
+    if let Err(e) = report::prune_old_runs(backend.as_ref(), source.cipher).await {
+        eprintln!("gitquarry: warning: couldn't prune old backup run records: {e:#}");
+    }
+    Ok(run)
+}
+
+/// The run itself. Split out so [`run_for`] has exactly one place to turn an
+/// error into a recorded failure.
+async fn execute(
+    source: &Source<'_>,
+    settings: &ServerSettings,
+    dest_override: Option<&str>,
+    selection_override: Option<Selection>,
+    run: &mut BackupRun,
+) -> Result<()> {
+    let configured = dest_override
+        .or(settings.backup_dest.as_deref())
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .context("no backup destination configured (set one at /_settings/backup)")?;
+    let target = Dest::parse(configured)?;
+
+    let backend = source.backend;
+    let resolved = dest::resolve(&target, source).await?;
+    let selection = selection_override.unwrap_or_else(|| Selection::from_settings(settings));
     let concurrency = settings
         .backup_concurrency
         .map(|n| n as usize)
@@ -115,7 +138,7 @@ async fn execute(ctx: &AppContext, settings: &ServerSettings, run: &mut BackupRu
         // data before it has an encryption config can never be given one.
         replica::ensure_same_data_key(backend.as_ref(), resolved.backend.as_ref()).await?;
         resolved.verify_openable().await?;
-        replica::sync(&backend, &resolved.backend, selection, concurrency, run).await?;
+        replica::sync(backend, &resolved.backend, selection, concurrency, run).await?;
     }
 
     // The snapshot half: only worth taking when the entity classes are in
@@ -126,8 +149,8 @@ async fn execute(ctx: &AppContext, settings: &ServerSettings, run: &mut BackupRu
         // `validate::validate_backup_id`.
         let snapshot_id = run.id.clone();
         let manifest = snapshot::capture(
-            &backend,
-            &ctx.cipher,
+            backend,
+            source.cipher,
             &resolved.backend,
             &resolved.cipher,
             &snapshot_id,

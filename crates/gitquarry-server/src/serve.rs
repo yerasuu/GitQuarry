@@ -48,7 +48,13 @@ on the next query.
 doesn't write inside a repo's prefix -- see that command with --help.
 
 'gitquarry repack <repo> [--bucket NAME] [--apply]' consolidates a repo's
-accumulated packs into one -- see that command with --help.";
+accumulated packs into one -- see that command with --help.
+
+'gitquarry backup [--bucket NAME] [--dest DEST]' runs one backup now, the
+same one /_settings/backup schedules -- see that command with --help.
+
+'gitquarry restore <snapshot-id> [--apply]' writes a snapshot back over the
+live data -- see that command with --help.";
 
 #[derive(Debug, Default)]
 struct Args {

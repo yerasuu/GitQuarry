@@ -1,5 +1,5 @@
 //! One binary, one unified server, plus one entry point that only git
-//! invokes (not run by a human), plus three operator maintenance commands
+//! invokes (not run by a human), plus five operator maintenance commands
 //! (see [`gitquarry_domain::commands`]):
 //! - `gitquarry --bucket NAME [--web-bind ...] [--ssh-bind ...]`: starts
 //!   the ssh:// server and the web UI (browsing + git smart-HTTP) together,
@@ -19,6 +19,10 @@
 //! - `backfill-repo-index`: human-run, one-time backfill for repos/grants
 //!   that existed before the owner/visibility/permission indexes did — see
 //!   [`gitquarry_domain::commands::backfill_repo_index`].
+//! - `backup`: human-run (or cron-run), one backup now — see
+//!   [`gitquarry_domain::commands::backup`].
+//! - `restore`: human-run, writes a snapshot back over the live data — see
+//!   [`gitquarry_domain::commands::restore`].
 
 use anyhow::Result;
 use gitquarry::serve;
@@ -44,6 +48,8 @@ async fn dispatch() -> Result<()> {
         Some("fsck") => commands::fsck::run(&args[2..]).await,
         Some("repack") => commands::repack::run(&args[2..]).await,
         Some("backfill-repo-index") => commands::backfill_repo_index::run(&args[2..]).await,
+        Some("backup") => commands::backup::run(&args[2..]).await,
+        Some("restore") => commands::restore::run(&args[2..]).await,
         _ => serve::run(&args[1..]).await,
     }
 }
