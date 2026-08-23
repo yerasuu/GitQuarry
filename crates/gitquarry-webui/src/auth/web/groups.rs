@@ -83,7 +83,7 @@ pub(crate) async fn handler_groups_get(
 /// to avoid. Subgroups of a group `me` belongs to are included: membership
 /// is inherited downward (`access::effective_permission`), so a group whose
 /// repos `me` can reach has to be reachable from this page too.
-async fn visible_groups(
+pub(crate) async fn visible_groups(
     ctx: &gitquarry_core::app::AppContext,
     me: &User,
 ) -> Result<Vec<gitquarry_core::auth::entities::Group>, AppError> {

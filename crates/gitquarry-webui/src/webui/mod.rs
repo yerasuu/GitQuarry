@@ -109,6 +109,7 @@ pub mod repo;
 pub mod repo_label;
 pub mod repo_new;
 pub mod repo_settings;
+pub mod repos;
 pub mod watch;
 
 mod actions;
@@ -354,6 +355,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_fork", axum::routing::post(fork::handler_fork_post))
         .route("/_watch", axum::routing::post(watch::handler_watch_post))
         .route("/_new", get(repo_new::handler_new_get).post(repo_new::handler_new_post))
+        .route("/_repos", get(repos::handler_repos_get))
         .route(
             "/_profile/{username}",
             get(crate::auth::web::profile::handler_profile_get),
