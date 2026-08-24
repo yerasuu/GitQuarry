@@ -29,7 +29,18 @@ on a per-release versioning scheme.
 - cgit-inspired browsing UI covering summary, refs, tree, blob, log, commit
   diff, blame, and stats views.
 - Compare view between two arbitrary refs.
-- Commit signature verification badge.
+- Commit signature verification badge. It now says only what this instance
+  can stand behind: verified by a registered account's key, verified as
+  built by this instance, or unverified. The old grades taken from git's own
+  check against the server's system keyring ("valid but untrusted",
+  "invalid", "revoked") are gone — this process never populates that
+  keyring, so they asserted more than had actually been checked. A verdict
+  not yet computed also shows as unverified until it is.
+- A commit whose diff runs past the page's ceiling renders the part that
+  fits and links to the raw patch for the rest.
+- A file's syntax highlighting can arrive on the second view: the first
+  render of a long file serves it unstyled rather than blocking on the
+  highlighter, and highlights it in the background.
 - Create-tag form on the refs tab.
 - Markdown rendering gained syntax-highlighted fenced code blocks and
   GitHub-style alert blockquotes (note/tip/important/warning/caution) in
