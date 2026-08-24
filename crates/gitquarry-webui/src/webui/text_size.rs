@@ -198,7 +198,7 @@ pub fn render_text_size_buttons(return_to: &str, current: TextSize) -> String {
     maud::html! {
         span id="text-size-buttons" {
             @for (size, glyph, title) in [(TextSize::Sm, "A\u{2212}", "small"), (TextSize::Md, "A", "medium"), (TextSize::Lg, "A+", "large")] {
-                form method="post" action="/_prefs/text_size" style="display:inline" data-async
+                form method="post" action="/_prefs/text_size" class="inline-form" data-async
                     data-async-target="#text-size-buttons"
                     data-class-target="#about-body" data-class-value=(size.div_class()) {
                     input type="hidden" name="size" value=(size.as_cookie());
@@ -215,7 +215,7 @@ pub(crate) fn render_text_size_buttons(return_to: &str, current: TextSize) -> St
     maud::html! {
         span id="text-size-buttons" {
             @for (size, glyph, title) in [(TextSize::Sm, "A\u{2212}", "small"), (TextSize::Md, "A", "medium"), (TextSize::Lg, "A+", "large")] {
-                form method="post" action="/_prefs/text_size" style="display:inline" data-async
+                form method="post" action="/_prefs/text_size" class="inline-form" data-async
                     data-async-target="#text-size-buttons"
                     data-class-target="#about-body" data-class-value=(size.div_class()) {
                     input type="hidden" name="size" value=(size.as_cookie());

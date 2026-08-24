@@ -130,7 +130,7 @@ fn render_mr_actions(
             @if can_manage {
                 @match mr.status {
                     MrStatus::Open => {
-                        form method="post" action=(mutation_url("close", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(t::close_confirm(locale, mr.number, &mr.title)) {
+                        form method="post" action=(mutation_url("close", repo_name)) class="inline-form" data-async data-async-target="#mr-actions" data-confirm=(t::close_confirm(locale, mr.number, &mr.title)) {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
@@ -138,14 +138,14 @@ fn render_mr_actions(
                         }
                         " "
                         @if mr.is_draft {
-                            form method="post" action=(mutation_url("mark_ready", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" {
+                            form method="post" action=(mutation_url("mark_ready", repo_name)) class="inline-form" data-async data-async-target="#mr-actions" {
                                 (PreEscaped(csrf_html))
                                 input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                                 button type="submit" { (t::mark_ready_button(locale)) }
                             }
                         } @else {
-                            form method="post" action=(mutation_url("mark_draft", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" {
+                            form method="post" action=(mutation_url("mark_draft", repo_name)) class="inline-form" data-async data-async-target="#mr-actions" {
                                 (PreEscaped(csrf_html))
                                 input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
@@ -154,7 +154,7 @@ fn render_mr_actions(
                         }
                     }
                     MrStatus::Closed => {
-                        form method="post" action=(mutation_url("reopen", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" {
+                        form method="post" action=(mutation_url("reopen", repo_name)) class="inline-form" data-async data-async-target="#mr-actions" {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
@@ -165,7 +165,7 @@ fn render_mr_actions(
                 }
             }
             @if can_merge && !mr.is_draft && mr.status == MrStatus::Open {
-                form method="post" action=(mutation_url("merge", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo && !source_branch_protected { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
+                form method="post" action=(mutation_url("merge", repo_name)) class="inline-form" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo && !source_branch_protected { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
                     (PreEscaped(csrf_html))
                     input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);

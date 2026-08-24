@@ -74,7 +74,7 @@ pub(super) fn tag_table(
                     td class="muted" { (r.date) }
                     @if can_write {
                         td {
-                            form method="post" action=(format!("/_tags/delete/{}", url_encode(repo_name))) style="display:inline" data-async data-async-target="#tag-table" data-confirm=(t::delete_tag_confirm(locale, short)) {
+                            form method="post" action=(format!("/_tags/delete/{}", url_encode(repo_name))) class="inline-form" data-async data-async-target="#tag-table" data-confirm=(t::delete_tag_confirm(locale, short)) {
                                 (PreEscaped(csrf_field(headers)))
                                 input type="hidden" name="tag" value=(short);
                                 button type="submit" { (t::delete_tag_button(locale)) }
@@ -125,7 +125,7 @@ pub(super) fn branch_table(
                     td class="muted" { (r.date) }
                     @if can_write {
                         td {
-                            form method="post" action=(format!("/_branches/delete/{}", url_encode(repo_name))) style="display:inline" data-async data-async-target="#branch-table" data-confirm=(t::delete_branch_confirm(locale, short)) {
+                            form method="post" action=(format!("/_branches/delete/{}", url_encode(repo_name))) class="inline-form" data-async data-async-target="#branch-table" data-confirm=(t::delete_branch_confirm(locale, short)) {
                                 (PreEscaped(csrf_field(headers)))
                                 input type="hidden" name="branch" value=(short);
                                 button type="submit" { (t::delete_branch_button(locale)) }

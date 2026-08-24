@@ -223,7 +223,7 @@ fn render_ssh_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
                     tr {
                         td { code { (fp) } }
                         td {
-                            form method="post" action=(ACTION_URL) style="display:inline" data-async data-async-target="#ssh-keys-table" data-confirm=(t::remove_ssh_key_confirm(locale, &fp)) {
+                            form method="post" action=(ACTION_URL) class="inline-form" data-async data-async-target="#ssh-keys-table" data-confirm=(t::remove_ssh_key_confirm(locale, &fp)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="keys_action" value="remove_pubkey";
                                 input type="hidden" name="fingerprint" value=(fp);
@@ -254,7 +254,7 @@ fn render_gpg_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
                     tr {
                         td { code { (key.fingerprint) } }
                         td {
-                            form method="post" action=(ACTION_URL) style="display:inline" data-async data-async-target="#gpg-keys-table" data-confirm=(t::remove_gpg_key_confirm(locale, &key.fingerprint)) {
+                            form method="post" action=(ACTION_URL) class="inline-form" data-async data-async-target="#gpg-keys-table" data-confirm=(t::remove_gpg_key_confirm(locale, &key.fingerprint)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="keys_action" value="remove_gpg_key";
                                 input type="hidden" name="gpg_fingerprint" value=(key.fingerprint);

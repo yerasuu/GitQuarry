@@ -387,7 +387,7 @@ pub(crate) async fn handler_index(
                         div class="repo-card-meta" {
                             @if let Some(lang) = &repo.primary_language {
                                 span {
-                                    span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                    span class=(format!("lang-swatch {}", summary::language_class(lang))) {}
                                     (lang)
                                 }
                             }
@@ -430,7 +430,7 @@ pub(crate) async fn handler_index(
                     div class="rl-meta" {
                         @if let Some(lang) = &repo.primary_language {
                             span {
-                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                span class=(format!("lang-swatch {}", summary::language_class(lang))) {}
                                 (lang)
                             }
                         }

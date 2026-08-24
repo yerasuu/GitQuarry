@@ -639,6 +639,10 @@ pub(crate) const STYLE: &str = concat!(
     "}\n",
     include_str!("style/base.css"),
     include_str!("style/mobile.css"),
+    // Last: the per-render utility classes (widths, language colours,
+    // `display:inline`) a view picks by name instead of writing a `style`
+    // attribute the CSP would have to allow. See the file's own header.
+    include_str!("style/utilities.css"),
 );
 
 /// General cgit/kernel.org-style layout: sans-serif, dense tables with thin

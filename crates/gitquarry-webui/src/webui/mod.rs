@@ -680,10 +680,24 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// module doc comment): `script-src 'none'` means even a hypothetical
 /// escaping bug that smuggled a `<script>` tag past every [`esc`]/`maud`
 /// auto-escape still couldn't execute it — the browser refuses on policy,
-/// not on hope the markup stayed clean. `style-src` needs `'unsafe-inline'`:
-/// plenty of views set a `style="..."` attribute directly (widths in
-/// `repo::stats`'s bar chart, `display:inline` on same-row forms), not
-/// worth threading a nonce through every render function to avoid it.
+/// not on hope the markup stayed clean. `style-src` is `'self'` alone, with
+/// no `'unsafe-inline'`: no view sets a `style="..."` attribute any more —
+/// bar widths, language colours and `display:inline` all resolve to classes
+/// in `style/utilities.css` (see `components::width_class` and
+/// `repo::summary::language_class`). That directive can't be relaxed by a
+/// nonce either way, since CSP nonces cover `<style>` elements and never
+/// style attributes, so the class file is what keeps it tight —
+/// `tests/webui_csp.rs` fails if a view goes back to an attribute.
+/// The policy [`security_headers`] puts on every response. A constant so
+/// `tests/webui_csp.rs` can hold it next to the markup the views emit.
+#[cfg(any(test, feature = "test-util"))]
+pub const CONTENT_SECURITY_POLICY: &str = CSP;
+#[cfg(not(any(test, feature = "test-util")))]
+const CONTENT_SECURITY_POLICY: &str = CSP;
+
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
+     img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
 async fn security_headers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     // Checked before the request is consumed. A response rendered for a
     // logged-in session can carry things no shared cache should keep — a
@@ -742,8 +756,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
             // images baked into that pinned, hand-vetted stylesheet, not
             // anything request- or user-influenced — same trust level as the
             // CSS file itself, which `style-src 'self'` already accepts.
-            "default-src 'self'; script-src 'self'; style-src 'self'; \
-             img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            CONTENT_SECURITY_POLICY,
         ),
     );
     resp

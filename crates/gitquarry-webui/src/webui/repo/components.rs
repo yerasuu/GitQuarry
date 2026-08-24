@@ -14,6 +14,37 @@ use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
 use gitquarry_i18n::web::repo::components as t;
 use maud::{Markup, PreEscaped, html};
+
+/// The `.w-*` class for a percentage, clamped to the whole-percent rules
+/// `style/utilities.css` defines.
+///
+/// A width can't be a `style` attribute — the CSP allows no inline style,
+/// and a nonce covers `<style>` elements, never attributes — so a bar
+/// segment picks the nearest class instead. Any non-zero share rounds up to
+/// at least `.w-1`: a language at 0.2% of a repo should read as a sliver,
+/// not vanish, and `.lang-bar`'s flex row absorbs the odd percent that
+/// rounding adds.
+pub(crate) fn width_class(percent: f64) -> &'static str {
+    if percent <= 0.0 {
+        return WIDTH_CLASSES[0];
+    }
+    WIDTH_CLASSES[percent.round().clamp(1.0, 100.0) as usize]
+}
+
+/// Written out rather than formatted per segment: these are the exact names
+/// `style/utilities.css` carries, and a `&'static str` costs no allocation
+/// on a page that renders a few hundred of them.
+const WIDTH_CLASSES: [&str; 101] = [
+    "w-0", "w-1", "w-2", "w-3", "w-4", "w-5", "w-6", "w-7", "w-8", "w-9", "w-10", "w-11", "w-12", "w-13", "w-14",
+    "w-15", "w-16", "w-17", "w-18", "w-19", "w-20", "w-21", "w-22", "w-23", "w-24", "w-25", "w-26", "w-27", "w-28",
+    "w-29", "w-30", "w-31", "w-32", "w-33", "w-34", "w-35", "w-36", "w-37", "w-38", "w-39", "w-40", "w-41", "w-42",
+    "w-43", "w-44", "w-45", "w-46", "w-47", "w-48", "w-49", "w-50", "w-51", "w-52", "w-53", "w-54", "w-55", "w-56",
+    "w-57", "w-58", "w-59", "w-60", "w-61", "w-62", "w-63", "w-64", "w-65", "w-66", "w-67", "w-68", "w-69", "w-70",
+    "w-71", "w-72", "w-73", "w-74", "w-75", "w-76", "w-77", "w-78", "w-79", "w-80", "w-81", "w-82", "w-83", "w-84",
+    "w-85", "w-86", "w-87", "w-88", "w-89", "w-90", "w-91", "w-92", "w-93", "w-94", "w-95", "w-96", "w-97", "w-98",
+    "w-99", "w-100",
+];
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
@@ -698,7 +729,7 @@ pub(crate) fn comment_edit_delete_controls(
             }
         }
         @if can_delete {
-            form method="post" action=(format!("{mutation_prefix}/comment_delete/{}", url_encode(repo_name))) style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
+            form method="post" action=(format!("{mutation_prefix}/comment_delete/{}", url_encode(repo_name))) class="inline-form" data-confirm=(t::delete_comment_confirm(locale)) {
                 (PreEscaped(&csrf_html))
                 input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);

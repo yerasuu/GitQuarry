@@ -247,7 +247,7 @@ fn render_asset_table(
                     td { code { (gitquarry_core::validate::short_sha(&asset.sha256)) } }
                     td {
                         @if can_write {
-                            form method="post" action=(format!("/_releases/asset_delete/{}", url_encode(repo_name))) style="display:inline" data-async data-async-target="#asset-table" data-confirm=(t::delete_asset_confirm(locale, &asset.filename)) {
+                            form method="post" action=(format!("/_releases/asset_delete/{}", url_encode(repo_name))) class="inline-form" data-async data-async-target="#asset-table" data-confirm=(t::delete_asset_confirm(locale, &asset.filename)) {
                                 (PreEscaped(csrf_field(headers)))
                                 input type="hidden" name="tag" value=(tag);
                                 input type="hidden" name="filename" value=(&asset.filename);
