@@ -12,12 +12,18 @@ use gitquarry_core::validate;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 
+/// `truncated` is `git::browse::show_commit_capped`'s verdict: the patch
+/// ran past the page's ceiling and what's in `diff` is a prefix. The page
+/// says so and points at the raw patch rather than pretending the commit
+/// ends there.
+#[allow(clippy::too_many_arguments)]
 pub async fn render_commit(
     ctx: &AppContext,
     bare_repo: &FsPath,
     repo_name: &str,
     info: &CommitInfo,
     diff: &str,
+    truncated: bool,
     headers: &HeaderMap,
 ) -> Result<String> {
     let stat = git::browse::diffstat(bare_repo, &info.sha).await?;
@@ -69,6 +75,13 @@ pub async fn render_commit(
         }
         @if !stat.trim().is_empty() {
             div class="scroll-x" { pre class="diff" { (stat) } }
+        }
+        @if truncated {
+            p class="muted" {
+                "this diff is too large to show in full — "
+                a href=(raw_link("patch", repo_name, "").sha(&info.sha).to_string()) { "the raw patch" }
+                " has all of it"
+            }
         }
         p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view))) }
         @match diff_view {

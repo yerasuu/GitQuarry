@@ -144,9 +144,17 @@ async fn commit_by_a_registered_gpg_key_shows_the_gitquarry_verified_badge() {
         .unwrap();
 
     let (info, diff) = gitquarry_core::git::browse::show_commit(&git_dir, &sha).await.unwrap();
-    let html = render_commit(&ctx, &git_dir, "repo", &info, &diff, &axum::http::HeaderMap::new())
-        .await
-        .unwrap();
+    let html = render_commit(
+        &ctx,
+        &git_dir,
+        "repo",
+        &info,
+        &diff,
+        false,
+        &axum::http::HeaderMap::new(),
+    )
+    .await
+    .unwrap();
     assert!(html.contains("verified signature (alice)"), "{html}");
 }
 
@@ -160,9 +168,17 @@ async fn commit_by_an_unregistered_email_falls_back_to_the_system_trust_store_ba
     let ctx = test_ctx(ctx_dir.path());
 
     let (info, diff) = gitquarry_core::git::browse::show_commit(&git_dir, &sha).await.unwrap();
-    let html = render_commit(&ctx, &git_dir, "repo", &info, &diff, &axum::http::HeaderMap::new())
-        .await
-        .unwrap();
+    let html = render_commit(
+        &ctx,
+        &git_dir,
+        "repo",
+        &info,
+        &diff,
+        false,
+        &axum::http::HeaderMap::new(),
+    )
+    .await
+    .unwrap();
     // Falls through to the old `%G?`-based badge instead — this test has
     // no system trust store configured, so that's "unverified" (missing
     // key), never the gitquarry-registered-key wording.

@@ -127,9 +127,17 @@ async fn renders_full_repo_views_against_real_git() {
     let commits = git::browse::log(&git_dir, "main", 1, None).await.unwrap();
     let sha = commits[0].sha.clone();
     let (info, diff) = git::browse::show_commit(&git_dir, &sha).await.unwrap();
-    let commit_html = render_commit(&ctx, &git_dir, "repo", &info, &diff, &axum::http::HeaderMap::new())
-        .await
-        .unwrap();
+    let commit_html = render_commit(
+        &ctx,
+        &git_dir,
+        "repo",
+        &info,
+        &diff,
+        false,
+        &axum::http::HeaderMap::new(),
+    )
+    .await
+    .unwrap();
     assert!(commit_html.contains("initial commit"), "commit: {commit_html}");
     // Split view toggled on: a real `git show` diff, laid out side by side.
     assert!(
@@ -142,7 +150,7 @@ async fn renders_full_repo_views_against_real_git() {
     let (info2, diff2) = git::browse::show_commit(&git_dir, "main").await.unwrap();
     let mut split_cookie = axum::http::HeaderMap::new();
     split_cookie.insert(axum::http::header::COOKIE, "diff-view=split".parse().unwrap());
-    let split_html = render_commit(&ctx, &git_dir, "repo", &info2, &diff2, &split_cookie)
+    let split_html = render_commit(&ctx, &git_dir, "repo", &info2, &diff2, false, &split_cookie)
         .await
         .unwrap();
     assert!(split_html.contains("diff-split"), "split: {split_html}");
