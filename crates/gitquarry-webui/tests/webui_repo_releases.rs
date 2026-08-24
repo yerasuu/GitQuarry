@@ -112,7 +112,7 @@ async fn releases_list_shows_each_release_linked_by_tag() {
     assert!(html.contains("First release"));
     assert!(html.contains("view=release&amp;tag=v1.0") || html.contains("view=release&tag=v1.0"));
     // Anonymous viewer: no create-release form.
-    assert!(!html.contains(r#"action="/_releases""#));
+    assert!(!html.contains(r#"action="/_releases/create/"#));
 }
 
 #[tokio::test]

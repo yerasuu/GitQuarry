@@ -657,11 +657,12 @@ pub(crate) async fn resolve_number_mentions(
 /// override, see `i18n::shared::not_comment_author`'s own doc comment) and
 /// `can_delete` (author-only too, but `Developer`+ on the repo also
 /// qualifies — moderating someone else's comment away is different from
-/// rewriting it) gate the edit/delete forms independently. `mutation_prefix`
-/// is `"/_issues"` or `"/_merges"` — the two POST targets are
-/// `{mutation_prefix}/comment/edit` and `{mutation_prefix}/comment/delete`,
-/// same route-naming convention the existing `/_issues/comment` and
-/// `/_merges/comment` (create) routes use. Used by an MR's own flat thread and
+/// rewriting it) gate the edit/delete forms independently.
+/// `mutation_prefix` is `"/_issues"` or `"/_merges"`; the two POST targets
+/// are `{mutation_prefix}/comment_edit/{repo}` and
+/// `{mutation_prefix}/comment_delete/{repo}`, the same "action first, repo
+/// as the trailing catch-all" shape the rest of those routes use (see
+/// `merges::mutation_url` for why the repo is in the path). Used by an MR's own flat thread and
 /// its annotated inline diff comments ([`super::merges::annotated_diff`]); an
 /// issue's own comments render this inline instead, predating this shared
 /// extraction.

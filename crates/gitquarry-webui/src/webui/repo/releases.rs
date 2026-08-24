@@ -1,7 +1,7 @@
 //! The `releases` tab: named releases wrapping an existing tag, with
-//! markdown notes and downloadable asset files, plus the `/_releases`,
-//! `/_releases/edit`, `/_releases/delete`, `/_releases/assets`,
-//! `/_releases/assets/delete` mutation handlers those views' forms POST to.
+//! markdown notes and downloadable asset files, plus the
+//! `/_releases/{create,edit,delete,generate_notes,asset_upload,asset_delete}/{repo}`
+//! mutation handlers those views' forms POST to.
 //! Top-level routes, not nested under the repo's own `/{*repo}` path — same
 //! shape as `/_fork` ([`super::super::fork`]'s doc comment explains why:
 //! that path is a full-path catch-all already bound to one POST handler, so
@@ -204,7 +204,7 @@ pub async fn render_releases_list_with_prefill(
     .into_string())
 }
 
-/// The asset table alone, wrapped in a stable `id` so `/_releases/assets/delete`
+/// The asset table alone, wrapped in a stable `id` so `/_releases/asset_delete`
 /// can swap just this fragment (`data-async-target="#asset-table"`, see
 /// `crate::webui::ASYNC_HEADER`'s own doc comment) instead of re-rendering
 /// the whole release detail page.
