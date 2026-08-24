@@ -126,3 +126,30 @@ async fn sweep_evicts_lru_when_over_size_cap() {
     assert!(!root.path().join("middle").exists());
     assert!(root.path().join("newest").exists());
 }
+
+#[tokio::test]
+async fn touch_if_missing_creates_a_marker_but_keeps_an_existing_one() {
+    let root = tempfile::tempdir().unwrap();
+    make_fake_mirror(root.path(), "already-marked", Duration::from_secs(3600), 0);
+    let marked = root.path().join("already-marked");
+    let before = std::fs::metadata(marked.join(LAST_ACCESS_MARKER))
+        .unwrap()
+        .modified()
+        .unwrap();
+
+    let unmarked = root.path().join("no-marker");
+    std::fs::create_dir_all(&unmarked).unwrap();
+
+    touch_last_access_if_missing(&marked).await.unwrap();
+    touch_last_access_if_missing(&unmarked).await.unwrap();
+
+    assert_eq!(
+        std::fs::metadata(marked.join(LAST_ACCESS_MARKER))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        before,
+        "an existing marker keeps the mtime real traffic gave it"
+    );
+    assert!(unmarked.join(LAST_ACCESS_MARKER).is_file());
+}
