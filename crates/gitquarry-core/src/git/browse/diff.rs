@@ -28,11 +28,13 @@ pub async fn show_commit(git_dir: &Path, sha: &str) -> Result<(CommitInfo, Strin
     Ok((info, String::from_utf8_lossy(&out).into_owned()))
 }
 
-/// The one commit `sha` names — shared by the capped and uncapped readers,
-/// which differ only in how much of the patch below it they take.
+/// The one commit `sha` names, with its signature presence filled in — this
+/// page always renders a signature badge, so the pass `log` no longer does
+/// inline belongs here.
 async fn commit_info(git_dir: &Path, sha: &str) -> Result<CommitInfo> {
-    log(git_dir, sha, 1, None)
-        .await?
+    let mut found = log(git_dir, sha, 1, None).await?;
+    super::mark_signed(git_dir, &mut found).await?;
+    found
         .into_iter()
         .next()
         .with_context(|| format!("commit {sha} not found"))

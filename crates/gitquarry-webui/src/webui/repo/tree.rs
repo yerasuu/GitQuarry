@@ -34,6 +34,8 @@ pub async fn render_tree(
         git::browse::read_gitmodules(bare_repo, rev),
         git::browse::log(bare_repo, rev, RECENT_LOG_LIMIT, Some(path)),
     )?;
+    let mut recent = recent;
+    git::browse::mark_signed(bare_repo, &mut recent).await?;
     let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
     // Bounded, single-pass (see `last_touched`'s own doc comment) — one
     // `git log` walk for every row in this listing, not one per row.

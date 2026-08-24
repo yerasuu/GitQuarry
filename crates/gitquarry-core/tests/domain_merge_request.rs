@@ -1260,15 +1260,14 @@ async fn a_merge_commit_reads_back_as_signed_by_the_instance() {
     };
 
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
-    let info = gitquarry_core::git::browse::log(&git_dir, &sha, 1, None)
+    let mut found = gitquarry_core::git::browse::log(&git_dir, &sha, 1, None).await.unwrap();
+    gitquarry_core::git::browse::mark_signed(&git_dir, &mut found)
         .await
-        .unwrap()
-        .into_iter()
-        .next()
         .unwrap();
+    let info = found.into_iter().next().unwrap();
     assert_eq!(
-        info.signature_status, 'G',
-        "git didn't accept the instance's own signature — is the mirror's allowed-signers file missing?"
+        info.signature_status, 'U',
+        "the merge commit came out without a gpgsig header at all"
     );
 
     let signer = verified_signer(

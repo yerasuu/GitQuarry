@@ -32,7 +32,8 @@ pub(super) async fn render_activity(
     rev: &str,
     locale: Locale,
 ) -> Result<String> {
-    let commits = git::browse::log(bare_repo, rev, ACTIVITY_LOG_LIMIT, None).await?;
+    let mut commits = git::browse::log(bare_repo, rev, ACTIVITY_LOG_LIMIT, None).await?;
+    git::browse::mark_signed(bare_repo, &mut commits).await?;
     let avatars = commit_avatars(ctx, bare_repo, &commits).await;
 
     Ok(html! {

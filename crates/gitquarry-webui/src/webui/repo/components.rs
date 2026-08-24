@@ -103,17 +103,30 @@ async fn avatars_for(
         let cipher = Arc::clone(&cipher);
         let git_dir = git_dir.to_path_buf();
         set.spawn(async move {
-            let signer = domain::commit_signature::verified_signer(
-                &backend,
-                &cipher,
-                &git_dir,
-                &sha,
-                signature_status,
-                &author_email,
-            )
-            .await
-            .ok()
-            .flatten();
+            // `cached_signer`, not `verified_signer`: rendering a page is a
+            // read, and the computing variant turned every uncached row
+            // into a bucket write plus a `gpg` spawn inside the request.
+            // A miss falls back to the neutral "signed" badge and is
+            // computed out of band, so the next view has the exact verdict.
+            let cached = domain::commit_signature::cached_signer(&backend, &cipher, &sha, signature_status)
+                .await
+                .ok()
+                .flatten();
+            let signer = match cached {
+                Some(signer) => signer,
+                // Miss: compute it out of band so the next view is a hit,
+                // and render this one with whatever the neutral badge says.
+                None => {
+                    domain::commit_signature::warm_signer(
+                        Arc::clone(&backend),
+                        Arc::clone(&cipher),
+                        git_dir.clone(),
+                        sha.clone(),
+                        author_email.clone(),
+                    );
+                    None
+                }
+            };
             (sha, author_email, signer)
         });
     }
@@ -210,11 +223,16 @@ fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &A
 /// Compact signature badge for a commit-table row: `verified_by` is
 /// `Some(username)` only when [`AvatarMatches`]' `bool` was `true` for this
 /// sha (a real GPG check against that account's own registered keys, not
-/// just an author-email guess) — takes priority over `signature_status`
-/// (`%G?`) itself, since a git-side "good" grade alone doesn't say *which*
-/// gitquarry account signed it, if any. Empty for `'N'` (unsigned): no
-/// badge at all, same as the single-commit page's own
-/// `webui::repo::commit::signature_badge` treats it.
+/// just an author-email guess). `signature_status` only says whether a
+/// signature is there at all, so on its own it can never read as more than
+/// "unverified" — and empty for `'N'` (unsigned): no badge, same as the
+/// single-commit page's own `webui::repo::commit::signature_badge`.
+///
+/// "unverified" also covers a row whose verdict simply isn't computed yet
+/// (`domain::commit_signature::cached_signer` missed and
+/// `warm_signer` is filling it in) — indistinguishable here from one that
+/// was checked and matched nobody, and deliberately so: both mean this
+/// server is not vouching for the signature right now.
 fn signature_indicator(signature_status: char, verified_by: Option<&str>, instance_signed: bool) -> Markup {
     html! {
         @if let Some(username) = verified_by {
@@ -229,10 +247,8 @@ fn signature_indicator(signature_status: char, verified_by: Option<&str>, instan
             // apart.
             " " span class="badge accent" title="verified signature (built and signed by this instance)" { "verified" }
         } @else {
-            @match signature_status {
-                'B' | 'R' | 'Y' => { " " span class="badge danger" title="signature check failed" { "invalid" } }
-                'N' => {}
-                _ => { " " span class="muted" title="signed, but not by any registered account's key" { "unverified" } }
+            @if signature_status != 'N' {
+                " " span class="muted" title="signed, but not by any registered account's key" { "unverified" }
             }
         }
     }
