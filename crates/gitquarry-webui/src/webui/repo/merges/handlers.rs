@@ -174,16 +174,23 @@ pub(crate) async fn handler_create_post(
 
     // A rejected submit (bad rev, no fork relationship, no diff, ...)
     // re-renders this same form with everything the user typed still
-    // filled in, instead of losing it to the generic error page — no ref
-    // suggestions on the retry render (would need re-listing the mirror's
-    // branches), a minor loss next to keeping the typed title/description.
+    // filled in, instead of losing it to the generic error page. The
+    // branch suggestions are re-listed for the retry (one mirror open):
+    // the commonest rejection here is "'x' isn't a branch of this repo",
+    // and that sentence is only actionable next to the branches that are.
+    // A mirror that won't open costs the datalist, not the retry.
     macro_rules! fail {
         ($msg:expr) => {{
+            let refs = match ctx.open_mirror_read(&resolved).await {
+                Ok(mirror) => gitquarry_core::git::list_refs(&mirror.path).await.unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            let ref_names: Vec<&str> = refs.iter().filter_map(|r| r.strip_prefix("refs/heads/")).collect();
             let topnav = login::topnav(&ctx, &headers).await;
             let body = super::render_new_merge_form(
                 &name,
                 &resolved.uid,
-                &[],
+                &ref_names,
                 None,
                 super::NewMergeFormValues {
                     source_repo: &form.source_repo,
