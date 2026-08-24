@@ -23,7 +23,12 @@
    picks with `components::width_class`. Whole percents and not something finer
    on purpose: this is the entire cost of the CSP staying tight, and 1% is
    under half a pixel on a 320px-wide bar. `.lang-bar`/`.bar` both live in
-   flex/inline-block contexts that absorb the rounding. */
+   flex/inline-block contexts that absorb the rounding.
+
+   `styler.css` ships `.w-25`/`.w-50`/`.w-75`/`.w-100` of its own, same
+   meaning and same values; this file loads after it (see
+   `page_chrome::STYLE`), so those four overlap harmlessly instead of
+   leaving gaps in the family. */
 .w-0 { width: 0%; }
 .w-1 { width: 1%; }
 .w-2 { width: 2%; }
