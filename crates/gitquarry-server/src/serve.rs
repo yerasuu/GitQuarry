@@ -37,7 +37,8 @@ Starts, in the same process, the ssh:// server (push/clone/fetch with
 pubkey auth and per-repo permissions), git smart-HTTP over the same web
 port (push/clone/fetch with basic auth and per-repo permissions), and the
 read-only web UI -- the only two publicly supported transports are ssh://
-and http. If the config has only one bucket, --bucket is optional.
+and http. --bucket is optional when the config has only one bucket or
+names a `default_bucket`.
 
 Local mirrors (`--mirrors-dir`) are a cache: a periodic sweep deletes the
 ones not queried within `--mirrors-max-age` (default 3d) and, if the
@@ -115,14 +116,16 @@ pub async fn run(rest: &[String]) -> Result<()> {
         let allow_push_create = conf.allow_push_create();
         let trust_forwarded_for = conf.trust_forwarded_for();
         config::warn_if_world_readable(&config_path);
-        // Without --bucket: if the config only has one configured, there's no
-        // ambiguity.
+        // Without --bucket: whatever `default_bucket` names, or the single
+        // configured bucket. Buckets that exist only as a backup destination
+        // or a mirror target are never served, so a config with several is
+        // ordinary and the default has to be written down.
         let bucket = match args.bucket {
             Some(b) => b,
             None => conf
-                .only_bucket_name()
+                .default_bucket_name()
                 .map(str::to_string)
-                .context("--bucket NAME required (config has more than one bucket)")?,
+                .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
         };
         // Validates early, with a good error message, before binding ports.
         let bucket_cfg = conf.bucket(&bucket)?.clone();
