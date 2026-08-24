@@ -530,6 +530,13 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         );
 
     let app = app
+        // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
+        // answers POST only, and a rejected submit re-renders in the POST
+        // response rather than redirecting, so that URL is what stays in the
+        // address bar. Reloading or backing into it would otherwise get
+        // axum's bare 405 -- empty body, `Allow` header, and the catch-all
+        // `GET /{*repo}` never consulted because the path itself did match.
+        .method_not_allowed_fallback(|| async { axum::response::Redirect::to("/") })
         // Runs before the routes above ever see the request: short-circuits
         // the three git-smart-HTTP paths (see `gitquarry_core::git::http`'s module
         // doc for why this has to be a layer, not a route), passes
