@@ -296,9 +296,8 @@ fn form_row(
     html! {
         tr class="diff-comment" {
             td colspan="3" {
-                form method="post" action="/_merges/comment" {
+                form method="post" action=(super::mutation_url("comment", repo_name)) {
                     (PreEscaped(csrf_field(headers)))
-                    input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="repo_uid" value=(repo_uid);
                     input type="hidden" name="number" value=(number);
                     input type="hidden" name="anchor_path" value=(anchor.path);

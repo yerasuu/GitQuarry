@@ -333,7 +333,13 @@ async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
     static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
 }
 
-pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
+/// The whole route table, layers included, with nothing bound yet.
+///
+/// Split out of [`run_server`] so `tests/webui_routes.rs` can assert
+/// properties of the table itself (every mutation target answering a stray
+/// GET rather than axum's bare 405) without a listener, a bucket or a
+/// storage backend.
+pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
         .route("/_assets/style.css", get(handler_style_css))
         .route("/_assets/app.js", get(handler_app_js))
@@ -388,8 +394,14 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_changelog", get(changelog::handler_changelog_get))
         .route("/_license", get(license::handler_license_get))
         .route("/_search", get(crate::search::web::handler_search_get))
-        .route("/_fork", axum::routing::post(fork::handler_fork_post))
-        .route("/_watch", axum::routing::post(watch::handler_watch_post))
+        .route(
+            "/_fork/{*repo}",
+            get(fork::handler_mutation_get).post(fork::handler_fork_post),
+        )
+        .route(
+            "/_watch/{*repo}",
+            get(watch::handler_mutation_get).post(watch::handler_watch_post),
+        )
         .route("/_new", get(repo_new::handler_new_get).post(repo_new::handler_new_post))
         .route("/_repos", get(repos::handler_repos_get))
         .route(
@@ -449,69 +461,90 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             "/_login_totp",
             get(crate::auth::web::login::handler_login_totp_get).post(crate::auth::web::login::handler_login_totp_post),
         )
-        .route("/_releases", axum::routing::post(repo::releases::handler_create_post))
         .route(
-            "/_releases/generate_notes",
-            axum::routing::post(repo::releases::handler_generate_notes_post),
+            "/_releases/create/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_create_post),
         )
         .route(
-            "/_releases/edit",
-            axum::routing::post(repo::releases::handler_edit_post),
+            "/_releases/generate_notes/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_generate_notes_post),
         )
         .route(
-            "/_releases/delete",
-            axum::routing::post(repo::releases::handler_delete_post),
+            "/_releases/edit/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_edit_post),
         )
         .route(
-            "/_releases/assets",
-            axum::routing::post(repo::releases::handler_upload_asset_post),
+            "/_releases/delete/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_delete_post),
         )
         .route(
-            "/_releases/assets/delete",
-            axum::routing::post(repo::releases::handler_delete_asset_post),
+            "/_releases/asset_upload/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_upload_asset_post),
         )
-        .route("/_tags", axum::routing::post(repo::tags::handler_create_post))
-        .route("/_tags/delete", axum::routing::post(repo::tags::handler_delete_post))
         .route(
-            "/_branches/delete",
-            axum::routing::post(repo::branches::handler_delete_post),
+            "/_releases/asset_delete/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_delete_asset_post),
+        )
+        .route(
+            "/_tags/create/{*repo}",
+            get(repo::tags::handler_mutation_get).post(repo::tags::handler_create_post),
+        )
+        .route(
+            "/_tags/delete/{*repo}",
+            get(repo::tags::handler_mutation_get).post(repo::tags::handler_delete_post),
+        )
+        .route(
+            "/_branches/delete/{*repo}",
+            get(repo::branches::handler_mutation_get).post(repo::branches::handler_delete_post),
         );
     let app = app
-        .route("/_merges", axum::routing::post(repo::merges::handler_create_post))
-        .route("/_merges/bulk", axum::routing::post(repo::merges::handler_bulk_post))
-        .route("/_merges/close", axum::routing::post(repo::merges::handler_close_post))
         .route(
-            "/_merges/reopen",
-            axum::routing::post(repo::merges::handler_reopen_post),
+            "/_merges/create/{*repo}",
+            get(repo::merges::handler_create_get).post(repo::merges::handler_create_post),
         )
         .route(
-            "/_merges/comment",
-            axum::routing::post(repo::merges::handler_comment_post),
+            "/_merges/bulk/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_bulk_post),
         )
         .route(
-            "/_merges/comment/edit",
-            axum::routing::post(repo::merges::handler_comment_edit_post),
+            "/_merges/close/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_close_post),
         )
         .route(
-            "/_merges/comment/delete",
-            axum::routing::post(repo::merges::handler_comment_delete_post),
+            "/_merges/reopen/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_reopen_post),
         )
         .route(
-            "/_merges/review",
-            axum::routing::post(repo::merges::handler_review_post),
-        )
-        .route("/_merges/merge", axum::routing::post(repo::merges::handler_merge_post))
-        .route(
-            "/_merges/edit_metadata",
-            axum::routing::post(repo::merges::handler_edit_metadata_post),
+            "/_merges/comment/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_post),
         )
         .route(
-            "/_merges/mark_draft",
-            axum::routing::post(repo::merges::handler_mark_draft_post),
+            "/_merges/comment_edit/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_edit_post),
         )
         .route(
-            "/_merges/mark_ready",
-            axum::routing::post(repo::merges::handler_mark_ready_post),
+            "/_merges/comment_delete/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_delete_post),
+        )
+        .route(
+            "/_merges/review/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_review_post),
+        )
+        .route(
+            "/_merges/merge/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_merge_post),
+        )
+        .route(
+            "/_merges/edit_metadata/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_edit_metadata_post),
+        )
+        .route(
+            "/_merges/mark_draft/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_mark_draft_post),
+        )
+        .route(
+            "/_merges/mark_ready/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_mark_ready_post),
         )
         .route("/_login_oidc", get(crate::auth::web::login::handler_login_oidc))
         .route("/_callback", get(crate::auth::web::login::handler_callback))
@@ -529,7 +562,14 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             get(repo::handler_repo).post(repo_settings::handler_repo_conf_post),
         );
 
-    let app = app
+    app
+        // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
+        // answers POST only, and a rejected submit re-renders in the POST
+        // response rather than redirecting, so that URL is what stays in the
+        // address bar. Reloading or backing into it would otherwise get
+        // axum's bare 405 -- empty body, `Allow` header, and the catch-all
+        // `GET /{*repo}` never consulted because the path itself did match.
+        .method_not_allowed_fallback(|| async { axum::response::Redirect::to("/") })
         // Runs before the routes above ever see the request: short-circuits
         // the three git-smart-HTTP paths (see `gitquarry_core::git::http`'s module
         // doc for why this has to be a layer, not a route), passes
@@ -542,6 +582,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             Arc::clone(&ctx),
             request_cache_middleware,
         ))
+        .layer(axum::middleware::from_fn(flash_middleware))
         .layer(axum::middleware::from_fn(security_headers))
         // Every HTML/CSS/JS response this app sends is compressible text
         // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
@@ -549,7 +590,11 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         // -- picks whichever of br/gzip/zstd the client's `Accept-Encoding`
         // offers.
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(Arc::clone(&ctx));
+        .with_state(Arc::clone(&ctx))
+}
+
+pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
+    let app = router(Arc::clone(&ctx));
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
@@ -606,6 +651,26 @@ async fn request_cache_middleware(
             ),
         )
         .await
+}
+
+/// Carries a redirected flash across the redirect: reads the cookie
+/// [`flash::redirect`] set, scopes it into [`flash::CURRENT_FLASH`] so
+/// [`page_chrome::layout`] renders it on whatever page the browser landed
+/// on, and clears the cookie in that same response so it shows exactly
+/// once (a 30s `Max-Age` alone would show it again on the next page the
+/// reader opened).
+async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let incoming = flash::from_cookie(req.headers());
+    let clear = incoming
+        .is_some()
+        .then(|| cookies::set_cookie(req.headers(), flash::FLASH_COOKIE, "", 0));
+    let mut response = flash::CURRENT_FLASH.scope(incoming, next.run(req)).await;
+    if let Some((name, cookie)) = clear
+        && let Ok(cookie) = axum::http::HeaderValue::from_str(&cookie)
+    {
+        response.headers_mut().append(name, cookie);
+    }
+    response
 }
 
 /// Response headers applied to every route, hand-rolled (`from_fn`, no

@@ -130,26 +130,23 @@ fn render_mr_actions(
             @if can_manage {
                 @match mr.status {
                     MrStatus::Open => {
-                        form method="post" action="/_merges/close" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(t::close_confirm(locale, mr.number, &mr.title)) {
+                        form method="post" action=(mutation_url("close", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(t::close_confirm(locale, mr.number, &mr.title)) {
                             (PreEscaped(csrf_html))
-                            input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                             button type="submit" { (t::close_button(locale)) }
                         }
                         " "
                         @if mr.is_draft {
-                            form method="post" action="/_merges/mark_ready" style="display:inline" data-async data-async-target="#mr-actions" {
+                            form method="post" action=(mutation_url("mark_ready", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" {
                                 (PreEscaped(csrf_html))
-                                input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                                 button type="submit" { (t::mark_ready_button(locale)) }
                             }
                         } @else {
-                            form method="post" action="/_merges/mark_draft" style="display:inline" data-async data-async-target="#mr-actions" {
+                            form method="post" action=(mutation_url("mark_draft", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" {
                                 (PreEscaped(csrf_html))
-                                input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                                 button type="submit" { (t::mark_draft_button(locale)) }
@@ -157,9 +154,8 @@ fn render_mr_actions(
                         }
                     }
                     MrStatus::Closed => {
-                        form method="post" action="/_merges/reopen" style="display:inline" data-async data-async-target="#mr-actions" {
+                        form method="post" action=(mutation_url("reopen", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" {
                             (PreEscaped(csrf_html))
-                            input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                             button type="submit" { (t::reopen_button(locale)) }
@@ -169,9 +165,8 @@ fn render_mr_actions(
                 }
             }
             @if can_merge && !mr.is_draft && mr.status == MrStatus::Open {
-                form method="post" action="/_merges/merge" style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo && !source_branch_protected { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
+                form method="post" action=(mutation_url("merge", repo_name)) style="display:inline" data-async data-async-target="#mr-actions" data-confirm=(if is_same_repo && !source_branch_protected { t::merge_confirm_with_branch_delete(locale, mr.number, &mr.title) } else { t::merge_confirm(locale, mr.number, &mr.title) }) {
                     (PreEscaped(csrf_html))
-                    input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                     label for="merge-strategy" class="muted" { (t::merge_strategy_label(locale)) }
@@ -274,9 +269,8 @@ fn render_reviews(
             }
         }
         @if viewer.is_some() {
-            form method="post" action="/_merges/review" {
+            form method="post" action=(mutation_url("review", repo_name)) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);
                 @if is_own_mr {
@@ -413,9 +407,8 @@ async fn render_merges_list_impl(
             button type="submit" { (t::search_button(locale)) }
         }
         @if can_bulk_manage {
-            form method="post" action="/_merges/bulk" data-confirm=(t::bulk_apply_confirm(locale)) {
+            form method="post" action=(mutation_url("bulk", repo_name)) data-confirm=(t::bulk_apply_confirm(locale)) {
                 (PreEscaped(&csrf_html))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="repo_uid" value=(target.uid);
                 div class="table-scroll" {
                 table class="list" {
@@ -482,7 +475,8 @@ async fn render_merges_list_impl(
 /// the same way GitHub's own MR template does, editable/clearable before
 /// submit like any other pre-filled form field, never enforced at the
 /// handler.
-/// Values to redisplay after a rejected `POST /_merges` (bad rev, no diff,
+/// Values to redisplay after a rejected `POST /_merges/create/{repo}`
+/// (bad rev, no diff,
 /// ...) — all `""`/`None` for the plain GET landing, same
 /// [`render_new_merge_form`] either way so a failure just shows the reason
 /// next to the still-filled-in form instead of losing it.
@@ -493,6 +487,19 @@ pub(super) struct NewMergeFormValues<'a> {
     pub(super) title: &'a str,
     pub(super) description: &'a str,
     pub(super) error: Option<&'a str>,
+}
+
+/// The POST target for one merge-request mutation on one repo.
+///
+/// The repo is a path segment, not a hidden form field: a rejected submit
+/// renders in the POST response (that's what keeps the typed title and
+/// description), so this URL is what the browser is left holding, and it
+/// has to say which repo it belongs to. The action comes first and the
+/// repo last for the same reason `raw::handler_raw_plain`'s routes do — a
+/// catch-all has to be the final segment, and a repo whose namespace
+/// happened to be `merge` must not be able to look like one.
+fn mutation_url(action: &str, repo_name: &str) -> String {
+    format!("/_merges/{action}/{}", url_encode(repo_name))
 }
 
 pub(super) fn render_new_merge_form(
@@ -514,9 +521,8 @@ pub(super) fn render_new_merge_form(
         @if let Some(msg) = values.error {
             p class="alert alert-err" { (msg) }
         }
-        form method="post" action="/_merges" {
+        form method="post" action=(mutation_url("create", repo_name)) {
             (PreEscaped(csrf_field(headers)))
-            input type="hidden" name="repo" value=(repo_name);
             input type="hidden" name="repo_uid" value=(repo_uid);
             div class="field" {
                 label { (t::source_repo_label(locale)) }
@@ -783,9 +789,8 @@ async fn render_merge_detail_impl(
 
         @if can_manage && mr.status == MrStatus::Open {
             h4 { (t::edit_metadata_heading(locale)) }
-            form method="post" action="/_merges/edit_metadata" {
+            form method="post" action=(mutation_url("edit_metadata", repo_name)) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                 div class="field" {
@@ -857,9 +862,8 @@ async fn render_merge_detail_impl(
             }
         }
         @if logged_in {
-            form method="post" action="/_merges/comment" {
+            form method="post" action=(mutation_url("comment", repo_name)) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="number" value=(mr.number);
                             input type="hidden" name="repo_uid" value=(repo_uid);
                 textarea name="body" rows="4" cols="60" {}
@@ -881,6 +885,6 @@ mod handlers;
 
 pub(crate) use handlers::{
     handler_bulk_post, handler_close_post, handler_comment_delete_post, handler_comment_edit_post,
-    handler_comment_post, handler_create_post, handler_edit_metadata_post, handler_mark_draft_post,
-    handler_mark_ready_post, handler_merge_post, handler_reopen_post, handler_review_post,
+    handler_comment_post, handler_create_get, handler_create_post, handler_edit_metadata_post, handler_mark_draft_post,
+    handler_mark_ready_post, handler_merge_post, handler_mutation_get, handler_reopen_post, handler_review_post,
 };

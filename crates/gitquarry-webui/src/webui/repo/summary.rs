@@ -729,9 +729,8 @@ fn render_fork_form(
         @if let Some(msg) = error {
             p class="alert alert-err" { (msg) }
         }
-        form method="post" action="/_fork" class="fork-form" {
+        form method="post" action=(format!("/_fork/{}", crate::webui::url_encode(repo_name))) class="fork-form" {
             (PreEscaped(crate::webui::csrf_field(headers)))
-            input type="hidden" name="source" value=(repo_name);
             select name="namespace" {
                 option value=(viewer.username) { (viewer.username) " " (t::you_suffix(locale)) }
                 @for name in crate::auth::web::groups::manageable_group_names(groups, &viewer.uid, viewer.is_admin) {

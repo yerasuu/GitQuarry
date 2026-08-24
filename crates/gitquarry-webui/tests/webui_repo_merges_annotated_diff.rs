@@ -208,7 +208,7 @@ fn the_form_expands_only_on_the_active_anchor() {
     };
     let out = render(DIFF, &[], &view(&[], true, Some(&active), &HeaderMap::new()));
     let html = out.markup.into_string();
-    assert_eq!(html.matches(r#"action="/_merges/comment""#).count(), 1);
+    assert_eq!(html.matches(r#"action="/_merges/comment/team/proj""#).count(), 1);
     // The form's hidden fields carry the anchor back to the handler.
     assert!(html.contains(r#"name="anchor_side" value="new""#), "{html}");
     assert!(html.contains(r#"name="anchor_line" value="4""#), "{html}");
@@ -226,11 +226,11 @@ fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
     .markup
     .into_string();
     assert!(
-        !as_someone_else.contains(r#"action="/_merges/comment/edit""#),
+        !as_someone_else.contains(r#"action="/_merges/comment_edit/team/proj""#),
         "{as_someone_else}"
     );
     assert!(
-        !as_someone_else.contains(r#"action="/_merges/comment/delete""#),
+        !as_someone_else.contains(r#"action="/_merges/comment_delete/team/proj""#),
         "{as_someone_else}"
     );
 
@@ -242,11 +242,11 @@ fn a_placed_comments_edit_delete_controls_only_show_for_its_own_author() {
     .markup
     .into_string();
     assert!(
-        as_the_author.contains(r#"action="/_merges/comment/edit""#),
+        as_the_author.contains(r#"action="/_merges/comment_edit/team/proj""#),
         "{as_the_author}"
     );
     assert!(
-        as_the_author.contains(r#"action="/_merges/comment/delete""#),
+        as_the_author.contains(r#"action="/_merges/comment_delete/team/proj""#),
         "{as_the_author}"
     );
 }
@@ -263,11 +263,11 @@ fn a_moderator_can_delete_someone_elses_placed_comment_but_not_edit_it() {
     .markup
     .into_string();
     assert!(
-        !as_moderator.contains(r#"action="/_merges/comment/edit""#),
+        !as_moderator.contains(r#"action="/_merges/comment_edit/team/proj""#),
         "{as_moderator}"
     );
     assert!(
-        as_moderator.contains(r#"action="/_merges/comment/delete""#),
+        as_moderator.contains(r#"action="/_merges/comment_delete/team/proj""#),
         "{as_moderator}"
     );
 }

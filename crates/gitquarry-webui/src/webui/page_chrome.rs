@@ -772,6 +772,11 @@ pub fn layout(
                     }
                 }
                 main id="content" tabindex="-1" {
+                    // A message parked by `flash::redirect` on the response
+                    // before this one. Rendered here rather than by each
+                    // handler so a mutation only has to redirect somewhere
+                    // sensible to have its outcome shown.
+                    (maud::PreEscaped(super::flash::render_current(locale)))
                     (maud::PreEscaped(header))
                     (maud::PreEscaped(body))
                 }

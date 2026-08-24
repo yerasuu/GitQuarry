@@ -12,12 +12,23 @@ use tracing::error;
 pub struct AppError {
     status: StatusCode,
     error: anyhow::Error,
+    redirect: Option<Redirected>,
 }
 #[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug)]
 pub(crate) struct AppError {
     status: StatusCode,
     error: anyhow::Error,
+    redirect: Option<Redirected>,
+}
+
+/// Where a rejected mutation sends the browser instead of rendering the
+/// error page at the POST URL, and the `Set-Cookie` carrying the reason
+/// there. Built by [`AppError::flash_back`]; see `super::flash`.
+#[derive(Debug)]
+struct Redirected {
+    location: String,
+    cookie: String,
 }
 
 impl AppError {
@@ -25,6 +36,28 @@ impl AppError {
         AppError {
             status: StatusCode::BAD_REQUEST,
             error,
+            redirect: None,
+        }
+    }
+
+    /// A 400 that goes back to the page the submit came from, carrying its
+    /// reason as a flash, instead of rendering the error page at the POST
+    /// target. That target answers POST only, so the error page it would
+    /// otherwise render leaves the browser on a URL it can't reload — the
+    /// whole point of redirecting is to end on a real GET URL.
+    ///
+    /// `to` has to be a page the reader can actually get back to; a
+    /// handler with nowhere sensible to send them keeps
+    /// [`AppError::bad_request`].
+    pub(crate) fn flash_back(headers: &axum::http::HeaderMap, to: &str, error: anyhow::Error) -> Self {
+        let cookie = super::flash::error_cookie(headers, &format!("{error:#}"));
+        AppError {
+            status: StatusCode::BAD_REQUEST,
+            error,
+            redirect: Some(Redirected {
+                location: to.to_string(),
+                cookie,
+            }),
         }
     }
 
@@ -33,6 +66,7 @@ impl AppError {
         AppError {
             status: StatusCode::NOT_FOUND,
             error,
+            redirect: None,
         }
     }
     #[cfg(not(any(test, feature = "test-util")))]
@@ -40,6 +74,7 @@ impl AppError {
         AppError {
             status: StatusCode::NOT_FOUND,
             error,
+            redirect: None,
         }
     }
 
@@ -47,6 +82,7 @@ impl AppError {
         AppError {
             status: StatusCode::FORBIDDEN,
             error,
+            redirect: None,
         }
     }
 
@@ -97,9 +133,23 @@ impl AppError {
 }
 
 impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
+    fn into_response(mut self) -> Response {
         if self.status.is_server_error() {
             error!(error = %self.error, "UI web request failed");
+        }
+        // `303` rather than axum's `307` default: the browser has to follow
+        // this with a GET, otherwise it would repeat the POST that just
+        // failed.
+        if let Some(redirect) = self.redirect.take() {
+            let mut response = (StatusCode::SEE_OTHER, ()).into_response();
+            if let (Ok(location), Ok(cookie)) = (
+                axum::http::HeaderValue::from_str(&redirect.location),
+                axum::http::HeaderValue::from_str(&redirect.cookie),
+            ) {
+                response.headers_mut().insert(header::LOCATION, location);
+                response.headers_mut().append(header::SET_COOKIE, cookie);
+                return response;
+            }
         }
         // No `HeaderMap` reaches this conversion, so the explicit theme/
         // density cookies can't be read here — falls back to
@@ -133,6 +183,7 @@ impl<E: Into<anyhow::Error>> From<E> for AppError {
         AppError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             error: e.into(),
+            redirect: None,
         }
     }
 }

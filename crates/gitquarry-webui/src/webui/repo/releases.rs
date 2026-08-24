@@ -1,7 +1,7 @@
 //! The `releases` tab: named releases wrapping an existing tag, with
-//! markdown notes and downloadable asset files, plus the `/_releases`,
-//! `/_releases/edit`, `/_releases/delete`, `/_releases/assets`,
-//! `/_releases/assets/delete` mutation handlers those views' forms POST to.
+//! markdown notes and downloadable asset files, plus the
+//! `/_releases/{create,edit,delete,generate_notes,asset_upload,asset_delete}/{repo}`
+//! mutation handlers those views' forms POST to.
 //! Top-level routes, not nested under the repo's own `/{*repo}` path — same
 //! shape as `/_fork` ([`super::super::fork`]'s doc comment explains why:
 //! that path is a full-path catch-all already bound to one POST handler, so
@@ -14,7 +14,7 @@ use crate::webui::{
     AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout, markdown, non_empty,
     raw_link, repo_link, require_csrf, require_login, url_encode,
 };
-use axum::extract::{Form, Multipart, State};
+use axum::extract::{Form, Multipart, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -170,9 +170,8 @@ pub async fn render_releases_list_with_prefill(
             @if let Some(msg) = error {
                 p class="alert alert-err" { (msg) }
             }
-            form method="post" action="/_releases" {
+            form method="post" action=(format!("/_releases/create/{}", url_encode(repo_name))) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 div class="field" {
                     label { (t::tag_label(locale)) }
                     input list="release-tags" name="tag" size="30" value=(prefill.tag) placeholder=(t::tag_placeholder(locale));
@@ -190,7 +189,7 @@ pub async fn render_releases_list_with_prefill(
                     label { (t::notes_label(locale)) }
                     textarea name="notes" rows="4" cols="60" { (prefill.notes) }
                     br;
-                    button type="submit" formaction="/_releases/generate_notes" { (t::generate_notes_button(locale)) }
+                    button type="submit" formaction=(format!("/_releases/generate_notes/{}", url_encode(repo_name))) { (t::generate_notes_button(locale)) }
                 }
                 div class="field" {
                     label { input type="checkbox" name="is_prerelease" value="1" checked[prefill.is_prerelease]; " " (t::prerelease_checkbox_label(locale)) }
@@ -205,7 +204,7 @@ pub async fn render_releases_list_with_prefill(
     .into_string())
 }
 
-/// The asset table alone, wrapped in a stable `id` so `/_releases/assets/delete`
+/// The asset table alone, wrapped in a stable `id` so `/_releases/asset_delete`
 /// can swap just this fragment (`data-async-target="#asset-table"`, see
 /// `crate::webui::ASYNC_HEADER`'s own doc comment) instead of re-rendering
 /// the whole release detail page.
@@ -248,9 +247,8 @@ fn render_asset_table(
                     td { code { (gitquarry_core::validate::short_sha(&asset.sha256)) } }
                     td {
                         @if can_write {
-                            form method="post" action="/_releases/assets/delete" style="display:inline" data-async data-async-target="#asset-table" data-confirm=(t::delete_asset_confirm(locale, &asset.filename)) {
+                            form method="post" action=(format!("/_releases/asset_delete/{}", url_encode(repo_name))) style="display:inline" data-async data-async-target="#asset-table" data-confirm=(t::delete_asset_confirm(locale, &asset.filename)) {
                                 (PreEscaped(csrf_field(headers)))
-                                input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="tag" value=(tag);
                                 input type="hidden" name="filename" value=(&asset.filename);
                                 button type="submit" { (t::delete_button(locale)) }
@@ -317,9 +315,8 @@ pub async fn render_release_detail(
 
         @if can_write {
             h4 { (t::upload_asset_heading(locale)) }
-            form method="post" action="/_releases/assets" enctype="multipart/form-data" {
+            form method="post" action=(format!("/_releases/asset_upload/{}", url_encode(repo_name))) enctype="multipart/form-data" {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);
                 input type="file" name="file";
                 br;
@@ -328,9 +325,8 @@ pub async fn render_release_detail(
             }
 
             h4 { (t::edit_heading(locale)) }
-            form method="post" action="/_releases/edit" {
+            form method="post" action=(format!("/_releases/edit/{}", url_encode(repo_name))) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);
                 div class="field" {
                     label { (t::title_label(locale)) }
@@ -350,9 +346,8 @@ pub async fn render_release_detail(
             }
 
             h4 { (t::delete_release_heading(locale)) }
-            form method="post" action="/_releases/delete" data-confirm=(t::delete_release_confirm(locale, tag)) {
+            form method="post" action=(format!("/_releases/delete/{}", url_encode(repo_name))) data-confirm=(t::delete_release_confirm(locale, tag)) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);
                 button type="submit" { (t::delete_release_button(locale)) }
             }
@@ -391,9 +386,15 @@ async fn require_write_target(
     Ok((resolved, name))
 }
 
+/// `GET` on a `/_releases/*` mutation target: what a reload or a back
+/// button asks for after a rejected submit left that URL in the address
+/// bar. The repo is in the path, so it lands on that repo's releases.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}?view=releases", url_encode(&repo))).into_response()
+}
+
 #[derive(serde::Deserialize)]
 pub(crate) struct ReleaseForm {
-    repo: String,
     tag: String,
     #[serde(default)]
     title: String,
@@ -411,16 +412,17 @@ pub(crate) struct ReleaseForm {
 
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
 
@@ -545,16 +547,17 @@ pub(crate) async fn handler_create_post(
 /// call site in the create form.
 pub(crate) async fn handler_generate_notes_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim().to_string();
     let (notes, error) = match release::generate_notes(&ctx, &resolved, &tag, locale).await {
@@ -604,16 +607,17 @@ pub(crate) async fn handler_generate_notes_post(
 
 pub(crate) async fn handler_edit_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let cas = release::edit(
@@ -648,7 +652,6 @@ pub(crate) async fn handler_edit_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ReleaseDeleteForm {
-    repo: String,
     tag: String,
     #[serde(default)]
     csrf: String,
@@ -656,16 +659,17 @@ pub(crate) struct ReleaseDeleteForm {
 
 pub(crate) async fn handler_delete_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseDeleteForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     release::delete(&resolved, tag).await?;
@@ -698,7 +702,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     })
 }
 
-/// `POST /_releases/assets`: multipart upload. Every text field (`repo`/
+/// `POST /_releases/asset_upload/{repo}`: multipart upload. Every text field (
 /// `tag`/`csrf`) is read first, the `file` field's bytes are streamed into a
 /// scratch tempfile (hashed and size-counted along the way, capped at
 /// [`MAX_ASSET_UPLOAD_BYTES`]) — never fully buffered in memory. Login/CSRF/
@@ -706,23 +710,22 @@ fn encode_hex(bytes: &[u8]) -> String {
 /// could otherwise make the server write [`MAX_ASSET_UPLOAD_BYTES`] to disk
 /// per request just by opening one, and the cap bounds a single upload, not
 /// how many an attacker may start. CSRF and the write-permission check stay
-/// after the drain — their inputs (`csrf`, `repo`) are body fields, and
-/// multipart fields can only be read in the order the client sent them.
+/// after the drain — `csrf` is a body field, and multipart fields can only
+/// be read in the order the client sent them.
 pub(crate) async fn handler_upload_asset_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
     let locale = effective_locale(&ctx, &headers).await;
     // Headers alone answer "is anyone logged in", so this doesn't have to
     // wait for the body — and it must not: everything below writes the
-    // uploaded bytes to disk. `return_to` is the index rather than the
-    // repo, which is only known once the body has been read.
-    let me = match require_login(&ctx, &headers, "/").await {
+    // uploaded bytes to disk.
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
-    let mut repo = String::new();
     let mut tag = String::new();
     let mut csrf = String::new();
     let mut signature = String::new();
@@ -735,12 +738,6 @@ pub(crate) async fn handler_upload_asset_post(
         ))
     })? {
         match field.name() {
-            Some("repo") => {
-                repo = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::bad_request(anyhow::anyhow!("{e}")))?;
-            }
             Some("tag") => {
                 tag = field
                     .text()
@@ -847,7 +844,6 @@ pub(crate) async fn handler_upload_asset_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct AssetDeleteForm {
-    repo: String,
     tag: String,
     filename: String,
     #[serde(default)]
@@ -856,16 +852,17 @@ pub(crate) struct AssetDeleteForm {
 
 pub(crate) async fn handler_delete_asset_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<AssetDeleteForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let filename = validate::validate_asset_filename(&form.filename).map_err(AppError::bad_request)?;
