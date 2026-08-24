@@ -333,7 +333,13 @@ async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
     static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
 }
 
-pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
+/// The whole route table, layers included, with nothing bound yet.
+///
+/// Split out of [`run_server`] so `tests/webui_routes.rs` can assert
+/// properties of the table itself (every mutation target answering a stray
+/// GET rather than axum's bare 405) without a listener, a bucket or a
+/// storage backend.
+pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
         .route("/_assets/style.css", get(handler_style_css))
         .route("/_assets/app.js", get(handler_app_js))
@@ -529,7 +535,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             get(repo::handler_repo).post(repo_settings::handler_repo_conf_post),
         );
 
-    let app = app
+    app
         // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
         // answers POST only, and a rejected submit re-renders in the POST
         // response rather than redirecting, so that URL is what stays in the
@@ -556,7 +562,11 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         // -- picks whichever of br/gzip/zstd the client's `Accept-Encoding`
         // offers.
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(Arc::clone(&ctx));
+        .with_state(Arc::clone(&ctx))
+}
+
+pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
+    let app = router(Arc::clone(&ctx));
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
