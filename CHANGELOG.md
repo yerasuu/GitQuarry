@@ -189,6 +189,9 @@ on a per-release versioning scheme.
   it unbounded.
 - `gitquarry backup`/`gitquarry restore` operator commands, and a matching
   backup settings section in the web UI to configure and trigger it.
+- `default_bucket` in `gitquarry.toml` names the bucket the instance serves,
+  so extra `[buckets.*]` sections can exist purely as backup destinations or
+  mirror targets without every command needing `--bucket`.
 
 ## Search
 
