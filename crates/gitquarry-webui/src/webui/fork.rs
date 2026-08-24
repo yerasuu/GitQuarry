@@ -14,7 +14,7 @@ use super::{
     url_encode,
 };
 use crate::auth::web::login;
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::domain;
@@ -24,10 +24,6 @@ use maud::html;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ForkForm {
-    /// Full name (`owner/name`) of the repo being forked — a hidden field
-    /// on the fork form, not user-typed, but still re-validated/re-checked
-    /// (existence + visibility) here rather than trusted from the form.
-    source: String,
     /// The caller's own username, or a group they can manage — checked
     /// against `access.json`, never trusted as free text (same reasoning
     /// as `repo_new::NewRepoForm::namespace`).
@@ -95,9 +91,8 @@ async fn fork_error_page(
     let topnav = login::topnav(ctx, headers).await;
     let body = html! {
         p class="alert alert-err" { (message) }
-        form method="post" action="/_fork" class="fork-form" {
+        form method="post" action=(format!("/_fork/{}", crate::webui::url_encode(source))) class="fork-form" {
             (maud::PreEscaped(crate::webui::csrf_field(headers)))
-            input type="hidden" name="source" value=(source);
             select name="namespace" {
                 option value=(me.username) selected[namespace == me.username] { (me.username) }
                 @for name in crate::auth::web::groups::manageable_group_names(&groups, &me.uid, me.is_admin) {
@@ -121,8 +116,20 @@ async fn fork_error_page(
     .into_response())
 }
 
+/// `GET` on this POST-only mutation target: what a browser asks for when it
+/// reloads or backs into the URL a rejected submit left in the address bar.
+/// The repo is in the path, so it can land on the repo that was being forked
+/// rather than on the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_fork_post(
     State(ctx): State_,
+    // The repo being forked: from the URL now, not a hidden field, and
+    // still re-validated/re-checked (existence + visibility) below rather
+    // than trusted.
+    Path(source): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ForkForm>,
 ) -> Result<Response, AppError> {
@@ -134,7 +141,7 @@ pub(crate) async fn handler_fork_post(
     let locale = effective_locale(&ctx, &headers).await;
     let namespace = form.namespace.trim();
 
-    let source = validate::sanitize_path(&form.source).map_err(AppError::bad_request)?;
+    let source = validate::sanitize_path(&source).map_err(AppError::bad_request)?;
     let Some(source_resolved) = ctx.resolve_repo(&source).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",

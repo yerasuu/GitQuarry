@@ -11,7 +11,7 @@ use crate::webui::{
     AppError, State_, effective_density, effective_locale, effective_theme, layout, repo_link, require_csrf,
     require_login, url_encode,
 };
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -54,25 +54,33 @@ async fn require_write_target(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct TagForm {
-    repo: String,
     tag: String,
     source: String,
     #[serde(default)]
     csrf: String,
 }
 
+/// `GET` on this POST-only mutation target: what a browser asks for when it
+/// reloads or backs into the URL a rejected submit left in the address bar.
+/// The repo is in the path, so it can land on the repo's refs page, where the tag forms live
+/// rather than on the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}?view=refs", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<TagForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let source = form.source.trim();
@@ -167,7 +175,6 @@ pub(crate) async fn handler_create_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct TagDeleteForm {
-    repo: String,
     tag: String,
     #[serde(default)]
     csrf: String,
@@ -175,16 +182,17 @@ pub(crate) struct TagDeleteForm {
 
 pub(crate) async fn handler_delete_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<TagDeleteForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let cas = domain::repo::delete_tag(&resolved, tag, locale)

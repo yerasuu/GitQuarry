@@ -394,8 +394,14 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         .route("/_changelog", get(changelog::handler_changelog_get))
         .route("/_license", get(license::handler_license_get))
         .route("/_search", get(crate::search::web::handler_search_get))
-        .route("/_fork", axum::routing::post(fork::handler_fork_post))
-        .route("/_watch", axum::routing::post(watch::handler_watch_post))
+        .route(
+            "/_fork/{*repo}",
+            get(fork::handler_mutation_get).post(fork::handler_fork_post),
+        )
+        .route(
+            "/_watch/{*repo}",
+            get(watch::handler_mutation_get).post(watch::handler_watch_post),
+        )
         .route("/_new", get(repo_new::handler_new_get).post(repo_new::handler_new_post))
         .route("/_repos", get(repos::handler_repos_get))
         .route(
@@ -455,69 +461,90 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             "/_login_totp",
             get(crate::auth::web::login::handler_login_totp_get).post(crate::auth::web::login::handler_login_totp_post),
         )
-        .route("/_releases", axum::routing::post(repo::releases::handler_create_post))
         .route(
-            "/_releases/generate_notes",
-            axum::routing::post(repo::releases::handler_generate_notes_post),
+            "/_releases/create/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_create_post),
         )
         .route(
-            "/_releases/edit",
-            axum::routing::post(repo::releases::handler_edit_post),
+            "/_releases/generate_notes/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_generate_notes_post),
         )
         .route(
-            "/_releases/delete",
-            axum::routing::post(repo::releases::handler_delete_post),
+            "/_releases/edit/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_edit_post),
         )
         .route(
-            "/_releases/assets",
-            axum::routing::post(repo::releases::handler_upload_asset_post),
+            "/_releases/delete/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_delete_post),
         )
         .route(
-            "/_releases/assets/delete",
-            axum::routing::post(repo::releases::handler_delete_asset_post),
+            "/_releases/asset_upload/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_upload_asset_post),
         )
-        .route("/_tags", axum::routing::post(repo::tags::handler_create_post))
-        .route("/_tags/delete", axum::routing::post(repo::tags::handler_delete_post))
         .route(
-            "/_branches/delete",
-            axum::routing::post(repo::branches::handler_delete_post),
+            "/_releases/asset_delete/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_delete_asset_post),
+        )
+        .route(
+            "/_tags/create/{*repo}",
+            get(repo::tags::handler_mutation_get).post(repo::tags::handler_create_post),
+        )
+        .route(
+            "/_tags/delete/{*repo}",
+            get(repo::tags::handler_mutation_get).post(repo::tags::handler_delete_post),
+        )
+        .route(
+            "/_branches/delete/{*repo}",
+            get(repo::branches::handler_mutation_get).post(repo::branches::handler_delete_post),
         );
     let app = app
-        .route("/_merges", axum::routing::post(repo::merges::handler_create_post))
-        .route("/_merges/bulk", axum::routing::post(repo::merges::handler_bulk_post))
-        .route("/_merges/close", axum::routing::post(repo::merges::handler_close_post))
         .route(
-            "/_merges/reopen",
-            axum::routing::post(repo::merges::handler_reopen_post),
+            "/_merges/create/{*repo}",
+            get(repo::merges::handler_create_get).post(repo::merges::handler_create_post),
         )
         .route(
-            "/_merges/comment",
-            axum::routing::post(repo::merges::handler_comment_post),
+            "/_merges/bulk/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_bulk_post),
         )
         .route(
-            "/_merges/comment/edit",
-            axum::routing::post(repo::merges::handler_comment_edit_post),
+            "/_merges/close/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_close_post),
         )
         .route(
-            "/_merges/comment/delete",
-            axum::routing::post(repo::merges::handler_comment_delete_post),
+            "/_merges/reopen/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_reopen_post),
         )
         .route(
-            "/_merges/review",
-            axum::routing::post(repo::merges::handler_review_post),
-        )
-        .route("/_merges/merge", axum::routing::post(repo::merges::handler_merge_post))
-        .route(
-            "/_merges/edit_metadata",
-            axum::routing::post(repo::merges::handler_edit_metadata_post),
+            "/_merges/comment/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_post),
         )
         .route(
-            "/_merges/mark_draft",
-            axum::routing::post(repo::merges::handler_mark_draft_post),
+            "/_merges/comment_edit/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_edit_post),
         )
         .route(
-            "/_merges/mark_ready",
-            axum::routing::post(repo::merges::handler_mark_ready_post),
+            "/_merges/comment_delete/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_delete_post),
+        )
+        .route(
+            "/_merges/review/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_review_post),
+        )
+        .route(
+            "/_merges/merge/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_merge_post),
+        )
+        .route(
+            "/_merges/edit_metadata/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_edit_metadata_post),
+        )
+        .route(
+            "/_merges/mark_draft/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_mark_draft_post),
+        )
+        .route(
+            "/_merges/mark_ready/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_mark_ready_post),
         )
         .route("/_login_oidc", get(crate::auth::web::login::handler_login_oidc))
         .route("/_callback", get(crate::auth::web::login::handler_callback))

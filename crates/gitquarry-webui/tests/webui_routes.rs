@@ -102,7 +102,12 @@ fn the_source_scan_finds_the_route_table() {
     // A parser that silently matched nothing would make every other test
     // here pass vacuously.
     assert!(routes.len() > 50, "only found {} routes", routes.len());
-    assert!(routes.iter().any(|(p, get, post)| p == "/_merges" && !get && *post));
+    assert!(
+        routes
+            .iter()
+            .any(|(p, get, post)| p == "/_merges/create/{*repo}" && *get && *post),
+        "the merge-request create target should answer both methods"
+    );
 }
 
 #[tokio::test]

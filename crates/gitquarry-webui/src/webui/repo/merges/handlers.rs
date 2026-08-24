@@ -8,7 +8,7 @@ use crate::webui::{
     ASYNC_HEADER, AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout,
     repo_link, require_csrf, require_login, url_encode,
 };
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -139,7 +139,6 @@ async fn require_manage_permission(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct NewMergeForm {
-    repo: String,
     repo_uid: String,
     /// Full name (`owner/name`) of the fork to propose merging from — blank
     /// means "this repo itself" (a same-repo MR). `domain::merge_request::create`
@@ -183,18 +182,36 @@ fn mr_error(headers: &HeaderMap, name: &str, number: u64) -> impl Fn(anyhow::Err
     }
 }
 
+/// `GET` on any of the `/_merges/*` mutation targets.
+///
+/// Those answer POST, and a rejected submit renders in the POST response,
+/// so this URL is what a browser reloading or backing into the page asks
+/// for. It knows which repo it belongs to — that's the point of the repo
+/// being in the path — so it can land on that repo's merge requests
+/// instead of the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    Redirect::to(&format!("/{}?view=merges", url_encode(&repo))).into_response()
+}
+
+/// [`handler_mutation_get`] for the one target whose page isn't the list:
+/// a rejected create came from the new-merge-request form.
+pub(crate) async fn handler_create_get(Path(repo): Path<String>) -> Response {
+    Redirect::to(&format!("/{}?view=new_merge", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<NewMergeForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     // A rejected submit (bad rev, no fork relationship, no diff, ...)
     // re-renders this same form with everything the user typed still
@@ -342,7 +359,6 @@ async fn async_mr_actions_response(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct MergeActionForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -351,16 +367,17 @@ pub(crate) struct MergeActionForm {
 
 pub(crate) async fn handler_close_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::close(&ctx, &resolved, form.number, locale)
@@ -390,16 +407,17 @@ pub(crate) async fn handler_close_post(
 
 pub(crate) async fn handler_reopen_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::reopen(&ctx, &resolved, form.number, locale)
@@ -429,7 +447,6 @@ pub(crate) async fn handler_reopen_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct CommentForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -472,16 +489,17 @@ fn parse_anchor(form: &CommentForm) -> Result<Option<CommentAnchor>, AppError> {
 /// access `handler_repo` already gated the whole page behind.
 pub(crate) async fn handler_comment_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<CommentForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let body = form.body.trim();
     match parse_anchor(&form)? {
@@ -507,7 +525,6 @@ pub(crate) async fn handler_comment_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct EditPrCommentForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -522,16 +539,17 @@ pub(crate) struct EditPrCommentForm {
 /// override (same bar `issues::handlers::handler_comment_edit_post` has).
 pub(crate) async fn handler_comment_edit_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<EditPrCommentForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let cas = domain::merge_request::edit_comment(
         &ctx,
@@ -565,7 +583,6 @@ pub(crate) async fn handler_comment_edit_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct DeletePrCommentForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -579,16 +596,17 @@ pub(crate) struct DeletePrCommentForm {
 /// author-only).
 pub(crate) async fn handler_comment_delete_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<DeletePrCommentForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     let perm =
         gitquarry_core::auth::access::effective_permission_for_user(ctx.backend().as_ref(), &ctx.cipher, &me, &name)
             .await?;
@@ -620,7 +638,6 @@ pub(crate) async fn handler_comment_delete_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ReviewForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -658,16 +675,17 @@ fn parse_verdict_impl(raw: &str) -> ReviewVerdict {
 /// the domain layer, checked there regardless of what this form offered.
 pub(crate) async fn handler_review_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReviewForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let verdict = parse_verdict(form.verdict.trim());
     domain::merge_request::add_review(
@@ -719,7 +737,6 @@ async fn require_developer_permission(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct MergeForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -735,16 +752,17 @@ pub(crate) struct MergeForm {
 
 pub(crate) async fn handler_merge_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
 
     // Fetched before merging (not after — `merge` doesn't touch
@@ -799,7 +817,6 @@ pub(crate) async fn handler_merge_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct EditPrMetadataForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -824,16 +841,17 @@ pub(crate) struct EditPrMetadataForm {
 /// closed/merged MRs aren't editable even by the author or a maintainer.
 pub(crate) async fn handler_edit_metadata_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<EditPrMetadataForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::edit_metadata(
@@ -872,16 +890,17 @@ pub(crate) async fn handler_edit_metadata_post(
 
 pub(crate) async fn handler_mark_draft_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::mark_draft(&ctx, &resolved, form.number, locale)
@@ -911,16 +930,17 @@ pub(crate) async fn handler_mark_draft_post(
 
 pub(crate) async fn handler_mark_ready_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::mark_ready(&ctx, &resolved, form.number, locale)
@@ -950,7 +970,6 @@ pub(crate) async fn handler_mark_ready_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct BulkPrActionForm {
-    repo: String,
     repo_uid: String,
     /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
     /// repeated once per selected row — same shape
@@ -970,16 +989,17 @@ pub(crate) struct BulkPrActionForm {
 /// `reopen` just errors for that one number, which this loop ignores).
 pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<BulkPrActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
 
     if !matches!(form.action.as_str(), "close" | "reopen") {

@@ -3,7 +3,7 @@
 //! commit/compare. Anything used by exactly one view lives in that view's
 //! own file instead.
 
-use crate::webui::{csrf_field, esc, repo_link};
+use crate::webui::{csrf_field, esc, repo_link, url_encode};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::{access, entities::User};
@@ -686,9 +686,8 @@ pub(crate) fn comment_edit_delete_controls(
         @if can_edit {
             details {
                 summary { (t::edit_comment_button(locale)) }
-                form method="post" action=(format!("{mutation_prefix}/comment/edit")) {
+                form method="post" action=(format!("{mutation_prefix}/comment_edit/{}", url_encode(repo_name))) {
                     (PreEscaped(&csrf_html))
-                    input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="repo_uid" value=(repo_uid);
                     input type="hidden" name="number" value=(number);
                     input type="hidden" name="comment_id" value=(comment_id);
@@ -698,9 +697,8 @@ pub(crate) fn comment_edit_delete_controls(
             }
         }
         @if can_delete {
-            form method="post" action=(format!("{mutation_prefix}/comment/delete")) style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
+            form method="post" action=(format!("{mutation_prefix}/comment_delete/{}", url_encode(repo_name))) style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
                 (PreEscaped(&csrf_html))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);
                 input type="hidden" name="comment_id" value=(comment_id);

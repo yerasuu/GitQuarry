@@ -11,7 +11,7 @@
 //! codebase.
 
 use super::{ASYNC_HEADER, AppError, State_, csrf_field, effective_locale, require_csrf, require_login, url_encode};
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::domain;
@@ -20,13 +20,21 @@ use gitquarry_core::validate;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct WatchForm {
-    repo: String,
     #[serde(default)]
     csrf: String,
 }
 
+/// `GET` on this POST-only mutation target: what a browser asks for when it
+/// reloads or backs into the URL a rejected submit left in the address bar.
+/// The repo is in the path, so it can land on the repo itself, where the watch toggle lives
+/// rather than on the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_watch_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<WatchForm>,
 ) -> Result<Response, AppError> {
@@ -37,7 +45,7 @@ pub(crate) async fn handler_watch_post(
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
 
-    let repo = validate::sanitize_path(&form.repo).map_err(AppError::bad_request)?;
+    let repo = validate::sanitize_path(&repo).map_err(AppError::bad_request)?;
     let Some(resolved) = ctx.resolve_repo(&repo).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
