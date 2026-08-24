@@ -613,6 +613,13 @@ pub(crate) fn copy_button(value: &str, locale: gitquarry_i18n::Locale) -> maud::
 /// styler's own token names (`--text`, `--ok`, `--warn`, ...) to values
 /// already defined here, so those components render in this exact
 /// palette instead of styler's own default one.
+///
+/// Served as its own `/_assets/style.css` (see
+/// `webui::handler_style_css`), not spliced into `<head>`: at ~150KB it was
+/// 96% of every HTML response, re-sent on every navigation and re-brotli'd
+/// per request — measured at +21ms on a page that otherwise rendered in
+/// 1.8ms. As a file it compresses once, caches for a year against its own
+/// `ETag`, and lets the CSP drop `style-src 'unsafe-inline'`.
 pub(crate) const STYLE: &str = concat!(
     include_str!("style/vendor/styler.css"),
     ":root {\n",
@@ -726,7 +733,7 @@ pub fn layout(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " - GitQuarry" }
-                style { (maud::PreEscaped(STYLE)) }
+                link rel="stylesheet" href=(super::style_css_url());
                 script src="/_assets/styler.js" defer {}
                 script src="/_assets/app.js" defer {}
             }

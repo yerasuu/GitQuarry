@@ -87,7 +87,7 @@ pub(crate) async fn handler_delete_post(
     // Async, same "re-render the whole table, not just this row" reasoning
     // as `tags::handler_delete_post`.
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
-        let mirror = ctx.open_mirror(&resolved).await?;
+        let mirror = ctx.open_mirror_read(&resolved).await?;
         let branches = git::browse::list_refs_detailed(&mirror.path, "refs/heads/").await?;
         return Ok(axum::response::Html(
             super::refs::branch_table(&name, &branches, true, &headers, locale).into_string(),

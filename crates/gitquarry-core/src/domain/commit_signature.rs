@@ -72,22 +72,116 @@ pub async fn verified_signer(
     {
         return Ok(cached.signer());
     }
-
     let signer = compute_signer(backend, cipher, git_dir, sha, author_email).await?;
+    store(backend, cipher, sha, &signer, epoch, etag.as_deref()).await;
+    Ok(signer)
+}
+
+/// [`verified_signer`] for a request that must not write: the cached
+/// verdict if there is a current one, and never a `gpg` spawn or a bucket
+/// write either way.
+///
+/// The nested option is the whole point — `None` is a cache *miss*,
+/// `Some(None)` is a stored "checked, and it verifies against nobody".
+/// Collapsing the two would re-warm every unverifiable commit on every
+/// single page view, forever.
+///
+/// The read-only variant exists because rendering a commit list used to be
+/// a write path — one `CommitSigCache` read *and* one CAS put per row, so
+/// an anonymous view of a 50-commit log page issued 100 storage operations
+/// before it could answer. [`warm_signer`] is how a miss eventually becomes
+/// a hit; until it does the row renders with the neutral "signed" badge
+/// rather than the exact verdict.
+pub async fn cached_signer(
+    backend: &Arc<dyn Backend>,
+    cipher: &Arc<Cipher>,
+    sha: &str,
+    signature_status: char,
+) -> Result<Option<Option<CommitSigner>>> {
+    if signature_status == 'N' {
+        return Ok(Some(None));
+    }
+    let epoch = signing_epoch(backend.as_ref(), cipher).await?;
+    let (cached, _etag) = CommitSigCache::get(backend.as_ref(), cipher, sha).await?;
+    Ok(cached.filter(|c| c.epoch == epoch).map(|c| c.signer()))
+}
+
+/// Shas a [`warm_signer`] task is already working on, so a page that shows
+/// the same unverified commit in fifty rows — or fifty concurrent viewers
+/// of the same page — computes it once. Process-wide because the cache it
+/// fills is bucket-wide (keyed by sha and signing epoch, not by repo).
+static WARMING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Bounds how many signature verifications run at once. Each one can shell
+/// out to `gpg` with a scratch homedir, so this is deliberately far below
+/// the number of rows a single page can ask about: warming is background
+/// work that must never compete with the requests it exists to speed up.
+static WARM_SLOTS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+
+/// Computes and stores `sha`'s verdict outside the request that noticed it
+/// was missing, so the next view of that commit is a cache hit. Returns
+/// immediately; a failure is logged and dropped, since the only cost is
+/// another miss next time.
+pub fn warm_signer(
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
+    git_dir: std::path::PathBuf,
+    sha: String,
+    author_email: String,
+) {
+    {
+        let mut warming = WARMING.lock().expect("signature warm set poisoned");
+        if !warming.insert(sha.clone()) {
+            return;
+        }
+    }
+    let slots = Arc::clone(&WARM_SLOTS);
+    tokio::spawn(async move {
+        let result = async {
+            let _permit = slots.acquire().await?;
+            let epoch = signing_epoch(backend.as_ref(), &cipher).await?;
+            let (cached, etag) = CommitSigCache::get(backend.as_ref(), &cipher, &sha).await?;
+            // Re-checked under the permit: by the time a slot frees up
+            // another instance may have stored the same verdict.
+            if cached.is_some_and(|c| c.epoch == epoch) {
+                return anyhow::Ok(());
+            }
+            let signer = compute_signer(&backend, &cipher, &git_dir, &sha, &author_email).await?;
+            store(&backend, &cipher, &sha, &signer, epoch, etag.as_deref()).await;
+            anyhow::Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            tracing::debug!(error = %e, sha = %sha, "couldn't warm a commit signature");
+        }
+        WARMING.lock().expect("signature warm set poisoned").remove(&sha);
+    });
+}
+
+/// Writes one verdict into [`CommitSigCache`]. Best-effort: a lost CAS race
+/// just means another concurrent request computed and stored the identical
+/// answer first (same sha, same epoch, same deterministic result) — nothing
+/// to reconcile.
+async fn store(
+    backend: &Arc<dyn Backend>,
+    cipher: &Arc<Cipher>,
+    sha: &str,
+    signer: &Option<CommitSigner>,
+    epoch: u64,
+    etag: Option<&str>,
+) {
     let entry = CommitSigCache {
         sha: sha.to_string(),
-        verified_username: match &signer {
+        verified_username: match signer {
             Some(CommitSigner::User(username)) => Some(username.clone()),
             _ => None,
         },
         instance: matches!(signer, Some(CommitSigner::Instance)),
         epoch,
     };
-    // Best-effort: a lost CAS race here just means another concurrent
-    // request computed and stored the identical answer first (same sha,
-    // same epoch, same deterministic result) — nothing to reconcile.
-    let _ = entry.put(backend.as_ref(), cipher, etag.as_deref()).await;
-    Ok(signer)
+    let _ = entry.put(backend.as_ref(), cipher, etag).await;
 }
 
 /// Whichever gitquarry account's own registered `gpg_keys` verifies the
@@ -112,7 +206,7 @@ async fn compute_signer(
     // rather than trusting the committer line: a commit can *claim* the
     // instance's committer address, but only the instance's own key
     // produces a signature that matches it.
-    if signed_by_this_instance(backend, cipher, signature.as_bytes()).await? {
+    if signed_by_this_instance(backend, cipher, &payload, signature.as_bytes()).await? {
         return Ok(Some(CommitSigner::Instance));
     }
     let Some(user) = access::resolve_by_any_email(backend.as_ref(), cipher, author_email).await? else {
@@ -127,11 +221,21 @@ async fn compute_signer(
 }
 
 /// `true` when `signature` is an SSH signature made by this bucket's own
-/// signing key. Parsed here rather than shelled out to git because the
-/// answer is a key comparison, not a cryptographic verification: git has
-/// already checked the signature itself (`%G?`, via the mirror's
-/// allowed-signers file), and all that remains is *whose* it is.
-async fn signed_by_this_instance(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, signature: &[u8]) -> Result<bool> {
+/// signing key — the key comparison *and* the cryptographic check, both in
+/// process.
+///
+/// The check used to be git's: `%G?` had already validated the signature
+/// against the mirror's allowed-signers file, leaving only "whose key is
+/// it" to answer here. Nothing asks git for a grade any more (see
+/// [`git::browse::CommitInfo::signature_status`] for why), so this verifies
+/// the signature itself rather than trusting a commit that merely *claims*
+/// the instance's key — an Ed25519 verify, microseconds, no subprocess.
+async fn signed_by_this_instance(
+    backend: &Arc<dyn Backend>,
+    cipher: &Arc<Cipher>,
+    payload: &[u8],
+    signature: &[u8],
+) -> Result<bool> {
     let Ok(text) = std::str::from_utf8(signature) else {
         return Ok(false);
     };
@@ -145,5 +249,19 @@ async fn signed_by_this_instance(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher
     let Ok(signer) = signer.to_openssh() else {
         return Ok(false);
     };
-    Ok(signer.trim() == key.openssh_public.trim())
+    if signer.trim() != key.openssh_public.trim() {
+        return Ok(false);
+    }
+    // `git`'s own namespace for commit signatures — the same string
+    // `git commit -S` passes to `ssh-keygen -Y sign -n git`, and part of
+    // what's signed, so a signature made for any other namespace must not
+    // pass here.
+    Ok(signer_key(&key).is_some_and(|k| k.verify("git", payload, &sig).is_ok()))
+}
+
+/// This instance's public half as an `ssh-key` type, for
+/// [`signed_by_this_instance`]'s verify — stored as OpenSSH text
+/// (`InstanceKey::openssh_public`), which is what has to be parsed back.
+fn signer_key(key: &crate::git::signing::InstanceKey) -> Option<russh::keys::ssh_key::PublicKey> {
+    russh::keys::ssh_key::PublicKey::from_openssh(&key.openssh_public).ok()
 }

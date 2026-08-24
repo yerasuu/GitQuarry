@@ -275,7 +275,15 @@ async fn handle(
             if kind != Kind::ReceivePack {
                 crate::mirror::sync_external_before_serving(ctx, &resolved).await;
             }
-            let mirror = ctx.open_mirror(&resolved).await?;
+            // A fetch only reads the mirror, so it takes the repo's lock
+            // shared and stops queueing behind other fetches and web views
+            // of the same repo; `receive-pack` writes it and still needs
+            // the mirror to itself.
+            let mirror = if kind == Kind::ReceivePack {
+                ctx.open_mirror(&resolved).await?
+            } else {
+                ctx.open_mirror_read(&resolved).await?
+            };
             match kind {
                 Kind::InfoRefs => {
                     let query = req.uri().query().unwrap_or("");

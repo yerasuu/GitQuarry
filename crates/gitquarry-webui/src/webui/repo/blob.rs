@@ -9,6 +9,13 @@ use gitquarry_core::git;
 use gitquarry_i18n::Locale;
 use maud::{PreEscaped, html};
 use std::path::Path as FsPath;
+use std::time::Duration;
+
+/// How long a blob page waits for its own syntax highlighting before
+/// serving the file unstyled instead. Sized against the rest of the page,
+/// not against any particular file: whatever is left of a sub-50ms budget
+/// once the git reads and the render are paid for.
+const HIGHLIGHT_DEADLINE: Duration = Duration::from_millis(30);
 
 pub async fn render_blob(
     bare_repo: &FsPath,
@@ -21,7 +28,9 @@ pub async fn render_blob(
     let breadcrumbs = breadcrumbs(repo_name, display_name, rev, path, "blob", locale);
     let plain_link = github_raw_link(repo_name, rev, path);
 
-    let size = git::browse::blob_size(bare_repo, rev, path).await?;
+    // `blob_id`, not `blob_size`: same one round trip, and the sha it also
+    // returns is what keys the highlight cache below.
+    let (blob_sha, size) = git::browse::blob_id(bare_repo, rev, path).await?;
     if size > MAX_BLOB_BYTES {
         return Ok(html! {
             (PreEscaped(breadcrumbs))
@@ -48,10 +57,23 @@ pub async fn render_blob(
             // API, same reasoning as `git::browse::archive_one`'s own
             // `spawn_blocking` for gzip/zip repacking — a big file shouldn't
             // stall an async worker thread other requests are scheduled on.
+            // Cached by blob sha, so only the first view of a given file
+            // version pays it at all.
             let (owned_path, owned_text) = (path.to_string(), text.to_string());
-            let lines = tokio::task::spawn_blocking(move || highlight::highlighted_lines(&owned_path, &owned_text))
-                .await
-                .context("syntax highlighting task panicked")?;
+            let mut task = tokio::task::spawn_blocking(move || {
+                highlight::highlighted_lines_cached(&blob_sha, &owned_path, &owned_text)
+            });
+            // Bounded wait, not an unbounded one: syntect costs roughly
+            // 0.07ms per line, so a long file would otherwise put the whole
+            // page past its budget on the one request that happens to be
+            // first. Dropping the handle does not cancel a `spawn_blocking`
+            // task, so it runs to completion and fills the cache regardless
+            // — this request just renders the file unstyled and the next
+            // view of the same blob is a hit.
+            let lines = match tokio::time::timeout(HIGHLIGHT_DEADLINE, &mut task).await {
+                Ok(done) => done.context("syntax highlighting task panicked")?,
+                Err(_) => std::sync::Arc::new(highlight::plain_lines(text)),
+            };
             let blame_link = repo_link(repo_name, "blame", rev).path(path).to_string();
             html! {
                 div class="crumbs-row" {

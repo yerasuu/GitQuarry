@@ -12,12 +12,18 @@ use gitquarry_core::validate;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 
+/// `truncated` is `git::browse::show_commit_capped`'s verdict: the patch
+/// ran past the page's ceiling and what's in `diff` is a prefix. The page
+/// says so and points at the raw patch rather than pretending the commit
+/// ends there.
+#[allow(clippy::too_many_arguments)]
 pub async fn render_commit(
     ctx: &AppContext,
     bare_repo: &FsPath,
     repo_name: &str,
     info: &CommitInfo,
     diff: &str,
+    truncated: bool,
     headers: &HeaderMap,
 ) -> Result<String> {
     let stat = git::browse::diffstat(bare_repo, &info.sha).await?;
@@ -70,6 +76,13 @@ pub async fn render_commit(
         @if !stat.trim().is_empty() {
             div class="scroll-x" { pre class="diff" { (stat) } }
         }
+        @if truncated {
+            p class="muted" {
+                "this diff is too large to show in full — "
+                a href=(raw_link("patch", repo_name, "").sha(&info.sha).to_string()) { "the raw patch" }
+                " has all of it"
+            }
+        }
         p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view))) }
         @match diff_view {
             DiffView::Unified => div class="scroll-x" { pre class="diff" { (PreEscaped(super::components::color_diff(diff))) } },
@@ -79,28 +92,27 @@ pub async fn render_commit(
     .into_string())
 }
 
-/// `status` is `CommitInfo::signature_status` (`%G?`), the fallback shown
-/// only when [`domain::commit_signature::verified_signer`] found nothing —
-/// this differentiates *why* it found nothing: `E` (has a signature, just
-/// nothing gitquarry itself can vouch for) still gets a badge — silence
-/// there would look identical to `N` (genuinely unsigned) — but a muted
-/// one, since it usually just means no registered account's key matches,
-/// not that anything is actually wrong. `B`/`R`/`Y` are the one case
-/// stronger than "unverified": git's own check (against whatever system
-/// trust store this server happens to have, almost always none) came back
-/// actively bad.
+/// `status` is `CommitInfo::signature_status`, the fallback shown only when
+/// [`domain::commit_signature::verified_signer`] found nothing. `'U'` (a
+/// signature is there, just nothing gitquarry itself can vouch for) still
+/// gets a badge — silence would look identical to `'N'`, genuinely unsigned
+/// — but a muted one, since it usually just means no registered account's
+/// key matches, not that anything is wrong.
+///
+/// The grade letters this used to render (`G`/`X`/`B`/`R`/`Y`) came from
+/// `%G?`, which is git checking against whatever system trust store the
+/// server happens to have — almost always none, since this process never
+/// populates one. Claiming "valid signature (untrusted key)" off that was
+/// asserting more than had been checked, and the walk that produced it cost
+/// a `gpg` fork per commit (see `git::browse::CommitInfo::signature_status`),
+/// so the letter is now just signed/unsigned and the only real verdict is
+/// the one above it.
 #[cfg(any(test, feature = "test-util"))]
 pub fn signature_badge(status: char) -> Markup {
     html! {
         @match status {
-            'G' => { " " span class="badge ok" { "verified signature" } }
-            'U' => { " " span class="badge ok" { "valid signature (untrusted key)" } }
-            'X' => { " " span class="badge ok" { "valid signature (expired key)" } }
-            'B' => { " " span class="badge danger" { "invalid signature" } }
-            'R' => { " " span class="badge danger" { "revoked signature" } }
-            'Y' => { " " span class="badge danger" { "signature from a key already expired at signing time" } }
-            'E' => { " " span class="muted" { "unverified signature (missing key)" } }
-            _ => {} // 'N': unsigned, no badge
+            'N' => {} // unsigned, no badge
+            _ => { " " span class="muted" { "unverified signature (missing key)" } }
         }
     }
 }
@@ -108,14 +120,8 @@ pub fn signature_badge(status: char) -> Markup {
 fn signature_badge(status: char) -> Markup {
     html! {
         @match status {
-            'G' => { " " span class="badge ok" { "verified signature" } }
-            'U' => { " " span class="badge ok" { "valid signature (untrusted key)" } }
-            'X' => { " " span class="badge ok" { "valid signature (expired key)" } }
-            'B' => { " " span class="badge danger" { "invalid signature" } }
-            'R' => { " " span class="badge danger" { "revoked signature" } }
-            'Y' => { " " span class="badge danger" { "signature from a key already expired at signing time" } }
-            'E' => { " " span class="muted" { "unverified signature (missing key)" } }
-            _ => {} // 'N': unsigned, no badge
+            'N' => {} // unsigned, no badge
+            _ => { " " span class="muted" { "unverified signature (missing key)" } }
         }
     }
 }

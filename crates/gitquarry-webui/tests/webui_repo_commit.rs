@@ -144,9 +144,17 @@ async fn commit_by_a_registered_gpg_key_shows_the_gitquarry_verified_badge() {
         .unwrap();
 
     let (info, diff) = gitquarry_core::git::browse::show_commit(&git_dir, &sha).await.unwrap();
-    let html = render_commit(&ctx, &git_dir, "repo", &info, &diff, &axum::http::HeaderMap::new())
-        .await
-        .unwrap();
+    let html = render_commit(
+        &ctx,
+        &git_dir,
+        "repo",
+        &info,
+        &diff,
+        false,
+        &axum::http::HeaderMap::new(),
+    )
+    .await
+    .unwrap();
     assert!(html.contains("verified signature (alice)"), "{html}");
 }
 
@@ -160,32 +168,36 @@ async fn commit_by_an_unregistered_email_falls_back_to_the_system_trust_store_ba
     let ctx = test_ctx(ctx_dir.path());
 
     let (info, diff) = gitquarry_core::git::browse::show_commit(&git_dir, &sha).await.unwrap();
-    let html = render_commit(&ctx, &git_dir, "repo", &info, &diff, &axum::http::HeaderMap::new())
-        .await
-        .unwrap();
-    // Falls through to the old `%G?`-based badge instead — this test has
-    // no system trust store configured, so that's "unverified" (missing
-    // key), never the gitquarry-registered-key wording.
+    let html = render_commit(
+        &ctx,
+        &git_dir,
+        "repo",
+        &info,
+        &diff,
+        false,
+        &axum::http::HeaderMap::new(),
+    )
+    .await
+    .unwrap();
+    // Falls through to the muted fallback badge instead: the signature is
+    // there, but no registered account's key accounts for it, and nothing
+    // else in this server is in a position to vouch for it.
     assert!(!html.contains(r#"class="badge ok""#), "{html}");
     assert!(html.contains("unverified signature (missing key)"), "{html}");
 }
 
+/// This badge is only ever the *fallback*, reached when gitquarry itself
+/// couldn't attribute the signature to an account or to this instance — so
+/// a present-but-unattributed signature must never read as valid, however
+/// the signature got there.
 #[test]
-fn good_signature_gets_the_good_badge() {
-    assert!(signature_badge('G').into_string().contains("badge ok"));
-    assert!(signature_badge('U').into_string().contains("badge ok"));
-    assert!(signature_badge('X').into_string().contains("badge ok"));
+fn a_signature_gitquarry_cant_attribute_gets_a_muted_hint_never_a_good_badge() {
+    let badge = signature_badge('U').into_string();
+    assert!(badge.contains("muted"), "{badge}");
+    assert!(!badge.contains("badge ok"), "{badge}");
 }
 
 #[test]
-fn bad_signature_gets_the_bad_badge() {
-    assert!(signature_badge('B').into_string().contains("badge danger"));
-    assert!(signature_badge('R').into_string().contains("badge danger"));
-    assert!(signature_badge('Y').into_string().contains("badge danger"));
-}
-
-#[test]
-fn unchecked_gets_a_muted_hint_unsigned_gets_nothing() {
-    assert!(signature_badge('E').into_string().contains("muted"));
+fn unsigned_gets_nothing() {
     assert_eq!(signature_badge('N').into_string(), "");
 }

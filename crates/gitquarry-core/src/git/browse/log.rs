@@ -15,27 +15,28 @@ pub struct CommitInfo {
     /// Refs pointing at this commit (`refs/heads/main`, `tag: v1.0`, ...),
     /// raw as `%D` gives it (no wrapping parens, unlike `%d`).
     pub decoration: String,
-    /// `%G?`: `'N'` (no `gpgsig` header at all) short-circuits
+    /// `'N'` (no `gpgsig` header at all) short-circuits
     /// `domain::commit_signature::verified_signer` straight to `None` with
-    /// no cache lookup or `gpg` spawn — every other value (`'G'`/`'U'`/`'X'`/
-    /// `'B'`/`'R'`/`'Y'`/`'E'`) just means *something* claims to be a
-    /// signature, worth checking against `gitquarry_gpg::verify_detached_signature`.
-    /// Riding along on the same batched `git log` a commit list already
-    /// runs is what lets a whole page of commits skip a per-row
-    /// `git::browse::commit_signature` subprocess just to answer "is this
-    /// even worth checking" — git's own system keyring (which this process
-    /// never populates) makes that value otherwise useless for anything
-    /// past this cheap yes/no.
+    /// no cache lookup or `gpg` spawn; `'U'` means *something* claims to be
+    /// a signature, worth checking against
+    /// `gitquarry_gpg::verify_detached_signature`.
+    ///
+    /// `'N'` until [`mark_signed`] fills it in — deliberately not carried by
+    /// the `git log` walk itself, which is what `%G?` used to do at the
+    /// price of one `gpg`/`ssh-keygen` fork per commit walked (see
+    /// [`super::signed_shas`] for the measurements). Only the views that
+    /// actually render a signature badge run that pass; a walk that just
+    /// needs dates or subjects (`stats`, `last_touched`) never pays for it.
     pub signature_status: char,
 }
 
 /// Field separator for `git log`: US (unit separator) can't appear in an
 /// author name or a subject, unlike `|` or `\t`.
 pub(super) const LOG_SEP: &str = "\x1f";
-pub(super) const LOG_FORMAT: &str = "--format=%H\x1f%an\x1f%ae\x1f%ad\x1f%s\x1f%D\x1f%G?";
+pub(super) const LOG_FORMAT: &str = "--format=%H\x1f%an\x1f%ae\x1f%ad\x1f%s\x1f%D";
 
 pub fn parse_log_line(line: &str) -> Option<CommitInfo> {
-    let mut parts = line.splitn(7, LOG_SEP);
+    let mut parts = line.splitn(6, LOG_SEP);
     Some(CommitInfo {
         sha: parts.next()?.to_string(),
         author_name: parts.next()?.to_string(),
@@ -43,7 +44,7 @@ pub fn parse_log_line(line: &str) -> Option<CommitInfo> {
         date: parts.next()?.to_string(),
         subject: parts.next().unwrap_or("").to_string(),
         decoration: parts.next().unwrap_or("").to_string(),
-        signature_status: parts.next().and_then(|s| s.chars().next()).unwrap_or('N'),
+        signature_status: 'N',
     })
 }
 
@@ -172,6 +173,17 @@ async fn run_log_with_stats(git_dir: &Path, args: &[&OsStr]) -> Result<Vec<(Comm
             last.1 = Some(stats);
         }
     }
+    // Both callers of this shape (the summary tab's recent commits and the
+    // log tab's own table) render a signature badge per row, so the
+    // presence pass belongs here rather than duplicated in each — see
+    // [`mark_signed`].
+    let shas: Vec<&str> = rows.iter().map(|(c, _)| c.sha.as_str()).collect();
+    let signed = super::signed_shas(git_dir, &shas).await?;
+    for (commit, _) in rows.iter_mut() {
+        if signed.contains(&commit.sha) {
+            commit.signature_status = 'U';
+        }
+    }
     Ok(rows)
 }
 
@@ -293,4 +305,25 @@ pub fn parse_shortlog(text: &str) -> Vec<(u64, String)> {
         }
     }
     counts
+}
+
+/// Fills in [`CommitInfo::signature_status`] for a whole listing in one
+/// `git cat-file --batch` — the pass the `git log` walk deliberately no
+/// longer does inline (see that field's own doc comment). Called only by
+/// the views that render a signature badge; everything else leaves every
+/// row at `'N'` and skips the subprocess entirely.
+///
+/// `'U'` rather than a git-side grade: what a badge ultimately shows comes
+/// from [`crate::domain::commit_signature::verified_signer`] checking the
+/// signature against the accounts' own registered keys, and "there is a
+/// signature here" is the entire input that step needs.
+pub async fn mark_signed(git_dir: &Path, commits: &mut [CommitInfo]) -> Result<()> {
+    let shas: Vec<&str> = commits.iter().map(|c| c.sha.as_str()).collect();
+    let signed = super::signed_shas(git_dir, &shas).await?;
+    for commit in commits.iter_mut() {
+        if signed.contains(&commit.sha) {
+            commit.signature_status = 'U';
+        }
+    }
+    Ok(())
 }

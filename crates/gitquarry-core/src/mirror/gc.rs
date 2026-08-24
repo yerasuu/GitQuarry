@@ -29,6 +29,26 @@ const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
 /// (days) on purpose: cheap to run, no reason to make this configurable too.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
+/// How stale the marker has to be before a read-only open rewrites it. The
+/// sweep's own threshold is `mirror_max_age`, days at the shortest, so
+/// resolution finer than this buys nothing — while a mirror being browsed
+/// hard would otherwise take one filesystem write per page view, on a path
+/// (`app::AppContext::open_mirror_read`) whose whole point is not writing.
+const TOUCH_DEBOUNCE: Duration = Duration::from_secs(15 * 60);
+
+/// [`touch_last_access`], skipped when the marker is already recent enough
+/// to say the same thing — see [`TOUCH_DEBOUNCE`].
+pub async fn touch_last_access_if_stale(mirror_path: &Path) -> Result<()> {
+    let marker = mirror_path.join(LAST_ACCESS_MARKER);
+    if let Ok(meta) = tokio::fs::metadata(&marker).await
+        && let Ok(modified) = meta.modified()
+        && modified.elapsed().is_ok_and(|age| age < TOUCH_DEBOUNCE)
+    {
+        return Ok(());
+    }
+    touch_last_access(mirror_path).await
+}
+
 pub async fn touch_last_access(mirror_path: &Path) -> Result<()> {
     let marker = mirror_path.join(LAST_ACCESS_MARKER);
     tokio::fs::write(&marker, b"")

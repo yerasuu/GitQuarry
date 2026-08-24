@@ -286,7 +286,7 @@ async fn async_mr_actions_response(
     // form: this fragment is swapped in *after* an action landed, and the
     // one that most obviously changes the answer is the merge itself.
     let fast_forwardable = if mr.status == gitquarry_core::storage::merge_requests::MrStatus::Open && can_merge {
-        let mirror = ctx.open_mirror(resolved).await?;
+        let mirror = ctx.open_mirror_read(resolved).await?;
         domain::merge_request::fast_forwardable(ctx, resolved, &mirror.path, &mr).await?
     } else {
         false

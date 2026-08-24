@@ -1987,6 +1987,7 @@ dependencies = [
  "gitquarry-mirror-external",
  "gitquarry-webui",
  "gitquarry-wire",
+ "lru 0.18.2",
  "maud",
  "openidconnect",
  "pulldown-cmark",

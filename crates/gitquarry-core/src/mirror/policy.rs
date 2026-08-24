@@ -173,7 +173,12 @@ pub(crate) async fn commit_signature_authorized(
     repo_full_name: &str,
     sha: &str,
 ) -> Result<bool> {
-    let Some(info) = git::browse::log(git_dir, sha, 1, None).await?.into_iter().next() else {
+    let mut found = git::browse::log(git_dir, sha, 1, None).await?;
+    // Without this the status stays `'N'` and `verified_signer` short-
+    // circuits to "unsigned", which here would reject every push instead of
+    // checking the signature it was asked about.
+    git::browse::mark_signed(git_dir, &mut found).await?;
+    let Some(info) = found.into_iter().next() else {
         // No commit object to inspect at all — nothing to authorize, same
         // "skip what can't be read" tolerance the hook's own loop has.
         return Ok(true);

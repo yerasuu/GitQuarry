@@ -202,3 +202,105 @@ fn push_escaped(out: &mut String, text: &str) {
         }
     }
 }
+
+/// Highlighted output for blobs already rendered once, keyed by the blob's
+/// own sha and the extension the syntax was picked from.
+///
+/// syntect is pure CPU work and not cheap at it: measured at ~0.6ms per
+/// line of Rust, so a 789-line source file cost 507ms of a page render —
+/// per view, every view, for output that can never change. A git blob sha
+/// *is* its content, so a hit is exact by construction, and the extension
+/// is in the key because the same bytes under a different name pick a
+/// different grammar.
+static HIGHLIGHT_CACHE: LazyLock<std::sync::Mutex<HighlightCache>> =
+    LazyLock::new(|| std::sync::Mutex::new(HighlightCache::new()));
+
+/// Roughly how many highlighted lines the cache may hold in total. The
+/// budget is lines rather than entries because entry count says nothing
+/// about size here — one 20k-line file and 200 short ones are the same
+/// count and nowhere near the same memory.
+const HIGHLIGHT_CACHE_MAX_LINES: usize = 400_000;
+
+struct HighlightCache {
+    entries: lru::LruCache<(String, String), std::sync::Arc<Vec<String>>>,
+    lines: usize,
+}
+
+impl HighlightCache {
+    fn new() -> Self {
+        HighlightCache {
+            // Unbounded by count: `lines` is the real budget, enforced in
+            // `insert`, and letting the count cap evict too would just make
+            // the two limits fight over the same entries.
+            entries: lru::LruCache::unbounded(),
+            lines: 0,
+        }
+    }
+
+    fn get(&mut self, key: &(String, String)) -> Option<std::sync::Arc<Vec<String>>> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: (String, String), value: std::sync::Arc<Vec<String>>) {
+        // A single blob larger than the whole budget would evict everything
+        // and then still not fit; skip it rather than empty the cache for
+        // one file nobody may open twice.
+        if value.len() > HIGHLIGHT_CACHE_MAX_LINES {
+            return;
+        }
+        if let Some(previous) = self.entries.put(key, std::sync::Arc::clone(&value)) {
+            self.lines = self.lines.saturating_sub(previous.len());
+        }
+        self.lines += value.len();
+        while self.lines > HIGHLIGHT_CACHE_MAX_LINES {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.lines = self.lines.saturating_sub(evicted.len());
+        }
+    }
+}
+
+fn cache_key(blob_sha: &str, path: &str) -> (String, String) {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_string();
+    (blob_sha.to_string(), ext)
+}
+
+/// Already-highlighted lines for this blob, if any — a lookup only, never
+/// the work itself, so a request can check before deciding whether it has
+/// time to compute them.
+pub fn cached_lines(blob_sha: &str, path: &str) -> Option<std::sync::Arc<Vec<String>>> {
+    HIGHLIGHT_CACHE
+        .lock()
+        .expect("highlight cache poisoned")
+        .get(&cache_key(blob_sha, path))
+}
+
+/// [`highlighted_lines`] memoized on `blob_sha` — see [`HIGHLIGHT_CACHE`].
+/// `path` is still what picks the grammar; the sha only identifies the
+/// bytes.
+pub fn highlighted_lines_cached(blob_sha: &str, path: &str, text: &str) -> std::sync::Arc<Vec<String>> {
+    let key = cache_key(blob_sha, path);
+    if let Some(hit) = HIGHLIGHT_CACHE.lock().expect("highlight cache poisoned").get(&key) {
+        return hit;
+    }
+    let lines = std::sync::Arc::new(highlighted_lines(path, text));
+    HIGHLIGHT_CACHE
+        .lock()
+        .expect("highlight cache poisoned")
+        .insert(key, std::sync::Arc::clone(&lines));
+    lines
+}
+
+/// The same escaping [`highlighted_lines`] applies, with no grammar run at
+/// all: one fragment per line, unstyled. What a blob renders as while its
+/// real highlighting is still being computed (see
+/// `webui::repo::blob::render_blob`) — identical structure, so line
+/// numbering and anchors are the same either way.
+pub fn plain_lines(text: &str) -> Vec<String> {
+    text.lines().map(super::esc).collect()
+}

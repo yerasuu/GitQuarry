@@ -86,6 +86,23 @@ pub(crate) async fn run_capped(git_dir: Option<&Path>, args: &[&OsStr], max_byte
 }
 
 async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
+    let (out, truncated) = run_truncating(git_dir, args, max_bytes).await?;
+    if truncated {
+        bail!("git {} produced more than the {max_bytes}-byte limit", describe(args));
+    }
+    Ok(out)
+}
+
+/// `(stdout, whether it was cut short)` — [`run_capped`]'s reader without
+/// its verdict, for a caller that has something better to show than an
+/// error when git's output runs long (a commit page that can offer the raw
+/// patch instead of rendering a 50MB diff into HTML).
+///
+/// Truncation isn't a failure here, so the killed child's exit status is
+/// deliberately not checked in that case: `SIGPIPE`/`SIGKILL` on a producer
+/// we stopped on purpose says nothing about whether the bytes already read
+/// are good, and they are — git writes a patch in order.
+pub(crate) async fn run_truncating(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<(Vec<u8>, bool)> {
     use tokio::io::AsyncReadExt;
 
     let mut cmd = Command::new("git");
@@ -111,7 +128,7 @@ async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64
         if out.len() + n > cap {
             // Don't finish reading just to throw it away: stop the producer.
             let _ = child.kill().await;
-            bail!("git {} produced more than the {max_bytes}-byte limit", describe(args));
+            return Ok((out, true));
         }
         out.extend_from_slice(&buf[..n]);
     }
@@ -124,7 +141,7 @@ async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64
         }
         bail!("git {} failed: {}", describe(args), stderr.trim());
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 /// Same as [`run`] but returns stdout as trimmed text.
