@@ -240,16 +240,22 @@ fn asset_etag(content: &str) -> String {
     hex
 }
 
-/// Shared response shape for both static JS assets: honors `If-None-Match`
+/// Shared response shape for every static asset: honors `If-None-Match`
 /// with a `304` (skipping the body entirely), otherwise serves the file with
 /// a year-long `Cache-Control` — safe because a change to the file changes
 /// its `ETag`, so a stale cache never serves stale content, it just costs
 /// one conditional round-trip to notice.
+///
+/// `immutable` drops even that round-trip, and is only correct for an asset
+/// whose *URL* carries its content hash (the stylesheet — see
+/// [`style_css_url`]). The JS assets live at fixed paths, so marking them
+/// immutable would pin a browser to whatever build it first saw.
 fn static_asset_response(
     req_headers: &axum::http::HeaderMap,
     content_type: &'static str,
     content: &'static str,
     etag: &str,
+    immutable: bool,
 ) -> Response {
     use axum::response::IntoResponse;
     if req_headers
@@ -269,12 +275,40 @@ fn static_asset_response(
             (axum::http::header::ETAG, etag.to_string()),
             (
                 axum::http::header::CACHE_CONTROL,
-                "public, max-age=31536000".to_string(),
+                if immutable {
+                    "public, max-age=31536000, immutable".to_string()
+                } else {
+                    "public, max-age=31536000".to_string()
+                },
             ),
         ],
         content,
     )
         .into_response()
+}
+
+/// `GET /_assets/style.css` — every page's stylesheet
+/// ([`page_chrome::STYLE`]), served as a file rather than inlined into each
+/// response. Cached `immutable`, not merely `max-age`: the `<link>`
+/// [`style_css_url`] emits carries the content hash in its query, so a
+/// changed stylesheet is a changed URL and a repeat navigation needs no
+/// conditional request at all — unlike the two JS assets below, which still
+/// pay one `304` round-trip each because their URLs are fixed.
+async fn handler_style_css(headers: axum::http::HeaderMap) -> Response {
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(page_chrome::STYLE));
+    static_asset_response(&headers, "text/css; charset=utf-8", page_chrome::STYLE, &ETAG, true)
+}
+
+/// The `<link href>` for [`handler_style_css`]: a fixed path plus the
+/// stylesheet's own content hash, so one static route can still be served
+/// `immutable`. Computed once — the content is baked in at compile time.
+pub(crate) fn style_css_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let etag = asset_etag(page_chrome::STYLE);
+        let hash = etag.trim_matches('"');
+        format!("/_assets/style.css?v={}", &hash[..16])
+    });
+    &URL
 }
 
 /// `GET /_assets/app.js` — this project's own hand-written client JS (see
@@ -285,7 +319,7 @@ fn static_asset_response(
 async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
     const CONTENT: &str = include_str!("style/app.js");
     static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG)
+    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
 }
 
 /// `GET /_assets/styler.js` — the pinned `styler` build vendored alongside
@@ -296,11 +330,12 @@ async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
 async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
     const CONTENT: &str = include_str!("style/vendor/styler.js");
     static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG)
+    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
 }
 
 pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
     let app = Router::new()
+        .route("/_assets/style.css", get(handler_style_css))
         .route("/_assets/app.js", get(handler_app_js))
         .route("/_assets/styler.js", get(handler_styler_js))
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
@@ -642,7 +677,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
             // images baked into that pinned, hand-vetted stylesheet, not
             // anything request- or user-influenced — same trust level as the
             // CSS file itself, which `style-src 'self'` already accepts.
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+            "default-src 'self'; script-src 'self'; style-src 'self'; \
              img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),
     );
