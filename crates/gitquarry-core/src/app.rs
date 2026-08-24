@@ -133,6 +133,16 @@ pub struct Mirror {
 /// Which half of [`Locks`] a live [`Mirror`] is holding. An enum rather than
 /// two `Mirror` types because every caller uses the mirror identically; all
 /// that differs is whether anyone else may be reading it at the same time.
+/// Whether an `open_mirror_common` call is somebody actually querying the
+/// repo or the startup prewarm refilling a cold cache. Only a query stamps
+/// the last-access marker and the bucket-side recent index: a prewarm that
+/// stamped them would keep an idle repo warm forever, one restart at a time.
+#[derive(Debug, Clone, Copy)]
+enum Access {
+    Query,
+    Warm,
+}
+
 #[derive(Debug)]
 enum MirrorGuard {
     Shared(#[allow(dead_code)] OwnedRwLockReadGuard<()>),
@@ -504,11 +514,12 @@ impl AppContext {
 
     /// Validates `key` stays under `mirrors_root`, takes its lock, creates
     /// the bare mirror if missing, syncs it against this bucket's own S3
-    /// manifest, and marks it as just-queried.
+    /// manifest, and records the access per `access`.
     async fn open_mirror_common(
         &self,
         key: &str,
         remote: &crate::storage::remote::Remote,
+        access: Access,
     ) -> Result<(PathBuf, OwnedRwLockWriteGuard<()>)> {
         let path = self.mirror_path(key)?;
         let guard = self.locks.lock(key).await;
@@ -524,10 +535,50 @@ impl AppContext {
         // (`crate::mirror::gc`) doesn't evict it as stale. Best-effort: a failure
         // here would just make this mirror a slightly earlier eviction
         // candidate, not worth failing the whole request over.
-        if let Err(e) = crate::mirror::gc::touch_last_access(&path).await {
+        let touched = match access {
+            Access::Query => crate::mirror::gc::touch_last_access(&path).await,
+            // A mirror the prewarm just created has no marker at all, which
+            // `gc` reads as maximally stale — the next sweep would evict
+            // what startup had just paid to download. Anything already on
+            // disk keeps the mtime it had, so a restart can't reset the
+            // eviction order.
+            Access::Warm => crate::mirror::gc::touch_last_access_if_missing(&path).await,
+        };
+        if let Err(e) = touched {
             warn!(error = %e, "couldn't touch mirror last-access marker");
         }
+        if matches!(access, Access::Query) {
+            self.note_mirror_use(key);
+        }
         Ok((path, guard))
+    }
+
+    /// Records, in the bucket, that `key` was just used — the index
+    /// [`crate::mirror::gc::prewarm_recent_mirrors`] reads at startup.
+    ///
+    /// Detached, and through the long-lived backend rather than
+    /// [`Self::backend`]: the write outlives the request that triggered it,
+    /// so it must not borrow that request's own cached backend, and no
+    /// browse or clone should ever wait on a bucket round trip that only
+    /// exists to make the *next* restart faster.
+    fn note_mirror_use(&self, key: &str) {
+        let backend = Arc::clone(&self.backend);
+        let cipher = Arc::clone(&self.cipher);
+        let uid = Uid::from(key.to_string());
+        tokio::spawn(async move {
+            crate::mirror::recent::record_use(backend.as_ref(), &cipher, &uid).await;
+        });
+    }
+
+    /// Brings `uid`'s mirror up to date without counting as a query — what
+    /// the startup prewarm calls. Same work [`Self::open_mirror`] does
+    /// (lock, create, sync), minus the two things that would make a restart
+    /// look like traffic: it neither refreshes an existing last-access
+    /// marker nor re-records the repo as recently used.
+    pub async fn warm_mirror(&self, uid: &Uid) -> Result<()> {
+        let remote = self.remote_for_uid(uid);
+        self.open_mirror_common(uid.as_str(), &remote, Access::Warm).await?;
+        Ok(())
     }
 
     /// Takes the repo's lock, creates the bare mirror if missing, and syncs
@@ -537,7 +588,9 @@ impl AppContext {
     /// renamed repo's old mirror just sat there until `mirror::gc` aged it
     /// out; now there's nothing to orphan).
     pub async fn open_mirror(&self, resolved: &ResolvedRepo) -> Result<Mirror> {
-        let (path, guard) = self.open_mirror_common(resolved.uid.as_str(), &resolved.remote).await?;
+        let (path, guard) = self
+            .open_mirror_common(resolved.uid.as_str(), &resolved.remote, Access::Query)
+            .await?;
         Ok(Mirror {
             remote: resolved.remote.clone(),
             path,
@@ -569,6 +622,9 @@ impl AppContext {
             if let Err(e) = crate::mirror::gc::touch_last_access_if_stale(&path).await {
                 warn!(error = %e, "couldn't touch mirror last-access marker");
             }
+            // Debounced the same way inside `recent::record_use`, and for
+            // the same reason: this is the path most repo traffic takes.
+            self.note_mirror_use(key);
             return Ok(Mirror {
                 remote: resolved.remote.clone(),
                 path,
