@@ -158,7 +158,7 @@ fn from_openssh(openssh: &str) -> Result<InstanceKey> {
 /// (`mirror::gc` evicts it), so losing this costs a rewrite, never
 /// correctness of the repository itself.
 pub async fn install_allowed_signers(bare_repo: &std::path::Path, key: &InstanceKey) -> Result<()> {
-    let allowed = bare_repo.join("gitquarry-allowed-signers");
+    let allowed = allowed_signers_path(bare_repo);
     if tokio::fs::try_exists(&allowed).await.unwrap_or(false) {
         return Ok(());
     }
@@ -184,4 +184,19 @@ async fn config(bare_repo: &std::path::Path, name: &str, value: &str) -> Result<
         );
     }
     Ok(())
+}
+
+/// Where [`install_allowed_signers`] writes, and the marker for whether it
+/// already has.
+fn allowed_signers_path(bare_repo: &std::path::Path) -> std::path::PathBuf {
+    bare_repo.join("gitquarry-allowed-signers")
+}
+
+/// Whether this mirror is already configured — the same check
+/// [`install_allowed_signers`] makes, exposed so a caller can skip loading
+/// the instance key it would otherwise have to pass in.
+pub async fn allowed_signers_installed(bare_repo: &std::path::Path) -> bool {
+    tokio::fs::try_exists(allowed_signers_path(bare_repo))
+        .await
+        .unwrap_or(false)
 }

@@ -53,7 +53,7 @@ async fn resolve_mirror_and_default_rev(
     name: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Result<(Mirror, String), AppError> {
-    let mirror = ctx.open_mirror(resolved).await?;
+    let mirror = ctx.open_mirror_read(resolved).await?;
     let Some(head) = git::browse::resolve_head(&mirror.path).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
@@ -99,7 +99,7 @@ pub(crate) async fn handler_raw_patch(
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
         let (_name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
-        let mirror = ctx.open_mirror(&resolved).await?;
+        let mirror = ctx.open_mirror_read(&resolved).await?;
         let sha = require_sha(&params, locale)?;
         export::patch(&mirror.path, sha).await
     }
@@ -116,7 +116,7 @@ pub(crate) async fn handler_raw_rawdiff(
     let locale = effective_locale(&ctx, &headers).await;
     let result: Result<Response, AppError> = async {
         let (_name, _display_name, resolved) = resolve_visible_repo(&ctx, &headers, &raw_repo, locale).await?;
-        let mirror = ctx.open_mirror(&resolved).await?;
+        let mirror = ctx.open_mirror_read(&resolved).await?;
         let sha = require_sha(&params, locale)?;
         export::rawdiff(&mirror.path, sha).await
     }

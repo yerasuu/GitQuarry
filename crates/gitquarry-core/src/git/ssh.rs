@@ -326,7 +326,13 @@ impl ConnHandler {
         if git_subcmd != "receive-pack" {
             crate::mirror::sync_external_before_serving(&self.ctx, &resolved).await;
         }
-        let mirror = self.ctx.open_mirror(&resolved).await?;
+        // Shared for `upload-pack` (a read), exclusive for `receive-pack`
+        // — same split `git::http` makes for the same reason.
+        let mirror = if git_subcmd == "receive-pack" {
+            self.ctx.open_mirror(&resolved).await?
+        } else {
+            self.ctx.open_mirror_read(&resolved).await?
+        };
         let mut child = spawn_git_subcommand(
             &self.ctx,
             git_subcmd,

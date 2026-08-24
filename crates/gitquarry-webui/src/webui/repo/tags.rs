@@ -82,7 +82,7 @@ pub(crate) async fn handler_create_post(
     // still filled in, instead of losing them to the generic error page.
     macro_rules! fail {
         ($msg:expr) => {{
-            let error_mirror = ctx.open_mirror(&resolved).await?;
+            let error_mirror = ctx.open_mirror_read(&resolved).await?;
             let body = super::refs::render_refs(
                 &ctx,
                 &error_mirror.path,
@@ -138,7 +138,7 @@ pub(crate) async fn handler_create_post(
     // will actually point at, and to reject it up front if it doesn't
     // resolve to anything, instead of writing an unverified string into
     // the manifest.
-    let mirror = ctx.open_mirror(&resolved).await?;
+    let mirror = ctx.open_mirror_read(&resolved).await?;
     let resolved_sha = git::browse::resolve_commit(&mirror.path, source).await?;
     drop(mirror);
     let Some(sha) = resolved_sha else {
@@ -211,7 +211,7 @@ pub(crate) async fn handler_delete_post(
     // listing every tag, not just this one button's own label, so the
     // whole table gets re-rendered from a fresh ref list.
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
-        let mirror = ctx.open_mirror(&resolved).await?;
+        let mirror = ctx.open_mirror_read(&resolved).await?;
         let tags = git::browse::list_refs_detailed(&mirror.path, "refs/tags/").await?;
         return Ok(
             axum::response::Html(super::refs::tag_table(&name, &tags, true, &headers, locale).into_string())

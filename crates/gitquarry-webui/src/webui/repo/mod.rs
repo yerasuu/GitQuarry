@@ -851,7 +851,7 @@ pub(crate) async fn handler_repo(
     }
 
     let topnav = login::topnav(&ctx, &headers).await;
-    let mirror = ctx.open_mirror(&resolved).await?;
+    let mirror = ctx.open_mirror_read(&resolved).await?;
 
     let Some(head) = git::browse::resolve_head(&mirror.path).await? else {
         let size = crate::webui::effective_text_size(&ctx, &headers).await;

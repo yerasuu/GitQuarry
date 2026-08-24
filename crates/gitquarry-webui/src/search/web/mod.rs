@@ -117,7 +117,7 @@ async fn repo_uid_if_local(ctx: &AppContext, repo: &str) -> Option<gitquarry_cor
 
 async fn mirror_and_head_impl(ctx: &AppContext, repo: &str) -> Option<(std::path::PathBuf, String)> {
     let resolved = ctx.resolve_repo(repo).await.ok()??;
-    let mirror = ctx.open_mirror(&resolved).await.ok()?;
+    let mirror = ctx.open_mirror_read(&resolved).await.ok()?;
     let head = gitquarry_core::git::browse::resolve_head(&mirror.path).await.ok()??;
     Some((mirror.path, head))
 }
