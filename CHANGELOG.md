@@ -26,6 +26,16 @@ on a per-release versioning scheme.
 
 ## Web UI & browsing
 
+- Every form target now carries the repo in its own URL
+  (`/_merges/merge/{repo}`, `/_releases/edit/{repo}`, `/_tags/delete/{repo}`,
+  ...), and answers a stray `GET` by sending the reader to that repo's page
+  instead of a blank 405. A rejected submit no longer strands the browser on
+  a URL that means nothing.
+- A rejected action explains itself on the page it sends you back to (the
+  merge request, the releases list) rather than on a bare error page — and a
+  merge request refused for a branch that isn't on the server re-offers the
+  branches that are.
+
 - cgit-inspired browsing UI covering summary, refs, tree, blob, log, commit
   diff, blame, and stats views.
 - Compare view between two arbitrary refs.
