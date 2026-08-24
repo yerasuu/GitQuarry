@@ -555,6 +555,7 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             Arc::clone(&ctx),
             request_cache_middleware,
         ))
+        .layer(axum::middleware::from_fn(flash_middleware))
         .layer(axum::middleware::from_fn(security_headers))
         // Every HTML/CSS/JS response this app sends is compressible text
         // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
@@ -623,6 +624,26 @@ async fn request_cache_middleware(
             ),
         )
         .await
+}
+
+/// Carries a redirected flash across the redirect: reads the cookie
+/// [`flash::redirect`] set, scopes it into [`flash::CURRENT_FLASH`] so
+/// [`page_chrome::layout`] renders it on whatever page the browser landed
+/// on, and clears the cookie in that same response so it shows exactly
+/// once (a 30s `Max-Age` alone would show it again on the next page the
+/// reader opened).
+async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let incoming = flash::from_cookie(req.headers());
+    let clear = incoming
+        .is_some()
+        .then(|| cookies::set_cookie(req.headers(), flash::FLASH_COOKIE, "", 0));
+    let mut response = flash::CURRENT_FLASH.scope(incoming, next.run(req)).await;
+    if let Some((name, cookie)) = clear
+        && let Ok(cookie) = axum::http::HeaderValue::from_str(&cookie)
+    {
+        response.headers_mut().append(name, cookie);
+    }
+    response
 }
 
 /// Response headers applied to every route, hand-rolled (`from_fn`, no

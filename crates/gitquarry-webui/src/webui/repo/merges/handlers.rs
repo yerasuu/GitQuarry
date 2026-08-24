@@ -159,6 +159,30 @@ pub(crate) struct NewMergeForm {
     csrf: String,
 }
 
+/// Turns a rejected mutation on an existing MR into a redirect back to that
+/// MR's page with the reason attached, rather than the generic error page —
+/// which would render at the POST target, a URL that answers POST only and
+/// so can't be reloaded or shared. The commonest rejections here are
+/// stale-page ones (the MR was merged, its source branch is gone, someone
+/// else wrote first), and the MR's own page is exactly where the reader can
+/// see what actually happened.
+///
+/// The async path keeps the plain 400: those requests come from `app.js`
+/// expecting a fragment or a status, and follow a redirect into the wrong
+/// place entirely.
+fn mr_error(headers: &HeaderMap, name: &str, number: u64) -> impl Fn(anyhow::Error) -> AppError {
+    let back = repo_link(name, "merge", "").number(number).to_string();
+    let is_async = headers.contains_key(ASYNC_HEADER);
+    let headers = headers.clone();
+    move |e| {
+        if is_async {
+            AppError::bad_request(e)
+        } else {
+            AppError::flash_back(&headers, &back, e)
+        }
+    }
+}
+
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
     headers: HeaderMap,
@@ -341,9 +365,9 @@ pub(crate) async fn handler_close_post(
 
     let cas = domain::merge_request::close(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -380,9 +404,9 @@ pub(crate) async fn handler_reopen_post(
 
     let cas = domain::merge_request::reopen(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -467,7 +491,7 @@ pub(crate) async fn handler_comment_post(
         }
         None => domain::merge_request::add_comment(&ctx, &resolved, form.number, &me.username, body, locale).await,
     }
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -519,9 +543,9 @@ pub(crate) async fn handler_comment_edit_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -580,7 +604,7 @@ pub(crate) async fn handler_comment_delete_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -656,7 +680,7 @@ pub(crate) async fn handler_review_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -731,13 +755,13 @@ pub(crate) async fn handler_merge_post(
     // repo entirely, out of scope for this checkbox.
     let source_branch = domain::merge_request::get(&ctx, &resolved, form.number)
         .await
-        .map_err(AppError::bad_request)?
+        .map_err(mr_error(&headers, &name, form.number))?
         .filter(|mr| mr.source_repo == resolved.uid)
         .map(|mr| mr.source_branch);
 
     match domain::merge_request::merge(&ctx, &resolved, form.number, &me.username, form.strategy, locale)
         .await
-        .map_err(AppError::bad_request)?
+        .map_err(mr_error(&headers, &name, form.number))?
     {
         domain::merge_request::MergeOutcome::Merged(sha) => {
             gitquarry_core::storage::audit::record(
@@ -826,9 +850,9 @@ pub(crate) async fn handler_edit_metadata_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -862,9 +886,9 @@ pub(crate) async fn handler_mark_draft_post(
 
     let cas = domain::merge_request::mark_draft(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -901,9 +925,9 @@ pub(crate) async fn handler_mark_ready_post(
 
     let cas = domain::merge_request::mark_ready(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -959,10 +983,13 @@ pub(crate) async fn handler_bulk_post(
     require_developer_permission(&ctx, &me, &name, locale).await?;
 
     if !matches!(form.action.as_str(), "close" | "reopen") {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::unknown_action(locale, &form.action)
-        )));
+        // Back to the list this batch was selected on -- there's no single
+        // MR page to return to here.
+        return Err(AppError::flash_back(
+            &headers,
+            &format!("/{}?view=merges", url_encode(&name)),
+            anyhow::anyhow!("{}", gitquarry_i18n::shared::unknown_action(locale, &form.action)),
+        ));
     }
     let mut applied = 0usize;
     for number in &form.numbers {
