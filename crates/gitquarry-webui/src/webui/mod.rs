@@ -676,11 +676,14 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// Response headers applied to every route, hand-rolled (`from_fn`, no
 /// `tower-http`) since it's four header inserts, same "small enough to
 /// write directly" call as [`cookies::get_cookie`]/[`cookies::set_cookie`].
-/// Meaningful specifically because this app ships zero JavaScript (see the
-/// module doc comment): `script-src 'none'` means even a hypothetical
-/// escaping bug that smuggled a `<script>` tag past every [`esc`]/`maud`
-/// auto-escape still couldn't execute it — the browser refuses on policy,
-/// not on hope the markup stayed clean. `style-src` is `'self'` alone, with
+/// Meaningful specifically because every script and every stylesheet this
+/// app serves is a same-origin *file*: `script-src 'self'` means a
+/// `<script>` tag smuggled past every [`esc`]/`maud` auto-escape still
+/// couldn't execute — the browser refuses on policy, not on hope the markup
+/// stayed clean. Same for an `onclick=` an injection might set, which no
+/// nonce could ever have covered anyway. `tests/webui_csp.rs` walks `src/`
+/// and fails if any view goes back to an inline script, handler or
+/// `javascript:` URL. `style-src` is `'self'` alone, with
 /// no `'unsafe-inline'`: no view sets a `style="..."` attribute any more —
 /// bar widths, language colours and `display:inline` all resolve to classes
 /// in `style/utilities.css` (see `components::width_class` and
