@@ -677,6 +677,13 @@ pub(crate) const STYLE: &str = concat!(
 /// setting: this is the project's own notice, not something a deploy
 /// customises — a fork changes it here, in the same commit it changes the
 /// name everywhere else.
+/// The quarry-block mark, as one `<path d>`: the topbar's brand link draws
+/// it inline (filled by CSS, so it follows the accent), and
+/// `webui::handler_favicon_svg` wraps this same string in a standalone SVG
+/// document for the tab icon. One copy — a redrawn logo can't end up
+/// matching in the header and stale in the tab.
+pub(crate) const BRAND_MARK_PATH: &str = "M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z";
+
 const COPYRIGHT_HOLDER: &str = "Yerasuu";
 const COPYRIGHT_YEAR: &str = "2026";
 
@@ -737,6 +744,7 @@ pub fn layout(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " - GitQuarry" }
+                link rel="icon" type="image/svg+xml" href="/_assets/favicon.svg";
                 link rel="stylesheet" href=(super::style_css_url());
                 script src="/_assets/styler.js" defer {}
                 script src="/_assets/app.js" defer {}
@@ -748,7 +756,7 @@ pub fn layout(
                         span class="brand" {
                             a href="/" {
                                 svg viewBox="0 0 24 24" aria-hidden="true" {
-                                    path d="M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z" {}
+                                    path d=(BRAND_MARK_PATH) {}
                                 }
                                 "GitQuarry"
                             }
