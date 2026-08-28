@@ -6,7 +6,6 @@
 
 use axum::http::HeaderMap;
 
-/// Reads one cookie's value out of the request's `Cookie` header.
 #[cfg(any(test, feature = "test-util"))]
 pub fn get_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;

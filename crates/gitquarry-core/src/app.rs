@@ -263,7 +263,6 @@ impl LoginAttempts {
         map.entry(username.to_string()).or_default().push(now);
     }
 
-    /// Clears a username's history on a successful login.
     pub fn clear(&self, username: &str) {
         self.inner
             .lock()
@@ -512,9 +511,6 @@ impl AppContext {
         Ok(path)
     }
 
-    /// Validates `key` stays under `mirrors_root`, takes its lock, creates
-    /// the bare mirror if missing, syncs it against this bucket's own S3
-    /// manifest, and records the access per `access`.
     async fn open_mirror_common(
         &self,
         key: &str,
@@ -581,12 +577,11 @@ impl AppContext {
         Ok(())
     }
 
-    /// Takes the repo's lock, creates the bare mirror if missing, and syncs
-    /// it with S3. Keyed by `resolved.uid`, not the display name — the
-    /// local mirror survives a rename untouched, unlike before this uid
-    /// scheme existed (a `move_repo` never touched `mirrors_root`, so a
-    /// renamed repo's old mirror just sat there until `mirror::gc` aged it
-    /// out; now there's nothing to orphan).
+    /// Keyed by `resolved.uid`, not the display name — the local mirror
+    /// survives a rename untouched, unlike before this uid scheme existed (a
+    /// `move_repo` never touched `mirrors_root`, so a renamed repo's old
+    /// mirror just sat there until `mirror::gc` aged it out; now there's
+    /// nothing to orphan).
     pub async fn open_mirror(&self, resolved: &ResolvedRepo) -> Result<Mirror> {
         let (path, guard) = self
             .open_mirror_common(resolved.uid.as_str(), &resolved.remote, Access::Query)
@@ -653,7 +648,6 @@ async fn install_instance_allowed_signers(ctx: &AppContext, bare_repo: &std::pat
     crate::git::signing::install_allowed_signers(bare_repo, &key).await
 }
 
-/// Default mirrors path for a bucket, under the user's cache dir.
 pub fn default_mirrors_root(bucket: &str) -> PathBuf {
     let sanitized: String = bucket
         .chars()

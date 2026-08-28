@@ -90,7 +90,6 @@ pub fn validate_rev(rev: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validates a full object sha (sha1 or sha256).
 pub fn validate_sha(sha: &str) -> Result<()> {
     if !matches!(sha.len(), 40 | 64) || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
         bail!("invalid sha: {sha}");
@@ -182,7 +181,7 @@ pub fn validate_hex_color(color: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validates a path inside the repo tree. Empty = root.
+/// Empty = root.
 pub fn validate_tree_path(path: &str) -> Result<()> {
     if path.is_empty() {
         return Ok(());

@@ -1,5 +1,3 @@
-//! `webui::auth::web::profile`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(no_repos_visible() {

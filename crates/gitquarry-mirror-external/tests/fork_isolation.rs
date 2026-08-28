@@ -83,6 +83,5 @@ async fn a_fork_doesnt_inherit_the_sources_mirror_credential() {
         "the fork inherited {} mirror(s), credential included",
         inherited.len()
     );
-    // The source keeps its own, untouched.
     assert_eq!(domain::list(&ctx, &source.uid).await.unwrap().len(), 1);
 }

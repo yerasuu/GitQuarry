@@ -1,5 +1,3 @@
-//! `webui::repo_settings`'s page copy.
-
 use super::super::{Locale, msg};
 
 // Reused across several of the page's sub-forms (default branch, protected

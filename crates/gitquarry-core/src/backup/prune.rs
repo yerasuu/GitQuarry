@@ -104,7 +104,6 @@ pub async fn prune_replica(
         if matches!(inventory::classify(&dest_key), Class::Never) || dest_key.starts_with(ORPHAN_ROOT) {
             continue;
         }
-        // Advance the source cursor to at least this key.
         while let Some((src_key, _)) = &src_next {
             if src_key < &dest_key {
                 src_next = src_keys.next().await?;

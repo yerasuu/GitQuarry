@@ -1,5 +1,3 @@
-//! `webui::repo::stats`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(commits_by_author_heading() { Locale::Es => "commits por autor", Locale::En => "commits by author" });

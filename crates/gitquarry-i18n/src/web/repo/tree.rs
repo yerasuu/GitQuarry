@@ -1,5 +1,3 @@
-//! `webui::repo::tree`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(name_column() { Locale::Es => "nombre", Locale::En => "name" });

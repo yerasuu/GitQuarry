@@ -221,8 +221,6 @@ async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
         }
     }
 
-    // LRU eviction on top of the survivors, oldest access first, until back
-    // under the size cap.
     kept.sort_by_key(|m| m.last_access);
     let mut total: u64 = kept.iter().map(|m| m.size_bytes).sum();
     for m in kept {

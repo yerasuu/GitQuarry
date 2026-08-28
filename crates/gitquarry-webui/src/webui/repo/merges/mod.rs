@@ -42,13 +42,6 @@ fn status_badge_class(status: MrStatus) -> &'static str {
     }
 }
 
-/// Status line + close/reopen/merge buttons + merged-by paragraph, factored
-/// out of [`render_merge_detail`] so the close/reopen/merge handlers can
-/// return just this fragment (wrapped in `#mr-actions`, see the `data-async`
-/// forms below) after an async submit — closing an MR changes all of this
-/// at once (status text, which button shows next, whether the merged-by
-/// line appears), not just one button's own label the way star/watch/theme
-/// do, so the whole block has to refresh together.
 /// What to show when the MR can't fast-forward cleanly: which files
 /// collide, and the exact commands to resolve it locally.
 ///
@@ -106,6 +99,13 @@ fn conflict_commands(repo_name: &str, mr: &gitquarry_core::storage::merge_reques
     )
 }
 
+/// Status line + close/reopen/merge buttons + merged-by paragraph, factored
+/// out of [`render_merge_detail`] so the close/reopen/merge handlers can
+/// return just this fragment (wrapped in `#mr-actions`, see the `data-async`
+/// forms below) after an async submit — closing an MR changes all of this
+/// at once (status text, which button shows next, whether the merged-by
+/// line appears), not just one button's own label the way star/watch/theme
+/// do, so the whole block has to refresh together.
 #[allow(clippy::too_many_arguments)]
 fn render_mr_actions(
     mr: &gitquarry_core::storage::merge_requests::MergeRequestMeta,
