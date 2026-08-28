@@ -112,7 +112,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let dest_dir = git::objects_pack_dir(mirror_path);
     for base_name in &new_packs {
         if old_packs.contains(base_name) {
-            continue; // repack produced the exact same pack (nothing to do)
+            continue;
         }
         remote
             .upload_pack(
@@ -137,7 +137,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let mut deleted = 0usize;
     for base_name in &old_packs {
         if new_packs.contains(base_name) {
-            continue; // repack kept this one as-is (rare, but possible)
+            continue;
         }
         remote.delete_pack(base_name).await?;
         deleted += 1;

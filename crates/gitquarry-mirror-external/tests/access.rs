@@ -234,7 +234,6 @@ fn a_far_side_error_is_capped_before_it_becomes_bucket_state() {
     let capped = cap_error(&huge);
     assert!(capped.len() < 600, "not capped: {} bytes", capped.len());
     assert!(capped.ends_with("… (truncated)"));
-    // Short messages, which is what most of them are, pass through whole.
     assert_eq!(cap_error("fatal: repository not found"), "fatal: repository not found");
 }
 

@@ -83,8 +83,8 @@ fn verify_code_at_tolerates_one_step_of_skew_but_not_two() {
 #[test]
 fn verify_code_rejects_malformed_input_without_panicking() {
     assert!(!verify_code("not-base32!!", "123456"));
-    assert!(!verify_code(&generate_secret(), "12345")); // too short
-    assert!(!verify_code(&generate_secret(), "abcdef")); // not digits
+    assert!(!verify_code(&generate_secret(), "12345"));
+    assert!(!verify_code(&generate_secret(), "abcdef"));
     assert!(!verify_code(&generate_secret(), ""));
 }
 
