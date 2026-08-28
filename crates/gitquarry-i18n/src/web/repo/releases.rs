@@ -1,5 +1,3 @@
-//! `webui::repo::releases`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(release_column() { Locale::Es => "lanzamiento", Locale::En => "release" });

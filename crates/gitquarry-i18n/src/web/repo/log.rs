@@ -1,5 +1,3 @@
-//! `webui::repo::log`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(search_commit_messages_placeholder() {

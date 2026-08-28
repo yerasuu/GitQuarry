@@ -1,5 +1,3 @@
-//! `webui::repo::compare`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(compare_heading() { Locale::Es => "comparar ", Locale::En => "compare " });

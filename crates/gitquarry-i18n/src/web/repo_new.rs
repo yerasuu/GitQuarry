@@ -1,5 +1,3 @@
-//! `webui::repo_new`'s page copy.
-
 use super::super::{Locale, msg};
 
 msg!(repo_new_heading() { Locale::Es => "nuevo repo", Locale::En => "new repo" });

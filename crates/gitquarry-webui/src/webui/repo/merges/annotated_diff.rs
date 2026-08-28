@@ -16,7 +16,6 @@ use gitquarry_i18n::web::repo::merges as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashSet;
 
-/// One rendered diff row.
 #[cfg(any(test, feature = "test-util"))]
 pub enum Row<'a> {
     /// `diff --git`, `index`, mode, `---`/`+++` headers — nothing to anchor.

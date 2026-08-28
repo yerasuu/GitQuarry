@@ -1,5 +1,3 @@
-//! `webui::repo::refs`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(branches_heading() { Locale::Es => "ramas", Locale::En => "branches" });

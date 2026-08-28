@@ -1,5 +1,3 @@
-//! `webui::auth::web::security`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(logged_in_as() { Locale::Es => "Sesión iniciada como ", Locale::En => "Logged in as " });

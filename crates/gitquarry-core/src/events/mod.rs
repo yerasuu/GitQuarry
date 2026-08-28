@@ -113,7 +113,6 @@ impl EventBus {
     }
 }
 
-/// Fans `event` out to every consumer registered on `ctx.events`.
 pub fn emit(ctx: &AppContext, event: RepoEvent) {
     let consumers = ctx.events.consumers.lock().expect("event bus mutex poisoned");
     for consumer in consumers.iter() {
