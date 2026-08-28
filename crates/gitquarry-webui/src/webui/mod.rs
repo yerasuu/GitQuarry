@@ -311,6 +311,29 @@ pub(crate) fn style_css_url() -> &'static str {
     &URL
 }
 
+/// `GET /_assets/favicon.svg` — the tab icon, the same mark
+/// [`page_chrome::BRAND_MARK_PATH`] draws in the topbar, wrapped in a
+/// standalone SVG document. Built here rather than vendored as its own
+/// file so the mark has one definition; served as a file like every other
+/// asset, since `img-src 'self'` (see [`security_headers`]) is what a
+/// `<link rel="icon">` is checked against.
+///
+/// The fill is a literal colour, not `currentColor` and not the accent
+/// custom property: nothing about the page's stylesheet reaches an icon the
+/// browser paints in its own chrome. `--accent-dark-500` rather than the
+/// light theme's `#8b0000`, because a tab strip is as often dark as light
+/// and the lighter red is the one that stays legible on both.
+async fn handler_favicon_svg(headers: axum::http::HeaderMap) -> Response {
+    static CONTENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"#e0574f\" d=\"{}\"/></svg>",
+            page_chrome::BRAND_MARK_PATH
+        )
+    });
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(&CONTENT));
+    static_asset_response(&headers, "image/svg+xml", &CONTENT, &ETAG, false)
+}
+
 /// `GET /_assets/app.js` — this project's own hand-written client JS (see
 /// `style/app.js`'s own doc comment). Served as an actual same-origin file,
 /// not inlined into `<head>` the way `STYLE` is: `script-src 'self'` (see
@@ -343,6 +366,7 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
         .route("/_assets/style.css", get(handler_style_css))
         .route("/_assets/app.js", get(handler_app_js))
+        .route("/_assets/favicon.svg", get(handler_favicon_svg))
         .route("/_assets/styler.js", get(handler_styler_js))
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
