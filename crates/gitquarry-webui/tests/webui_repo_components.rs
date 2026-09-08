@@ -24,10 +24,14 @@ fn side_by_side_pairs_dels_against_adds_row_by_row() {
     let out = side_by_side_diff("@@ -1,2 +1,2 @@\n-old one\n-old two\n+new one\n context\n").into_string();
     // The hunk header, two change rows (old one/new one, old two/[empty]), one context row.
     assert_eq!(out.matches("<tr>").count(), 4);
-    assert!(out.contains(r#"<td class="diff-del">old one</td>"#));
-    assert!(out.contains(r#"<td class="diff-add">new one</td>"#));
-    assert!(out.contains(r#"<td class="diff-del">old two</td><td></td>"#));
-    assert!(out.contains("<td>context</td><td>context</td>"));
+    // No `+++`/`---` header in this fixture -> no path tracked -> the
+    // `language-plaintext` fallback (`language_tag`'s own doc comment).
+    assert!(out.contains(r#"<td class="diff-del-line"><code class="language-plaintext">old one</code></td>"#));
+    assert!(out.contains(r#"<td class="diff-add-line"><code class="language-plaintext">new one</code></td>"#));
+    assert!(out.contains(r#"<td class="diff-del-line"><code class="language-plaintext">old two</code></td><td></td>"#));
+    assert!(out.contains(
+        r#"<td><code class="language-plaintext">context</code></td><td><code class="language-plaintext">context</code></td>"#
+    ));
 }
 
 #[test]
@@ -45,6 +49,9 @@ fn diff_headers_win_over_add_del() {
     assert!(out.contains("<span class=\"diff-meta\">+++ b/x</span>"));
     assert!(out.contains("<span class=\"diff-meta\">--- a/x</span>"));
     assert!(out.contains("<span class=\"diff-hunk\">@@ -1 +1 @@</span>"));
-    assert!(out.contains("<span class=\"diff-add\">+new</span>"));
-    assert!(out.contains("<span class=\"diff-del\">-old</span>"));
+    // `x` has no extension -> `language-plaintext` (`language_tag`'s own doc
+    // comment); the `+`/`-` marker sits outside the `<code>`, same as it did
+    // when the line had no tokenizing wrapper at all.
+    assert!(out.contains("<span class=\"diff-add-line\">+<code class=\"language-plaintext\">new</code></span>"));
+    assert!(out.contains("<span class=\"diff-del-line\">-<code class=\"language-plaintext\">old</code></span>"));
 }

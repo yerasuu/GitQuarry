@@ -614,6 +614,11 @@ pub(crate) fn copy_button(value: &str, locale: gitquarry_i18n::Locale) -> maud::
 /// already defined here, so those components render in this exact
 /// palette instead of styler's own default one.
 ///
+/// `style/vendor/hljs-light.css`/`hljs-dark.css` — `highlight.js`'s own
+/// vendored theme (`scripts/vendor-hljs.sh`), placed after `base.css` since
+/// it's real selectors rather than variables (see the include site below
+/// for why that means no wrapper block here, unlike `light.css`/`dark.css`).
+///
 /// Served as its own `/_assets/style.css` (see
 /// `webui::handler_style_css`), not spliced into `<head>`: at ~150KB it was
 /// 96% of every HTML response, re-sent on every navigation and re-brotli'd
@@ -638,6 +643,15 @@ pub(crate) const STYLE: &str = concat!(
     include_str!("style/airy.css"),
     "}\n",
     include_str!("style/base.css"),
+    // `highlight.js`'s vendored theme — real selectors, not custom
+    // properties, so unlike `light.css`/`dark.css` above each file governs
+    // its own light/dark guarding internally (see `hljs-light.css`/
+    // `hljs-dark.css`'s own header comments) instead of needing a wrapper
+    // here. Light first, unguarded default; dark after it, both its guard
+    // conditions strictly more specific so it wins when either applies
+    // regardless of source order.
+    include_str!("style/vendor/hljs-light.css"),
+    include_str!("style/vendor/hljs-dark.css"),
     include_str!("style/mobile.css"),
     // Last: the per-render utility classes (widths, language colours,
     // `display:inline`) a view picks by name instead of writing a `style`
@@ -747,6 +761,11 @@ pub fn layout(
                 link rel="icon" type="image/svg+xml" href="/_assets/favicon.svg";
                 link rel="stylesheet" href=(super::style_css_url());
                 script src="/_assets/styler.js" defer {}
+                // Both before `app.js`: it calls into `window.hljs` (see its
+                // own doc comment) once the DOM is parsed, which `defer`
+                // guarantees happens after these two have already run.
+                script src="/_assets/hljs.js" defer {}
+                script src="/_assets/hljs-line-numbers.js" defer {}
                 script src="/_assets/app.js" defer {}
             }
             body data-error-generic=(chrome::async_request_failed(locale)) {

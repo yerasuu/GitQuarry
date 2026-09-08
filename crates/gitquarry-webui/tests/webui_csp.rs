@@ -69,8 +69,8 @@ fn no_view_writes_an_inline_style_attribute() {
 }
 
 /// An inline `<script>` — `script { ... }` in maud with a body, as opposed
-/// to the two `script src=` tags `page_chrome::layout` emits for
-/// `/_assets/app.js` and `/_assets/styler.js`.
+/// to the `script src=` tags `page_chrome::layout` emits for `app.js`,
+/// `styler.js`, and the vendored `hljs.js`/`hljs-line-numbers.js`.
 #[test]
 fn no_view_emits_an_inline_script() {
     let found = offenders(|line| {

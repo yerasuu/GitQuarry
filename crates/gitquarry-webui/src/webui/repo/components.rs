@@ -451,192 +451,143 @@ fn decoration_badges(decoration: &str) -> Markup {
     }
 }
 
-/// Colors unified diff lines cgit-style: `+` green, `-` red, `@@ ... @@`
-/// blue, `+++`/`---` headers gray. Check order matters: `+++` also starts
-/// with `+`.
+/// Colors unified diff lines cgit-style: `+`/`-` lines get a tinted
+/// background (`diff-add-line`/`diff-del-line` — distinct from the
+/// `diff-add`/`diff-del` classes [`commit_table`] uses for its insertion/
+/// deletion count badges, an unrelated feature that keeps its own solid
+/// text color), `@@ ... @@` blue, `+++`/`---` headers gray. Line content is
+/// wrapped in `<code class="language-*">` (`super::diff::code_fragment`) so
+/// `highlight.js` (client-side, vendored) tokenizes it; the background tint
+/// keeps its `.hljs-*` colors visible on top instead of a solid block.
 #[cfg(any(test, feature = "test-util"))]
 pub fn color_diff(diff: &str) -> String {
-    let mut out = String::with_capacity(diff.len());
-    for line in diff.lines() {
-        let class = if line.starts_with("+++") || line.starts_with("---") {
-            "diff-meta"
-        } else if line.starts_with("@@") {
-            "diff-hunk"
-        } else if line.starts_with('+') {
-            "diff-add"
-        } else if line.starts_with('-') {
-            "diff-del"
-        } else {
-            ""
-        };
-        if class.is_empty() {
-            out.push_str(&esc(line));
-        } else {
-            out.push_str(&format!("<span class=\"{class}\">{}</span>", esc(line)));
-        }
-        out.push('\n');
-    }
-    out
+    color_diff_impl(diff)
 }
 #[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn color_diff(diff: &str) -> String {
+    color_diff_impl(diff)
+}
+
+fn color_diff_impl(diff: &str) -> String {
     let mut out = String::with_capacity(diff.len());
-    for line in diff.lines() {
-        let class = if line.starts_with("+++") || line.starts_with("---") {
-            "diff-meta"
-        } else if line.starts_with("@@") {
-            "diff-hunk"
-        } else if line.starts_with('+') {
-            "diff-add"
-        } else if line.starts_with('-') {
-            "diff-del"
-        } else {
-            ""
-        };
-        if class.is_empty() {
-            out.push_str(&esc(line));
-        } else {
-            out.push_str(&format!("<span class=\"{class}\">{}</span>", esc(line)));
+    for row in super::diff::parse(diff) {
+        match row {
+            super::diff::Row::Meta(l) => {
+                out.push_str("<span class=\"diff-meta\">");
+                out.push_str(&esc(l));
+                out.push_str("</span>");
+            }
+            super::diff::Row::Hunk(l) => {
+                out.push_str("<span class=\"diff-hunk\">");
+                out.push_str(&esc(l));
+                out.push_str("</span>");
+            }
+            super::diff::Row::Line { class, path, text } => {
+                match class {
+                    "diff-add" => out.push_str("<span class=\"diff-add-line\">"),
+                    "diff-del" => out.push_str("<span class=\"diff-del-line\">"),
+                    _ => {}
+                }
+                out.push(super::diff::prefix_char(class));
+                out.push_str(&super::diff::code_fragment(path, text));
+                if !class.is_empty() {
+                    out.push_str("</span>");
+                }
+            }
         }
         out.push('\n');
     }
     out
 }
 
-/// One row of a [`side_by_side_diff`] table, built while scanning the
-/// unified diff line by line.
-enum SplitRow<'a> {
+/// One row of a [`side_by_side_diff`] table, built while scanning
+/// [`super::diff::parse`]'s rows. Cells carry pre-escaped, `<code
+/// class="language-*">`-wrapped HTML (`super::diff::code_fragment`), so
+/// rendering uses `PreEscaped` rather than letting maud re-escape it.
+enum SplitRow {
     /// A full-width row: `diff --git`/`index`/mode lines, `+++`/`---`
     /// headers, "\ No newline at end of file" — a two-column layout has no
     /// natural left/right split for these.
-    Full(&'a str),
+    Full(String),
     /// A `@@ ...@@` hunk header — full-width too, but its own color, same
     /// distinction [`color_diff`] draws.
-    Hunk(&'a str),
-    /// An unchanged line, same content on both sides (leading diff space
-    /// stripped for display).
-    Context(&'a str),
+    Hunk(String),
+    /// An unchanged line, same content on both sides.
+    Context(String),
     /// A run of consecutive removals paired against a run of consecutive
     /// additions (git's own diff already groups a hunk's changes this way).
     /// Zipped row by row; the shorter side pads with blank cells.
-    Change(Vec<&'a str>, Vec<&'a str>),
+    Change(Vec<String>, Vec<String>),
 }
 
-/// Same diff text [`color_diff`] renders as a single `+`/`-` stream, laid
-/// out as an old-vs-new table instead: consecutive `-` lines paired against
-/// the following consecutive `+` lines, one pair per row. This is a purely
+/// Same diff [`color_diff`] renders as a single `+`/`-` stream, laid out as
+/// an old-vs-new table instead: consecutive `-` lines paired against the
+/// following consecutive `+` lines, one pair per row. This is a purely
 /// positional pairing (git's raw diff carries no line-to-line correspondence
 /// within a hunk) — it's the same convention GitHub/GitLab's split view
 /// uses, not a real similarity match, so an unrelated removal and addition
 /// can end up side by side on the same row.
 #[cfg(any(test, feature = "test-util"))]
 pub fn side_by_side_diff(diff: &str) -> Markup {
-    let mut rows: Vec<SplitRow> = Vec::new();
-    let mut dels: Vec<&str> = Vec::new();
-    let mut adds: Vec<&str> = Vec::new();
+    side_by_side_diff_impl(diff)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+pub(super) fn side_by_side_diff(diff: &str) -> Markup {
+    side_by_side_diff_impl(diff)
+}
 
-    fn flush_change<'a>(rows: &mut Vec<SplitRow<'a>>, dels: &mut Vec<&'a str>, adds: &mut Vec<&'a str>) {
+fn side_by_side_diff_impl(diff: &str) -> Markup {
+    let mut rows: Vec<SplitRow> = Vec::new();
+    let mut dels: Vec<String> = Vec::new();
+    let mut adds: Vec<String> = Vec::new();
+
+    fn flush_change(rows: &mut Vec<SplitRow>, dels: &mut Vec<String>, adds: &mut Vec<String>) {
         if !dels.is_empty() || !adds.is_empty() {
             rows.push(SplitRow::Change(std::mem::take(dels), std::mem::take(adds)));
         }
     }
 
-    for line in diff.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        } else if line.starts_with("@@") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Hunk(line));
-        } else if let Some(rest) = line.strip_prefix('+') {
-            adds.push(rest);
-        } else if let Some(rest) = line.strip_prefix('-') {
-            dels.push(rest);
-        } else if let Some(rest) = line.strip_prefix(' ') {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Context(rest));
-        } else {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        }
-    }
-    flush_change(&mut rows, &mut dels, &mut adds);
-
-    html! {
-        table class="diff-split" {
-            @for row in &rows {
-                @match row {
-                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="2" { (l) } }
-                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="2" { (l) } }
-                    SplitRow::Context(l) => tr { td { (l) } td { (l) } }
-                    SplitRow::Change(dels, adds) => {
-                        @for i in 0..dels.len().max(adds.len()) {
-                            tr {
-                                @match dels.get(i) {
-                                    Some(d) => td class="diff-del" { (d) },
-                                    None => td {},
-                                }
-                                @match adds.get(i) {
-                                    Some(a) => td class="diff-add" { (a) },
-                                    None => td {},
-                                }
-                            }
-                        }
+    for row in super::diff::parse(diff) {
+        match row {
+            super::diff::Row::Meta(l) => {
+                flush_change(&mut rows, &mut dels, &mut adds);
+                rows.push(SplitRow::Full(esc(l)));
+            }
+            super::diff::Row::Hunk(l) => {
+                flush_change(&mut rows, &mut dels, &mut adds);
+                rows.push(SplitRow::Hunk(esc(l)));
+            }
+            super::diff::Row::Line { class, path, text } => {
+                let fragment = super::diff::code_fragment(path, text);
+                match class {
+                    "diff-add" => adds.push(fragment),
+                    "diff-del" => dels.push(fragment),
+                    _ => {
+                        flush_change(&mut rows, &mut dels, &mut adds);
+                        rows.push(SplitRow::Context(fragment));
                     }
                 }
             }
         }
     }
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn side_by_side_diff(diff: &str) -> Markup {
-    let mut rows: Vec<SplitRow> = Vec::new();
-    let mut dels: Vec<&str> = Vec::new();
-    let mut adds: Vec<&str> = Vec::new();
-
-    fn flush_change<'a>(rows: &mut Vec<SplitRow<'a>>, dels: &mut Vec<&'a str>, adds: &mut Vec<&'a str>) {
-        if !dels.is_empty() || !adds.is_empty() {
-            rows.push(SplitRow::Change(std::mem::take(dels), std::mem::take(adds)));
-        }
-    }
-
-    for line in diff.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        } else if line.starts_with("@@") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Hunk(line));
-        } else if let Some(rest) = line.strip_prefix('+') {
-            adds.push(rest);
-        } else if let Some(rest) = line.strip_prefix('-') {
-            dels.push(rest);
-        } else if let Some(rest) = line.strip_prefix(' ') {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Context(rest));
-        } else {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        }
-    }
     flush_change(&mut rows, &mut dels, &mut adds);
 
     html! {
         table class="diff-split" {
             @for row in &rows {
                 @match row {
-                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="2" { (l) } }
-                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="2" { (l) } }
-                    SplitRow::Context(l) => tr { td { (l) } td { (l) } }
+                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="2" { (PreEscaped(l)) } }
+                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="2" { (PreEscaped(l)) } }
+                    SplitRow::Context(l) => tr { td { (PreEscaped(l)) } td { (PreEscaped(l)) } }
                     SplitRow::Change(dels, adds) => {
                         @for i in 0..dels.len().max(adds.len()) {
                             tr {
                                 @match dels.get(i) {
-                                    Some(d) => td class="diff-del" { (d) },
+                                    Some(d) => td class="diff-del-line" { (PreEscaped(d)) },
                                     None => td {},
                                 }
                                 @match adds.get(i) {
-                                    Some(a) => td class="diff-add" { (a) },
+                                    Some(a) => td class="diff-add-line" { (PreEscaped(a)) },
                                     None => td {},
                                 }
                             }

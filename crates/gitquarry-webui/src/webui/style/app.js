@@ -470,3 +470,58 @@ document.addEventListener("drop", (event) => {
     }
   }).catch(() => window.location.reload());
 });
+
+// A fifth shape, run once at load rather than delegated: client-side syntax
+// highlighting (`/_assets/hljs.js`, `/_assets/hljs-line-numbers.js`, both
+// loaded `defer` ahead of this file -- see `page_chrome.rs`'s `layout()`).
+// `repo::blob::render_blob` and every diff renderer
+// (`repo::components::color_diff`/`side_by_side_diff`,
+// `repo::merges::annotated_diff`) emit plain, unhighlighted
+// `<code class="language-*">` -- this is the one place that actually
+// tokenizes it, so every page pays one `hljs.highlightAll()` call (a no-op
+// scan on a page with no code) instead of duplicating the wiring per view.
+//
+// `cssSelector` widens `highlightAll()`'s default `pre code` match: diff
+// lines wrap their `<code>` in a `<span>`/`<td>`, not a `<pre>`, so the
+// default selector would silently skip every one of them.
+if (window.hljs) {
+  hljs.configure({ cssSelector: 'code[class*="language-"]' });
+  hljs.highlightAll();
+
+  // Line numbers only for the blob view's single full-file block (diff
+  // lines are already one fragment per line -- numbering them the same way
+  // would just repeat what the diff's own gutter already shows). Sync, not
+  // the plugin's default async (`setTimeout`) variant: this runs once at
+  // load, nothing else needs to happen before the numbered rows exist.
+  const blobCode = document.getElementById("blob-code");
+  if (blobCode && window.hljs.lineNumbersBlockSync) {
+    hljs.lineNumbersBlockSync(blobCode);
+    // The plugin numbers rows but doesn't link them -- `blob.rs`'s own
+    // permalink convention (`#L42`, also `blame.rs`'s row ids) still needs
+    // a real `id` on each row and a real `<a>` a reader can click/copy, so
+    // this fills in both from the `data-line-number` the plugin already
+    // stamped on each number cell.
+    blobCode.querySelectorAll(".hljs-ln-numbers").forEach((cell) => {
+      const n = cell.dataset.lineNumber;
+      const row = cell.closest("tr");
+      if (row) {
+        row.id = `L${n}`;
+      }
+      const numberBox = cell.querySelector(".hljs-ln-n");
+      if (numberBox && !numberBox.firstChild) {
+        const link = document.createElement("a");
+        link.href = `#L${n}`;
+        link.textContent = n;
+        numberBox.appendChild(link);
+      }
+    });
+    // The target row's real `id` only exists as of the loop above -- a
+    // page load that already carried `#L42` in its URL (a shared
+    // permalink, not a same-page click) needs its own scroll now, since
+    // the browser's own initial scroll-to-fragment ran before this
+    // deferred script did.
+    if (location.hash) {
+      document.getElementById(location.hash.slice(1))?.scrollIntoView();
+    }
+  }
+}

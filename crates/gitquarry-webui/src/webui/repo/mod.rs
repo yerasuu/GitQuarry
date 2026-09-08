@@ -22,6 +22,7 @@ mod compare;
 pub mod components;
 #[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod components;
+mod diff;
 pub(crate) mod log;
 #[cfg(any(test, feature = "test-util"))]
 pub mod merges;

@@ -100,9 +100,9 @@ pub mod changelog;
 pub mod export;
 pub mod fork;
 pub mod health;
-pub mod highlight;
 pub mod icons;
 pub mod identicon;
+pub mod language_tag;
 pub mod license;
 pub mod markdown;
 pub mod repo;
@@ -292,8 +292,8 @@ fn static_asset_response(
 /// response. Cached `immutable`, not merely `max-age`: the `<link>`
 /// [`style_css_url`] emits carries the content hash in its query, so a
 /// changed stylesheet is a changed URL and a repeat navigation needs no
-/// conditional request at all — unlike the two JS assets below, which still
-/// pay one `304` round-trip each because their URLs are fixed.
+/// conditional request at all — unlike the JS assets below, which still pay
+/// one `304` round-trip each because their URLs are fixed.
 async fn handler_style_css(headers: axum::http::HeaderMap) -> Response {
     static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(page_chrome::STYLE));
     static_asset_response(&headers, "text/css; charset=utf-8", page_chrome::STYLE, &ETAG, true)
@@ -356,6 +356,31 @@ async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
     static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
 }
 
+/// `GET /_assets/hljs.js` — `highlight.js`, vendored the same way
+/// [`handler_styler_js`] is (`scripts/vendor-hljs.sh` re-runs the fetch on a
+/// version bump). Client-side syntax highlighting for the blob view and
+/// every diff view — see `repo::blob::render_blob`'s and
+/// `repo::components::color_diff`'s own doc comments for how each feeds it
+/// `<code class="language-*">` fragments.
+async fn handler_hljs_js(headers: axum::http::HeaderMap) -> Response {
+    const CONTENT: &str = include_str!("style/vendor/hljs.js");
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
+}
+
+/// `GET /_assets/hljs-line-numbers.js` — the official `highlight.js`
+/// companion plugin that turns the blob view's single tokenized block into
+/// numbered, individually anchorable rows (`app.js`'s own doc comment on
+/// where it's invoked) — the piece that lets `#L42` permalinks survive
+/// highlighting a whole file as one unit instead of losing per-line
+/// anchors the way tokenizing line-by-line would (splitting a multi-line
+/// comment/string across separate highlight calls loses its own state).
+async fn handler_hljs_line_numbers_js(headers: axum::http::HeaderMap) -> Response {
+    const CONTENT: &str = include_str!("style/vendor/hljs-line-numbers.js");
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
+}
+
 /// The whole route table, layers included, with nothing bound yet.
 ///
 /// Split out of [`run_server`] so `tests/webui_routes.rs` can assert
@@ -368,6 +393,8 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         .route("/_assets/app.js", get(handler_app_js))
         .route("/_assets/favicon.svg", get(handler_favicon_svg))
         .route("/_assets/styler.js", get(handler_styler_js))
+        .route("/_assets/hljs.js", get(handler_hljs_js))
+        .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
         .route("/_metrics", get(health::handler_metrics))

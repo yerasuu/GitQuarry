@@ -61,36 +61,16 @@ pub(super) struct Annotated {
 }
 
 /// The path a `+++ b/<path>` / `--- a/<path>` header names, or `None` for
-/// `/dev/null` (a pure add or delete has one of the two).
+/// `/dev/null` (a pure add or delete has one of the two). Delegates to
+/// `super::super::diff::header_path` — the same parsing `color_diff`/
+/// `side_by_side_diff` need, kept in one place.
 #[cfg(any(test, feature = "test-util"))]
 pub fn header_path(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("+++ ").or_else(|| line.strip_prefix("--- "))?;
-    if rest == "/dev/null" {
-        return None;
-    }
-    // git prefixes with `a/`/`b/` unless `--no-prefix`; a trailing tab
-    // introduces the timestamp field some diff generators append.
-    let rest = rest.split('\t').next().unwrap_or(rest);
-    Some(
-        rest.strip_prefix("a/")
-            .or_else(|| rest.strip_prefix("b/"))
-            .unwrap_or(rest),
-    )
+    super::super::diff::header_path(line)
 }
 #[cfg(not(any(test, feature = "test-util")))]
 fn header_path(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("+++ ").or_else(|| line.strip_prefix("--- "))?;
-    if rest == "/dev/null" {
-        return None;
-    }
-    // git prefixes with `a/`/`b/` unless `--no-prefix`; a trailing tab
-    // introduces the timestamp field some diff generators append.
-    let rest = rest.split('\t').next().unwrap_or(rest);
-    Some(
-        rest.strip_prefix("a/")
-            .or_else(|| rest.strip_prefix("b/"))
-            .unwrap_or(rest),
-    )
+    super::super::diff::header_path(line)
 }
 
 /// The `-old_start` / `+new_start` of an `@@ -1,2 +3,4 @@` header. `None`
@@ -393,6 +373,21 @@ fn advance(counter: &mut i32) -> i32 {
     *counter
 }
 
+/// `class` ("diff-add"/"diff-del"/"") as stored on a [`Row::Line`], for
+/// anchor derivation and comment matching, mapped to the CSS class that
+/// actually renders it: added/removed lines get a tinted *background*
+/// (`diff-add-line`/`diff-del-line`) — not `components::color_diff`'s
+/// `diff-add`/`diff-del` classes, which stay solid-text for the unrelated
+/// insertion/deletion count badges in `commit_table` — so `highlight.js`'s
+/// token colors show through.
+fn line_css_class(class: &str) -> &'static str {
+    match class {
+        "diff-add" => "diff-add-line",
+        "diff-del" => "diff-del-line",
+        _ => "",
+    }
+}
+
 fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
     let rows = parse(diff);
     let mut placed = HashSet::new();
@@ -418,7 +413,7 @@ fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) ->
                         tr data-rows-group=(format!("hunk-{hunk_index}")) {
                             td class="lineno" { @if let Some(n) = old { (n) } }
                             td class="lineno" { @if let Some(n) = new { (n) } }
-                            td class=(*class) {
+                            td class=(line_css_class(class)) {
                                 @if view.can_comment {
                                     a class="line-comment-link"
                                       href=(comment_link(view.repo_name, view.number, anchor)) {
@@ -426,7 +421,7 @@ fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) ->
                                     }
                                     " "
                                 }
-                                (text)
+                                (PreEscaped(super::super::diff::code_fragment(&anchor.path, text)))
                             }
                         }
                         @for (index, (comment_id, comment)) in comments.iter().enumerate() {
