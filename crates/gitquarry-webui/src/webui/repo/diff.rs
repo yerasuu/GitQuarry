@@ -11,10 +11,14 @@ pub(super) enum Row<'a> {
     Meta(&'a str),
     /// An `@@ ...@@` hunk header — same reasoning as [`Row::Meta`].
     Hunk(&'a str),
-    /// A content line. `text` has its leading `+`/`-`/` ` diff marker
-    /// already stripped — that marker isn't source text, so callers
-    /// reattach it themselves from `class` (see [`prefix_char`]).
+    /// A content line, with whichever side's line numbers it occupies (a
+    /// pure add has no `old`, a pure del no `new` — `side_by_side_diff`'s
+    /// own per-side gutter, GitHub-style). `text` has its leading `+`/`-`/
+    /// ` ` diff marker already stripped — that marker isn't source text, so
+    /// callers reattach it themselves from `class` (see [`prefix_char`]).
     Line {
+        old: Option<u32>,
+        new: Option<u32>,
         class: &'static str,
         path: &'a str,
         text: &'a str,
@@ -38,11 +42,25 @@ pub(super) fn header_path(line: &str) -> Option<&str> {
     )
 }
 
+/// The `-old_start` / `+new_start` of an `@@ -1,2 +3,4 @@` header. `None`
+/// if the header is malformed — the caller then leaves the counters alone
+/// rather than numbering the following lines wrongly.
+pub(super) fn hunk_starts(line: &str) -> Option<(u32, u32)> {
+    let body = line.strip_prefix("@@ ")?.split(" @@").next()?;
+    let mut parts = body.split(' ');
+    let old = parts.next()?.strip_prefix('-')?;
+    let new = parts.next()?.strip_prefix('+')?;
+    let start = |spec: &str| spec.split(',').next()?.parse::<u32>().ok();
+    Some((start(old)?, start(new)?))
+}
+
 /// Walks a (possibly multi-file) unified diff into [`Row`]s, tracking the
-/// current file's path from the last `+++`/`---` header seen.
+/// current file's path from the last `+++`/`---` header seen, and each
+/// side's line counters from the last `@@` hunk header.
 pub(super) fn parse(diff: &str) -> Vec<Row<'_>> {
     let mut rows = Vec::new();
     let mut path = "";
+    let (mut old_line, mut new_line) = (0u32, 0u32);
 
     for line in diff.lines() {
         if line.starts_with("+++") || line.starts_with("---") {
@@ -51,21 +69,39 @@ pub(super) fn parse(diff: &str) -> Vec<Row<'_>> {
             }
             rows.push(Row::Meta(line));
         } else if line.starts_with("@@") {
+            if let Some((old, new)) = hunk_starts(line) {
+                old_line = old;
+                new_line = new;
+            }
             rows.push(Row::Hunk(line));
         } else if let Some(text) = line.strip_prefix('+') {
             rows.push(Row::Line {
+                old: None,
+                new: Some(new_line),
                 class: "diff-add",
                 path,
                 text,
             });
+            new_line += 1;
         } else if let Some(text) = line.strip_prefix('-') {
             rows.push(Row::Line {
+                old: Some(old_line),
+                new: None,
                 class: "diff-del",
                 path,
                 text,
             });
+            old_line += 1;
         } else if let Some(text) = line.strip_prefix(' ') {
-            rows.push(Row::Line { class: "", path, text });
+            rows.push(Row::Line {
+                old: Some(old_line),
+                new: Some(new_line),
+                class: "",
+                path,
+                text,
+            });
+            old_line += 1;
+            new_line += 1;
         } else {
             rows.push(Row::Meta(line));
         }
@@ -124,17 +160,32 @@ mod tests {
         let lines: Vec<_> = rows
             .iter()
             .filter_map(|row| match row {
-                Row::Line { class, path, text } => Some((*class, *path, *text)),
+                Row::Line {
+                    old,
+                    new,
+                    class,
+                    path,
+                    text,
+                } => Some((*old, *new, *class, *path, *text)),
                 _ => None,
             })
             .collect();
         assert_eq!(
             lines,
             vec![
-                ("", "f.rs", "context"),
-                ("diff-del", "f.rs", "gone"),
-                ("diff-add", "f.rs", "added"),
+                (Some(1), Some(1), "", "f.rs", "context"),
+                (Some(2), None, "diff-del", "f.rs", "gone"),
+                (None, Some(2), "diff-add", "f.rs", "added"),
             ]
         );
+    }
+
+    #[test]
+    fn hunk_starts_reads_both_sides_and_rejects_a_malformed_header() {
+        assert_eq!(hunk_starts("@@ -12,7 +40,8 @@ fn main()"), Some((12, 40)));
+        // A one-line hunk omits the count.
+        assert_eq!(hunk_starts("@@ -1 +1 @@"), Some((1, 1)));
+        assert_eq!(hunk_starts("@@ nonsense @@"), None);
+        assert_eq!(hunk_starts("+not a hunk"), None);
     }
 }

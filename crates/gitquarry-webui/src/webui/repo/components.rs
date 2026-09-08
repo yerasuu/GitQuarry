@@ -482,7 +482,7 @@ fn color_diff_impl(diff: &str) -> String {
                 out.push_str(&esc(l));
                 out.push_str("</span>");
             }
-            super::diff::Row::Line { class, path, text } => {
+            super::diff::Row::Line { class, path, text, .. } => {
                 match class {
                     "diff-add" => out.push_str("<span class=\"diff-add-line\">"),
                     "diff-del" => out.push_str("<span class=\"diff-del-line\">"),
@@ -506,27 +506,31 @@ fn color_diff_impl(diff: &str) -> String {
 /// rendering uses `PreEscaped` rather than letting maud re-escape it.
 enum SplitRow {
     /// A full-width row: `diff --git`/`index`/mode lines, `+++`/`---`
-    /// headers, "\ No newline at end of file" — a two-column layout has no
+    /// headers, "\ No newline at end of file" — a four-column layout has no
     /// natural left/right split for these.
     Full(String),
     /// A `@@ ...@@` hunk header — full-width too, but its own color, same
     /// distinction [`color_diff`] draws.
     Hunk(String),
-    /// An unchanged line, same content on both sides.
-    Context(String),
+    /// An unchanged line, same content and (necessarily identical count,
+    /// possibly different *value* — earlier adds/dels in the same hunk can
+    /// have shifted one side already) line number on both sides.
+    Context { old: u32, new: u32, html: String },
     /// A run of consecutive removals paired against a run of consecutive
-    /// additions (git's own diff already groups a hunk's changes this way).
-    /// Zipped row by row; the shorter side pads with blank cells.
-    Change(Vec<String>, Vec<String>),
+    /// additions (git's own diff already groups a hunk's changes this way),
+    /// each with its own side's line number. Zipped row by row; the shorter
+    /// side pads with a blank gutter and cell, GitHub-style.
+    Change(Vec<(u32, String)>, Vec<(u32, String)>),
 }
 
 /// Same diff [`color_diff`] renders as a single `+`/`-` stream, laid out as
-/// an old-vs-new table instead: consecutive `-` lines paired against the
-/// following consecutive `+` lines, one pair per row. This is a purely
-/// positional pairing (git's raw diff carries no line-to-line correspondence
-/// within a hunk) — it's the same convention GitHub/GitLab's split view
-/// uses, not a real similarity match, so an unrelated removal and addition
-/// can end up side by side on the same row.
+/// an old-vs-new table instead, each side with its own line-number gutter
+/// (GitHub/GitLab's own split-view convention): consecutive `-` lines
+/// paired against the following consecutive `+` lines, one pair per row.
+/// This is a purely positional pairing (git's raw diff carries no
+/// line-to-line correspondence within a hunk), not a real similarity match,
+/// so an unrelated removal and addition can end up side by side on the same
+/// row.
 #[cfg(any(test, feature = "test-util"))]
 pub fn side_by_side_diff(diff: &str) -> Markup {
     side_by_side_diff_impl(diff)
@@ -538,10 +542,10 @@ pub(super) fn side_by_side_diff(diff: &str) -> Markup {
 
 fn side_by_side_diff_impl(diff: &str) -> Markup {
     let mut rows: Vec<SplitRow> = Vec::new();
-    let mut dels: Vec<String> = Vec::new();
-    let mut adds: Vec<String> = Vec::new();
+    let mut dels: Vec<(u32, String)> = Vec::new();
+    let mut adds: Vec<(u32, String)> = Vec::new();
 
-    fn flush_change(rows: &mut Vec<SplitRow>, dels: &mut Vec<String>, adds: &mut Vec<String>) {
+    fn flush_change(rows: &mut Vec<SplitRow>, dels: &mut Vec<(u32, String)>, adds: &mut Vec<(u32, String)>) {
         if !dels.is_empty() || !adds.is_empty() {
             rows.push(SplitRow::Change(std::mem::take(dels), std::mem::take(adds)));
         }
@@ -557,14 +561,30 @@ fn side_by_side_diff_impl(diff: &str) -> Markup {
                 flush_change(&mut rows, &mut dels, &mut adds);
                 rows.push(SplitRow::Hunk(esc(l)));
             }
-            super::diff::Row::Line { class, path, text } => {
+            super::diff::Row::Line {
+                old,
+                new,
+                class,
+                path,
+                text,
+            } => {
                 let fragment = super::diff::code_fragment(path, text);
                 match class {
-                    "diff-add" => adds.push(fragment),
-                    "diff-del" => dels.push(fragment),
+                    "diff-add" => adds.push((
+                        new.expect("diff-add rows always carry a new-side line number"),
+                        fragment,
+                    )),
+                    "diff-del" => dels.push((
+                        old.expect("diff-del rows always carry an old-side line number"),
+                        fragment,
+                    )),
                     _ => {
                         flush_change(&mut rows, &mut dels, &mut adds);
-                        rows.push(SplitRow::Context(fragment));
+                        rows.push(SplitRow::Context {
+                            old: old.expect("context rows always carry an old-side line number"),
+                            new: new.expect("context rows always carry a new-side line number"),
+                            html: fragment,
+                        });
                     }
                 }
             }
@@ -574,21 +594,47 @@ fn side_by_side_diff_impl(diff: &str) -> Markup {
 
     html! {
         table class="diff-split" {
+            // `table-layout: fixed` (base.css) makes these authoritative
+            // instead of a mere hint: without it, an unwrapped long line
+            // (`white-space: pre`, no wrap) grows its own column past its
+            // share at the other columns' expense, since auto layout sizes
+            // columns from content width first. Fixed layout reads column
+            // widths from the first row only, which here can just as
+            // easily be a `colspan="4"` header row — a `colgroup` is what
+            // pins them regardless of which row happens to render first.
+            colgroup { col class="w-5"; col class="w-45"; col class="w-5"; col class="w-45"; }
             @for row in &rows {
                 @match row {
-                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="2" { (PreEscaped(l)) } }
-                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="2" { (PreEscaped(l)) } }
-                    SplitRow::Context(l) => tr { td { (PreEscaped(l)) } td { (PreEscaped(l)) } }
+                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="4" { (PreEscaped(l)) } }
+                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="4" { (PreEscaped(l)) } }
+                    SplitRow::Context { old, new, html } => tr {
+                        td class="lineno" { (old) }
+                        td { (PreEscaped(html)) }
+                        td class="lineno" { (new) }
+                        td { (PreEscaped(html)) }
+                    }
                     SplitRow::Change(dels, adds) => {
                         @for i in 0..dels.len().max(adds.len()) {
                             tr {
                                 @match dels.get(i) {
-                                    Some(d) => td class="diff-del-line" { (PreEscaped(d)) },
-                                    None => td {},
+                                    Some((n, d)) => {
+                                        td class="lineno" { (n) }
+                                        td class="diff-del-line" { (PreEscaped(d)) }
+                                    }
+                                    None => {
+                                        td class="lineno" {}
+                                        td {}
+                                    }
                                 }
                                 @match adds.get(i) {
-                                    Some(a) => td class="diff-add-line" { (PreEscaped(a)) },
-                                    None => td {},
+                                    Some((n, a)) => {
+                                        td class="lineno" { (n) }
+                                        td class="diff-add-line" { (PreEscaped(a)) }
+                                    }
+                                    None => {
+                                        td class="lineno" {}
+                                        td {}
+                                    }
                                 }
                             }
                         }

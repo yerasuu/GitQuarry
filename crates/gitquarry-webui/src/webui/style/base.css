@@ -474,11 +474,32 @@ table.hljs-ln { width: 100%; border-collapse: collapse; }
 .diff-add-line, .diff-del-line { display: block; }
 .diff-add-line { background: var(--diff-add-bg); }
 .diff-del-line { background: var(--diff-del-bg); }
-table.diff-split { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
-                   border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+/* `table-layout: fixed`, paired with the `<colgroup>` `side_by_side_diff`
+   emits (4 columns — old lineno, old code, new lineno, new code, GitHub's
+   own split-view convention): without it, column widths are only a hint
+   under the default auto layout, and a long line would grow its own
+   column at the other columns' expense, since auto layout sizes columns
+   from content width first. */
+table.diff-split { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--code-bg);
+                   border: 1px solid var(--code-border); border-radius: var(--radius-sm);
+                   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
                    font-size: var(--fs-sm); }
-table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre; vertical-align: top; width: 50%; }
-table.diff-split td:first-child:not([colspan]) { border-right: 1px solid var(--code-border); }
+/* `pre-wrap`, not `pre`: a long line wraps within its own column instead of
+   forcing a horizontal scrollbar, so both sides stay readable without
+   scrolling sideways to compare them — indentation and interior spacing
+   still render exactly as written, `pre-wrap` only adds wrap *opportunities*
+   at existing whitespace/line-break points, it never collapses any.
+   `overflow-wrap` is the fallback for the one case plain whitespace-based
+   wrapping can't handle: a single unbroken run (a long string literal, a
+   URL) with no space for the browser to wrap at. */
+table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre-wrap; overflow-wrap: break-word; vertical-align: top; }
+table.diff-split td.lineno { text-align: right; color: var(--muted); user-select: none;
+                             border-right: 1px solid var(--code-border); }
+/* Separates the old side's two columns from the new side's, not just
+   `:first-child`: that was the boundary back when each side was a single
+   column, but the old side is columns 1-2 now that each has its own
+   lineno gutter. */
+table.diff-split td:nth-child(2):not([colspan]) { border-right: 1px solid var(--code-border); }
 /* The MR view's unified diff: same monospace slab as `.diff-split`, but with
    old/new line-number gutters and comment rows spliced between the lines. */
 table.diff-annotated { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);

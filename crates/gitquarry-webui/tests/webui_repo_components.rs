@@ -26,21 +26,27 @@ fn side_by_side_pairs_dels_against_adds_row_by_row() {
     assert_eq!(out.matches("<tr>").count(), 4);
     // No `+++`/`---` header in this fixture -> no path tracked -> the
     // `language-plaintext` fallback (`language_tag`'s own doc comment).
-    assert!(out.contains(r#"<td class="diff-del-line"><code class="language-plaintext">old one</code></td>"#));
-    assert!(out.contains(r#"<td class="diff-add-line"><code class="language-plaintext">new one</code></td>"#));
-    assert!(out.contains(r#"<td class="diff-del-line"><code class="language-plaintext">old two</code></td><td></td>"#));
+    // Each side carries its own line number, GitHub-style: "old one"/"new
+    // one" land on the same row (positional pairing), "old two" has no
+    // partner so the new side's cells are blank instead.
     assert!(out.contains(
-        r#"<td><code class="language-plaintext">context</code></td><td><code class="language-plaintext">context</code></td>"#
+        r#"<td class="lineno">1</td><td class="diff-del-line"><code class="language-plaintext">old one</code></td><td class="lineno">1</td><td class="diff-add-line"><code class="language-plaintext">new one</code></td>"#
+    ));
+    assert!(out.contains(
+        r#"<td class="lineno">2</td><td class="diff-del-line"><code class="language-plaintext">old two</code></td><td class="lineno"></td><td></td>"#
+    ));
+    assert!(out.contains(
+        r#"<td class="lineno">3</td><td><code class="language-plaintext">context</code></td><td class="lineno">2</td><td><code class="language-plaintext">context</code></td>"#
     ));
 }
 
 #[test]
 fn side_by_side_spans_hunk_and_file_headers_across_both_columns() {
     let out = side_by_side_diff("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n").into_string();
-    assert!(out.contains(r#"<td class="diff-meta" colspan="2">diff --git a/f b/f</td>"#));
-    assert!(out.contains(r#"<td class="diff-meta" colspan="2">--- a/f</td>"#));
-    assert!(out.contains(r#"<td class="diff-meta" colspan="2">+++ b/f</td>"#));
-    assert!(out.contains(r#"<td class="diff-hunk" colspan="2">@@ -1 +1 @@</td>"#));
+    assert!(out.contains(r#"<td class="diff-meta" colspan="4">diff --git a/f b/f</td>"#));
+    assert!(out.contains(r#"<td class="diff-meta" colspan="4">--- a/f</td>"#));
+    assert!(out.contains(r#"<td class="diff-meta" colspan="4">+++ b/f</td>"#));
+    assert!(out.contains(r#"<td class="diff-hunk" colspan="4">@@ -1 +1 @@</td>"#));
 }
 
 #[test]
