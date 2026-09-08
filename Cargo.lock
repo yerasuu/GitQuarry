@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-auth-crypto"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "argon2 0.5.3",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1876,7 +1876,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-domain"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "gitquarry-core",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-forge-clients"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-gpg"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -1914,11 +1914,11 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-i18n"
-version = "0.5.0"
+version = "0.5.1"
 
 [[package]]
 name = "gitquarry-mirror-external"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-webui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "gitquarry-wire"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axum",
  "rand 0.10.2",
