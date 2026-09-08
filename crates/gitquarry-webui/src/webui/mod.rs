@@ -247,9 +247,16 @@ fn asset_etag(content: &str) -> String {
 /// one conditional round-trip to notice.
 ///
 /// `immutable` drops even that round-trip, and is only correct for an asset
-/// whose *URL* carries its content hash (the stylesheet — see
-/// [`style_css_url`]). The JS assets live at fixed paths, so marking them
-/// immutable would pin a browser to whatever build it first saw.
+/// whose *URL* carries its content hash (every asset below has one —
+/// [`style_css_url`]/[`app_js_url`]/[`styler_js_url`]/[`hljs_js_url`]/
+/// [`hljs_line_numbers_js_url`] — this used to be true only of the
+/// stylesheet, which is why a plain fixed `/_assets/app.js`-style path once
+/// needed `immutable: false` here; a script tag pinned to whatever build a
+/// browser first saw is exactly the bug a hashed URL exists to avoid, once
+/// one is in place there's no reason to still pay the round-trip).
+/// [`favicon.svg`](handler_favicon_svg) is the one exception: its `<link
+/// rel="icon">` has no query-string convention browsers respect the same
+/// way, so it stays a fixed path, `immutable: false`.
 fn static_asset_response(
     req_headers: &axum::http::HeaderMap,
     content_type: &'static str,
@@ -287,27 +294,30 @@ fn static_asset_response(
         .into_response()
 }
 
-/// `GET /_assets/style.css` — every page's stylesheet
-/// ([`page_chrome::STYLE`]), served as a file rather than inlined into each
-/// response. Cached `immutable`, not merely `max-age`: the `<link>`
-/// [`style_css_url`] emits carries the content hash in its query, so a
-/// changed stylesheet is a changed URL and a repeat navigation needs no
-/// conditional request at all — unlike the JS assets below, which still pay
-/// one `304` round-trip each because their URLs are fixed.
+/// A route's fixed path plus its own content hash in the query string, so
+/// one static route can still be served `immutable` (see
+/// [`static_asset_response`]'s own doc comment): a changed asset is a
+/// changed URL, so a repeat visit needs no conditional request at all,
+/// unlike a fixed path that only shortens the round trip to a `304`.
+/// Shared by every asset's own `_url()` function below — each just picks
+/// its own path and content.
+fn versioned_asset_url(path: &str, content: &str) -> String {
+    let etag = asset_etag(content);
+    let hash = etag.trim_matches('"');
+    format!("{path}?v={}", &hash[..16])
+}
+
+/// `GET /_assets/style.css` — every page's stylesheet ([`page_chrome::STYLE`]),
+/// served as a file rather than inlined into each response.
 async fn handler_style_css(headers: axum::http::HeaderMap) -> Response {
     static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(page_chrome::STYLE));
     static_asset_response(&headers, "text/css; charset=utf-8", page_chrome::STYLE, &ETAG, true)
 }
 
-/// The `<link href>` for [`handler_style_css`]: a fixed path plus the
-/// stylesheet's own content hash, so one static route can still be served
-/// `immutable`. Computed once — the content is baked in at compile time.
+/// The `<link href>` for [`handler_style_css`] — see [`versioned_asset_url`].
 pub(crate) fn style_css_url() -> &'static str {
-    static URL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        let etag = asset_etag(page_chrome::STYLE);
-        let hash = etag.trim_matches('"');
-        format!("/_assets/style.css?v={}", &hash[..16])
-    });
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/style.css", page_chrome::STYLE));
     &URL
 }
 
@@ -340,9 +350,16 @@ async fn handler_favicon_svg(headers: axum::http::HeaderMap) -> Response {
 /// [`security_headers`]) allows a same-origin *file*, not inline `<script>`
 /// text, so unlike CSS this can't just be spliced into every page.
 async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
-    const CONTENT: &str = include_str!("style/app.js");
-    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(APP_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", APP_JS, &ETAG, true)
+}
+const APP_JS: &str = include_str!("style/app.js");
+
+/// The `<script src>` for [`handler_app_js`] — see [`versioned_asset_url`].
+pub(crate) fn app_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/app.js", APP_JS));
+    &URL
 }
 
 /// `GET /_assets/styler.js` — the pinned `styler` build vendored alongside
@@ -351,9 +368,16 @@ async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
 /// second same-origin script file needs no CSP change, `script-src 'self'`
 /// already covers it.
 async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
-    const CONTENT: &str = include_str!("style/vendor/styler.js");
-    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(STYLER_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", STYLER_JS, &ETAG, true)
+}
+const STYLER_JS: &str = include_str!("style/vendor/styler.js");
+
+/// The `<script src>` for [`handler_styler_js`] — see [`versioned_asset_url`].
+pub(crate) fn styler_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/styler.js", STYLER_JS));
+    &URL
 }
 
 /// `GET /_assets/hljs.js` — `highlight.js`, vendored the same way
@@ -363,9 +387,16 @@ async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
 /// `repo::components::color_diff`'s own doc comments for how each feeds it
 /// `<code class="language-*">` fragments.
 async fn handler_hljs_js(headers: axum::http::HeaderMap) -> Response {
-    const CONTENT: &str = include_str!("style/vendor/hljs.js");
-    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(HLJS_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", HLJS_JS, &ETAG, true)
+}
+const HLJS_JS: &str = include_str!("style/vendor/hljs.js");
+
+/// The `<script src>` for [`handler_hljs_js`] — see [`versioned_asset_url`].
+pub(crate) fn hljs_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/hljs.js", HLJS_JS));
+    &URL
 }
 
 /// `GET /_assets/hljs-line-numbers.js` — the official `highlight.js`
@@ -376,9 +407,23 @@ async fn handler_hljs_js(headers: axum::http::HeaderMap) -> Response {
 /// anchors the way tokenizing line-by-line would (splitting a multi-line
 /// comment/string across separate highlight calls loses its own state).
 async fn handler_hljs_line_numbers_js(headers: axum::http::HeaderMap) -> Response {
-    const CONTENT: &str = include_str!("style/vendor/hljs-line-numbers.js");
-    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG, false)
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(HLJS_LINE_NUMBERS_JS));
+    static_asset_response(
+        &headers,
+        "text/javascript; charset=utf-8",
+        HLJS_LINE_NUMBERS_JS,
+        &ETAG,
+        true,
+    )
+}
+const HLJS_LINE_NUMBERS_JS: &str = include_str!("style/vendor/hljs-line-numbers.js");
+
+/// The `<script src>` for [`handler_hljs_line_numbers_js`] — see
+/// [`versioned_asset_url`].
+pub(crate) fn hljs_line_numbers_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/hljs-line-numbers.js", HLJS_LINE_NUMBERS_JS));
+    &URL
 }
 
 /// The whole route table, layers included, with nothing bound yet.

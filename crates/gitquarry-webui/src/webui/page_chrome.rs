@@ -760,13 +760,13 @@ pub fn layout(
                 title { (title) " - GitQuarry" }
                 link rel="icon" type="image/svg+xml" href="/_assets/favicon.svg";
                 link rel="stylesheet" href=(super::style_css_url());
-                script src="/_assets/styler.js" defer {}
+                script src=(super::styler_js_url()) defer {}
                 // Both before `app.js`: it calls into `window.hljs` (see its
                 // own doc comment) once the DOM is parsed, which `defer`
                 // guarantees happens after these two have already run.
-                script src="/_assets/hljs.js" defer {}
-                script src="/_assets/hljs-line-numbers.js" defer {}
-                script src="/_assets/app.js" defer {}
+                script src=(super::hljs_js_url()) defer {}
+                script src=(super::hljs_line_numbers_js_url()) defer {}
+                script src=(super::app_js_url()) defer {}
             }
             body data-error-generic=(chrome::async_request_failed(locale)) {
                 a class="skip-link" href="#content" { (chrome::skip_to_content(locale)) }
