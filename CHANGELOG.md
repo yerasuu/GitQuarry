@@ -48,9 +48,15 @@ on a per-release versioning scheme.
   not yet computed also shows as unverified until it is.
 - A commit whose diff runs past the page's ceiling renders the part that
   fits and links to the raw patch for the rest.
-- A file's syntax highlighting can arrive on the second view: the first
-  render of a long file serves it unstyled rather than blocking on the
-  highlighter, and highlights it in the background.
+- Syntax highlighting (blob view, every diff view, and markdown fenced code
+  blocks) is client-side now, via a vendored `highlight.js` — covers far
+  more languages than the old server-side highlighter did, and a blob's
+  `#L42` line permalinks come from the same pass instead of a bespoke
+  per-line table.
+- Side-by-side diff view reworked to match GitHub's split layout:
+  independent line numbers on each side, a fixed 50/50 column split
+  regardless of content length, and a long line wraps instead of forcing a
+  horizontal scrollbar.
 - Create-tag form on the refs tab.
 - Markdown rendering gained syntax-highlighted fenced code blocks and
   GitHub-style alert blockquotes (note/tip/important/warning/caution) in
