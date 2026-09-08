@@ -466,7 +466,7 @@ pub fn render_favorites_page(
                                 }
                             }
                             td {
-                                form method="post" action=(action_url) style="display:inline" data-async data-async-target="#favorites-body" {
+                                form method="post" action=(action_url) class="inline-form" data-async data-async-target="#favorites-body" {
                                     (PreEscaped(csrf))
                                     // `star_action`, matching `actions.rs`'s
                                     // `star_button_html` -- both forms feed the

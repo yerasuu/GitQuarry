@@ -613,6 +613,18 @@ pub(crate) fn copy_button(value: &str, locale: gitquarry_i18n::Locale) -> maud::
 /// styler's own token names (`--text`, `--ok`, `--warn`, ...) to values
 /// already defined here, so those components render in this exact
 /// palette instead of styler's own default one.
+///
+/// `style/vendor/hljs-light.css`/`hljs-dark.css` — `highlight.js`'s own
+/// vendored theme (`scripts/vendor-hljs.sh`), placed after `base.css` since
+/// it's real selectors rather than variables (see the include site below
+/// for why that means no wrapper block here, unlike `light.css`/`dark.css`).
+///
+/// Served as its own `/_assets/style.css` (see
+/// `webui::handler_style_css`), not spliced into `<head>`: at ~150KB it was
+/// 96% of every HTML response, re-sent on every navigation and re-brotli'd
+/// per request — measured at +21ms on a page that otherwise rendered in
+/// 1.8ms. As a file it compresses once, caches for a year against its own
+/// `ETag`, and lets the CSP drop `style-src 'unsafe-inline'`.
 pub(crate) const STYLE: &str = concat!(
     include_str!("style/vendor/styler.css"),
     ":root {\n",
@@ -631,7 +643,20 @@ pub(crate) const STYLE: &str = concat!(
     include_str!("style/airy.css"),
     "}\n",
     include_str!("style/base.css"),
+    // `highlight.js`'s vendored theme — real selectors, not custom
+    // properties, so unlike `light.css`/`dark.css` above each file governs
+    // its own light/dark guarding internally (see `hljs-light.css`/
+    // `hljs-dark.css`'s own header comments) instead of needing a wrapper
+    // here. Light first, unguarded default; dark after it, both its guard
+    // conditions strictly more specific so it wins when either applies
+    // regardless of source order.
+    include_str!("style/vendor/hljs-light.css"),
+    include_str!("style/vendor/hljs-dark.css"),
     include_str!("style/mobile.css"),
+    // Last: the per-render utility classes (widths, language colours,
+    // `display:inline`) a view picks by name instead of writing a `style`
+    // attribute the CSP would have to allow. See the file's own header.
+    include_str!("style/utilities.css"),
 );
 
 /// General cgit/kernel.org-style layout: sans-serif, dense tables with thin
@@ -666,6 +691,13 @@ pub(crate) const STYLE: &str = concat!(
 /// setting: this is the project's own notice, not something a deploy
 /// customises — a fork changes it here, in the same commit it changes the
 /// name everywhere else.
+/// The quarry-block mark, as one `<path d>`: the topbar's brand link draws
+/// it inline (filled by CSS, so it follows the accent), and
+/// `webui::handler_favicon_svg` wraps this same string in a standalone SVG
+/// document for the tab icon. One copy — a redrawn logo can't end up
+/// matching in the header and stale in the tab.
+pub(crate) const BRAND_MARK_PATH: &str = "M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z";
+
 const COPYRIGHT_HOLDER: &str = "Yerasuu";
 const COPYRIGHT_YEAR: &str = "2026";
 
@@ -726,9 +758,15 @@ pub fn layout(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " - GitQuarry" }
-                style { (maud::PreEscaped(STYLE)) }
-                script src="/_assets/styler.js" defer {}
-                script src="/_assets/app.js" defer {}
+                link rel="icon" type="image/svg+xml" href="/_assets/favicon.svg";
+                link rel="stylesheet" href=(super::style_css_url());
+                script src=(super::styler_js_url()) defer {}
+                // Both before `app.js`: it calls into `window.hljs` (see its
+                // own doc comment) once the DOM is parsed, which `defer`
+                // guarantees happens after these two have already run.
+                script src=(super::hljs_js_url()) defer {}
+                script src=(super::hljs_line_numbers_js_url()) defer {}
+                script src=(super::app_js_url()) defer {}
             }
             body data-error-generic=(chrome::async_request_failed(locale)) {
                 a class="skip-link" href="#content" { (chrome::skip_to_content(locale)) }
@@ -737,7 +775,7 @@ pub fn layout(
                         span class="brand" {
                             a href="/" {
                                 svg viewBox="0 0 24 24" aria-hidden="true" {
-                                    path d="M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z" {}
+                                    path d=(BRAND_MARK_PATH) {}
                                 }
                                 "GitQuarry"
                             }
@@ -765,6 +803,11 @@ pub fn layout(
                     }
                 }
                 main id="content" tabindex="-1" {
+                    // A message parked by `flash::redirect` on the response
+                    // before this one. Rendered here rather than by each
+                    // handler so a mutation only has to redirect somewhere
+                    // sensible to have its outcome shown.
+                    (maud::PreEscaped(super::flash::render_current(locale)))
                     (maud::PreEscaped(header))
                     (maud::PreEscaped(body))
                 }

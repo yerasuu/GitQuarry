@@ -15,6 +15,7 @@ pub mod hook;
 #[cfg(not(any(test, feature = "test-util")))]
 mod hook;
 pub mod policy;
+pub mod recent;
 
 pub use hook::run_pre_receive_hook;
 
@@ -155,6 +156,24 @@ const SYNC_MARKER: &str = ".gitquarry-synced-etag";
 /// `s3db::CachedBackend`, which only caches point `get`s) and the ref diff
 /// entirely, leaving only the manifest `get` -- itself usually a memory hit
 /// off that same cache -- between a browse/clone and local-disk speed.
+/// `true` when `bare_repo` already matches the manifest the bucket holds —
+/// exactly the condition [`sync_bare_repo_from_s3`]'s fast path checks, but
+/// asked *before* taking a write lock, so a reader that needs no sync never
+/// takes one at all (`app::AppContext::open_mirror_read`).
+///
+/// `false` for a mirror that doesn't exist yet, for a bucket whose driver
+/// gives no etag, and for any read error on the marker: all of them mean
+/// "can't prove it's current", and the only cost of being wrong that way is
+/// taking the exclusive path that was the sole path before.
+pub async fn is_synced(remote: &crate::storage::remote::Remote, bare_repo: &Path) -> Result<bool> {
+    let (_manifest, etag) = remote.get_manifest().await?;
+    let Some(etag) = etag else {
+        return Ok(false);
+    };
+    let marker = tokio::fs::read_to_string(bare_repo.join(SYNC_MARKER)).await;
+    Ok(marker.is_ok_and(|m| m.trim() == etag))
+}
+
 pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bare_repo: &Path) -> Result<()> {
     let (manifest, etag) = remote.get_manifest().await?;
 

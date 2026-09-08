@@ -9,6 +9,7 @@
 //!   (oldest first) until it's back under the cap.
 
 use crate::app::AppContext;
+use crate::storage::uid::Uid;
 use anyhow::{Context, Result, bail};
 use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
@@ -28,6 +29,40 @@ const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
 /// How often the sweep runs. Coarser than `mirror_max_age`'s granularity
 /// (days) on purpose: cheap to run, no reason to make this configurable too.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+/// How stale the marker has to be before a read-only open rewrites it. The
+/// sweep's own threshold is `mirror_max_age`, days at the shortest, so
+/// resolution finer than this buys nothing — while a mirror being browsed
+/// hard would otherwise take one filesystem write per page view, on a path
+/// (`app::AppContext::open_mirror_read`) whose whole point is not writing.
+const TOUCH_DEBOUNCE: Duration = Duration::from_secs(15 * 60);
+
+/// [`touch_last_access`], skipped when the marker is already recent enough
+/// to say the same thing — see [`TOUCH_DEBOUNCE`].
+pub async fn touch_last_access_if_stale(mirror_path: &Path) -> Result<()> {
+    let marker = mirror_path.join(LAST_ACCESS_MARKER);
+    if let Ok(meta) = tokio::fs::metadata(&marker).await
+        && let Ok(modified) = meta.modified()
+        && modified.elapsed().is_ok_and(|age| age < TOUCH_DEBOUNCE)
+    {
+        return Ok(());
+    }
+    touch_last_access(mirror_path).await
+}
+
+/// [`touch_last_access`], but only for a mirror that has no marker at all
+/// — a mirror the startup prewarm just created. Without it `list_mirrors`
+/// reads that mirror as `UNIX_EPOCH` old and the next sweep evicts exactly
+/// what the prewarm just downloaded; with it, a mirror that *does* have a
+/// marker keeps the mtime real traffic gave it, so restarting can't flatten
+/// the sweep's least-recently-queried order.
+pub async fn touch_last_access_if_missing(mirror_path: &Path) -> Result<()> {
+    let marker = mirror_path.join(LAST_ACCESS_MARKER);
+    if tokio::fs::try_exists(&marker).await.unwrap_or(false) {
+        return Ok(());
+    }
+    touch_last_access(mirror_path).await
+}
 
 pub async fn touch_last_access(mirror_path: &Path) -> Result<()> {
     let marker = mirror_path.join(LAST_ACCESS_MARKER);
@@ -103,47 +138,60 @@ pub async fn run_periodic_sweep(ctx: Arc<AppContext>) {
 /// boot.
 const PREWARM_CONCURRENCY: usize = 4;
 
-/// Re-syncs every mirror still within [`AppContext::mirror_max_age`] of its
-/// last access — the ones [`sweep_once`] would keep, not evict — right
-/// after startup, so a repo someone was actively using before a restart
-/// doesn't make the first request after one pay for a cold sync. Meant to
-/// run detached (`tokio::spawn`, same as [`run_periodic_sweep`]): with many
-/// mirrors this can mean real pack downloads, and startup accepting
-/// connections should never wait on that.
+/// Syncs the repos that were in use before this process started, right
+/// after startup, so the first request to one doesn't pay for a cold sync.
+/// Meant to run detached (`tokio::spawn`, same as [`run_periodic_sweep`]):
+/// with many mirrors this can mean real pack downloads, and startup
+/// accepting connections should never wait on that.
 ///
-/// Best-effort per mirror: one repo's sync failing (a transient backend
-/// error, a repo deleted since the marker was last touched) is logged and
-/// skipped, never fatal to the rest of the prewarm.
+/// The warm set comes from the bucket ([`super::recent::recent_uids`])
+/// first and only then from what's on disk. `mirrors_root` is a local
+/// cache: a deploy that doesn't persist it (a container without a volume,
+/// a new host) starts with nothing there, which is precisely when a
+/// prewarm is worth anything — reading the set from disk alone made this
+/// a no-op in that case. The on-disk pass still runs because the two
+/// disagree: the bucket index is capped at the last few dozen repos, disk
+/// can hold every repo touched within `mirror_max_age`.
+///
+/// Best-effort per repo: one sync failing (a transient backend error, a
+/// repo deleted since it was last used) is logged and skipped, never fatal
+/// to the rest of the prewarm.
 pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
-    let mirrors = match list_mirrors(&ctx.mirrors_root).await {
-        Ok(mirrors) => mirrors,
-        Err(e) => {
-            warn!(error = %e, "couldn't list mirrors to prewarm, continuing");
-            return;
+    let mut uids: Vec<Uid> = Vec::new();
+    match super::recent::recent_uids(ctx.backend.as_ref(), &ctx.cipher, ctx.mirror_max_age).await {
+        Ok(recent) => uids.extend(recent),
+        Err(e) => warn!(error = %e, "couldn't read the recently-used repo index, continuing"),
+    }
+    match list_mirrors(&ctx.mirrors_root).await {
+        Ok(mirrors) => {
+            let now = SystemTime::now();
+            for m in mirrors {
+                if now.duration_since(m.last_access).unwrap_or_default() > ctx.mirror_max_age {
+                    continue;
+                }
+                let uid = Uid::from(m.repo_name);
+                if !uids.contains(&uid) {
+                    uids.push(uid);
+                }
+            }
         }
-    };
-    let now = SystemTime::now();
-    let recent: Vec<MirrorInfo> = mirrors
-        .into_iter()
-        .filter(|m| now.duration_since(m.last_access).unwrap_or_default() <= ctx.mirror_max_age)
-        .collect();
-    if recent.is_empty() {
+        Err(e) => warn!(error = %e, "couldn't list mirrors to prewarm, continuing"),
+    }
+    if uids.is_empty() {
         return;
     }
-    info!(count = recent.len(), "prewarming recently-used mirrors");
+    info!(count = uids.len(), "prewarming recently-used mirrors");
 
-    stream::iter(recent)
-        .for_each_concurrent(Some(PREWARM_CONCURRENCY), |m| {
+    stream::iter(uids)
+        .for_each_concurrent(Some(PREWARM_CONCURRENCY), |uid| {
             let ctx = Arc::clone(&ctx);
             async move {
-                // Same per-repo lock `AppContext::open_mirror` takes: a real
-                // request for this repo arriving mid-prewarm just waits its
-                // turn instead of racing this sync, exactly as it would
-                // race a normal open_mirror call from another request.
-                let _guard = ctx.locks.lock(&m.repo_name).await;
-                let remote = ctx.remote_for_uid(&crate::storage::uid::Uid::from(m.repo_name.clone()));
-                if let Err(e) = crate::mirror::sync_bare_repo_from_s3(&remote, &m.path).await {
-                    warn!(repo = %m.repo_name, error = %e, "prewarm sync failed for mirror");
+                // `warm_mirror` takes the same per-repo lock every other
+                // open takes, so a real request for this repo arriving
+                // mid-prewarm just waits its turn instead of racing this
+                // sync.
+                if let Err(e) = ctx.warm_mirror(&uid).await {
+                    warn!(repo = %uid, error = %e, "prewarm sync failed for mirror");
                 }
             }
         })
@@ -173,8 +221,6 @@ async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
         }
     }
 
-    // LRU eviction on top of the survivors, oldest access first, until back
-    // under the size cap.
     kept.sort_by_key(|m| m.last_access);
     let mut total: u64 = kept.iter().map(|m| m.size_bytes).sum();
     for m in kept {

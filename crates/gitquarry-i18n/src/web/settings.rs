@@ -1,5 +1,3 @@
-//! `webui::settings::web`'s page copy.
-
 use super::super::{Locale, msg};
 
 msg!(settings_saved_in_bucket_prefix() {

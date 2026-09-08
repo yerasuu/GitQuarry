@@ -4,7 +4,7 @@
 use super::compare::render_compare_form;
 use super::components::split_refs;
 use crate::auth::web::login;
-use crate::webui::{AppError, csrf_field, icons, repo_link};
+use crate::webui::{AppError, csrf_field, icons, repo_link, url_encode};
 use anyhow::Result;
 use axum::http::HeaderMap;
 use gitquarry_core::app::AppContext;
@@ -74,9 +74,8 @@ pub(super) fn tag_table(
                     td class="muted" { (r.date) }
                     @if can_write {
                         td {
-                            form method="post" action="/_tags/delete" style="display:inline" data-async data-async-target="#tag-table" data-confirm=(t::delete_tag_confirm(locale, short)) {
+                            form method="post" action=(format!("/_tags/delete/{}", url_encode(repo_name))) class="inline-form" data-async data-async-target="#tag-table" data-confirm=(t::delete_tag_confirm(locale, short)) {
                                 (PreEscaped(csrf_field(headers)))
-                                input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="tag" value=(short);
                                 button type="submit" { (t::delete_tag_button(locale)) }
                             }
@@ -126,9 +125,8 @@ pub(super) fn branch_table(
                     td class="muted" { (r.date) }
                     @if can_write {
                         td {
-                            form method="post" action="/_branches/delete" style="display:inline" data-async data-async-target="#branch-table" data-confirm=(t::delete_branch_confirm(locale, short)) {
+                            form method="post" action=(format!("/_branches/delete/{}", url_encode(repo_name))) class="inline-form" data-async data-async-target="#branch-table" data-confirm=(t::delete_branch_confirm(locale, short)) {
                                 (PreEscaped(csrf_field(headers)))
-                                input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="branch" value=(short);
                                 button type="submit" { (t::delete_branch_button(locale)) }
                             }
@@ -184,9 +182,8 @@ pub async fn render_refs(
             @if let Some(msg) = error {
                 p class="alert alert-err" { (msg) }
             }
-            form method="post" action="/_tags" {
+            form method="post" action=(format!("/_tags/create/{}", url_encode(repo_name))) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 div class="field" {
                     label { (t::tag_name_label(locale)) }
                     input name="tag" size="30" value=(tag_value) placeholder=(t::tag_name_placeholder(locale));

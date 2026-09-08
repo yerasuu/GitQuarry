@@ -66,7 +66,7 @@ pub(crate) async fn resolve_compound_path(
         return Ok(None);
     }
 
-    let mirror = ctx.open_mirror(&resolved).await?;
+    let mirror = ctx.open_mirror_read(&resolved).await?;
     let (branch, path) = split_branch_and_path(&mirror.path, rest).await?;
     validate::validate_rev(&branch).map_err(AppError::bad_request)?;
     validate::validate_tree_path(&path).map_err(AppError::bad_request)?;

@@ -1,5 +1,3 @@
-//! `webui::auth::web::pat`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(page_intro() {

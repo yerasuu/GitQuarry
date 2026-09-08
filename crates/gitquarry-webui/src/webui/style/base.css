@@ -445,28 +445,61 @@ table.blob td { padding: 0 var(--pad-x-sm); white-space: pre; }
 table.blob td.lineno { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--code-border); }
 table.blob td.lineno a { color: var(--muted); }
 table.blob img { display: block; max-width: 100%; }
+/* Companion CSS for `highlightjs-line-numbers.js`'s generated markup
+   (`app.js`'s own doc comment on where it's invoked, `scripts/vendor-hljs.sh`
+   for where the plugin itself comes from) — it ships none of its own, only
+   the `.hljs-ln-*` classes/`data-line-number` attribute it stamps onto each
+   row it builds inside the blob view's `#blob-code`. Same look as
+   `table.blob`'s own `td.lineno` above, since this replaces it for the
+   blob view specifically (`blame.rs` still uses `table.blob` directly). */
+table.hljs-ln { width: 100%; border-collapse: collapse; }
+.hljs-ln-numbers { text-align: right; color: var(--muted); user-select: none;
+                   border-right: 1px solid var(--code-border); padding: 0 var(--pad-x-sm); white-space: nowrap; vertical-align: top; }
+.hljs-ln-numbers a { color: var(--muted); }
+.hljs-ln-code { padding: 0 var(--pad-x-sm); white-space: pre; width: 100%; }
 .diff-add { color: var(--diff-add); }
 .diff-del { color: var(--diff-del); }
 .diff-hunk { color: var(--diff-hunk); }
 .diff-meta { color: var(--muted); font-weight: bold; }
-/* Syntax-highlight token classes (`highlight.rs`'s own doc comment) — an
-   unmatched token has no class at all and just inherits this same plain
-   code color, so no `.tok-default`/`.tok-plain` rule exists to fall back
-   to; there's nothing for one to override. */
-.tok-kw { color: var(--syn-kw); }
-.tok-str { color: var(--syn-str); }
-.tok-com { color: var(--syn-com); font-style: italic; }
-.tok-num { color: var(--syn-num); }
-.tok-const { color: var(--syn-const); }
-.tok-fn { color: var(--syn-fn); }
-.tok-type { color: var(--syn-type); }
-.tok-tag { color: var(--syn-tag); }
-.tok-attr { color: var(--syn-attr); }
-table.diff-split { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
-                   border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+/* Added/removed *code* lines in every diff renderer (`repo::components::
+   color_diff`/`side_by_side_diff`, `repo::merges::annotated_diff`) use
+   these instead of `.diff-add`/`.diff-del` above: a tinted background, not
+   a solid text color, so `highlight.js`'s own `.hljs-*` token colors stay
+   visible inside them. `display: block` makes the tint span the full line
+   width even inside `pre.diff`'s single-column text flow (`color_diff`),
+   where a `<span>` would otherwise only tint the glyphs themselves.
+   Distinct from `.diff-add`/`.diff-del`: those stay the commit log's
+   insertion/deletion count badge (`commit_table`), an unrelated feature
+   that keeps its own solid text color. */
+.diff-add-line, .diff-del-line { display: block; }
+.diff-add-line { background: var(--diff-add-bg); }
+.diff-del-line { background: var(--diff-del-bg); }
+/* `table-layout: fixed`, paired with the `<colgroup>` `side_by_side_diff`
+   emits (4 columns — old lineno, old code, new lineno, new code, GitHub's
+   own split-view convention): without it, column widths are only a hint
+   under the default auto layout, and a long line would grow its own
+   column at the other columns' expense, since auto layout sizes columns
+   from content width first. */
+table.diff-split { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--code-bg);
+                   border: 1px solid var(--code-border); border-radius: var(--radius-sm);
+                   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
                    font-size: var(--fs-sm); }
-table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre; vertical-align: top; width: 50%; }
-table.diff-split td:first-child:not([colspan]) { border-right: 1px solid var(--code-border); }
+/* `pre-wrap`, not `pre`: a long line wraps within its own column instead of
+   forcing a horizontal scrollbar, so both sides stay readable without
+   scrolling sideways to compare them — indentation and interior spacing
+   still render exactly as written, `pre-wrap` only adds wrap *opportunities*
+   at existing whitespace/line-break points, it never collapses any.
+   `overflow-wrap` is the fallback for the one case plain whitespace-based
+   wrapping can't handle: a single unbroken run (a long string literal, a
+   URL) with no space for the browser to wrap at. */
+table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre-wrap; overflow-wrap: break-word; vertical-align: top; }
+table.diff-split td.lineno { text-align: right; color: var(--muted); user-select: none;
+                             border-right: 1px solid var(--code-border); }
+/* Separates the old side's two columns from the new side's, not just
+   `:first-child`: that was the boundary back when each side was a single
+   column, but the old side is columns 1-2 now that each has its own
+   lineno gutter. */
+table.diff-split td:nth-child(2):not([colspan]) { border-right: 1px solid var(--code-border); }
 /* The MR view's unified diff: same monospace slab as `.diff-split`, but with
    old/new line-number gutters and comment rows spliced between the lines. */
 table.diff-annotated { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);

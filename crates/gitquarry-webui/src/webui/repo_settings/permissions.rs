@@ -133,7 +133,7 @@ pub(super) fn render_perm_grid_fragment(
                             }
                         }
                         td {
-                            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) style="display:inline" data-async data-async-target="#perm-grid" data-confirm=(t::change_perm_confirm(locale, &user.username)) {
+                            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) class="inline-form" data-async data-async-target="#perm-grid" data-confirm=(t::change_perm_confirm(locale, &user.username)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="conf_action" value="set_perm";
                                 input type="hidden" name="username" value=(user.username);

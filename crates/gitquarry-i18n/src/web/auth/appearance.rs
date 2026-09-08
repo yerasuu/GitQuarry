@@ -1,5 +1,3 @@
-//! `webui::auth::web::appearance`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(text_size_heading() { Locale::Es => "tamaño de texto", Locale::En => "text size" });

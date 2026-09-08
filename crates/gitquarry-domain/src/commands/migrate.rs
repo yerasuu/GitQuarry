@@ -44,9 +44,9 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let bucket = match bucket_arg {
         Some(b) => b,
         None => conf
-            .only_bucket_name()
+            .default_bucket_name()
             .map(str::to_string)
-            .context("--bucket NAME required (config has more than one bucket)")?,
+            .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
     let backend = storage::build_backend(&bucket_cfg)?;

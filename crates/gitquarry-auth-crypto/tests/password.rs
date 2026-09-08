@@ -15,7 +15,6 @@ fn password_hash_rejects_garbage() {
 #[test]
 fn a_new_hash_carries_the_raised_cost() {
     let hash = hash_password("correct horse battery staple").unwrap();
-    // PHC string: `$argon2id$v=19$m=65536,t=3,p=1$...`
     assert!(hash.starts_with("$argon2id$"), "{hash}");
     assert!(hash.contains("m=65536,t=3,p=1"), "{hash}");
     assert!(verify_password("correct horse battery staple", &hash));

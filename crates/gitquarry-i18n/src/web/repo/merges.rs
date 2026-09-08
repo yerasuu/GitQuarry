@@ -1,5 +1,3 @@
-//! `webui::repo::merges`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(number_column() { Locale::Es => "#", Locale::En => "#" });

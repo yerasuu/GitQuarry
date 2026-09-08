@@ -205,12 +205,6 @@ async fn error_page(
         Some(Flash::Err(message)),
         locale,
     );
-    // Async (`data-async-target="#new-repo-body"`, see `crate::webui::ASYNC_HEADER`'s
-    // own doc comment): a rejected name/namespace re-renders in place, no
-    // real page navigation for an F5 to later warn about resubmitting.
-    if headers.contains_key(crate::webui::ASYNC_HEADER) {
-        return axum::response::Html(content.into_string()).into_response();
-    }
     let topnav = login::topnav(ctx, headers).await;
     let body = content.into_string();
     axum::response::Html(layout(
@@ -247,7 +241,17 @@ pub fn render_new_form(
             code { "owner" } (repo_new_prose_owner_note(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action="/_new" data-async data-async-target="#new-repo-body" {
+        // Plain, not `data-async`: a successful create redirects to the new
+        // repo's own page (`handler_new_post`'s `Redirect::to`), a real
+        // navigation a `data-async` submit can't do -- `fetch()` follows
+        // that redirect transparently and hands the JS side the *new repo
+        // page's* full HTML, which it would then try to graft into
+        // `#new-repo-body` as if it were a fragment. A validation error
+        // still re-renders the whole page (`error_page`'s plain branch)
+        // instead of swapping a fragment in place, so an F5 afterward can
+        // warn about resubmitting -- an accepted trade for a create that
+        // actually lands on the repo it just made.
+        form method="post" action="/_new" {
             (PreEscaped(csrf))
             div class="field" {
                 label { (repo_new_namespace_label(locale)) }
@@ -306,7 +310,17 @@ fn render_new_form(
             code { "owner" } (repo_new_prose_owner_note(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action="/_new" data-async data-async-target="#new-repo-body" {
+        // Plain, not `data-async`: a successful create redirects to the new
+        // repo's own page (`handler_new_post`'s `Redirect::to`), a real
+        // navigation a `data-async` submit can't do -- `fetch()` follows
+        // that redirect transparently and hands the JS side the *new repo
+        // page's* full HTML, which it would then try to graft into
+        // `#new-repo-body` as if it were a fragment. A validation error
+        // still re-renders the whole page (`error_page`'s plain branch)
+        // instead of swapping a fragment in place, so an F5 afterward can
+        // warn about resubmitting -- an accepted trade for a create that
+        // actually lands on the repo it just made.
+        form method="post" action="/_new" {
             (PreEscaped(csrf))
             div class="field" {
                 label { (repo_new_namespace_label(locale)) }

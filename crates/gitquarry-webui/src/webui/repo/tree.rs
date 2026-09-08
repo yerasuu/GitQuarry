@@ -25,15 +25,26 @@ pub async fn render_tree(
     path: &str,
     locale: Locale,
 ) -> Result<String> {
-    let entries = git::browse::ls_tree(bare_repo, rev, path).await?;
-    let gitmodules = git::browse::read_gitmodules(bare_repo, rev).await?;
-    let recent = git::browse::log(bare_repo, rev, RECENT_LOG_LIMIT, Some(path)).await?;
-    let avatars = commit_avatars(ctx, bare_repo, &recent).await;
+    // Three independent git subprocesses over the same read-only mirror, so
+    // they run together rather than one after another: nothing here reads
+    // another's output, and awaiting them in sequence just added up their
+    // latencies.
+    let (entries, gitmodules, recent) = tokio::try_join!(
+        git::browse::ls_tree(bare_repo, rev, path),
+        git::browse::read_gitmodules(bare_repo, rev),
+        git::browse::log(bare_repo, rev, RECENT_LOG_LIMIT, Some(path)),
+    )?;
+    let mut recent = recent;
+    git::browse::mark_signed(bare_repo, &mut recent).await?;
     let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
     // Bounded, single-pass (see `last_touched`'s own doc comment) — one
     // `git log` walk for every row in this listing, not one per row.
     let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
-    let touched = git::browse::last_touched(bare_repo, rev, path, &names).await?;
+    let (avatars, touched) = tokio::join!(
+        commit_avatars(ctx, bare_repo, &recent),
+        git::browse::last_touched(bare_repo, rev, path, &names),
+    );
+    let touched = touched?;
 
     Ok(html! {
         // Only when scoped to a subdirectory: at the repo root, `breadcrumbs`

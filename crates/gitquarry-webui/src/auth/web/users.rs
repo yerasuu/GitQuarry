@@ -496,7 +496,7 @@ pub fn render_user(
                     tr {
                         td { code { (fp) } }
                         td {
-                            form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) data-confirm=(t::remove_pubkey_confirm(locale, &user.username)) {
+                            form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::remove_pubkey_confirm(locale, &user.username)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="user_action" value="remove_pubkey";
                                 input type="hidden" name="username" value=(user.username);
@@ -573,21 +573,21 @@ pub fn render_user(
                 }
                 button type="submit" { (t::set_storage_quota_button(locale)) }
             }
-            form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) data-confirm=(if user.is_admin { t::remove_admin_confirm(locale, &user.username) } else { t::make_admin_confirm(locale, &user.username) }) {
+            form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(if user.is_admin { t::remove_admin_confirm(locale, &user.username) } else { t::make_admin_confirm(locale, &user.username) }) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="toggle_admin";
                 input type="hidden" name="username" value=(user.username);
                 button type="submit" { (if user.is_admin { t::remove_admin_button(locale) } else { t::make_admin_button(locale) }) }
             }
             @if user.totp_enabled {
-                form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) data-confirm=(t::disable_totp_confirm(locale, &user.username)) {
+                form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::disable_totp_confirm(locale, &user.username)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="user_action" value="disable_totp";
                     input type="hidden" name="username" value=(user.username);
                     button type="submit" { (t::disable_totp_button(locale)) }
                 }
             }
-            form method="post" action="/_users" style="display:inline" data-async data-async-target="#users-list" data-confirm=(t::delete_user_confirm(locale, &user.username)) {
+            form method="post" action="/_users" class="inline-form" data-async data-async-target="#users-list" data-confirm=(t::delete_user_confirm(locale, &user.username)) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="delete_user";
                 input type="hidden" name="username" value=(user.username);
@@ -640,7 +640,7 @@ fn repo_perm_row(
             td { code { (display) } }
             td { span class=(crate::webui::permission_badge_class(perm)) { (perm_label) } }
             td {
-                form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) data-confirm=(t::remove_repo_perm_confirm(locale, &user.username)) {
+                form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::remove_repo_perm_confirm(locale, &user.username)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="user_action" value="remove_repo_perm";
                     input type="hidden" name="username" value=(user.username);

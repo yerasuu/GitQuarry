@@ -417,14 +417,14 @@ pub fn render_mirrors_section(
                             }
                         }
                         td {
-                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#mirrors-section" {
+                            form method="post" action=(&action_url) class="inline-form" data-async data-async-target="#mirrors-section" {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="conf_action" value="sync_mirror_now";
                                 input type="hidden" name="mirror_id" value=(mirror.id);
                                 button type="submit" { (t::sync_now_button(locale)) }
                             }
                             " "
-                            form method="post" action=(&action_url) style="display:inline" data-async data-async-target="#mirrors-section" data-confirm=(t::delete_mirror_confirm(locale, &mirror.label)) {
+                            form method="post" action=(&action_url) class="inline-form" data-async data-async-target="#mirrors-section" data-confirm=(t::delete_mirror_confirm(locale, &mirror.label)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="conf_action" value="delete_mirror";
                                 input type="hidden" name="mirror_id" value=(mirror.id);

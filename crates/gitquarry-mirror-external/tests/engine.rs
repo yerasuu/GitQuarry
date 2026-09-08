@@ -902,7 +902,6 @@ async fn a_deleted_repo_stops_being_mirrored_outward() {
 
     sync_repo_mirrors(&ctx, &source).await.unwrap();
 
-    // Nothing was recorded as synced: the sweep didn't touch this repo.
     let (persisted, _) = domain::get(&ctx, &source.uid, &mirror.id).await.unwrap().unwrap();
     assert!(persisted.last_synced.is_empty());
     assert!(persisted.ref_status.is_empty());

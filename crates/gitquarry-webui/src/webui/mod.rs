@@ -100,9 +100,9 @@ pub mod changelog;
 pub mod export;
 pub mod fork;
 pub mod health;
-pub mod highlight;
 pub mod icons;
 pub mod identicon;
+pub mod language_tag;
 pub mod license;
 pub mod markdown;
 pub mod repo;
@@ -240,16 +240,29 @@ fn asset_etag(content: &str) -> String {
     hex
 }
 
-/// Shared response shape for both static JS assets: honors `If-None-Match`
+/// Shared response shape for every static asset: honors `If-None-Match`
 /// with a `304` (skipping the body entirely), otherwise serves the file with
 /// a year-long `Cache-Control` — safe because a change to the file changes
 /// its `ETag`, so a stale cache never serves stale content, it just costs
 /// one conditional round-trip to notice.
+///
+/// `immutable` drops even that round-trip, and is only correct for an asset
+/// whose *URL* carries its content hash (every asset below has one —
+/// [`style_css_url`]/[`app_js_url`]/[`styler_js_url`]/[`hljs_js_url`]/
+/// [`hljs_line_numbers_js_url`] — this used to be true only of the
+/// stylesheet, which is why a plain fixed `/_assets/app.js`-style path once
+/// needed `immutable: false` here; a script tag pinned to whatever build a
+/// browser first saw is exactly the bug a hashed URL exists to avoid, once
+/// one is in place there's no reason to still pay the round-trip).
+/// [`favicon.svg`](handler_favicon_svg) is the one exception: its `<link
+/// rel="icon">` has no query-string convention browsers respect the same
+/// way, so it stays a fixed path, `immutable: false`.
 fn static_asset_response(
     req_headers: &axum::http::HeaderMap,
     content_type: &'static str,
     content: &'static str,
     etag: &str,
+    immutable: bool,
 ) -> Response {
     use axum::response::IntoResponse;
     if req_headers
@@ -269,12 +282,66 @@ fn static_asset_response(
             (axum::http::header::ETAG, etag.to_string()),
             (
                 axum::http::header::CACHE_CONTROL,
-                "public, max-age=31536000".to_string(),
+                if immutable {
+                    "public, max-age=31536000, immutable".to_string()
+                } else {
+                    "public, max-age=31536000".to_string()
+                },
             ),
         ],
         content,
     )
         .into_response()
+}
+
+/// A route's fixed path plus its own content hash in the query string, so
+/// one static route can still be served `immutable` (see
+/// [`static_asset_response`]'s own doc comment): a changed asset is a
+/// changed URL, so a repeat visit needs no conditional request at all,
+/// unlike a fixed path that only shortens the round trip to a `304`.
+/// Shared by every asset's own `_url()` function below — each just picks
+/// its own path and content.
+fn versioned_asset_url(path: &str, content: &str) -> String {
+    let etag = asset_etag(content);
+    let hash = etag.trim_matches('"');
+    format!("{path}?v={}", &hash[..16])
+}
+
+/// `GET /_assets/style.css` — every page's stylesheet ([`page_chrome::STYLE`]),
+/// served as a file rather than inlined into each response.
+async fn handler_style_css(headers: axum::http::HeaderMap) -> Response {
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(page_chrome::STYLE));
+    static_asset_response(&headers, "text/css; charset=utf-8", page_chrome::STYLE, &ETAG, true)
+}
+
+/// The `<link href>` for [`handler_style_css`] — see [`versioned_asset_url`].
+pub(crate) fn style_css_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/style.css", page_chrome::STYLE));
+    &URL
+}
+
+/// `GET /_assets/favicon.svg` — the tab icon, the same mark
+/// [`page_chrome::BRAND_MARK_PATH`] draws in the topbar, wrapped in a
+/// standalone SVG document. Built here rather than vendored as its own
+/// file so the mark has one definition; served as a file like every other
+/// asset, since `img-src 'self'` (see [`security_headers`]) is what a
+/// `<link rel="icon">` is checked against.
+///
+/// The fill is a literal colour, not `currentColor` and not the accent
+/// custom property: nothing about the page's stylesheet reaches an icon the
+/// browser paints in its own chrome. `--accent-dark-500` rather than the
+/// light theme's `#8b0000`, because a tab strip is as often dark as light
+/// and the lighter red is the one that stays legible on both.
+async fn handler_favicon_svg(headers: axum::http::HeaderMap) -> Response {
+    static CONTENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"#e0574f\" d=\"{}\"/></svg>",
+            page_chrome::BRAND_MARK_PATH
+        )
+    });
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(&CONTENT));
+    static_asset_response(&headers, "image/svg+xml", &CONTENT, &ETAG, false)
 }
 
 /// `GET /_assets/app.js` — this project's own hand-written client JS (see
@@ -283,9 +350,16 @@ fn static_asset_response(
 /// [`security_headers`]) allows a same-origin *file*, not inline `<script>`
 /// text, so unlike CSS this can't just be spliced into every page.
 async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
-    const CONTENT: &str = include_str!("style/app.js");
-    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG)
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(APP_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", APP_JS, &ETAG, true)
+}
+const APP_JS: &str = include_str!("style/app.js");
+
+/// The `<script src>` for [`handler_app_js`] — see [`versioned_asset_url`].
+pub(crate) fn app_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/app.js", APP_JS));
+    &URL
 }
 
 /// `GET /_assets/styler.js` — the pinned `styler` build vendored alongside
@@ -294,15 +368,78 @@ async fn handler_app_js(headers: axum::http::HeaderMap) -> Response {
 /// second same-origin script file needs no CSP change, `script-src 'self'`
 /// already covers it.
 async fn handler_styler_js(headers: axum::http::HeaderMap) -> Response {
-    const CONTENT: &str = include_str!("style/vendor/styler.js");
-    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(CONTENT));
-    static_asset_response(&headers, "text/javascript; charset=utf-8", CONTENT, &ETAG)
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(STYLER_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", STYLER_JS, &ETAG, true)
+}
+const STYLER_JS: &str = include_str!("style/vendor/styler.js");
+
+/// The `<script src>` for [`handler_styler_js`] — see [`versioned_asset_url`].
+pub(crate) fn styler_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/styler.js", STYLER_JS));
+    &URL
 }
 
-pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
+/// `GET /_assets/hljs.js` — `highlight.js`, vendored the same way
+/// [`handler_styler_js`] is (`scripts/vendor-hljs.sh` re-runs the fetch on a
+/// version bump). Client-side syntax highlighting for the blob view and
+/// every diff view — see `repo::blob::render_blob`'s and
+/// `repo::components::color_diff`'s own doc comments for how each feeds it
+/// `<code class="language-*">` fragments.
+async fn handler_hljs_js(headers: axum::http::HeaderMap) -> Response {
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(HLJS_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", HLJS_JS, &ETAG, true)
+}
+const HLJS_JS: &str = include_str!("style/vendor/hljs.js");
+
+/// The `<script src>` for [`handler_hljs_js`] — see [`versioned_asset_url`].
+pub(crate) fn hljs_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/hljs.js", HLJS_JS));
+    &URL
+}
+
+/// `GET /_assets/hljs-line-numbers.js` — the official `highlight.js`
+/// companion plugin that turns the blob view's single tokenized block into
+/// numbered, individually anchorable rows (`app.js`'s own doc comment on
+/// where it's invoked) — the piece that lets `#L42` permalinks survive
+/// highlighting a whole file as one unit instead of losing per-line
+/// anchors the way tokenizing line-by-line would (splitting a multi-line
+/// comment/string across separate highlight calls loses its own state).
+async fn handler_hljs_line_numbers_js(headers: axum::http::HeaderMap) -> Response {
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(HLJS_LINE_NUMBERS_JS));
+    static_asset_response(
+        &headers,
+        "text/javascript; charset=utf-8",
+        HLJS_LINE_NUMBERS_JS,
+        &ETAG,
+        true,
+    )
+}
+const HLJS_LINE_NUMBERS_JS: &str = include_str!("style/vendor/hljs-line-numbers.js");
+
+/// The `<script src>` for [`handler_hljs_line_numbers_js`] — see
+/// [`versioned_asset_url`].
+pub(crate) fn hljs_line_numbers_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/hljs-line-numbers.js", HLJS_LINE_NUMBERS_JS));
+    &URL
+}
+
+/// The whole route table, layers included, with nothing bound yet.
+///
+/// Split out of [`run_server`] so `tests/webui_routes.rs` can assert
+/// properties of the table itself (every mutation target answering a stray
+/// GET rather than axum's bare 405) without a listener, a bucket or a
+/// storage backend.
+pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
+        .route("/_assets/style.css", get(handler_style_css))
         .route("/_assets/app.js", get(handler_app_js))
+        .route("/_assets/favicon.svg", get(handler_favicon_svg))
         .route("/_assets/styler.js", get(handler_styler_js))
+        .route("/_assets/hljs.js", get(handler_hljs_js))
+        .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
         .route("/_metrics", get(health::handler_metrics))
@@ -353,8 +490,14 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         .route("/_changelog", get(changelog::handler_changelog_get))
         .route("/_license", get(license::handler_license_get))
         .route("/_search", get(crate::search::web::handler_search_get))
-        .route("/_fork", axum::routing::post(fork::handler_fork_post))
-        .route("/_watch", axum::routing::post(watch::handler_watch_post))
+        .route(
+            "/_fork/{*repo}",
+            get(fork::handler_mutation_get).post(fork::handler_fork_post),
+        )
+        .route(
+            "/_watch/{*repo}",
+            get(watch::handler_mutation_get).post(watch::handler_watch_post),
+        )
         .route("/_new", get(repo_new::handler_new_get).post(repo_new::handler_new_post))
         .route("/_repos", get(repos::handler_repos_get))
         .route(
@@ -414,69 +557,90 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             "/_login_totp",
             get(crate::auth::web::login::handler_login_totp_get).post(crate::auth::web::login::handler_login_totp_post),
         )
-        .route("/_releases", axum::routing::post(repo::releases::handler_create_post))
         .route(
-            "/_releases/generate_notes",
-            axum::routing::post(repo::releases::handler_generate_notes_post),
+            "/_releases/create/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_create_post),
         )
         .route(
-            "/_releases/edit",
-            axum::routing::post(repo::releases::handler_edit_post),
+            "/_releases/generate_notes/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_generate_notes_post),
         )
         .route(
-            "/_releases/delete",
-            axum::routing::post(repo::releases::handler_delete_post),
+            "/_releases/edit/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_edit_post),
         )
         .route(
-            "/_releases/assets",
-            axum::routing::post(repo::releases::handler_upload_asset_post),
+            "/_releases/delete/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_delete_post),
         )
         .route(
-            "/_releases/assets/delete",
-            axum::routing::post(repo::releases::handler_delete_asset_post),
+            "/_releases/asset_upload/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_upload_asset_post),
         )
-        .route("/_tags", axum::routing::post(repo::tags::handler_create_post))
-        .route("/_tags/delete", axum::routing::post(repo::tags::handler_delete_post))
         .route(
-            "/_branches/delete",
-            axum::routing::post(repo::branches::handler_delete_post),
+            "/_releases/asset_delete/{*repo}",
+            get(repo::releases::handler_mutation_get).post(repo::releases::handler_delete_asset_post),
+        )
+        .route(
+            "/_tags/create/{*repo}",
+            get(repo::tags::handler_mutation_get).post(repo::tags::handler_create_post),
+        )
+        .route(
+            "/_tags/delete/{*repo}",
+            get(repo::tags::handler_mutation_get).post(repo::tags::handler_delete_post),
+        )
+        .route(
+            "/_branches/delete/{*repo}",
+            get(repo::branches::handler_mutation_get).post(repo::branches::handler_delete_post),
         );
     let app = app
-        .route("/_merges", axum::routing::post(repo::merges::handler_create_post))
-        .route("/_merges/bulk", axum::routing::post(repo::merges::handler_bulk_post))
-        .route("/_merges/close", axum::routing::post(repo::merges::handler_close_post))
         .route(
-            "/_merges/reopen",
-            axum::routing::post(repo::merges::handler_reopen_post),
+            "/_merges/create/{*repo}",
+            get(repo::merges::handler_create_get).post(repo::merges::handler_create_post),
         )
         .route(
-            "/_merges/comment",
-            axum::routing::post(repo::merges::handler_comment_post),
+            "/_merges/bulk/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_bulk_post),
         )
         .route(
-            "/_merges/comment/edit",
-            axum::routing::post(repo::merges::handler_comment_edit_post),
+            "/_merges/close/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_close_post),
         )
         .route(
-            "/_merges/comment/delete",
-            axum::routing::post(repo::merges::handler_comment_delete_post),
+            "/_merges/reopen/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_reopen_post),
         )
         .route(
-            "/_merges/review",
-            axum::routing::post(repo::merges::handler_review_post),
-        )
-        .route("/_merges/merge", axum::routing::post(repo::merges::handler_merge_post))
-        .route(
-            "/_merges/edit_metadata",
-            axum::routing::post(repo::merges::handler_edit_metadata_post),
+            "/_merges/comment/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_post),
         )
         .route(
-            "/_merges/mark_draft",
-            axum::routing::post(repo::merges::handler_mark_draft_post),
+            "/_merges/comment_edit/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_edit_post),
         )
         .route(
-            "/_merges/mark_ready",
-            axum::routing::post(repo::merges::handler_mark_ready_post),
+            "/_merges/comment_delete/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_comment_delete_post),
+        )
+        .route(
+            "/_merges/review/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_review_post),
+        )
+        .route(
+            "/_merges/merge/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_merge_post),
+        )
+        .route(
+            "/_merges/edit_metadata/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_edit_metadata_post),
+        )
+        .route(
+            "/_merges/mark_draft/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_mark_draft_post),
+        )
+        .route(
+            "/_merges/mark_ready/{*repo}",
+            get(repo::merges::handler_mutation_get).post(repo::merges::handler_mark_ready_post),
         )
         .route("/_login_oidc", get(crate::auth::web::login::handler_login_oidc))
         .route("/_callback", get(crate::auth::web::login::handler_callback))
@@ -494,7 +658,14 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             get(repo::handler_repo).post(repo_settings::handler_repo_conf_post),
         );
 
-    let app = app
+    app
+        // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
+        // answers POST only, and a rejected submit re-renders in the POST
+        // response rather than redirecting, so that URL is what stays in the
+        // address bar. Reloading or backing into it would otherwise get
+        // axum's bare 405 -- empty body, `Allow` header, and the catch-all
+        // `GET /{*repo}` never consulted because the path itself did match.
+        .method_not_allowed_fallback(|| async { axum::response::Redirect::to("/") })
         // Runs before the routes above ever see the request: short-circuits
         // the three git-smart-HTTP paths (see `gitquarry_core::git::http`'s module
         // doc for why this has to be a layer, not a route), passes
@@ -507,6 +678,7 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
             Arc::clone(&ctx),
             request_cache_middleware,
         ))
+        .layer(axum::middleware::from_fn(flash_middleware))
         .layer(axum::middleware::from_fn(security_headers))
         // Every HTML/CSS/JS response this app sends is compressible text
         // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
@@ -514,7 +686,11 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         // -- picks whichever of br/gzip/zstd the client's `Accept-Encoding`
         // offers.
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(Arc::clone(&ctx));
+        .with_state(Arc::clone(&ctx))
+}
+
+pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
+    let app = router(Arc::clone(&ctx));
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
@@ -573,17 +749,54 @@ async fn request_cache_middleware(
         .await
 }
 
+/// Carries a redirected flash across the redirect: reads the cookie
+/// [`flash::redirect`] set, scopes it into [`flash::CURRENT_FLASH`] so
+/// [`page_chrome::layout`] renders it on whatever page the browser landed
+/// on, and clears the cookie in that same response so it shows exactly
+/// once (a 30s `Max-Age` alone would show it again on the next page the
+/// reader opened).
+async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let incoming = flash::from_cookie(req.headers());
+    let clear = incoming
+        .is_some()
+        .then(|| cookies::set_cookie(req.headers(), flash::FLASH_COOKIE, "", 0));
+    let mut response = flash::CURRENT_FLASH.scope(incoming, next.run(req)).await;
+    if let Some((name, cookie)) = clear
+        && let Ok(cookie) = axum::http::HeaderValue::from_str(&cookie)
+    {
+        response.headers_mut().append(name, cookie);
+    }
+    response
+}
+
 /// Response headers applied to every route, hand-rolled (`from_fn`, no
 /// `tower-http`) since it's four header inserts, same "small enough to
 /// write directly" call as [`cookies::get_cookie`]/[`cookies::set_cookie`].
-/// Meaningful specifically because this app ships zero JavaScript (see the
-/// module doc comment): `script-src 'none'` means even a hypothetical
-/// escaping bug that smuggled a `<script>` tag past every [`esc`]/`maud`
-/// auto-escape still couldn't execute it — the browser refuses on policy,
-/// not on hope the markup stayed clean. `style-src` needs `'unsafe-inline'`:
-/// plenty of views set a `style="..."` attribute directly (widths in
-/// `repo::stats`'s bar chart, `display:inline` on same-row forms), not
-/// worth threading a nonce through every render function to avoid it.
+/// Meaningful specifically because every script and every stylesheet this
+/// app serves is a same-origin *file*: `script-src 'self'` means a
+/// `<script>` tag smuggled past every [`esc`]/`maud` auto-escape still
+/// couldn't execute — the browser refuses on policy, not on hope the markup
+/// stayed clean. Same for an `onclick=` an injection might set, which no
+/// nonce could ever have covered anyway. `tests/webui_csp.rs` walks `src/`
+/// and fails if any view goes back to an inline script, handler or
+/// `javascript:` URL. `style-src` is `'self'` alone, with
+/// no `'unsafe-inline'`: no view sets a `style="..."` attribute any more —
+/// bar widths, language colours and `display:inline` all resolve to classes
+/// in `style/utilities.css` (see `components::width_class` and
+/// `repo::summary::language_class`). That directive can't be relaxed by a
+/// nonce either way, since CSP nonces cover `<style>` elements and never
+/// style attributes, so the class file is what keeps it tight —
+/// `tests/webui_csp.rs` fails if a view goes back to an attribute.
+/// The policy [`security_headers`] puts on every response. A constant so
+/// `tests/webui_csp.rs` can hold it next to the markup the views emit.
+#[cfg(any(test, feature = "test-util"))]
+pub const CONTENT_SECURITY_POLICY: &str = CSP;
+#[cfg(not(any(test, feature = "test-util")))]
+const CONTENT_SECURITY_POLICY: &str = CSP;
+
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
+     img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
 async fn security_headers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     // Checked before the request is consumed. A response rendered for a
     // logged-in session can carry things no shared cache should keep — a
@@ -642,8 +855,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
             // images baked into that pinned, hand-vetted stylesheet, not
             // anything request- or user-influenced — same trust level as the
             // CSS file itself, which `style-src 'self'` already accepts.
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            CONTENT_SECURITY_POLICY,
         ),
     );
     resp

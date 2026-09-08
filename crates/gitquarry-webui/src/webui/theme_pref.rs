@@ -159,7 +159,7 @@ pub fn render_theme_toggle(theme: &str) -> maud::Markup {
         // the async response here only ever re-rendered this button pair,
         // never touched `<html>` itself, so the toggle *looked* like it did
         // nothing until a reload happened to pick the new cookie back up.
-        form method="post" action="/_prefs/theme" style="display:inline" data-async data-html-attr="data-theme" {
+        form method="post" action="/_prefs/theme" class="inline-form" data-async data-html-attr="data-theme" {
             button type="submit" name="theme" value="light"
                 class={"theme-btn" @if theme == "light" { " active" }} title="light mode" aria-label="light mode" aria-pressed=(if theme == "light" { "true" } else { "false" }) { "☀" }
             button type="submit" name="theme" value="dark"

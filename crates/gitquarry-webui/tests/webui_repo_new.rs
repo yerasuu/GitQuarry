@@ -30,18 +30,16 @@ fn new_repo_form_has_an_optional_template_field() {
     assert!(html.contains(r#"input name="template""#), "{html}");
 }
 
-/// Regression: the form (and its own flash banner just above it) both sit
-/// inside `#new-repo-body`, and the form itself is `data-async` targeting
-/// that same wrapper — a rejected name/namespace re-renders in place
-/// instead of leaving the browser's "confirm resubmission" dialog for a
-/// later F5. Success still redirects (`Redirect::to` in `handler_new_post`),
-/// unaffected either way.
+/// Regression: the form is a *plain* POST, not `data-async` — a successful
+/// create redirects to the new repo's own page (`Redirect::to` in
+/// `handler_new_post`), a real navigation `data-async`'s `fetch()` can't
+/// make happen client-side (it would follow the redirect itself and hand
+/// the submit handler the destination page's full HTML to graft into
+/// `#new-repo-body` as if it were a fragment). A rejected name/namespace
+/// still re-renders the whole page in place of the old fragment swap.
 #[test]
-fn form_wraps_itself_and_targets_its_own_body() {
+fn form_is_a_plain_post_not_an_async_fragment_swap() {
     let html = render_new_form("alice", &[], "tok", None, gitquarry_i18n::Locale::En).into_string();
     assert!(html.starts_with(r#"<div id="new-repo-body">"#), "{html}");
-    assert!(
-        html.contains(r##"data-async data-async-target="#new-repo-body""##),
-        "{html}"
-    );
+    assert!(!html.contains("data-async"), "{html}");
 }

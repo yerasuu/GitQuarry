@@ -23,17 +23,14 @@ pub enum MergeStrategy {
     Merge,
     Squash,
     Rebase,
-    /// Move the target branch to the source's tip, creating nothing.
-    ///
-    /// The only strategy that produces no new commit at all, which is the
-    /// whole point of it: what lands is the author's own commits, carrying
-    /// the author's own signatures. Every other strategy has the server
-    /// build a commit object, and a server can only sign with a key of its
-    /// own — never the author's, whose private half it must never hold.
-    ///
-    /// Only possible while the target branch is an ancestor of the source;
-    /// once they diverge there is no pointer move that expresses the
-    /// merge, and one of the other three has to build a commit.
+    /// Move the target branch to the source's tip, creating nothing — the
+    /// only strategy that produces no new commit at all, so what lands is
+    /// the author's own commits with the author's own signatures, since
+    /// every other strategy has the server build a commit object and a
+    /// server can only sign with a key of its own, never the author's
+    /// private half. Only possible while the target branch is an ancestor
+    /// of the source; once they diverge there is no pointer move that
+    /// expresses the merge, so one of the other three has to build a commit.
     FastForward,
 }
 

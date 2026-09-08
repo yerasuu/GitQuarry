@@ -1,10 +1,21 @@
 //! The `blob` tab: a single file — syntax-highlighted text, an inline
 //! image, a "too big"/binary notice, or a link to the raw bytes
 //! ([`super::super::export`]).
+//!
+//! Highlighting itself is entirely client-side (`highlight.js`, vendored —
+//! see `app.js`'s own doc comment for where it's invoked): this just emits
+//! the file's raw text, escaped, inside one `<pre><code id="blob-code"
+//! class="language-*">` block. The `id` is what `app.js` looks for to run
+//! the line-numbers plugin only on this one full-file block (never on a
+//! diff line's own small fragment) — its own doc comment covers why a
+//! whole-file block, not one highlighted per line, is what keeps a
+//! multi-line comment/string correctly classified, and how `#L42`
+//! permalinks (this page's own convention, also what `blame.rs`'s row ids
+//! are for) survive that.
 
 use super::MAX_BLOB_BYTES;
-use crate::webui::{breadcrumbs, export, github_raw_link, highlight, repo_link};
-use anyhow::{Context, Result};
+use crate::webui::{breadcrumbs, export, github_raw_link, language_tag::language_tag, repo_link};
+use anyhow::Result;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
 use maud::{PreEscaped, html};
@@ -44,14 +55,6 @@ pub async fn render_blob(
     let bytes = git::browse::read_blob(bare_repo, rev, path).await?;
     Ok(match std::str::from_utf8(&bytes) {
         Ok(text) => {
-            // syntect highlighting is synchronous CPU work with no async
-            // API, same reasoning as `git::browse::archive_one`'s own
-            // `spawn_blocking` for gzip/zip repacking — a big file shouldn't
-            // stall an async worker thread other requests are scheduled on.
-            let (owned_path, owned_text) = (path.to_string(), text.to_string());
-            let lines = tokio::task::spawn_blocking(move || highlight::highlighted_lines(&owned_path, &owned_text))
-                .await
-                .context("syntax highlighting task panicked")?;
             let blame_link = repo_link(repo_name, "blame", rev).path(path).to_string();
             html! {
                 div class="crumbs-row" {
@@ -61,14 +64,8 @@ pub async fn render_blob(
                     }
                 }
                 div class="scroll-x" {
-                    table class="blob" {
-                        @for (i, line) in lines.iter().enumerate() {
-                            @let n = i + 1;
-                            tr id=(format!("L{n}")) {
-                                td class="lineno" { a href=(format!("#L{n}")) { (n) } }
-                                td class="code" { (PreEscaped(line)) }
-                            }
-                        }
+                    pre class="blob" {
+                        code id="blob-code" class=(format!("language-{}", language_tag(path))) { (text) }
                     }
                 }
             }

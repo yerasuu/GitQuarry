@@ -166,7 +166,7 @@ fn render_secondary_emails_table(user: &User, csrf: &str, locale: gitquarry_i18n
                     tr {
                         td { (email) }
                         td {
-                            form method="post" action=(EMAIL_ACTION_URL) style="display:inline" data-async data-async-target="#secondary-emails-table" data-confirm=(t::remove_secondary_email_confirm(locale, email)) {
+                            form method="post" action=(EMAIL_ACTION_URL) class="inline-form" data-async data-async-target="#secondary-emails-table" data-confirm=(t::remove_secondary_email_confirm(locale, email)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="email_action" value="remove_secondary_email";
                                 input type="hidden" name="secondary_email" value=(email);

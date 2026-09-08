@@ -1,7 +1,7 @@
 //! The default view (`?view=summary`): clone URLs, README, a handful of
 //! branches/tags, and recent commits — the "front page" of a single repo.
 
-use super::components::{commit_avatars, commit_table_with_stats, ref_avatars, ref_table, split_refs};
+use super::components::{commit_avatars, commit_table_with_stats, ref_avatars, ref_table, split_refs, width_class};
 use super::{MAX_BLOB_BYTES, RECENT_LOG_LIMIT, SUMMARY_REFS_LIMIT};
 use crate::auth::web::login;
 use crate::webui::{
@@ -558,81 +558,89 @@ async fn render_sidebar(
     })
 }
 
-/// The color GitHub's own Linguist assigns each language (`languages.yml`)
-/// — matches every name [`git::browse::language_for_extension`] can
-/// produce, so the language bar reads the same "Rust is orange, Python is
-/// blue" way GitHub's own repo page does, instead of an arbitrary hash-hue.
-/// `JSX` has no color of its own in Linguist (`.jsx` is just JavaScript
+/// The slug naming a language's colour class, for every name
+/// [`gitquarry_core::git::browse::language_for_extension`] can produce, so
+/// the language bar reads the same "Rust is orange, Python is blue" way
+/// GitHub's own repo page does instead of an arbitrary hash-hue. The
+/// colours themselves are Linguist's (`languages.yml`) and live in
+/// `style/utilities.css` as `.lang-c-<slug>`: a class, not a `style`
+/// attribute, because the CSP allows no inline styles and no nonce can
+/// cover an attribute. `tests/webui_csp.rs` fails if a slug here has no
+/// rule there.
+///
+/// `JSX` has no colour of its own in Linguist (`.jsx` is just JavaScript
 /// there) — reuses JavaScript's, the closest honest answer.
-fn linguist_color(name: &str) -> Option<&'static str> {
+fn known_language_slug(name: &str) -> Option<&'static str> {
     Some(match name {
-        "Rust" => "#dea584",
-        "Python" => "#3572A5",
-        "JavaScript" | "JSX" => "#f1e05a",
-        "TypeScript" => "#3178c6",
-        "TSX" => "#3178c6",
-        "Go" => "#00ADD8",
-        "Java" => "#b07219",
-        "Kotlin" => "#A97BFF",
-        "C" => "#555555",
-        "C++" => "#f34b7d",
-        "C#" => "#178600",
-        "Ruby" => "#701516",
-        "PHP" => "#4F5D95",
-        "Swift" => "#F05138",
-        "Scala" => "#c22d40",
-        "Haskell" => "#5e5086",
-        "Elixir" => "#6e4a7e",
-        "Erlang" => "#B83998",
-        "Lua" => "#000080",
-        "Perl" => "#0298c3",
-        "Shell" => "#89e051",
-        "PowerShell" => "#012456",
-        "SQL" => "#e38c00",
-        "HTML" => "#e34c26",
-        "CSS" => "#563d7c",
-        "SCSS" => "#c6538c",
-        "Vue" => "#41b883",
-        "Svelte" => "#ff3e00",
-        "JSON" => "#292929",
-        "YAML" => "#cb171e",
-        "TOML" => "#9c4221",
-        "Markdown" => "#083fa1",
-        "Dockerfile" => "#384d54",
-        "Nix" => "#7e7eff",
-        "Zig" => "#ec915c",
-        "Dart" => "#00B4AB",
-        "R" => "#198CE7",
-        "Julia" => "#a270ba",
+        "Rust" => "rust",
+        "Python" => "python",
+        "JavaScript" | "JSX" => "javascript",
+        "TypeScript" => "typescript",
+        "TSX" => "tsx",
+        "Go" => "go",
+        "Java" => "java",
+        "Kotlin" => "kotlin",
+        "C" => "c",
+        "C++" => "cpp",
+        "C#" => "cs",
+        "Ruby" => "ruby",
+        "PHP" => "php",
+        "Swift" => "swift",
+        "Scala" => "scala",
+        "Haskell" => "haskell",
+        "Elixir" => "elixir",
+        "Erlang" => "erlang",
+        "Lua" => "lua",
+        "Perl" => "perl",
+        "Shell" => "shell",
+        "PowerShell" => "powershell",
+        "SQL" => "sql",
+        "HTML" => "html",
+        "CSS" => "css",
+        "SCSS" => "scss",
+        "Vue" => "vue",
+        "Svelte" => "svelte",
+        "JSON" => "json",
+        "YAML" => "yaml",
+        "TOML" => "toml",
+        "Markdown" => "markdown",
+        "Dockerfile" => "dockerfile",
+        "Nix" => "nix",
+        "Zig" => "zig",
+        "Dart" => "dart",
+        "R" => "r",
+        "Julia" => "julia",
         _ => return None,
     })
 }
 
-/// Color for a language name — [`linguist_color`] when it's one of the
-/// languages `gitquarry_core::git::browse::language_for_extension` can produce, else a
-/// fixed hash-to-hue fallback (djb2-style) so an unrecognized name still
-/// gets a stable, distinct color instead of a missing one.
+/// The class carrying a language's colour: [`known_language_slug`]'s when
+/// Linguist names one, else one of twelve palette hues picked by a
+/// djb2-style hash of the name, so an unrecognized language still gets a
+/// stable, distinct colour instead of a missing one. Twelve and not one
+/// per hue because every one of them is a rule in `style/utilities.css`
+/// (see [`known_language_slug`] on why this can't be a `style` attribute).
 #[cfg(any(test, feature = "test-util"))]
-pub fn language_color(name: &str) -> String {
-    if let Some(hex) = linguist_color(name) {
-        return hex.to_string();
-    }
-    let mut hash: u32 = 5381;
-    for b in name.bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(u32::from(b));
-    }
-    format!("hsl({} 55% 45%)", hash % 360)
+pub fn language_class(name: &str) -> String {
+    language_class_impl(name)
 }
 #[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn language_color(name: &str) -> String {
-    if let Some(hex) = linguist_color(name) {
-        return hex.to_string();
+pub(super) fn language_class(name: &str) -> String {
+    language_class_impl(name)
+}
+
+/// How many `.lang-c-h*` fallback hues `style/utilities.css` defines.
+const FALLBACK_HUES: u32 = 12;
+
+fn language_class_impl(name: &str) -> String {
+    if let Some(slug) = known_language_slug(name) {
+        return format!("lang-c-{slug}");
     }
     let mut hash: u32 = 5381;
     for b in name.bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(u32::from(b));
     }
-    format!("hsl({} 55% 45%)", hash % 360)
+    format!("lang-c-h{}", hash % FALLBACK_HUES)
 }
 
 /// One stacked bar (segment width = byte share) plus a legend underneath —
@@ -651,7 +659,7 @@ pub fn render_language_bar(languages: &[(String, u64)], locale: gitquarry_i18n::
             div class="lang-bar" {
                 @for (lang, bytes) in languages {
                     span
-                        style=(format!("width:{:.2}%;background:{}", 100.0 * *bytes as f64 / total as f64, language_color(lang)))
+                        class=(format!("{} {}", width_class(100.0 * *bytes as f64 / total as f64), language_class(lang)))
                         title=(lang) {}
                 }
             }
@@ -659,7 +667,7 @@ pub fn render_language_bar(languages: &[(String, u64)], locale: gitquarry_i18n::
                 @for (i, (lang, bytes)) in languages.iter().enumerate() {
                     @if i > 0 { " " }
                     span class="lang-key-item" {
-                        span class="lang-swatch" style=(format!("background:{}", language_color(lang))) {}
+                        span class=(format!("lang-swatch {}", language_class(lang))) {}
                         (lang) " " (format!("{:.1}%", 100.0 * *bytes as f64 / total as f64))
                     }
                 }
@@ -677,7 +685,7 @@ pub(super) fn render_language_bar(languages: &[(String, u64)], locale: gitquarry
             div class="lang-bar" {
                 @for (lang, bytes) in languages {
                     span
-                        style=(format!("width:{:.2}%;background:{}", 100.0 * *bytes as f64 / total as f64, language_color(lang)))
+                        class=(format!("{} {}", width_class(100.0 * *bytes as f64 / total as f64), language_class(lang)))
                         title=(lang) {}
                 }
             }
@@ -685,7 +693,7 @@ pub(super) fn render_language_bar(languages: &[(String, u64)], locale: gitquarry
                 @for (i, (lang, bytes)) in languages.iter().enumerate() {
                     @if i > 0 { " " }
                     span class="lang-key-item" {
-                        span class="lang-swatch" style=(format!("background:{}", language_color(lang))) {}
+                        span class=(format!("lang-swatch {}", language_class(lang))) {}
                         (lang) " " (format!("{:.1}%", 100.0 * *bytes as f64 / total as f64))
                     }
                 }
@@ -729,9 +737,8 @@ fn render_fork_form(
         @if let Some(msg) = error {
             p class="alert alert-err" { (msg) }
         }
-        form method="post" action="/_fork" class="fork-form" {
+        form method="post" action=(format!("/_fork/{}", crate::webui::url_encode(repo_name))) class="fork-form" {
             (PreEscaped(crate::webui::csrf_field(headers)))
-            input type="hidden" name="source" value=(repo_name);
             select name="namespace" {
                 option value=(viewer.username) { (viewer.username) " " (t::you_suffix(locale)) }
                 @for name in crate::auth::web::groups::manageable_group_names(groups, &viewer.uid, viewer.is_admin) {

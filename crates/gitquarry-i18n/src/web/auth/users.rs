@@ -1,5 +1,3 @@
-//! `webui::auth::web::users`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 // Intro paragraph, split at every inline `code { ... }` boundary — maud

@@ -1,5 +1,3 @@
-//! `webui::auth::web::groups`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 // The intro paragraph is split into fragments around fixed `code` elements

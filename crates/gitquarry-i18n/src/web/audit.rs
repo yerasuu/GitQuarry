@@ -1,5 +1,3 @@
-//! `webui::audit`'s page copy.
-
 use super::super::{Locale, msg};
 
 msg!(

@@ -657,7 +657,7 @@ pub fn render_group(
                 }
             }
 
-            h4 style="border-bottom:none" { (gitquarry_i18n::web::auth::groups::groups_members_heading(locale)) }
+            h4 class="no-rule" { (gitquarry_i18n::web::auth::groups::groups_members_heading(locale)) }
             table class="list" {
                 tr {
                     th { (gitquarry_i18n::web::auth::groups::groups_member_column(locale)) }
@@ -690,7 +690,7 @@ pub fn render_group(
             }
 
             @if is_admin {
-                form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_delete_group_confirm(locale, &group.name)) {
+                form method="post" action="/_groups" class="inline-form" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_delete_group_confirm(locale, &group.name)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="group_action" value="delete_group";
                     input type="hidden" name="name" value=(group.name);
@@ -754,7 +754,7 @@ fn member_row(
             td { (username) }
             td {
                 @if can_manage {
-                    form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" {
+                    form method="post" action="/_groups" class="inline-form" data-async data-async-target="#groups-list" {
                         (PreEscaped(csrf))
                         input type="hidden" name="group_action" value="set_member";
                         input type="hidden" name="name" value=(group_name);
@@ -768,7 +768,7 @@ fn member_row(
             }
             td {
                 @if can_manage {
-                    form method="post" action="/_groups" style="display:inline" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_remove_member_confirm(locale, username)) {
+                    form method="post" action="/_groups" class="inline-form" data-async data-async-target="#groups-list" data-confirm=(gitquarry_i18n::web::auth::groups::groups_remove_member_confirm(locale, username)) {
                         (PreEscaped(csrf))
                         input type="hidden" name="group_action" value="remove_member";
                         input type="hidden" name="name" value=(group_name);

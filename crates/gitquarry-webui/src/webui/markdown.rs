@@ -9,12 +9,14 @@
 //! - non-http(s)/mailto/relative link and image targets (`javascript:...`
 //!   etc) — pulldown-cmark happily emits whatever scheme the source used.
 //!
-//! A fenced code block with a language tag (` ```rust `) gets routed
-//! through [`super::highlight::highlighted_lines_by_token`] instead of
-//! pulldown-cmark's own plain `<pre><code>` — same syntax highlighter the
-//! blob view uses, just looked up by the fence's language token instead of
-//! a file extension. A fence with no language tag (or an indented code
-//! block) renders exactly as before: plain, escaped, unhighlighted.
+//! A fenced code block with a language tag (` ```rust `) gets the same
+//! `<pre class="blob"><code class="language-*">` shape
+//! `repo::blob::render_blob` emits — `highlight.js` (client-side, vendored,
+//! see `app.js`'s own doc comment) tokenizes it there, the fence's language
+//! token doubling as the `language-*` class directly (no lookup needed: a
+//! fence token like ` ```rust ` already *is* the identifier `highlight.js`
+//! expects). A fence with no language tag (or an indented code block)
+//! renders exactly as before: plain, escaped, unhighlighted.
 //!
 //! GitHub-style alert blockquotes (`> [!NOTE]`/`[!TIP]`/`[!IMPORTANT]`/
 //! `[!WARNING]`/`[!CAUTION]`) are pulldown-cmark's own native `ENABLE_GFM`
@@ -23,7 +25,7 @@
 //! bold label line (`::before`) and colors are pure CSS, see
 //! `.readme .markdown-alert-*` in `base.css`.
 
-use super::highlight;
+use super::esc;
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, html};
 use std::collections::HashMap;
 
@@ -145,11 +147,10 @@ pub(crate) fn scan_number_mentions(text: &str) -> Vec<(std::ops::Range<usize>, u
 /// Buffers a fenced code block's text between its `Start`/`End` events (they
 /// can arrive as more than one `Event::Text` for a single block) and, once
 /// closed, emits one pre-rendered `Event::Html` in its place — everything
-/// else passes through [`sanitize_event`] unchanged. The synthesized block's
-/// HTML comes straight from `highlight::highlighted_lines_by_token`, which
-/// (like the blob view's own highlighter) already HTML-escapes its input,
-/// so it must NOT be run through `sanitize_event` — that would strip it as
-/// if it were untrusted raw HTML from the README itself.
+/// else passes through [`sanitize_event`] unchanged. The synthesized
+/// block's HTML is escaped here (`esc`), so it must NOT be run through
+/// `sanitize_event` — that strips `Event::Html` outright, on the
+/// assumption it's untrusted raw HTML from the README itself.
 fn highlight_code_blocks<'a>(parser: impl Iterator<Item = Event<'a>>) -> Vec<Event<'a>> {
     let mut out = Vec::new();
     let mut current: Option<(String, String)> = None; // (language token, accumulated text)
@@ -163,8 +164,11 @@ fn highlight_code_blocks<'a>(parser: impl Iterator<Item = Event<'a>>) -> Vec<Eve
             }
             Event::End(TagEnd::CodeBlock) if current.is_some() => {
                 let (lang, code) = current.take().expect("just checked is_some");
-                let lines = highlight::highlighted_lines_by_token(&lang, &code);
-                let html = format!("<pre class=\"blob\"><code>{}</code></pre>", lines.join("\n"));
+                let html = format!(
+                    "<pre class=\"blob\"><code class=\"language-{}\">{}</code></pre>",
+                    esc(&lang),
+                    esc(&code)
+                );
                 out.push(Event::Html(CowStr::from(html)));
             }
             other => {

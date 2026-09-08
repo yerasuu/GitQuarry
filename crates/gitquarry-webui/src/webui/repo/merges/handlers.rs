@@ -8,7 +8,7 @@ use crate::webui::{
     ASYNC_HEADER, AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout,
     repo_link, require_csrf, require_login, url_encode,
 };
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -139,7 +139,6 @@ async fn require_manage_permission(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct NewMergeForm {
-    repo: String,
     repo_uid: String,
     /// Full name (`owner/name`) of the fork to propose merging from — blank
     /// means "this repo itself" (a same-repo MR). `domain::merge_request::create`
@@ -159,31 +158,80 @@ pub(crate) struct NewMergeForm {
     csrf: String,
 }
 
+/// Turns a rejected mutation on an existing MR into a redirect back to that
+/// MR's page with the reason attached, rather than the generic error page —
+/// which would render at the POST target, a URL that answers POST only and
+/// so can't be reloaded or shared. The commonest rejections here are
+/// stale-page ones (the MR was merged, its source branch is gone, someone
+/// else wrote first), and the MR's own page is exactly where the reader can
+/// see what actually happened.
+///
+/// The async path keeps the plain 400: those requests come from `app.js`
+/// expecting a fragment or a status, and follow a redirect into the wrong
+/// place entirely.
+fn mr_error(headers: &HeaderMap, name: &str, number: u64) -> impl Fn(anyhow::Error) -> AppError {
+    let back = repo_link(name, "merge", "").number(number).to_string();
+    let is_async = headers.contains_key(ASYNC_HEADER);
+    let headers = headers.clone();
+    move |e| {
+        if is_async {
+            AppError::bad_request(e)
+        } else {
+            AppError::flash_back(&headers, &back, e)
+        }
+    }
+}
+
+/// `GET` on any of the `/_merges/*` mutation targets.
+///
+/// Those answer POST, and a rejected submit renders in the POST response,
+/// so this URL is what a browser reloading or backing into the page asks
+/// for. It knows which repo it belongs to — that's the point of the repo
+/// being in the path — so it can land on that repo's merge requests
+/// instead of the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    Redirect::to(&format!("/{}?view=merges", url_encode(&repo))).into_response()
+}
+
+/// [`handler_mutation_get`] for the one target whose page isn't the list:
+/// a rejected create came from the new-merge-request form.
+pub(crate) async fn handler_create_get(Path(repo): Path<String>) -> Response {
+    Redirect::to(&format!("/{}?view=new_merge", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<NewMergeForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     // A rejected submit (bad rev, no fork relationship, no diff, ...)
     // re-renders this same form with everything the user typed still
-    // filled in, instead of losing it to the generic error page — no ref
-    // suggestions on the retry render (would need re-listing the mirror's
-    // branches), a minor loss next to keeping the typed title/description.
+    // filled in, instead of losing it to the generic error page. The
+    // branch suggestions are re-listed for the retry (one mirror open):
+    // the commonest rejection here is "'x' isn't a branch of this repo",
+    // and that sentence is only actionable next to the branches that are.
+    // A mirror that won't open costs the datalist, not the retry.
     macro_rules! fail {
         ($msg:expr) => {{
+            let refs = match ctx.open_mirror_read(&resolved).await {
+                Ok(mirror) => gitquarry_core::git::list_refs(&mirror.path).await.unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            let ref_names: Vec<&str> = refs.iter().filter_map(|r| r.strip_prefix("refs/heads/")).collect();
             let topnav = login::topnav(&ctx, &headers).await;
             let body = super::render_new_merge_form(
                 &name,
                 &resolved.uid,
-                &[],
+                &ref_names,
                 None,
                 super::NewMergeFormValues {
                     source_repo: &form.source_repo,
@@ -286,7 +334,7 @@ async fn async_mr_actions_response(
     // form: this fragment is swapped in *after* an action landed, and the
     // one that most obviously changes the answer is the merge itself.
     let fast_forwardable = if mr.status == gitquarry_core::storage::merge_requests::MrStatus::Open && can_merge {
-        let mirror = ctx.open_mirror(resolved).await?;
+        let mirror = ctx.open_mirror_read(resolved).await?;
         domain::merge_request::fast_forwardable(ctx, resolved, &mirror.path, &mr).await?
     } else {
         false
@@ -311,7 +359,6 @@ async fn async_mr_actions_response(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct MergeActionForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -320,23 +367,24 @@ pub(crate) struct MergeActionForm {
 
 pub(crate) async fn handler_close_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::close(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -359,23 +407,24 @@ pub(crate) async fn handler_close_post(
 
 pub(crate) async fn handler_reopen_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::reopen(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -398,7 +447,6 @@ pub(crate) async fn handler_reopen_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct CommentForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -441,16 +489,17 @@ fn parse_anchor(form: &CommentForm) -> Result<Option<CommentAnchor>, AppError> {
 /// access `handler_repo` already gated the whole page behind.
 pub(crate) async fn handler_comment_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<CommentForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let body = form.body.trim();
     match parse_anchor(&form)? {
@@ -460,7 +509,7 @@ pub(crate) async fn handler_comment_post(
         }
         None => domain::merge_request::add_comment(&ctx, &resolved, form.number, &me.username, body, locale).await,
     }
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -476,7 +525,6 @@ pub(crate) async fn handler_comment_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct EditPrCommentForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -491,16 +539,17 @@ pub(crate) struct EditPrCommentForm {
 /// override (same bar `issues::handlers::handler_comment_edit_post` has).
 pub(crate) async fn handler_comment_edit_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<EditPrCommentForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let cas = domain::merge_request::edit_comment(
         &ctx,
@@ -512,9 +561,9 @@ pub(crate) async fn handler_comment_edit_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -534,7 +583,6 @@ pub(crate) async fn handler_comment_edit_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct DeletePrCommentForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -548,16 +596,17 @@ pub(crate) struct DeletePrCommentForm {
 /// author-only).
 pub(crate) async fn handler_comment_delete_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<DeletePrCommentForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     let perm =
         gitquarry_core::auth::access::effective_permission_for_user(ctx.backend().as_ref(), &ctx.cipher, &me, &name)
             .await?;
@@ -573,7 +622,7 @@ pub(crate) async fn handler_comment_delete_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -589,7 +638,6 @@ pub(crate) async fn handler_comment_delete_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ReviewForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -627,16 +675,17 @@ fn parse_verdict_impl(raw: &str) -> ReviewVerdict {
 /// the domain layer, checked there regardless of what this form offered.
 pub(crate) async fn handler_review_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReviewForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let verdict = parse_verdict(form.verdict.trim());
     domain::merge_request::add_review(
@@ -649,7 +698,7 @@ pub(crate) async fn handler_review_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -688,7 +737,6 @@ async fn require_developer_permission(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct MergeForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -704,16 +752,17 @@ pub(crate) struct MergeForm {
 
 pub(crate) async fn handler_merge_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
 
     // Fetched before merging (not after — `merge` doesn't touch
@@ -724,13 +773,13 @@ pub(crate) async fn handler_merge_post(
     // repo entirely, out of scope for this checkbox.
     let source_branch = domain::merge_request::get(&ctx, &resolved, form.number)
         .await
-        .map_err(AppError::bad_request)?
+        .map_err(mr_error(&headers, &name, form.number))?
         .filter(|mr| mr.source_repo == resolved.uid)
         .map(|mr| mr.source_branch);
 
     match domain::merge_request::merge(&ctx, &resolved, form.number, &me.username, form.strategy, locale)
         .await
-        .map_err(AppError::bad_request)?
+        .map_err(mr_error(&headers, &name, form.number))?
     {
         domain::merge_request::MergeOutcome::Merged(sha) => {
             gitquarry_core::storage::audit::record(
@@ -768,7 +817,6 @@ pub(crate) async fn handler_merge_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct EditPrMetadataForm {
-    repo: String,
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -793,16 +841,17 @@ pub(crate) struct EditPrMetadataForm {
 /// closed/merged MRs aren't editable even by the author or a maintainer.
 pub(crate) async fn handler_edit_metadata_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<EditPrMetadataForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::edit_metadata(
@@ -819,9 +868,9 @@ pub(crate) async fn handler_edit_metadata_post(
         locale,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -841,23 +890,24 @@ pub(crate) async fn handler_edit_metadata_post(
 
 pub(crate) async fn handler_mark_draft_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::mark_draft(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -880,23 +930,24 @@ pub(crate) async fn handler_mark_draft_post(
 
 pub(crate) async fn handler_mark_ready_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<MergeActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
     let cas = domain::merge_request::mark_ready(&ctx, &resolved, form.number, locale)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(mr_error(&headers, &name, form.number))?;
     if cas == Cas::Conflict {
-        return Err(AppError::bad_request(anyhow::anyhow!(
+        return Err(mr_error(&headers, &name, form.number)(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::cas_conflict(locale)
         )));
@@ -919,7 +970,6 @@ pub(crate) async fn handler_mark_ready_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct BulkPrActionForm {
-    repo: String,
     repo_uid: String,
     /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
     /// repeated once per selected row — same shape
@@ -939,23 +989,27 @@ pub(crate) struct BulkPrActionForm {
 /// `reopen` just errors for that one number, which this loop ignores).
 pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<BulkPrActionForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, &form.repo_uid, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
 
     if !matches!(form.action.as_str(), "close" | "reopen") {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::unknown_action(locale, &form.action)
-        )));
+        // Back to the list this batch was selected on -- there's no single
+        // MR page to return to here.
+        return Err(AppError::flash_back(
+            &headers,
+            &format!("/{}?view=merges", url_encode(&name)),
+            anyhow::anyhow!("{}", gitquarry_i18n::shared::unknown_action(locale, &form.action)),
+        ));
     }
     let mut applied = 0usize;
     for number in &form.numbers {

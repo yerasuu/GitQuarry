@@ -26,10 +26,37 @@ on a per-release versioning scheme.
 
 ## Web UI & browsing
 
+- Every form target now carries the repo in its own URL
+  (`/_merges/merge/{repo}`, `/_releases/edit/{repo}`, `/_tags/delete/{repo}`,
+  ...), and answers a stray `GET` by sending the reader to that repo's page
+  instead of a blank 405. A rejected submit no longer strands the browser on
+  a URL that means nothing.
+- A rejected action explains itself on the page it sends you back to (the
+  merge request, the releases list) rather than on a bare error page — and a
+  merge request refused for a branch that isn't on the server re-offers the
+  branches that are.
+
 - cgit-inspired browsing UI covering summary, refs, tree, blob, log, commit
   diff, blame, and stats views.
 - Compare view between two arbitrary refs.
-- Commit signature verification badge.
+- Commit signature verification badge. It now says only what this instance
+  can stand behind: verified by a registered account's key, verified as
+  built by this instance, or unverified. The old grades taken from git's own
+  check against the server's system keyring ("valid but untrusted",
+  "invalid", "revoked") are gone — this process never populates that
+  keyring, so they asserted more than had actually been checked. A verdict
+  not yet computed also shows as unverified until it is.
+- A commit whose diff runs past the page's ceiling renders the part that
+  fits and links to the raw patch for the rest.
+- Syntax highlighting (blob view, every diff view, and markdown fenced code
+  blocks) is client-side now, via a vendored `highlight.js` — covers far
+  more languages than the old server-side highlighter did, and a blob's
+  `#L42` line permalinks come from the same pass instead of a bespoke
+  per-line table.
+- Side-by-side diff view reworked to match GitHub's split layout:
+  independent line numbers on each side, a fixed 50/50 column split
+  regardless of content length, and a long line wraps instead of forcing a
+  horizontal scrollbar.
 - Create-tag form on the refs tab.
 - Markdown rendering gained syntax-highlighted fenced code blocks and
   GitHub-style alert blockquotes (note/tip/important/warning/caution) in
@@ -178,6 +205,9 @@ on a per-release versioning scheme.
   it unbounded.
 - `gitquarry backup`/`gitquarry restore` operator commands, and a matching
   backup settings section in the web UI to configure and trigger it.
+- `default_bucket` in `gitquarry.toml` names the bucket the instance serves,
+  so extra `[buckets.*]` sections can exist purely as backup destinations or
+  mirror targets without every command needing `--bucket`.
 
 ## Search
 

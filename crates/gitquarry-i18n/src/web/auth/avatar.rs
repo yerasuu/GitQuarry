@@ -1,5 +1,3 @@
-//! `webui::auth::web::avatar`'s page copy.
-
 use super::super::super::{Locale, msg};
 
 msg!(heading() { Locale::Es => "avatar", Locale::En => "avatar" });

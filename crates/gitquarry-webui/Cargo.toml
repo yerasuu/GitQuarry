@@ -17,7 +17,7 @@ gitquarry-wire = { path = "../gitquarry-wire" }
 # Storage engine, direct dep for `s3db::RequestCache` (the per-request
 # read cache `webui::request_cache_middleware` scopes) -- see
 # gitquarry-core/Cargo.toml for why this is a git dependency pinned by tag.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.3", features = ["streaming"] }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
 
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 futures = "0.3.33"
@@ -30,9 +30,6 @@ tower-http = { version = "0.6.9", default-features = false, features = ["compres
 maud = { version = "0.27.0", features = ["axum"] }
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
 pulldown-cmark = "0.13.4"
-syntect = { version = "5.3.0", default-features = false, features = [
-    "default-fancy",
-] }
 # Outbound HTTP to gitquarry-federation's loopback API (peer browse
 # lookups, MR-proxy) -- rustls-only, matches gitquarry-core's own pin.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
@@ -51,6 +48,7 @@ anyhow = "1.0.104"
 rand = "0.10.2"
 async-trait = "0.1.91"
 base64 = "0.23.1"
+lru = "0.18.2"
 sha2 = "0.11.0"
 tempfile = "3.27.0"
 tracing = "0.1.44"

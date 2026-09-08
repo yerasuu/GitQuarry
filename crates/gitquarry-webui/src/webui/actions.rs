@@ -42,7 +42,7 @@ pub(crate) fn star_button_html(
         // `data-async-extra-target`), so a wrong optimistic guess (a lost
         // CAS race, a second tab) self-corrects within the same round trip
         // instead of drifting.
-        form method="post" action=(favorites_url) style="display:inline" data-async
+        form method="post" action=(favorites_url) class="inline-form" data-async
             data-async-extra-target=(stats_target)
             data-toggle-label=(toggle_label) data-optimistic-target=(count_target) data-optimistic-delta=(delta) {
             (maud::PreEscaped(csrf_html))
@@ -53,7 +53,6 @@ pub(crate) fn star_button_html(
             // element instead of the URL string, and `fetch()` silently
             // stringifies it to `"[object HTMLInputElement]"`, 404-ing.
             input type="hidden" name="star_action" value="toggle_star";
-            input type="hidden" name="repo" value=(repo_name);
             input type="hidden" name="return_to" value=(format!("/{}", url_encode(repo_name)));
             button type="submit" class="action-btn" {
                 (crate::webui::icons::star()) " " span class="btn-label" { (label) }
@@ -114,11 +113,10 @@ pub(crate) fn watch_button_html(
         // Optimistic label/count flip -- see `star_button_html`'s own doc
         // comment on `data-toggle-label`/`data-optimistic-target`/
         // `data-optimistic-delta`.
-        form method="post" action="/_watch" style="display:inline" data-async
+        form method="post" action=(format!("/_watch/{}", crate::webui::url_encode(repo_name))) class="inline-form" data-async
             data-async-extra-target=(stats_target)
             data-toggle-label=(toggle_label) data-optimistic-target=(count_target) data-optimistic-delta=(delta) {
             (maud::PreEscaped(csrf_html))
-            input type="hidden" name="repo" value=(repo_name);
             button type="submit" class="action-btn" {
                 (crate::webui::icons::eye()) " " span class="btn-label" { (label) }
             }

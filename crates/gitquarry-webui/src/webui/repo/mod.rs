@@ -22,6 +22,7 @@ mod compare;
 pub mod components;
 #[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod components;
+mod diff;
 pub(crate) mod log;
 #[cfg(any(test, feature = "test-util"))]
 pub mod merges;
@@ -112,6 +113,13 @@ pub(crate) const SUMMARY_REFS_LIMIT: usize = 5;
 /// memory and highlighting/escaping it multiplies its size several times
 /// over. `export::plain` has its own, larger cap for raw downloads.
 const MAX_BLOB_BYTES: u64 = 1 << 20;
+/// How much of a commit's patch the commit page renders before handing the
+/// reader the raw patch instead. Same reasoning as [`MAX_BLOB_BYTES`] and
+/// the same order of magnitude — escaping and colorizing a diff several
+/// times its own size, then asking a browser to lay it out, is the cost
+/// being bounded, not git's own work. `export::patch`/`export::rawdiff`
+/// stay uncapped.
+const MAX_DIFF_BYTES: u64 = 512 << 10;
 
 /// One index row's worth of `RepoConfig`, not the whole thing: the index
 /// only ever needs these three, and threading the full config through would
@@ -380,7 +388,7 @@ pub(crate) async fn handler_index(
                         div class="repo-card-meta" {
                             @if let Some(lang) = &repo.primary_language {
                                 span {
-                                    span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                    span class=(format!("lang-swatch {}", summary::language_class(lang))) {}
                                     (lang)
                                 }
                             }
@@ -423,7 +431,7 @@ pub(crate) async fn handler_index(
                     div class="rl-meta" {
                         @if let Some(lang) = &repo.primary_language {
                             span {
-                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
+                                span class=(format!("lang-swatch {}", summary::language_class(lang))) {}
                                 (lang)
                             }
                         }
@@ -851,7 +859,7 @@ pub(crate) async fn handler_repo(
     }
 
     let topnav = login::topnav(&ctx, &headers).await;
-    let mirror = ctx.open_mirror(&resolved).await?;
+    let mirror = ctx.open_mirror_read(&resolved).await?;
 
     let Some(head) = git::browse::resolve_head(&mirror.path).await? else {
         let size = crate::webui::effective_text_size(&ctx, &headers).await;
@@ -1052,8 +1060,8 @@ async fn render_repo_view(
         }
         "commit" => {
             let sha = require_sha(params, locale)?;
-            let (info, diff) = git::browse::show_commit(&mirror.path, sha).await?;
-            render_commit(ctx, &mirror.path, &name, &info, &diff, headers).await?
+            let (info, diff, truncated) = git::browse::show_commit_capped(&mirror.path, sha, MAX_DIFF_BYTES).await?;
+            render_commit(ctx, &mirror.path, &name, &info, &diff, truncated, headers).await?
         }
         "compare" => {
             let base = params

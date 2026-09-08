@@ -3,7 +3,7 @@
 //! commit/compare. Anything used by exactly one view lives in that view's
 //! own file instead.
 
-use crate::webui::{csrf_field, esc, repo_link};
+use crate::webui::{csrf_field, esc, repo_link, url_encode};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::{access, entities::User};
@@ -14,6 +14,37 @@ use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
 use gitquarry_i18n::web::repo::components as t;
 use maud::{Markup, PreEscaped, html};
+
+/// The `.w-*` class for a percentage, clamped to the whole-percent rules
+/// `style/utilities.css` defines.
+///
+/// A width can't be a `style` attribute — the CSP allows no inline style,
+/// and a nonce covers `<style>` elements, never attributes — so a bar
+/// segment picks the nearest class instead. Any non-zero share rounds up to
+/// at least `.w-1`: a language at 0.2% of a repo should read as a sliver,
+/// not vanish, and `.lang-bar`'s flex row absorbs the odd percent that
+/// rounding adds.
+pub(crate) fn width_class(percent: f64) -> &'static str {
+    if percent <= 0.0 {
+        return WIDTH_CLASSES[0];
+    }
+    WIDTH_CLASSES[percent.round().clamp(1.0, 100.0) as usize]
+}
+
+/// Written out rather than formatted per segment: these are the exact names
+/// `style/utilities.css` carries, and a `&'static str` costs no allocation
+/// on a page that renders a few hundred of them.
+const WIDTH_CLASSES: [&str; 101] = [
+    "w-0", "w-1", "w-2", "w-3", "w-4", "w-5", "w-6", "w-7", "w-8", "w-9", "w-10", "w-11", "w-12", "w-13", "w-14",
+    "w-15", "w-16", "w-17", "w-18", "w-19", "w-20", "w-21", "w-22", "w-23", "w-24", "w-25", "w-26", "w-27", "w-28",
+    "w-29", "w-30", "w-31", "w-32", "w-33", "w-34", "w-35", "w-36", "w-37", "w-38", "w-39", "w-40", "w-41", "w-42",
+    "w-43", "w-44", "w-45", "w-46", "w-47", "w-48", "w-49", "w-50", "w-51", "w-52", "w-53", "w-54", "w-55", "w-56",
+    "w-57", "w-58", "w-59", "w-60", "w-61", "w-62", "w-63", "w-64", "w-65", "w-66", "w-67", "w-68", "w-69", "w-70",
+    "w-71", "w-72", "w-73", "w-74", "w-75", "w-76", "w-77", "w-78", "w-79", "w-80", "w-81", "w-82", "w-83", "w-84",
+    "w-85", "w-86", "w-87", "w-88", "w-89", "w-90", "w-91", "w-92", "w-93", "w-94", "w-95", "w-96", "w-97", "w-98",
+    "w-99", "w-100",
+];
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
@@ -103,17 +134,30 @@ async fn avatars_for(
         let cipher = Arc::clone(&cipher);
         let git_dir = git_dir.to_path_buf();
         set.spawn(async move {
-            let signer = domain::commit_signature::verified_signer(
-                &backend,
-                &cipher,
-                &git_dir,
-                &sha,
-                signature_status,
-                &author_email,
-            )
-            .await
-            .ok()
-            .flatten();
+            // `cached_signer`, not `verified_signer`: rendering a page is a
+            // read, and the computing variant turned every uncached row
+            // into a bucket write plus a `gpg` spawn inside the request.
+            // A miss falls back to the neutral "signed" badge and is
+            // computed out of band, so the next view has the exact verdict.
+            let cached = domain::commit_signature::cached_signer(&backend, &cipher, &sha, signature_status)
+                .await
+                .ok()
+                .flatten();
+            let signer = match cached {
+                Some(signer) => signer,
+                // Miss: compute it out of band so the next view is a hit,
+                // and render this one with whatever the neutral badge says.
+                None => {
+                    domain::commit_signature::warm_signer(
+                        Arc::clone(&backend),
+                        Arc::clone(&cipher),
+                        git_dir.clone(),
+                        sha.clone(),
+                        author_email.clone(),
+                    );
+                    None
+                }
+            };
             (sha, author_email, signer)
         });
     }
@@ -210,11 +254,16 @@ fn author_cell(sha: &str, author_name: &str, signature_status: char, avatars: &A
 /// Compact signature badge for a commit-table row: `verified_by` is
 /// `Some(username)` only when [`AvatarMatches`]' `bool` was `true` for this
 /// sha (a real GPG check against that account's own registered keys, not
-/// just an author-email guess) — takes priority over `signature_status`
-/// (`%G?`) itself, since a git-side "good" grade alone doesn't say *which*
-/// gitquarry account signed it, if any. Empty for `'N'` (unsigned): no
-/// badge at all, same as the single-commit page's own
-/// `webui::repo::commit::signature_badge` treats it.
+/// just an author-email guess). `signature_status` only says whether a
+/// signature is there at all, so on its own it can never read as more than
+/// "unverified" — and empty for `'N'` (unsigned): no badge, same as the
+/// single-commit page's own `webui::repo::commit::signature_badge`.
+///
+/// "unverified" also covers a row whose verdict simply isn't computed yet
+/// (`domain::commit_signature::cached_signer` missed and
+/// `warm_signer` is filling it in) — indistinguishable here from one that
+/// was checked and matched nobody, and deliberately so: both mean this
+/// server is not vouching for the signature right now.
 fn signature_indicator(signature_status: char, verified_by: Option<&str>, instance_signed: bool) -> Markup {
     html! {
         @if let Some(username) = verified_by {
@@ -229,10 +278,8 @@ fn signature_indicator(signature_status: char, verified_by: Option<&str>, instan
             // apart.
             " " span class="badge accent" title="verified signature (built and signed by this instance)" { "verified" }
         } @else {
-            @match signature_status {
-                'B' | 'R' | 'Y' => { " " span class="badge danger" title="signature check failed" { "invalid" } }
-                'N' => {}
-                _ => { " " span class="muted" title="signed, but not by any registered account's key" { "unverified" } }
+            @if signature_status != 'N' {
+                " " span class="muted" title="signed, but not by any registered account's key" { "unverified" }
             }
         }
     }
@@ -404,193 +451,190 @@ fn decoration_badges(decoration: &str) -> Markup {
     }
 }
 
-/// Colors unified diff lines cgit-style: `+` green, `-` red, `@@ ... @@`
-/// blue, `+++`/`---` headers gray. Check order matters: `+++` also starts
-/// with `+`.
+/// Colors unified diff lines cgit-style: `+`/`-` lines get a tinted
+/// background (`diff-add-line`/`diff-del-line` — distinct from the
+/// `diff-add`/`diff-del` classes [`commit_table`] uses for its insertion/
+/// deletion count badges, an unrelated feature that keeps its own solid
+/// text color), `@@ ... @@` blue, `+++`/`---` headers gray. Line content is
+/// wrapped in `<code class="language-*">` (`super::diff::code_fragment`) so
+/// `highlight.js` (client-side, vendored) tokenizes it; the background tint
+/// keeps its `.hljs-*` colors visible on top instead of a solid block.
 #[cfg(any(test, feature = "test-util"))]
 pub fn color_diff(diff: &str) -> String {
-    let mut out = String::with_capacity(diff.len());
-    for line in diff.lines() {
-        let class = if line.starts_with("+++") || line.starts_with("---") {
-            "diff-meta"
-        } else if line.starts_with("@@") {
-            "diff-hunk"
-        } else if line.starts_with('+') {
-            "diff-add"
-        } else if line.starts_with('-') {
-            "diff-del"
-        } else {
-            ""
-        };
-        if class.is_empty() {
-            out.push_str(&esc(line));
-        } else {
-            out.push_str(&format!("<span class=\"{class}\">{}</span>", esc(line)));
-        }
-        out.push('\n');
-    }
-    out
+    color_diff_impl(diff)
 }
 #[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn color_diff(diff: &str) -> String {
+    color_diff_impl(diff)
+}
+
+fn color_diff_impl(diff: &str) -> String {
     let mut out = String::with_capacity(diff.len());
-    for line in diff.lines() {
-        let class = if line.starts_with("+++") || line.starts_with("---") {
-            "diff-meta"
-        } else if line.starts_with("@@") {
-            "diff-hunk"
-        } else if line.starts_with('+') {
-            "diff-add"
-        } else if line.starts_with('-') {
-            "diff-del"
-        } else {
-            ""
-        };
-        if class.is_empty() {
-            out.push_str(&esc(line));
-        } else {
-            out.push_str(&format!("<span class=\"{class}\">{}</span>", esc(line)));
+    for row in super::diff::parse(diff) {
+        match row {
+            super::diff::Row::Meta(l) => {
+                out.push_str("<span class=\"diff-meta\">");
+                out.push_str(&esc(l));
+                out.push_str("</span>");
+            }
+            super::diff::Row::Hunk(l) => {
+                out.push_str("<span class=\"diff-hunk\">");
+                out.push_str(&esc(l));
+                out.push_str("</span>");
+            }
+            super::diff::Row::Line { class, path, text, .. } => {
+                match class {
+                    "diff-add" => out.push_str("<span class=\"diff-add-line\">"),
+                    "diff-del" => out.push_str("<span class=\"diff-del-line\">"),
+                    _ => {}
+                }
+                out.push(super::diff::prefix_char(class));
+                out.push_str(&super::diff::code_fragment(path, text));
+                if !class.is_empty() {
+                    out.push_str("</span>");
+                }
+            }
         }
         out.push('\n');
     }
     out
 }
 
-/// One row of a [`side_by_side_diff`] table, built while scanning the
-/// unified diff line by line.
-enum SplitRow<'a> {
+/// One row of a [`side_by_side_diff`] table, built while scanning
+/// [`super::diff::parse`]'s rows. Cells carry pre-escaped, `<code
+/// class="language-*">`-wrapped HTML (`super::diff::code_fragment`), so
+/// rendering uses `PreEscaped` rather than letting maud re-escape it.
+enum SplitRow {
     /// A full-width row: `diff --git`/`index`/mode lines, `+++`/`---`
-    /// headers, "\ No newline at end of file" — a two-column layout has no
+    /// headers, "\ No newline at end of file" — a four-column layout has no
     /// natural left/right split for these.
-    Full(&'a str),
+    Full(String),
     /// A `@@ ...@@` hunk header — full-width too, but its own color, same
     /// distinction [`color_diff`] draws.
-    Hunk(&'a str),
-    /// An unchanged line, same content on both sides (leading diff space
-    /// stripped for display).
-    Context(&'a str),
+    Hunk(String),
+    /// An unchanged line, same content and (necessarily identical count,
+    /// possibly different *value* — earlier adds/dels in the same hunk can
+    /// have shifted one side already) line number on both sides.
+    Context { old: u32, new: u32, html: String },
     /// A run of consecutive removals paired against a run of consecutive
-    /// additions (git's own diff already groups a hunk's changes this way).
-    /// Zipped row by row; the shorter side pads with blank cells.
-    Change(Vec<&'a str>, Vec<&'a str>),
+    /// additions (git's own diff already groups a hunk's changes this way),
+    /// each with its own side's line number. Zipped row by row; the shorter
+    /// side pads with a blank gutter and cell, GitHub-style.
+    Change(Vec<(u32, String)>, Vec<(u32, String)>),
 }
 
-/// Same diff text [`color_diff`] renders as a single `+`/`-` stream, laid
-/// out as an old-vs-new table instead: consecutive `-` lines paired against
-/// the following consecutive `+` lines, one pair per row. This is a purely
-/// positional pairing (git's raw diff carries no line-to-line correspondence
-/// within a hunk) — it's the same convention GitHub/GitLab's split view
-/// uses, not a real similarity match, so an unrelated removal and addition
-/// can end up side by side on the same row.
+/// Same diff [`color_diff`] renders as a single `+`/`-` stream, laid out as
+/// an old-vs-new table instead, each side with its own line-number gutter
+/// (GitHub/GitLab's own split-view convention): consecutive `-` lines
+/// paired against the following consecutive `+` lines, one pair per row.
+/// This is a purely positional pairing (git's raw diff carries no
+/// line-to-line correspondence within a hunk), not a real similarity match,
+/// so an unrelated removal and addition can end up side by side on the same
+/// row.
 #[cfg(any(test, feature = "test-util"))]
 pub fn side_by_side_diff(diff: &str) -> Markup {
-    let mut rows: Vec<SplitRow> = Vec::new();
-    let mut dels: Vec<&str> = Vec::new();
-    let mut adds: Vec<&str> = Vec::new();
+    side_by_side_diff_impl(diff)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+pub(super) fn side_by_side_diff(diff: &str) -> Markup {
+    side_by_side_diff_impl(diff)
+}
 
-    fn flush_change<'a>(rows: &mut Vec<SplitRow<'a>>, dels: &mut Vec<&'a str>, adds: &mut Vec<&'a str>) {
+fn side_by_side_diff_impl(diff: &str) -> Markup {
+    let mut rows: Vec<SplitRow> = Vec::new();
+    let mut dels: Vec<(u32, String)> = Vec::new();
+    let mut adds: Vec<(u32, String)> = Vec::new();
+
+    fn flush_change(rows: &mut Vec<SplitRow>, dels: &mut Vec<(u32, String)>, adds: &mut Vec<(u32, String)>) {
         if !dels.is_empty() || !adds.is_empty() {
             rows.push(SplitRow::Change(std::mem::take(dels), std::mem::take(adds)));
         }
     }
 
-    for line in diff.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        } else if line.starts_with("@@") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Hunk(line));
-        } else if let Some(rest) = line.strip_prefix('+') {
-            adds.push(rest);
-        } else if let Some(rest) = line.strip_prefix('-') {
-            dels.push(rest);
-        } else if let Some(rest) = line.strip_prefix(' ') {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Context(rest));
-        } else {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        }
-    }
-    flush_change(&mut rows, &mut dels, &mut adds);
-
-    html! {
-        table class="diff-split" {
-            @for row in &rows {
-                @match row {
-                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="2" { (l) } }
-                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="2" { (l) } }
-                    SplitRow::Context(l) => tr { td { (l) } td { (l) } }
-                    SplitRow::Change(dels, adds) => {
-                        @for i in 0..dels.len().max(adds.len()) {
-                            tr {
-                                @match dels.get(i) {
-                                    Some(d) => td class="diff-del" { (d) },
-                                    None => td {},
-                                }
-                                @match adds.get(i) {
-                                    Some(a) => td class="diff-add" { (a) },
-                                    None => td {},
-                                }
-                            }
-                        }
+    for row in super::diff::parse(diff) {
+        match row {
+            super::diff::Row::Meta(l) => {
+                flush_change(&mut rows, &mut dels, &mut adds);
+                rows.push(SplitRow::Full(esc(l)));
+            }
+            super::diff::Row::Hunk(l) => {
+                flush_change(&mut rows, &mut dels, &mut adds);
+                rows.push(SplitRow::Hunk(esc(l)));
+            }
+            super::diff::Row::Line {
+                old,
+                new,
+                class,
+                path,
+                text,
+            } => {
+                let fragment = super::diff::code_fragment(path, text);
+                match class {
+                    "diff-add" => adds.push((
+                        new.expect("diff-add rows always carry a new-side line number"),
+                        fragment,
+                    )),
+                    "diff-del" => dels.push((
+                        old.expect("diff-del rows always carry an old-side line number"),
+                        fragment,
+                    )),
+                    _ => {
+                        flush_change(&mut rows, &mut dels, &mut adds);
+                        rows.push(SplitRow::Context {
+                            old: old.expect("context rows always carry an old-side line number"),
+                            new: new.expect("context rows always carry a new-side line number"),
+                            html: fragment,
+                        });
                     }
                 }
             }
         }
     }
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn side_by_side_diff(diff: &str) -> Markup {
-    let mut rows: Vec<SplitRow> = Vec::new();
-    let mut dels: Vec<&str> = Vec::new();
-    let mut adds: Vec<&str> = Vec::new();
-
-    fn flush_change<'a>(rows: &mut Vec<SplitRow<'a>>, dels: &mut Vec<&'a str>, adds: &mut Vec<&'a str>) {
-        if !dels.is_empty() || !adds.is_empty() {
-            rows.push(SplitRow::Change(std::mem::take(dels), std::mem::take(adds)));
-        }
-    }
-
-    for line in diff.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        } else if line.starts_with("@@") {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Hunk(line));
-        } else if let Some(rest) = line.strip_prefix('+') {
-            adds.push(rest);
-        } else if let Some(rest) = line.strip_prefix('-') {
-            dels.push(rest);
-        } else if let Some(rest) = line.strip_prefix(' ') {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Context(rest));
-        } else {
-            flush_change(&mut rows, &mut dels, &mut adds);
-            rows.push(SplitRow::Full(line));
-        }
-    }
     flush_change(&mut rows, &mut dels, &mut adds);
 
     html! {
         table class="diff-split" {
+            // `table-layout: fixed` (base.css) makes these authoritative
+            // instead of a mere hint: without it, an unwrapped long line
+            // (`white-space: pre`, no wrap) grows its own column past its
+            // share at the other columns' expense, since auto layout sizes
+            // columns from content width first. Fixed layout reads column
+            // widths from the first row only, which here can just as
+            // easily be a `colspan="4"` header row — a `colgroup` is what
+            // pins them regardless of which row happens to render first.
+            colgroup { col class="w-5"; col class="w-45"; col class="w-5"; col class="w-45"; }
             @for row in &rows {
                 @match row {
-                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="2" { (l) } }
-                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="2" { (l) } }
-                    SplitRow::Context(l) => tr { td { (l) } td { (l) } }
+                    SplitRow::Full(l) => tr { td class="diff-meta" colspan="4" { (PreEscaped(l)) } }
+                    SplitRow::Hunk(l) => tr { td class="diff-hunk" colspan="4" { (PreEscaped(l)) } }
+                    SplitRow::Context { old, new, html } => tr {
+                        td class="lineno" { (old) }
+                        td { (PreEscaped(html)) }
+                        td class="lineno" { (new) }
+                        td { (PreEscaped(html)) }
+                    }
                     SplitRow::Change(dels, adds) => {
                         @for i in 0..dels.len().max(adds.len()) {
                             tr {
                                 @match dels.get(i) {
-                                    Some(d) => td class="diff-del" { (d) },
-                                    None => td {},
+                                    Some((n, d)) => {
+                                        td class="lineno" { (n) }
+                                        td class="diff-del-line" { (PreEscaped(d)) }
+                                    }
+                                    None => {
+                                        td class="lineno" {}
+                                        td {}
+                                    }
                                 }
                                 @match adds.get(i) {
-                                    Some(a) => td class="diff-add" { (a) },
-                                    None => td {},
+                                    Some((n, a)) => {
+                                        td class="lineno" { (n) }
+                                        td class="diff-add-line" { (PreEscaped(a)) }
+                                    }
+                                    None => {
+                                        td class="lineno" {}
+                                        td {}
+                                    }
                                 }
                             }
                         }
@@ -641,11 +685,12 @@ pub(crate) async fn resolve_number_mentions(
 /// override, see `i18n::shared::not_comment_author`'s own doc comment) and
 /// `can_delete` (author-only too, but `Developer`+ on the repo also
 /// qualifies — moderating someone else's comment away is different from
-/// rewriting it) gate the edit/delete forms independently. `mutation_prefix`
-/// is `"/_issues"` or `"/_merges"` — the two POST targets are
-/// `{mutation_prefix}/comment/edit` and `{mutation_prefix}/comment/delete`,
-/// same route-naming convention the existing `/_issues/comment` and
-/// `/_merges/comment` (create) routes use. Used by an MR's own flat thread and
+/// rewriting it) gate the edit/delete forms independently.
+/// `mutation_prefix` is `"/_issues"` or `"/_merges"`; the two POST targets
+/// are `{mutation_prefix}/comment_edit/{repo}` and
+/// `{mutation_prefix}/comment_delete/{repo}`, the same "action first, repo
+/// as the trailing catch-all" shape the rest of those routes use (see
+/// `merges::mutation_url` for why the repo is in the path). Used by an MR's own flat thread and
 /// its annotated inline diff comments ([`super::merges::annotated_diff`]); an
 /// issue's own comments render this inline instead, predating this shared
 /// extraction.
@@ -670,9 +715,8 @@ pub(crate) fn comment_edit_delete_controls(
         @if can_edit {
             details {
                 summary { (t::edit_comment_button(locale)) }
-                form method="post" action=(format!("{mutation_prefix}/comment/edit")) {
+                form method="post" action=(format!("{mutation_prefix}/comment_edit/{}", url_encode(repo_name))) {
                     (PreEscaped(&csrf_html))
-                    input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="repo_uid" value=(repo_uid);
                     input type="hidden" name="number" value=(number);
                     input type="hidden" name="comment_id" value=(comment_id);
@@ -682,9 +726,8 @@ pub(crate) fn comment_edit_delete_controls(
             }
         }
         @if can_delete {
-            form method="post" action=(format!("{mutation_prefix}/comment/delete")) style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
+            form method="post" action=(format!("{mutation_prefix}/comment_delete/{}", url_encode(repo_name))) class="inline-form" data-confirm=(t::delete_comment_confirm(locale)) {
                 (PreEscaped(&csrf_html))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);
                 input type="hidden" name="comment_id" value=(comment_id);

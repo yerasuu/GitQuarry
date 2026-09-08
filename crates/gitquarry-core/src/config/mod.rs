@@ -49,6 +49,15 @@ pub struct BucketConfig {
 pub struct RawConfig {
     #[serde(default)]
     pub buckets: BTreeMap<String, BucketConfig>,
+    /// Which bucket this instance serves when no `--bucket` is passed. Only
+    /// meaningful with several sections configured, which is the normal
+    /// shape once a bucket exists purely as a backup destination
+    /// (`backup::dest::Dest::Bucket`) or a mirror target: those are never
+    /// served, so leaving the choice to "there is only one" stopped being
+    /// enough. Must name a configured bucket — a typo here would otherwise
+    /// only surface at startup as "bucket not configured".
+    #[serde(default)]
+    pub default_bucket: Option<String>,
     /// Whether `git push` to a repo name that doesn't exist yet creates it
     /// (same as `webui::repo_new`, just reached via `git push` instead of
     /// `/_new`). Defaults to off: a typo'd repo name in the push URL should
@@ -80,6 +89,7 @@ struct RawConfigOut<'a> {
 #[derive(Debug)]
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
+    default_bucket: Option<String>,
     allow_push_create: bool,
     trust_forwarded_for: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
@@ -111,8 +121,18 @@ impl Config {
                 );
             }
         }
+        if let Some(name) = &raw.default_bucket
+            && !raw.buckets.contains_key(name)
+        {
+            bail!(
+                "default_bucket = \"{name}\" in {} names no configured bucket (add [buckets.{name}] \
+                 or fix the name)",
+                path.display()
+            );
+        }
         Ok(Config {
             buckets: raw.buckets,
+            default_bucket: raw.default_bucket,
             allow_push_create: raw.allow_push_create,
             trust_forwarded_for: raw.trust_forwarded_for,
             path: path.to_path_buf(),
@@ -137,9 +157,15 @@ impl Config {
         resolve_path()
     }
 
-    /// If the config has exactly one bucket configured, its name. Lets the
-    /// server start without passing `--bucket` when there's no ambiguity.
-    pub fn only_bucket_name(&self) -> Option<&str> {
+    /// Which bucket to work on when no `--bucket` was given: whatever
+    /// `default_bucket` names, or the single configured bucket when there's
+    /// only one and so no ambiguity. `None` with several buckets and no
+    /// `default_bucket` — the caller turns that into the error telling the
+    /// operator to pick.
+    pub fn default_bucket_name(&self) -> Option<&str> {
+        if let Some(name) = &self.default_bucket {
+            return Some(name.as_str());
+        }
         match self.buckets.len() {
             1 => self.buckets.keys().next().map(String::as_str),
             _ => None,

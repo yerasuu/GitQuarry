@@ -16,7 +16,6 @@ use gitquarry_i18n::web::repo::merges as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashSet;
 
-/// One rendered diff row.
 #[cfg(any(test, feature = "test-util"))]
 pub enum Row<'a> {
     /// `diff --git`, `index`, mode, `---`/`+++` headers — nothing to anchor.
@@ -62,36 +61,16 @@ pub(super) struct Annotated {
 }
 
 /// The path a `+++ b/<path>` / `--- a/<path>` header names, or `None` for
-/// `/dev/null` (a pure add or delete has one of the two).
+/// `/dev/null` (a pure add or delete has one of the two). Delegates to
+/// `super::super::diff::header_path` — the same parsing `color_diff`/
+/// `side_by_side_diff` need, kept in one place.
 #[cfg(any(test, feature = "test-util"))]
 pub fn header_path(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("+++ ").or_else(|| line.strip_prefix("--- "))?;
-    if rest == "/dev/null" {
-        return None;
-    }
-    // git prefixes with `a/`/`b/` unless `--no-prefix`; a trailing tab
-    // introduces the timestamp field some diff generators append.
-    let rest = rest.split('\t').next().unwrap_or(rest);
-    Some(
-        rest.strip_prefix("a/")
-            .or_else(|| rest.strip_prefix("b/"))
-            .unwrap_or(rest),
-    )
+    super::super::diff::header_path(line)
 }
 #[cfg(not(any(test, feature = "test-util")))]
 fn header_path(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("+++ ").or_else(|| line.strip_prefix("--- "))?;
-    if rest == "/dev/null" {
-        return None;
-    }
-    // git prefixes with `a/`/`b/` unless `--no-prefix`; a trailing tab
-    // introduces the timestamp field some diff generators append.
-    let rest = rest.split('\t').next().unwrap_or(rest);
-    Some(
-        rest.strip_prefix("a/")
-            .or_else(|| rest.strip_prefix("b/"))
-            .unwrap_or(rest),
-    )
+    super::super::diff::header_path(line)
 }
 
 /// The `-old_start` / `+new_start` of an `@@ -1,2 +3,4 @@` header. `None`
@@ -296,9 +275,8 @@ fn form_row(
     html! {
         tr class="diff-comment" {
             td colspan="3" {
-                form method="post" action="/_merges/comment" {
+                form method="post" action=(super::mutation_url("comment", repo_name)) {
                     (PreEscaped(csrf_field(headers)))
-                    input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="repo_uid" value=(repo_uid);
                     input type="hidden" name="number" value=(number);
                     input type="hidden" name="anchor_path" value=(anchor.path);
@@ -395,6 +373,21 @@ fn advance(counter: &mut i32) -> i32 {
     *counter
 }
 
+/// `class` ("diff-add"/"diff-del"/"") as stored on a [`Row::Line`], for
+/// anchor derivation and comment matching, mapped to the CSS class that
+/// actually renders it: added/removed lines get a tinted *background*
+/// (`diff-add-line`/`diff-del-line`) — not `components::color_diff`'s
+/// `diff-add`/`diff-del` classes, which stay solid-text for the unrelated
+/// insertion/deletion count badges in `commit_table` — so `highlight.js`'s
+/// token colors show through.
+fn line_css_class(class: &str) -> &'static str {
+    match class {
+        "diff-add" => "diff-add-line",
+        "diff-del" => "diff-del-line",
+        _ => "",
+    }
+}
+
 fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
     let rows = parse(diff);
     let mut placed = HashSet::new();
@@ -420,7 +413,7 @@ fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) ->
                         tr data-rows-group=(format!("hunk-{hunk_index}")) {
                             td class="lineno" { @if let Some(n) = old { (n) } }
                             td class="lineno" { @if let Some(n) = new { (n) } }
-                            td class=(*class) {
+                            td class=(line_css_class(class)) {
                                 @if view.can_comment {
                                     a class="line-comment-link"
                                       href=(comment_link(view.repo_name, view.number, anchor)) {
@@ -428,7 +421,7 @@ fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) ->
                                     }
                                     " "
                                 }
-                                (text)
+                                (PreEscaped(super::super::diff::code_fragment(&anchor.path, text)))
                             }
                         }
                         @for (index, (comment_id, comment)) in comments.iter().enumerate() {
