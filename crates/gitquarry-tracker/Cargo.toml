@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-tracker"
-version = "0.3.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Issue tracker + kanban board + milestones for gitquarry — its own optional binary, talks to gitquarry-core only over loopback HTTP (docs/tracker-binary-split-concept.md)"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 gitquarry-wire = { path = "../gitquarry-wire" }
@@ -12,8 +12,8 @@ gitquarry-i18n = { path = "../gitquarry-i18n" }
 
 # Same s3db pin as gitquarry-core — must stay in lockstep, never a floating
 # branch (see gitquarry-core/Cargo.toml's own comment).
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
-s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "time", "fs"] }
 axum = "0.8.9"

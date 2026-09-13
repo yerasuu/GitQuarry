@@ -18,7 +18,7 @@ use gitquarry_wire::tracker::{CardRefDto, ReorderDirection};
 fn tracker_unavailable(locale: Locale) -> AppError {
     AppError::service_unavailable(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::tracker_not_configured(locale)
+        gitquarry_i18n::shared::tracker::tracker_not_configured(locale)
     ))
 }
 
@@ -31,7 +31,7 @@ async fn resolve_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     Ok((resolved, name))
@@ -52,7 +52,7 @@ async fn require_developer_permission(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok(())
@@ -187,19 +187,19 @@ pub(crate) async fn handler_add_card_post(
             let number = form.value.trim().parse::<u64>().map_err(|_| {
                 AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::board_card_target_not_found(locale)
+                    gitquarry_i18n::shared::tracker::board_card_target_not_found(locale)
                 ))
             })?;
             CardRefDto::Issue(number)
         }
-        "pull_request" => {
+        "merge_request" => {
             let number = form.value.trim().parse::<u64>().map_err(|_| {
                 AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::board_card_target_not_found(locale)
+                    gitquarry_i18n::shared::tracker::board_card_target_not_found(locale)
                 ))
             })?;
-            CardRefDto::PullRequest(number)
+            CardRefDto::MergeRequest(number)
         }
         _ => CardRefDto::Note(form.value.clone()),
     };

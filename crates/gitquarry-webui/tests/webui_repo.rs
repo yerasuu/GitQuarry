@@ -34,7 +34,10 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         tracker: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -77,20 +80,30 @@ async fn renders_full_repo_views_against_real_git() {
 
     let ctx = test_ctx(dir.path());
 
-    let tree = render_tree(&ctx, &git_dir, "repo", "main", "", gitquarry_i18n::Locale::En)
+    let tree = render_tree(&ctx, &git_dir, "repo", None, "main", "", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
     assert!(tree.contains("README.md"), "tree: {tree}");
     assert!(tree.contains("src.rs"), "tree: {tree}");
 
-    let blob = render_blob(&git_dir, "repo", "main", "src.rs", gitquarry_i18n::Locale::En)
+    let blob = render_blob(&git_dir, "repo", None, "main", "src.rs", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
     assert!(blob.contains("fn"), "blob: {blob}");
 
-    let log = render_log(&ctx, &git_dir, "repo", "main", "", None, 0, gitquarry_i18n::Locale::En)
-        .await
-        .unwrap();
+    let log = render_log(
+        &ctx,
+        &git_dir,
+        "repo",
+        None,
+        "main",
+        "",
+        None,
+        0,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    .unwrap();
     assert!(log.contains("initial commit"), "log: {log}");
     let refs = render_refs(
         &ctx,
@@ -115,9 +128,17 @@ async fn renders_full_repo_views_against_real_git() {
     let commits = git::browse::log(&git_dir, "main", 1, None).await.unwrap();
     let sha = commits[0].sha.clone();
     let (info, diff) = git::browse::show_commit(&git_dir, &sha).await.unwrap();
-    let commit_html = render_commit(&ctx, &git_dir, "repo", &info, &diff, &axum::http::HeaderMap::new())
-        .await
-        .unwrap();
+    let commit_html = render_commit(
+        &ctx,
+        &git_dir,
+        "repo",
+        &info,
+        &diff,
+        false,
+        &axum::http::HeaderMap::new(),
+    )
+    .await
+    .unwrap();
     assert!(commit_html.contains("initial commit"), "commit: {commit_html}");
     // Split view toggled on: a real `git show` diff, laid out side by side.
     assert!(
@@ -130,14 +151,14 @@ async fn renders_full_repo_views_against_real_git() {
     let (info2, diff2) = git::browse::show_commit(&git_dir, "main").await.unwrap();
     let mut split_cookie = axum::http::HeaderMap::new();
     split_cookie.insert(axum::http::header::COOKIE, "diff-view=split".parse().unwrap());
-    let split_html = render_commit(&ctx, &git_dir, "repo", &info2, &diff2, &split_cookie)
+    let split_html = render_commit(&ctx, &git_dir, "repo", &info2, &diff2, false, &split_cookie)
         .await
         .unwrap();
     assert!(split_html.contains("diff-split"), "split: {split_html}");
     assert!(split_html.contains("println"), "split: {split_html}");
     assert!(split_html.contains("size-btn active"), "split: {split_html}");
 
-    let blame = render_blame(&git_dir, "repo", "main", "src.rs", gitquarry_i18n::Locale::En)
+    let blame = render_blame(&git_dir, "repo", None, "main", "src.rs", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
     assert!(blame.contains("Test Author"), "blame: {blame}");
@@ -187,7 +208,7 @@ async fn renders_full_repo_views_against_real_git() {
         "application/gzip"
     );
 
-    let atom_resp = export::atom(&git_dir, "repo", "main").await.unwrap();
+    let atom_resp = export::atom(&git_dir, "repo", None, "main").await.unwrap();
     assert_eq!(
         atom_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
         "application/atom+xml; charset=utf-8"

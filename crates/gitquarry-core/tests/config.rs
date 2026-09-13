@@ -55,3 +55,93 @@ fn rejects_a_bucket_missing_the_driver_tag() {
     "#;
     assert!(toml::from_str::<RawConfig>(toml).is_err());
 }
+
+/// Two buckets is the normal shape once one exists purely as a backup
+/// destination or a mirror target, so the served one has to be named.
+#[test]
+fn default_bucket_picks_the_served_one_among_several() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gitquarry.toml");
+    std::fs::write(
+        &path,
+        r#"
+        default_bucket = "main"
+
+        [buckets.main]
+        driver = "local"
+        bucket = "/tmp/main"
+        passphrase = "hunter2"
+
+        [buckets.offsite]
+        driver = "local"
+        bucket = "/tmp/offsite"
+        passphrase = "hunter2"
+    "#,
+    )
+    .unwrap();
+    let cfg = Config::load_from(&path).unwrap();
+    assert_eq!(cfg.default_bucket_name(), Some("main"));
+}
+
+#[test]
+fn several_buckets_without_a_default_leave_the_choice_to_the_caller() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gitquarry.toml");
+    std::fs::write(
+        &path,
+        r#"
+        [buckets.main]
+        driver = "local"
+        bucket = "/tmp/main"
+        passphrase = "hunter2"
+
+        [buckets.offsite]
+        driver = "local"
+        bucket = "/tmp/offsite"
+        passphrase = "hunter2"
+    "#,
+    )
+    .unwrap();
+    let cfg = Config::load_from(&path).unwrap();
+    assert_eq!(cfg.default_bucket_name(), None);
+}
+
+#[test]
+fn a_single_bucket_still_needs_no_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gitquarry.toml");
+    std::fs::write(
+        &path,
+        r#"
+        [buckets.main]
+        driver = "local"
+        bucket = "/tmp/main"
+        passphrase = "hunter2"
+    "#,
+    )
+    .unwrap();
+    let cfg = Config::load_from(&path).unwrap();
+    assert_eq!(cfg.default_bucket_name(), Some("main"));
+}
+
+/// A typo'd default would otherwise only surface at startup, as the far
+/// less obvious "bucket 'mian' not configured".
+#[test]
+fn rejects_a_default_bucket_naming_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gitquarry.toml");
+    std::fs::write(
+        &path,
+        r#"
+        default_bucket = "mian"
+
+        [buckets.main]
+        driver = "local"
+        bucket = "/tmp/main"
+        passphrase = "hunter2"
+    "#,
+    )
+    .unwrap();
+    let err = Config::load_from(&path).unwrap_err().to_string();
+    assert!(err.contains("default_bucket"), "unexpected error: {err}");
+}

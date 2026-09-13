@@ -15,14 +15,14 @@ use s3db_crypto::Cipher;
 use serde::{Deserialize, Serialize};
 
 /// What a card points at. `Note` carries its own text since it has no
-/// backing issue/PR to point at — unlike the other two variants, deleting a
+/// backing issue/MR to point at — unlike the other two variants, deleting a
 /// `Note` card is the only copy of that text gone for good, which is why
 /// [`crate::domain::board::remove_column`] refuses to drop a non-empty
 /// column instead of silently discarding whatever notes were still on it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CardRef {
     Issue(u64),
-    PullRequest(u64),
+    MergeRequest(u64),
     Note(String),
 }
 

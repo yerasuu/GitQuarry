@@ -2,6 +2,7 @@
 
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
+use tracing::error;
 
 /// A handler error, with its matching status. Defaults to 500; anything
 /// coming from validating client input is marked 400 and anything missing
@@ -11,12 +12,23 @@ use axum::response::{Html, IntoResponse, Response};
 pub struct AppError {
     status: StatusCode,
     error: anyhow::Error,
+    redirect: Option<Redirected>,
 }
 #[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug)]
 pub(crate) struct AppError {
     status: StatusCode,
     error: anyhow::Error,
+    redirect: Option<Redirected>,
+}
+
+/// Where a rejected mutation sends the browser instead of rendering the
+/// error page at the POST URL, and the `Set-Cookie` carrying the reason
+/// there. Built by [`AppError::flash_back`]; see `super::flash`.
+#[derive(Debug)]
+struct Redirected {
+    location: String,
+    cookie: String,
 }
 
 impl AppError {
@@ -24,6 +36,28 @@ impl AppError {
         AppError {
             status: StatusCode::BAD_REQUEST,
             error,
+            redirect: None,
+        }
+    }
+
+    /// A 400 that goes back to the page the submit came from, carrying its
+    /// reason as a flash, instead of rendering the error page at the POST
+    /// target. That target answers POST only, so the error page it would
+    /// otherwise render leaves the browser on a URL it can't reload — the
+    /// whole point of redirecting is to end on a real GET URL.
+    ///
+    /// `to` has to be a page the reader can actually get back to; a
+    /// handler with nowhere sensible to send them keeps
+    /// [`AppError::bad_request`].
+    pub(crate) fn flash_back(headers: &axum::http::HeaderMap, to: &str, error: anyhow::Error) -> Self {
+        let cookie = super::flash::error_cookie(headers, &format!("{error:#}"));
+        AppError {
+            status: StatusCode::BAD_REQUEST,
+            error,
+            redirect: Some(Redirected {
+                location: to.to_string(),
+                cookie,
+            }),
         }
     }
 
@@ -32,6 +66,7 @@ impl AppError {
         AppError {
             status: StatusCode::NOT_FOUND,
             error,
+            redirect: None,
         }
     }
     #[cfg(not(any(test, feature = "test-util")))]
@@ -39,6 +74,7 @@ impl AppError {
         AppError {
             status: StatusCode::NOT_FOUND,
             error,
+            redirect: None,
         }
     }
 
@@ -46,26 +82,18 @@ impl AppError {
         AppError {
             status: StatusCode::FORBIDDEN,
             error,
+            redirect: None,
         }
     }
 
-    /// `[tracker]` compiled in but not configured for
-    /// this deploy — an operator condition, not a client mistake, so 503
-    /// rather than 400/404. An `AppError` so tracker's render functions
-    /// (which return `Result<String, AppError>`, not a full `Response`) can
-    /// surface it the same way every other failure there does.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn service_unavailable(error: anyhow::Error) -> Self {
-        AppError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            error,
-        }
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
+    /// `[tracker]` compiled in (`feature = "tracker"`) but not configured for
+    /// this deploy — every issue/board/milestone route hits this before
+    /// forwarding anything to `ctx.tracker`.
     pub(crate) fn service_unavailable(error: anyhow::Error) -> Self {
         AppError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error,
+            redirect: None,
         }
     }
 
@@ -77,7 +105,7 @@ impl AppError {
     #[cfg(any(test, feature = "test-util"))]
     pub fn into_plain_response(self) -> Response {
         if self.status.is_server_error() {
-            eprintln!("gitquarry: UI web: {:#}", self.error);
+            error!(error = %self.error, "UI web request failed");
         }
         let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
         (self.status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], msg).into_response()
@@ -85,7 +113,7 @@ impl AppError {
     #[cfg(not(any(test, feature = "test-util")))]
     pub(crate) fn into_plain_response(self) -> Response {
         if self.status.is_server_error() {
-            eprintln!("gitquarry: UI web: {:#}", self.error);
+            error!(error = %self.error, "UI web request failed");
         }
         let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
         (self.status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], msg).into_response()
@@ -104,7 +132,7 @@ impl AppError {
     /// means *any* stray error becomes one, so the chain is whatever
     /// happened to bubble up — git's stderr (which quotes `GIT_DIR` paths),
     /// an S3 key, a bucket name, a backend endpoint URL. The full chain
-    /// still reaches the operator through the `eprintln!` next to every
+    /// still reaches the operator through the `error!` log next to every
     /// call of this; the client gets a fixed sentence.
     fn client_message(&self, locale: gitquarry_i18n::Locale) -> String {
         if self.status.is_server_error() {
@@ -116,24 +144,46 @@ impl AppError {
 }
 
 impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
+    fn into_response(mut self) -> Response {
         if self.status.is_server_error() {
-            eprintln!("gitquarry: UI web: {:#}", self.error);
+            error!(error = %self.error, "UI web request failed");
         }
-        let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
+        // `303` rather than axum's `307` default: the browser has to follow
+        // this with a GET, otherwise it would repeat the POST that just
+        // failed.
+        if let Some(redirect) = self.redirect.take() {
+            let mut response = (StatusCode::SEE_OTHER, ()).into_response();
+            if let (Ok(location), Ok(cookie)) = (
+                axum::http::HeaderValue::from_str(&redirect.location),
+                axum::http::HeaderValue::from_str(&redirect.cookie),
+            ) {
+                response.headers_mut().insert(header::LOCATION, location);
+                response.headers_mut().append(header::SET_COOKIE, cookie);
+                return response;
+            }
+        }
         // No `HeaderMap` reaches this conversion, so the explicit theme/
         // density cookies can't be read here — falls back to
         // `prefers-color-scheme` and the dense default, same as a
-        // first-ever visit would. Same story for locale: falls back to
-        // `Locale::DEFAULT` since there's no cookie/account to check either.
+        // first-ever visit would. Locale doesn't have that problem:
+        // `super::locale_pref::CURRENT_LOCALE` was already resolved (cookie,
+        // then account default) by `webui::request_cache_middleware` before
+        // this handler ever ran — `try_with` rather than `with` since a test
+        // or background path constructing an `AppError` outside that
+        // middleware's scope has nothing to read, and falls back to
+        // `Locale::DEFAULT` same as before.
+        let locale = super::locale_pref::CURRENT_LOCALE
+            .try_with(|locale| *locale)
+            .unwrap_or(gitquarry_i18n::Locale::DEFAULT);
+        let msg = self.client_message(locale);
         let body = super::page_chrome::layout(
             "error",
             "",
-            &super::flash::render_flash(Some(super::flash::Flash::Err(&msg)), gitquarry_i18n::Locale::DEFAULT),
+            &super::flash::render_flash(Some(super::flash::Flash::Err(&msg)), locale),
             "",
             "",
             "",
-            gitquarry_i18n::Locale::DEFAULT,
+            locale,
         );
         (self.status, Html(body)).into_response()
     }
@@ -144,6 +194,7 @@ impl<E: Into<anyhow::Error>> From<E> for AppError {
         AppError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             error: e.into(),
+            redirect: None,
         }
     }
 }

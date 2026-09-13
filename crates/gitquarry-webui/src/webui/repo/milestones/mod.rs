@@ -11,14 +11,14 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_milestones as t;
+use gitquarry_i18n::web::repo::milestones as t;
 use gitquarry_wire::tracker::{MilestoneStatus, MilestoneSummaryDto};
 use maud::{Markup, PreEscaped, html};
 
 fn tracker_unavailable(locale: Locale) -> AppError {
     AppError::service_unavailable(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::tracker_not_configured(locale)
+        gitquarry_i18n::shared::tracker::tracker_not_configured(locale)
     ))
 }
 
@@ -60,7 +60,7 @@ fn render_milestone_row(
             @if can_manage {
                 @match milestone.status {
                     MilestoneStatus::Open => {
-                        form method="post" action="/_milestones/close" style="display:inline" {
+                        form method="post" action="/_milestones/close" class="inline-form" {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(milestone.number);
@@ -68,7 +68,7 @@ fn render_milestone_row(
                         }
                     }
                     MilestoneStatus::Closed => {
-                        form method="post" action="/_milestones/reopen" style="display:inline" {
+                        form method="post" action="/_milestones/reopen" class="inline-form" {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(milestone.number);

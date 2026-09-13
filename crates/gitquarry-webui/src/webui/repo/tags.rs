@@ -11,7 +11,7 @@ use crate::webui::{
     AppError, State_, effective_density, effective_locale, effective_theme, layout, repo_link, require_csrf,
     require_login, tracker_ui_active, url_encode,
 };
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -20,7 +20,7 @@ use gitquarry_core::domain;
 use gitquarry_core::git;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::validate;
-use gitquarry_i18n::web::repo_refs as t;
+use gitquarry_i18n::web::repo::refs as t;
 
 /// Resolves `repo` and checks `me` has at least `Write` on it — same gate
 /// and same "the actual mutation stays re-checked here, not just at the
@@ -37,7 +37,7 @@ async fn require_write_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let perm =
@@ -46,7 +46,7 @@ async fn require_write_target(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok((resolved, name))
@@ -54,25 +54,33 @@ async fn require_write_target(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct TagForm {
-    repo: String,
     tag: String,
     source: String,
     #[serde(default)]
     csrf: String,
 }
 
+/// `GET` on this POST-only mutation target: what a browser asks for when it
+/// reloads or backs into the URL a rejected submit left in the address bar.
+/// The repo is in the path, so it can land on the repo's refs page, where the tag forms live
+/// rather than on the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}?view=refs", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<TagForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let source = form.source.trim();
@@ -82,7 +90,7 @@ pub(crate) async fn handler_create_post(
     // still filled in, instead of losing them to the generic error page.
     macro_rules! fail {
         ($msg:expr) => {{
-            let error_mirror = ctx.open_mirror(&resolved).await?;
+            let error_mirror = ctx.open_mirror_read(&resolved).await?;
             let body = super::refs::render_refs(
                 &ctx,
                 &error_mirror.path,
@@ -103,6 +111,7 @@ pub(crate) async fn handler_create_post(
                 "refs",
                 HeaderExtras {
                     description: config.description.as_deref(),
+                    display_name: config.display_name.as_deref(),
                     archived: config.archived,
                     visibility: config.visibility,
                     branches: &[],
@@ -138,7 +147,7 @@ pub(crate) async fn handler_create_post(
     // will actually point at, and to reject it up front if it doesn't
     // resolve to anything, instead of writing an unverified string into
     // the manifest.
-    let mirror = ctx.open_mirror(&resolved).await?;
+    let mirror = ctx.open_mirror_read(&resolved).await?;
     let resolved_sha = git::browse::resolve_commit(&mirror.path, source).await?;
     drop(mirror);
     let Some(sha) = resolved_sha else {
@@ -167,7 +176,6 @@ pub(crate) async fn handler_create_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct TagDeleteForm {
-    repo: String,
     tag: String,
     #[serde(default)]
     csrf: String,
@@ -175,16 +183,17 @@ pub(crate) struct TagDeleteForm {
 
 pub(crate) async fn handler_delete_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<TagDeleteForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let cas = domain::repo::delete_tag(&resolved, tag, locale)
@@ -211,7 +220,7 @@ pub(crate) async fn handler_delete_post(
     // listing every tag, not just this one button's own label, so the
     // whole table gets re-rendered from a fresh ref list.
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
-        let mirror = ctx.open_mirror(&resolved).await?;
+        let mirror = ctx.open_mirror_read(&resolved).await?;
         let tags = git::browse::list_refs_detailed(&mirror.path, "refs/tags/").await?;
         return Ok(
             axum::response::Html(super::refs::tag_table(&name, &tags, true, &headers, locale).into_string())

@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-webui"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Read-only web UI (plus settings/search/auth pages) for gitquarry-core"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 # `default-features = false`: this crate's own `tracker` feature is what
@@ -15,26 +15,27 @@ gitquarry-core = { path = "../gitquarry-core", default-features = false }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 gitquarry-domain = { path = "../gitquarry-domain" }
+gitquarry-mirror-external = { path = "../gitquarry-mirror-external" }
 gitquarry-wire = { path = "../gitquarry-wire" }
 
 # Storage engine, direct dep for `s3db::RequestCache` (the per-request
 # read cache `webui::request_cache_middleware` scopes) -- see
 # gitquarry-core/Cargo.toml for why this is a git dependency pinned by tag.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
 
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 futures = "0.3.33"
 
 # Web server / UI
 axum = { version = "0.8.9", features = ["multipart"] }
+# Response compression only (`CompressionLayer`) -- the rest of tower-http
+# (tracing, CORS, ...) isn't needed, so no `full`/default features.
+tower-http = { version = "0.6.9", default-features = false, features = ["compression-gzip", "compression-br", "compression-zstd"] }
 maud = { version = "0.27.0", features = ["axum"] }
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
 pulldown-cmark = "0.13.4"
-syntect = { version = "5.3.0", default-features = false, features = [
-    "default-fancy",
-] }
 # Outbound HTTP to gitquarry-federation's loopback API (peer browse
-# lookups, PR-proxy) -- rustls-only, matches gitquarry-core's own pin.
+# lookups, MR-proxy) -- rustls-only, matches gitquarry-core's own pin.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 
 # Serialization
@@ -47,10 +48,14 @@ form_urlencoded = "1.2.2"
 
 # General utilities
 anyhow = "1.0.104"
+# CSPRNG for the first-boot bootstrap token -- see `webui::bootstrap`.
+rand = "0.10.2"
 async-trait = "0.1.91"
 base64 = "0.23.1"
+lru = "0.18.2"
 sha2 = "0.11.0"
 tempfile = "3.27.0"
+tracing = "0.1.44"
 
 [features]
 default = ["tracker"]

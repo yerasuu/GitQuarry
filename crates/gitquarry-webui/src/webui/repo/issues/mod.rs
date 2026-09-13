@@ -16,14 +16,14 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_issues as t;
+use gitquarry_i18n::web::repo::issues as t;
 use gitquarry_wire::tracker::{IssueCommentDto, IssueStatus, IssueSummary, MilestoneStatus};
 use maud::{Markup, PreEscaped, html};
 
 fn tracker_unavailable(locale: Locale) -> AppError {
     AppError::service_unavailable(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::tracker_not_configured(locale)
+        gitquarry_i18n::shared::tracker::tracker_not_configured(locale)
     ))
 }
 
@@ -61,7 +61,7 @@ fn render_issue_actions(
             @if can_manage {
                 @match issue.status {
                     IssueStatus::Open => {
-                        form method="post" action="/_issues/close" style="display:inline" data-async data-async-target="#issue-actions" {
+                        form method="post" action="/_issues/close" class="inline-form" data-async data-async-target="#issue-actions" {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(issue.number);
@@ -69,7 +69,7 @@ fn render_issue_actions(
                         }
                     }
                     IssueStatus::Closed => {
-                        form method="post" action="/_issues/reopen" style="display:inline" data-async data-async-target="#issue-actions" {
+                        form method="post" action="/_issues/reopen" class="inline-form" data-async data-async-target="#issue-actions" {
                             (PreEscaped(csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="number" value=(issue.number);
@@ -189,7 +189,7 @@ pub async fn render_issues_list(
                             td { (issue.number) }
                             td { a href=(repo_link(repo_name, "issue", "").number(issue.number).to_string()) { (issue.title) } }
                             td { span class=(status_badge_class(issue.status)) { (status_label(issue.status, locale)) } }
-                            td { (crate::webui::identicon::account_avatar(&issue.author, avatars.get(&issue.author).map(String::as_str), 16)) " " (issue.author) }
+                            td { (crate::webui::identicon::account_avatar(&issue.author, avatars.get(&issue.author).map(String::as_str))) " " (issue.author) }
                         }
                     }
                 }
@@ -216,7 +216,7 @@ pub async fn render_issues_list(
                         td { (issue.number) }
                         td { a href=(repo_link(repo_name, "issue", "").number(issue.number).to_string()) { (issue.title) } }
                         td { span class=(status_badge_class(issue.status)) { (status_label(issue.status, locale)) } }
-                        td { (crate::webui::identicon::account_avatar(&issue.author, avatars.get(&issue.author).map(String::as_str), 16)) " " (issue.author) }
+                        td { (crate::webui::identicon::account_avatar(&issue.author, avatars.get(&issue.author).map(String::as_str))) " " (issue.author) }
                     }
                 }
             }
@@ -315,6 +315,15 @@ async fn can_moderate_comments(ctx: &AppContext, headers: &HeaderMap, repo_name:
     Ok(perm >= Some(Permission::Developer))
 }
 
+/// An issue's own body, or one of its thread comments, as HTML: resolve the
+/// `#123` mentions, then render — same two-step treatment `merges::render_body`
+/// gives an MR's own body/comments/reviews, for the same untrusted-markdown
+/// reason.
+async fn render_body(ctx: &AppContext, target: &ResolvedRepo, repo_name: &str, body: &str) -> String {
+    let mentions = super::components::resolve_number_mentions(ctx, target, repo_name, body).await;
+    crate::webui::markdown::render_with_mentions(body, &mentions)
+}
+
 pub async fn render_issue_detail(
     ctx: &AppContext,
     target: &ResolvedRepo,
@@ -329,7 +338,7 @@ pub async fn render_issue_detail(
     let Some(issue) = tracker_client::get_issue(tracker, &target.uid, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::issue_not_found(locale, number)
+            gitquarry_i18n::shared::tracker::issue_not_found(locale, number)
         )));
     };
     let can_manage = can_manage(ctx, headers, repo_name, &issue.author).await?;
@@ -353,10 +362,10 @@ pub async fn render_issue_detail(
         .filter(|m| m.status == MilestoneStatus::Open)
         .collect();
     let csrf_html = csrf_field(headers);
-    let body_html = super::components::link_number_mentions(ctx, target, repo_name, &issue.body).await;
+    let body_html = render_body(ctx, target, repo_name, &issue.body).await;
     let mut comment_htmls = Vec::with_capacity(comments.len());
     for comment in &comments {
-        comment_htmls.push(super::components::link_number_mentions(ctx, target, repo_name, &comment.body).await);
+        comment_htmls.push(render_body(ctx, target, repo_name, &comment.body).await);
     }
 
     Ok(html! {
@@ -434,7 +443,7 @@ pub async fn render_issue_detail(
                     }
                 }
                 @if is_comment_author || can_moderate_comments {
-                    form method="post" action="/_issues/comment/delete" style="display:inline" data-confirm=(t::delete_comment_confirm(locale)) {
+                    form method="post" action="/_issues/comment/delete" class="inline-form" data-confirm=(t::delete_comment_confirm(locale)) {
                         (PreEscaped(&csrf_html))
                         input type="hidden" name="repo" value=(repo_name);
                         input type="hidden" name="number" value=(issue.number);

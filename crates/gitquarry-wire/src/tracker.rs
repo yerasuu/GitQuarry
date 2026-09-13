@@ -56,7 +56,7 @@ pub struct IssueCommentDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CardRefDto {
     Issue(u64),
-    PullRequest(u64),
+    MergeRequest(u64),
     Note(String),
 }
 
@@ -201,14 +201,14 @@ pub enum TrackerEventKind {
     IssueClosed { number: u64 },
 }
 
-/// `POST /_internal/tracker/pull-request-merged` (core → tracker): pushed
-/// right after a merge, carrying enough of the PR's own text for tracker's
+/// `POST /_internal/tracker/merge-request-merged` (core → tracker): pushed
+/// right after a merge, carrying enough of the MR's own text for tracker's
 /// issue-auto-close parse — core's push includes title/description directly
 /// so tracker never needs a round trip back to ask for them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PullRequestMergedNotification {
+pub struct MergeRequestMergedNotification {
     pub repo_uid: crate::Uid,
-    pub pr_number: u64,
+    pub mr_number: u64,
     pub title: String,
     pub description: String,
 }

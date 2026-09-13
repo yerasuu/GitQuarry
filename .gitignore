@@ -7,3 +7,4 @@
 /deploy/gitquarry.minio-test.toml
 __pycache__/
 *.pyc
+/docs/

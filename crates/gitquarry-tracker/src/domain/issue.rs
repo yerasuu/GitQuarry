@@ -321,15 +321,15 @@ pub async fn reopen(state: &TrackerState, target: &TrackerTarget, number: u64, l
     transition(state, target, number, IssueStatus::Closed, IssueStatus::Open, locale).await
 }
 
-/// The `POST /_internal/tracker/pull-request-merged` handler's own logic —
-/// what used to be a `RepoEvent::PullRequest{action: Merged}` in-process bus
+/// The `POST /_internal/tracker/merge-request-merged` handler's own logic —
+/// what used to be a `RepoEvent::MergeRequest{action: Merged}` in-process bus
 /// consumer before the binary split, now a pushed notification instead
 /// (core's push already carries `title`/`description`, no round trip back
 /// needed to fetch them). Best-effort per number, same tolerance the
 /// in-process version already had: a nonexistent or already-closed issue
 /// number is silently skipped, since the merge that triggered this already
 /// succeeded.
-pub async fn close_referenced_by_pull_request(
+pub async fn close_referenced_by_merge_request(
     state: &TrackerState,
     target: &TrackerTarget,
     title: &str,

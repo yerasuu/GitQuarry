@@ -42,10 +42,18 @@ pub async fn resolve_by_any_email(backend: &dyn Backend, cipher: &Cipher, email:
 
 /// Claims the secondary-email index entry for `username`, self-healing a
 /// stale claim — same contract [`super::pubkey::claim_pubkey`] has.
-/// `Ok(false)` if `email` is already claimed by a *different* user (as
-/// either their primary `email` or one of their own `secondary_emails`) —
-/// checked via [`resolve_by_any_email`] so a primary-email collision is
-/// rejected too, not just a secondary one.
+/// `Ok(false)` if `email` already belongs to anyone as either a primary
+/// `email` or a secondary one — checked via [`resolve_by_any_email`], so a
+/// primary-email collision is rejected too.
+///
+/// Re-claiming an address that is *already one of this same account's
+/// secondaries* is the one idempotent case, and returns `Ok(true)` without
+/// writing anything. An account's own **primary** deliberately is not:
+/// the two live in different indexes, so treating it as claimed would let
+/// the caller list the address in `secondary_emails` while nothing ever
+/// claimed it on this side — leaving an address the account shows but
+/// [`resolve_by_secondary_email`] can't resolve, and that a *different*
+/// account is then free to claim.
 pub async fn claim_secondary_email(
     backend: &dyn Backend,
     cipher: &Cipher,
@@ -53,7 +61,7 @@ pub async fn claim_secondary_email(
     username: &str,
 ) -> Result<bool> {
     if let Some(existing) = resolve_by_any_email(backend, cipher, email).await? {
-        return Ok(existing.username == username);
+        return Ok(existing.username == username && existing.secondary_emails.contains(email));
     }
     SECONDARY_EMAIL_INDEX
         .claim_self_healing(
@@ -76,5 +84,5 @@ pub async fn claim_secondary_email(
 /// `secondary_emails`, same ordering [`super::pubkey::release_pubkey`]
 /// documents.
 pub async fn release_secondary_email(backend: &dyn Backend, email: &str) {
-    SECONDARY_EMAIL_INDEX.release(backend, email).await;
+    let _ = SECONDARY_EMAIL_INDEX.release(backend, email).await;
 }

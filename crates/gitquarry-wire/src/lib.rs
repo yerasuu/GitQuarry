@@ -5,12 +5,12 @@
 //! call.
 
 pub mod ipc;
-mod pull_request;
+mod merge_request;
 pub mod tracker;
 mod uid;
 
-pub use pull_request::{
-    CommentAnchor, DiffSide, MergeStrategy, PrComment, PrDetail, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
+pub use merge_request::{
+    CommentAnchor, DiffSide, MergeRequestMeta, MergeStrategy, MrComment, MrReview, MrStatus, ReviewVerdict,
 };
 pub use uid::Uid;
 

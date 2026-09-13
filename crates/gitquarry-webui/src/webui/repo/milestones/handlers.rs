@@ -17,7 +17,7 @@ use gitquarry_i18n::Locale;
 fn tracker_unavailable(locale: Locale) -> AppError {
     AppError::service_unavailable(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::tracker_not_configured(locale)
+        gitquarry_i18n::shared::tracker::tracker_not_configured(locale)
     ))
 }
 
@@ -30,7 +30,7 @@ async fn resolve_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     Ok((resolved, name))
@@ -52,7 +52,7 @@ async fn require_developer_permission(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok(())

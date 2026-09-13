@@ -1,31 +1,27 @@
-//! `/_account/security`: self-service credentials for whoever is
-//! logged in — SSH pubkeys and password, same idea GitLab/Forgejo call
-//! "your SSH keys"/"change password" in a normal user's own settings, as
-//! opposed to [`super::users`] (admin-only, edits *any* user's pubkeys/
-//! password/`is_admin`/per-repo permissions). Display defaults (text-size,
-//! theme) live at [`super::appearance`] instead — split out for the same
-//! reason [`super::favorites`] is its own page: a display preference isn't
-//! a credential, and mixing the two made this page read like a catch-all
-//! instead of what it actually is — the one place that changes how someone
-//! can authenticate as this user.
+//! `/_account/security`: how whoever is logged in *signs in* — password,
+//! two-factor, and the recovery codes that get past a lost authenticator.
+//! Nothing else: keys moved to [`super::keys`] (they authenticate a push or
+//! vouch for a commit, they are not a login), email addresses to
+//! [`super::avatar`]'s profile section (an address is an identity, not a
+//! credential), and display defaults were already at
+//! [`super::appearance`]. [`super::users`] is the admin-only equivalent
+//! that can edit *any* account's.
 //!
 //! No username in the URL — always the logged-in session's own account,
 //! resolved server-side via [`login::current_user`], same as every other
 //! `/_account/*` section (see `crate::webui::account_settings_page`'s own
-//! doc comment). `email` and `is_admin` aren't editable here either: `email`
-//! is how OIDC login resolves to a [`User`], letting someone self-assign it
-//! could collide with another account's identity; `is_admin` stays an
-//! admin-only grant, same as always.
+//! doc comment). `is_admin` isn't editable here: it stays an admin-only
+//! grant, same as always.
 
-use super::login;
+use super::{login, reauth};
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    layout, non_empty, render_flash, require_csrf, require_login,
+    field, layout, non_empty, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
-use gitquarry_auth_crypto::{password, totp};
+use gitquarry_auth_crypto::totp;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain;
 use gitquarry_core::auth::entities::User;
@@ -53,76 +49,6 @@ pub(crate) async fn handler_security_get(State(ctx): State_, headers: HeaderMap)
     .into_response())
 }
 
-/// Shared re-auth gate for `disable_totp`/`regenerate_recovery_codes`:
-/// either the account password or a live TOTP code, whichever the user has
-/// handy — checked here, not inside `domain::user`, so a stolen session
-/// cookie alone can't turn 2FA off or invalidate someone's unused recovery
-/// codes (the whole point of having either).
-fn require_reauth(me: &User, attempt: &str, locale: gitquarry_i18n::Locale) -> Result<(), String> {
-    let password_ok = !attempt.is_empty()
-        && me
-            .password_hash
-            .as_deref()
-            .is_some_and(|h| password::verify_password(attempt, h));
-    let code_ok = me.totp_secret.as_deref().is_some_and(|s| totp::verify_code(s, attempt));
-    if !password_ok && !code_ok {
-        return Err(gitquarry_i18n::shared::wrong_password_or_code(locale));
-    }
-    Ok(())
-}
-
-/// [`require_reauth`] plus the same per-username lockout `/_login` applies
-/// ([`gitquarry_core::app::LoginAttempts`]). Without it this page is an
-/// unmetered guessing oracle for a 6-digit TOTP code: whoever holds a
-/// session cookie could grind one out here and use it to turn 2FA off,
-/// while the login form's own limiter never sees a single attempt. The
-/// same bucket, deliberately, not a second one — guesses made here and at
-/// `/_login` are guesses at the same account and should add up.
-async fn require_reauth_throttled(
-    ctx: &gitquarry_core::app::AppContext,
-    me: &User,
-    attempt: &str,
-    locale: gitquarry_i18n::Locale,
-) -> Result<(), String> {
-    if ctx.login_attempts.is_locked(&me.username) {
-        return Err(gitquarry_i18n::shared::too_many_failed_attempts(locale));
-    }
-    match require_reauth(me, attempt, locale) {
-        Ok(()) => {
-            ctx.login_attempts.clear(&me.username);
-            Ok(())
-        }
-        Err(e) => {
-            ctx.login_attempts.record_failure(&me.username);
-            Err(e)
-        }
-    }
-}
-
-/// Same gate as [`require_reauth_throttled`], in front of the two actions that
-/// establish a credential outliving the session that created it: a new
-/// password (which then logs in on its own) and a new SSH key (which then
-/// pushes on its own). Without this a stolen cookie converts itself into
-/// permanent access before its 7-day TTL runs out — the same reasoning
-/// `disable_totp` and `regenerate_recovery_codes` already apply, which
-/// these two were missing.
-///
-/// Skipped only when there is genuinely nothing to re-prove: an account
-/// with neither a password nor a TOTP secret (an OIDC-only user setting a
-/// first password, or adding a first key) has no second factor to ask for,
-/// and demanding one would lock them out of ever acquiring one.
-async fn require_reauth_for_credential_change(
-    ctx: &gitquarry_core::app::AppContext,
-    me: &User,
-    attempt: &str,
-    locale: gitquarry_i18n::Locale,
-) -> Result<(), String> {
-    if me.password_hash.is_none() && me.totp_secret.is_none() {
-        return Ok(());
-    }
-    require_reauth_throttled(ctx, me, attempt, locale).await
-}
-
 #[derive(serde::Deserialize)]
 pub(crate) struct SecurityForm {
     /// Wire name `security_action`, not `action`: `remove_pubkey`/
@@ -137,17 +63,13 @@ pub(crate) struct SecurityForm {
     #[serde(default)]
     csrf: String,
     #[serde(default)]
-    pubkey: String,
-    #[serde(default)]
-    fingerprint: String,
-    #[serde(default)]
-    secondary_email: String,
-    #[serde(default)]
-    gpg_key: String,
-    #[serde(default)]
-    gpg_fingerprint: String,
-    #[serde(default)]
     password: String,
+    /// Second copy of `password`, typed again. A password field shows
+    /// nothing back, so without this a typo silently becomes the new
+    /// password — and for an account with no other way in (no SSH key, no
+    /// OIDC) that is a lockout with no recovery path.
+    #[serde(default)]
+    password_confirm: String,
     #[serde(default)]
     totp_code: String,
     /// Current password or live TOTP code, proving the session holder is
@@ -185,65 +107,33 @@ pub(crate) async fn handler_security_post(
     // generic error page over one bad field would be a much worse outcome
     // than just showing the error where the user can retry.
     macro_rules! fail {
-        ($msg:expr) => {
+        ($msg:expr) => {{
+            let content = render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, locale);
+            if headers.contains_key(crate::webui::ASYNC_HEADER) {
+                return Ok(axum::response::Html(content.into_string()).into_response());
+            }
             return Ok(axum::response::Html(layout(
                 "security",
                 "",
-                &account_settings_page(
-                    "security",
-                    render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, locale),
-                    locale,
-                )
-                .into_string(),
+                &account_settings_page("security", content, locale).into_string(),
                 &topnav,
                 effective_theme(&ctx, &headers).await,
                 effective_density(&ctx, &headers).await,
                 locale,
             ))
-            .into_response())
-        };
+            .into_response());
+        }};
     }
 
     let mut pending_totp_secret = None;
     let mut revealed_recovery_codes = None;
     let cas = match form.action.as_str() {
-        "add_pubkey" => {
-            if let Err(e) = require_reauth_for_credential_change(&ctx, &me, form.reauth.trim(), locale).await {
-                fail!(e);
-            }
-            match domain::user::add_pubkey(&ctx, &me.username, form.pubkey.trim(), locale).await {
-                Ok(cas) => cas,
-                Err(e) => fail!(e.to_string()),
-            }
-        }
-        "remove_pubkey" => match domain::user::remove_pubkey(&ctx, &me.username, &form.fingerprint, locale).await {
-            Ok(cas) => cas,
-            Err(e) => fail!(e.to_string()),
-        },
-        "add_secondary_email" => {
-            match domain::user::add_secondary_email(&ctx, &me.username, form.secondary_email.trim(), locale).await {
-                Ok(cas) => cas,
-                Err(e) => fail!(e.to_string()),
-            }
-        }
-        "remove_secondary_email" => {
-            match domain::user::remove_secondary_email(&ctx, &me.username, form.secondary_email.trim(), locale).await {
-                Ok(cas) => cas,
-                Err(e) => fail!(e.to_string()),
-            }
-        }
-        "add_gpg_key" => match domain::user::add_gpg_key(&ctx, &me.username, form.gpg_key.trim(), locale).await {
-            Ok(cas) => cas,
-            Err(e) => fail!(e.to_string()),
-        },
-        "remove_gpg_key" => match domain::user::remove_gpg_key(&ctx, &me.username, &form.gpg_fingerprint, locale).await
-        {
-            Ok(cas) => cas,
-            Err(e) => fail!(e.to_string()),
-        },
         "set_password" => {
-            if let Err(e) = require_reauth_for_credential_change(&ctx, &me, form.reauth.trim(), locale).await {
+            if let Err(e) = reauth::require_reauth_for_credential_change(&ctx, &me, form.reauth.trim(), locale).await {
                 fail!(e);
+            }
+            if form.password != form.password_confirm {
+                fail!(gitquarry_i18n::web::auth::security::password_mismatch(locale));
             }
             match domain::user::set_password(&ctx, &me.username, non_empty(form.password.clone()).as_deref(), locale)
                 .await
@@ -267,7 +157,7 @@ pub(crate) async fn handler_security_post(
             Err(e) => fail!(e.to_string()),
         },
         "disable_totp" => {
-            if let Err(e) = require_reauth_throttled(&ctx, &me, form.totp_code.trim(), locale).await {
+            if let Err(e) = reauth::require_reauth_throttled(&ctx, &me, form.totp_code.trim(), locale).await {
                 fail!(e);
             }
             match domain::user::disable_totp(&ctx, &me.username, locale).await {
@@ -276,7 +166,7 @@ pub(crate) async fn handler_security_post(
             }
         }
         "regenerate_recovery_codes" => {
-            if let Err(e) = require_reauth_throttled(&ctx, &me, form.totp_code.trim(), locale).await {
+            if let Err(e) = reauth::require_reauth_throttled(&ctx, &me, form.totp_code.trim(), locale).await {
                 fail!(e);
             }
             match domain::user::regenerate_recovery_codes(&ctx, &me.username, locale).await {
@@ -299,27 +189,9 @@ pub(crate) async fn handler_security_post(
     let (Some(me), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_pubkey" {
-        return Ok(
-            axum::response::Html(render_ssh_keys_table(&me, "/_account/security", &csrf, locale).into_string())
-                .into_response(),
-        );
-    }
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_gpg_key" {
-        return Ok(
-            axum::response::Html(render_gpg_keys_table(&me, "/_account/security", &csrf, locale).into_string())
-                .into_response(),
-        );
-    }
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "remove_secondary_email" {
-        return Ok(axum::response::Html(
-            render_secondary_emails_table(&me, "/_account/security", &csrf, locale).into_string(),
-        )
-        .into_response());
-    }
     let content = render_security_page(
         &me,
         &csrf,
@@ -328,6 +200,13 @@ pub(crate) async fn handler_security_post(
         revealed_recovery_codes.as_deref(),
         locale,
     );
+    // Async (`data-async-target="#security-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment) — a revealed TOTP secret/QR or recovery-code set
+    // still shows up fine in the swapped fragment, it just never triggers
+    // a real page navigation for an F5 to later warn about resubmitting.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
     let body = account_settings_page("security", content, locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
@@ -341,99 +220,16 @@ pub(crate) async fn handler_security_post(
     .into_response())
 }
 
-/// The pubkey table alone, wrapped in a stable `id` so `remove_pubkey` can
-/// swap just this fragment (`data-async-target="#ssh-keys-table"`, see
-/// `crate::webui::ASYNC_HEADER`'s own doc comment) instead of re-rendering
-/// the whole page.
-fn render_ssh_keys_table(user: &User, action_url: &str, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
-    html! {
-        div id="ssh-keys-table" {
-        table class="list" {
-            tr { th { (t::pubkey_column_header(locale)) } th {} }
-            @if user.pubkeys.is_empty() {
-                tr { td colspan="2" { em { (t::no_keys_yet_hint(locale)) } } }
-            }
-            @for pubkey in &user.pubkeys {
-                @let fp = access::key_fingerprint(pubkey).unwrap_or_else(|_| "?".to_string());
-                tr {
-                    td { code { (fp) } }
-                    td {
-                        form method="post" action=(action_url) style="display:inline" data-async data-async-target="#ssh-keys-table" {
-                            (PreEscaped(csrf))
-                            input type="hidden" name="security_action" value="remove_pubkey";
-                            input type="hidden" name="fingerprint" value=(fp);
-                            button type="submit" { (t::delete_button(locale)) }
-                        }
-                    }
-                }
-            }
-        }
-        }
-    }
-}
-
-/// The secondary-emails table alone, wrapped in a stable `id` — same
-/// swap-just-this-fragment shape [`render_ssh_keys_table`] uses.
-fn render_secondary_emails_table(user: &User, action_url: &str, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
-    html! {
-        div id="secondary-emails-table" {
-        table class="list" {
-            tr { th { (t::secondary_email_column_header(locale)) } th {} }
-            @if user.secondary_emails.is_empty() {
-                tr { td colspan="2" { em { (t::no_secondary_emails_yet_hint(locale)) } } }
-            }
-            @for email in &user.secondary_emails {
-                tr {
-                    td { (email) }
-                    td {
-                        form method="post" action=(action_url) style="display:inline" data-async data-async-target="#secondary-emails-table" {
-                            (PreEscaped(csrf))
-                            input type="hidden" name="security_action" value="remove_secondary_email";
-                            input type="hidden" name="secondary_email" value=(email);
-                            button type="submit" { (t::delete_button(locale)) }
-                        }
-                    }
-                }
-            }
-        }
-        }
-    }
-}
-
-/// The GPG key table alone, wrapped in a stable `id` — same
-/// swap-just-this-fragment shape [`render_ssh_keys_table`] uses. Unlike
-/// that one, the fingerprint shown here is already stored on
-/// `GpgKeyEntry` (see its own doc comment): nothing here calls into
-/// `crate::gpg` at all, this is a plain sync render like every other view.
-fn render_gpg_keys_table(user: &User, action_url: &str, csrf: &str, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::auth::i18n::security as t;
-    html! {
-        div id="gpg-keys-table" {
-        table class="list" {
-            tr { th { (t::gpg_key_column_header(locale)) } th {} }
-            @if user.gpg_keys.is_empty() {
-                tr { td colspan="2" { em { (t::no_gpg_keys_yet_hint(locale)) } } }
-            }
-            @for key in &user.gpg_keys {
-                tr {
-                    td { code { (key.fingerprint) } }
-                    td {
-                        form method="post" action=(action_url) style="display:inline" data-async data-async-target="#gpg-keys-table" {
-                            (PreEscaped(csrf))
-                            input type="hidden" name="security_action" value="remove_gpg_key";
-                            input type="hidden" name="gpg_fingerprint" value=(key.fingerprint);
-                            button type="submit" { (t::delete_button(locale)) }
-                        }
-                    }
-                }
-            }
-        }
-        }
-    }
-}
-
+/// All 5 forms below (only 1-3 render at once, depending on 2FA state)
+/// target this one `#security-body` — every action can reveal something
+/// only the *next* render shows (a TOTP secret + QR, a set of recovery
+/// codes) or change which of the three 2FA forms even exists, so a submit
+/// has to refresh the whole wrapper, not just the form that fired it. Same
+/// reasoning `render_appearance_page`'s own doc comment gives.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_security_page(
     user: &User,
     csrf: &str,
@@ -442,9 +238,16 @@ pub fn render_security_page(
     revealed_recovery_codes: Option<&[String]>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::security as t;
+    use gitquarry_i18n::web::auth::security as t;
     let action_url = "/_account/security";
+    // Only asked for where there is something to re-prove: an account with
+    // neither a password nor a TOTP secret (an OIDC-only user setting a
+    // first password) has no second factor, and demanding one would lock it
+    // out of ever acquiring one.
+    let needs_reauth = user.password_hash.is_some() || user.totp_secret.is_some();
+    let has_password = user.password_hash.is_some();
     html! {
+      div id="security-body" {
         p class="muted" {
             (t::logged_in_as(locale)) strong { (user.username) }
             @if let Some(email) = &user.email {
@@ -459,96 +262,90 @@ pub fn render_security_page(
         }
         (PreEscaped(render_flash(message, locale)))
 
-        h4 { (t::ssh_keys_heading(locale)) }
-        (render_ssh_keys_table(user, action_url, csrf, locale))
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="security_action" value="add_pubkey";
-            input name="pubkey" size="60" placeholder=(t::add_pubkey_placeholder(locale));
-            @if user.password_hash.is_some() || user.totp_secret.is_some() {
-                input type="password" name="reauth" size="30" placeholder=(t::reauth_placeholder(locale));
+        (settings_section(&t::password_heading(locale), None, html! {
+            p class="muted" { (t::password_purpose_prefix(locale)) code { "/_login" } (t::password_purpose_suffix(locale)) }
+            form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=[has_password.then(|| t::change_password_confirm(locale))] {
+                (PreEscaped(csrf))
+                input type="hidden" name="security_action" value="set_password";
+                // `username` in a hidden field, and `autocomplete` on every
+                // control: without them a password manager cannot tell which
+                // account this changes, nor which box is the new password —
+                // it offers to fill the current one into all three.
+                input type="hidden" name="username" value=(user.username) autocomplete="username";
+                (field(&t::new_password_label(locale), Some(&t::clear_password_hint(locale)), html! {
+                    input type="password" name="password" size="30" autocomplete="new-password";
+                }))
+                (field(&t::confirm_password_label(locale), None, html! {
+                    input type="password" name="password_confirm" size="30" autocomplete="new-password";
+                }))
+                @if needs_reauth {
+                    (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
+                        input type="password" name="reauth" size="30" autocomplete="current-password";
+                    }))
+                }
+                button type="submit" {
+                    (if has_password { t::change_password_button(locale) } else { t::set_password_button(locale) })
+                }
             }
-            button type="submit" { (t::add_key_button(locale)) }
-        }
+        }))
 
-        h4 { (t::secondary_emails_heading(locale)) }
-        p class="muted" { (t::secondary_emails_purpose(locale)) }
-        (render_secondary_emails_table(user, action_url, csrf, locale))
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="security_action" value="add_secondary_email";
-            input name="secondary_email" size="40" placeholder=(t::add_secondary_email_placeholder(locale));
-            button type="submit" { (t::add_secondary_email_button(locale)) }
-        }
-
-        h4 { (t::gpg_keys_heading(locale)) }
-        p class="muted" { (t::gpg_keys_purpose(locale)) }
-        (render_gpg_keys_table(user, action_url, csrf, locale))
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="security_action" value="add_gpg_key";
-            textarea name="gpg_key" rows="6" cols="64" placeholder=(t::add_gpg_key_placeholder(locale)) {}
-            p { button type="submit" { (t::add_gpg_key_button(locale)) } }
-        }
-
-        h4 { (t::password_heading(locale)) }
-        p class="muted" { (t::password_purpose_prefix(locale)) code { "/_login" } (t::password_purpose_suffix(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="security_action" value="set_password";
-            input type="password" name="password" size="30"
-                placeholder=(if user.password_hash.is_some() { t::password_no_changes_placeholder(locale) } else { t::password_not_set_placeholder(locale) });
-            @if user.password_hash.is_some() || user.totp_secret.is_some() {
-                input type="password" name="reauth" size="30" placeholder=(t::reauth_placeholder(locale));
+        (settings_section(&t::two_factor_heading(locale), None, html! {
+            @if user.totp_enabled {
+                p class="muted" { (t::totp_active_hint(locale)) }
+                form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=(t::disable_totp_confirm(locale)) {
+                    (PreEscaped(csrf))
+                    input type="hidden" name="security_action" value="disable_totp";
+                    (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
+                        input name="totp_code" size="24" placeholder=(t::totp_disable_placeholder(locale)) autocomplete="one-time-code";
+                    }))
+                    button type="submit" { (t::disable_totp_button(locale)) }
+                }
+            } @else if let Some(secret) = pending_totp_secret {
+                @let uri = totp::otpauth_uri("gitquarry", &user.username, secret);
+                p class="muted" { (t::totp_scan_hint(locale)) }
+                @if let Some(svg) = totp::qr_svg(&uri) {
+                    div class="totp-qr" { (PreEscaped(svg)) }
+                }
+                p { code { (secret) } }
+                p { a href=(uri) { (t::totp_open_app_link(locale)) } }
+                form method="post" action=(action_url) data-async data-async-target="#security-body" {
+                    (PreEscaped(csrf))
+                    input type="hidden" name="security_action" value="confirm_totp";
+                    (field(&t::totp_confirm_placeholder(locale), None, html! {
+                        input name="totp_code" size="10" autocomplete="one-time-code" autofocus;
+                    }))
+                    button type="submit" { (t::confirm_totp_button(locale)) }
+                }
+            } @else {
+                p class="muted" { (t::totp_inactive_hint(locale)) }
+                form method="post" action=(action_url) data-async data-async-target="#security-body" {
+                    (PreEscaped(csrf))
+                    input type="hidden" name="security_action" value="enable_totp";
+                    button type="submit" { (t::enable_totp_button(locale)) }
+                }
             }
-            button type="submit" {
-                (if user.password_hash.is_some() { t::change_password_button(locale) } else { t::set_password_button(locale) })
-            }
-        }
+        }))
 
-        h4 { (t::two_factor_heading(locale)) }
+        // Only once 2FA is actually on: recovery codes exist to get past a
+        // lost authenticator, so there is nothing to show — or regenerate —
+        // before there is an authenticator to lose.
         @if user.totp_enabled {
-            p class="muted" { (t::totp_active_hint(locale)) }
-            form method="post" action=(action_url) {
-                (PreEscaped(csrf))
-                input type="hidden" name="security_action" value="disable_totp";
-                input name="totp_code" size="24" placeholder=(t::totp_disable_placeholder(locale));
-                button type="submit" { (t::disable_totp_button(locale)) }
-            }
-
-            h4 { (t::recovery_codes_heading(locale)) }
-            @if let Some(codes) = revealed_recovery_codes {
-                div class="alert alert-warn" { span class="alert-body" { (t::recovery_codes_reveal_warning(locale)) } }
-                pre { @for code in codes { (code) "\n" } }
-            }
-            p class="muted" { (t::recovery_codes_remaining_hint(locale, user.totp_recovery_codes.len())) }
-            form method="post" action=(action_url) {
-                (PreEscaped(csrf))
-                input type="hidden" name="security_action" value="regenerate_recovery_codes";
-                input name="totp_code" size="24" placeholder=(t::regenerate_recovery_codes_placeholder(locale));
-                button type="submit" { (t::regenerate_recovery_codes_button(locale)) }
-            }
-        } @else if let Some(secret) = pending_totp_secret {
-            @let uri = totp::otpauth_uri("gitquarry", &user.username, secret);
-            p class="muted" { (t::totp_scan_hint(locale)) }
-            @if let Some(svg) = totp::qr_svg(&uri) {
-                div class="totp-qr" { (PreEscaped(svg)) }
-            }
-            p { code { (secret) } }
-            p { a href=(uri) { (t::totp_open_app_link(locale)) } }
-            form method="post" action=(action_url) {
-                (PreEscaped(csrf))
-                input type="hidden" name="security_action" value="confirm_totp";
-                input name="totp_code" size="10" placeholder=(t::totp_confirm_placeholder(locale)) autofocus;
-                button type="submit" { (t::confirm_totp_button(locale)) }
-            }
-        } @else {
-            p class="muted" { (t::totp_inactive_hint(locale)) }
-            form method="post" action=(action_url) {
-                (PreEscaped(csrf))
-                input type="hidden" name="security_action" value="enable_totp";
-                button type="submit" { (t::enable_totp_button(locale)) }
-            }
+            (settings_section(&t::recovery_codes_heading(locale), None, html! {
+                @if let Some(codes) = revealed_recovery_codes {
+                    div class="alert alert-warn" { span class="alert-body" { (t::recovery_codes_reveal_warning(locale)) } }
+                    pre { @for code in codes { (code) "\n" } }
+                }
+                p class="muted" { (t::recovery_codes_remaining_hint(locale, user.totp_recovery_codes.len())) }
+                form method="post" action=(action_url) data-async data-async-target="#security-body" data-confirm=(t::regenerate_recovery_codes_confirm(locale)) {
+                    (PreEscaped(csrf))
+                    input type="hidden" name="security_action" value="regenerate_recovery_codes";
+                    (field(&t::reauth_label(locale), Some(&t::reauth_hint(locale)), html! {
+                        input name="totp_code" size="24" placeholder=(t::regenerate_recovery_codes_placeholder(locale)) autocomplete="one-time-code";
+                    }))
+                    button type="submit" { (t::regenerate_recovery_codes_button(locale)) }
+                }
+            }))
         }
+      }
     }
 }

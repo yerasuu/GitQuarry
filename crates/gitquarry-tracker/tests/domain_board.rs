@@ -84,18 +84,18 @@ async fn add_card_accepts_a_real_issue_and_a_note() {
 }
 
 #[tokio::test]
-async fn add_card_accepts_a_real_pull_request() {
+async fn add_card_accepts_a_real_merge_request() {
     let dir = tempfile::tempdir().unwrap();
     let (state, fake) = test_state(dir.path()).await;
     let target = test_target();
-    fake.add_pr(7);
+    fake.add_merge_request(7);
     add_column(&state, &target, "todo").await.unwrap();
 
-    add_card(&state, &target, 0, CardRef::PullRequest(7), gitquarry_i18n::Locale::En)
+    add_card(&state, &target, 0, CardRef::MergeRequest(7), gitquarry_i18n::Locale::En)
         .await
         .unwrap();
 
-    let err = add_card(&state, &target, 0, CardRef::PullRequest(8), gitquarry_i18n::Locale::En)
+    let err = add_card(&state, &target, 0, CardRef::MergeRequest(8), gitquarry_i18n::Locale::En)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("doesn't exist"));

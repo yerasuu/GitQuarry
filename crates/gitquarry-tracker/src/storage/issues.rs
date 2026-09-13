@@ -231,7 +231,7 @@ pub async fn put_issue_comment(
 /// best-effort, tombstoned-not-gone convention every other delete in this
 /// codebase (a label, a release asset, an ssh key) already uses.
 pub async fn delete_issue_comment(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, number: u64, comment_id: &str) {
-    issue_comments_collection(uid, number)
+    let _ = issue_comments_collection(uid, number)
         .delete(backend, cipher, comment_id)
-        .await
+        .await;
 }

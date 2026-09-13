@@ -1,10 +1,10 @@
 [package]
 name = "gitquarry-core"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Git remote backed by S3: domain/storage/auth/git/ssh/git-smart-HTTP core, consumed by the gitquarry binary"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 # Async runtime
@@ -26,8 +26,8 @@ tokio = { version = "1.53.1", features = [
 # Its own project now -- pinned by tag, never a floating branch, so
 # a rebuild always resolves the exact same engine. Public repo, fetched
 # over plain https, no credentials needed.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
-s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0" }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 
 # Plain DTOs shared with the gitquarry-federation binary
 gitquarry-wire = { path = "../gitquarry-wire" }
@@ -65,6 +65,7 @@ dirs = "6.0.0"
 tempfile = "3.27.0"
 gitquarry-gpg = { path = "../gitquarry-gpg" }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
+gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 
 # Release source-archive generation: one `git archive --format=tar` decode,
@@ -73,6 +74,7 @@ gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 flate2 = "1.1.5"
 tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tracing = "0.1.44"
 
 [features]
 default = ["tracker"]

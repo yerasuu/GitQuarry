@@ -1,5 +1,5 @@
 //! The `board` view: one kanban board per repo, columns of cards pointing
-//! at an issue, a PR, or a freeform note. Reordering within a column is
+//! at an issue, an MR, or a freeform note. Reordering within a column is
 //! still plain forms (swap up/down — the backend has no "move to this
 //! exact position" call to drive anything richer). Moving a card to a
 //! *different* column can now also be done by dragging it there
@@ -11,11 +11,11 @@
 //! handlers these forms POST to live in [`handlers`], same top-level-route
 //! shape `webui::repo::issues`/`milestones` use.
 //!
-//! Every read here except the `CardRef::PullRequest` case goes through
+//! Every read here except the `CardRef::MergeRequest` case goes through
 //! `ctx.tracker` (`webui::tracker_client`) — `gitquarry-tracker` is its own
-//! binary now (`docs/tracker-binary-split-concept.md`). `PullRequest` cards
-//! still resolve via core's own in-process `domain::pull_request`, since
-//! PRs stay a kernel concept, not a tracker one.
+//! binary now (`docs/tracker-binary-split-concept.md`). `MergeRequest` cards
+//! still resolve via core's own in-process `domain::merge_request`, since
+//! MRs stay a kernel concept, not a tracker one.
 
 use crate::auth::web::login;
 use crate::webui::{AppError, csrf_field, repo_link, tracker_client};
@@ -24,22 +24,22 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::domain;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_board as t;
-use gitquarry_wire::PrStatus;
+use gitquarry_i18n::web::repo::board as t;
+use gitquarry_wire::MrStatus;
 use gitquarry_wire::tracker::{BoardCardDto, CardRefDto, IssueStatus};
 use maud::{Markup, PreEscaped, html};
 
 fn tracker_unavailable(locale: Locale) -> AppError {
     AppError::service_unavailable(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::tracker_not_configured(locale)
+        gitquarry_i18n::shared::tracker::tracker_not_configured(locale)
     ))
 }
 
 /// `Developer`+ on the repo, no author exemption — a board is repo
 /// management like a label/milestone, not something an individual card's
 /// creator "owns" (there's no meaningful author to track for a card at
-/// all: `Note` cards are freeform, `Issue`/`PullRequest` cards already have
+/// all: `Note` cards are freeform, `Issue`/`MergeRequest` cards already have
 /// their own author elsewhere).
 async fn can_manage(ctx: &AppContext, headers: &HeaderMap, repo_name: &str) -> Result<bool, AppError> {
     let Some(user) = login::current_user(ctx, headers).await else {
@@ -81,12 +81,12 @@ async fn render_card_body(
                 None => html! { em { (t::broken_reference_hint(locale)) } },
             }
         }
-        CardRefDto::PullRequest(number) => match domain::pull_request::get(ctx, target, *number).await {
-            Ok(Some(pr)) => html! {
-                a href=(repo_link(repo_name, "pull", "").number(*number).to_string()) { "#" (number) " " (pr.title) }
-                @if pr.status != PrStatus::Open {
+        CardRefDto::MergeRequest(number) => match domain::merge_request::get(ctx, target, *number).await {
+            Ok(Some(mr)) => html! {
+                a href=(repo_link(repo_name, "merge", "").number(*number).to_string()) { "#" (number) " " (mr.title) }
+                @if mr.status != MrStatus::Open {
                     " " span class="badge" {
-                        (if pr.status == PrStatus::Merged { t::merged_badge(locale) } else { t::closed_badge(locale) })
+                        (if mr.status == MrStatus::Merged { t::merged_badge(locale) } else { t::closed_badge(locale) })
                     }
                 }
             },
@@ -128,20 +128,20 @@ async fn render_card(
         div class="commit-meta" draggable=[can_manage.then_some("true")] {
             p { (body) }
             @if can_manage {
-                form method="post" action="/_board/move_up" style="display:inline" {
+                form method="post" action="/_board/move_up" class="inline-form" {
                     (PreEscaped(csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="card_id" value=(card.id);
                     button type="submit" { "↑" }
                 }
-                form method="post" action="/_board/move_down" style="display:inline" {
+                form method="post" action="/_board/move_down" class="inline-form" {
                     (PreEscaped(csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="card_id" value=(card.id);
                     button type="submit" { "↓" }
                 }
                 @if column_count > 1 {
-                    form method="post" action="/_board/move_to_column" style="display:inline" {
+                    form method="post" action="/_board/move_to_column" class="inline-form" {
                         (PreEscaped(csrf_html))
                         input type="hidden" name="repo" value=(repo_name);
                         input type="hidden" name="card_id" value=(card.id);
@@ -155,7 +155,7 @@ async fn render_card(
                         button type="submit" { (t::move_button(locale)) }
                     }
                 }
-                form method="post" action="/_board/remove_card" style="display:inline" {
+                form method="post" action="/_board/remove_card" class="inline-form" {
                     (PreEscaped(csrf_html))
                     input type="hidden" name="repo" value=(repo_name);
                     input type="hidden" name="card_id" value=(card.id);
@@ -203,7 +203,7 @@ pub async fn render_board(
                 }
                 @if can_manage {
                     @if column.cards.is_empty() {
-                        form method="post" action="/_board/remove_column" style="display:inline" {
+                        form method="post" action="/_board/remove_column" class="inline-form" {
                             (PreEscaped(&csrf_html))
                             input type="hidden" name="repo" value=(repo_name);
                             input type="hidden" name="column" value=(column_index);
@@ -221,7 +221,7 @@ pub async fn render_board(
                                 select name="kind" {
                                     option value="note" { (t::card_kind_note(locale)) }
                                     option value="issue" { (t::card_kind_issue(locale)) }
-                                    option value="pull_request" { (t::card_kind_pull_request(locale)) }
+                                    option value="merge_request" { (t::card_kind_merge_request(locale)) }
                                 }
                             }
                             div class="field" {

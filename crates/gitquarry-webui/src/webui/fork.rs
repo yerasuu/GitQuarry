@@ -14,10 +14,9 @@ use super::{
     url_encode,
 };
 use crate::auth::web::login;
-use axum::extract::{Form, State};
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use gitquarry_core::auth::access;
 use gitquarry_core::domain;
 use gitquarry_core::storage::entities::OwnerRef;
 use gitquarry_core::validate;
@@ -25,10 +24,6 @@ use maud::html;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ForkForm {
-    /// Full name (`owner/name`) of the repo being forked — a hidden field
-    /// on the fork form, not user-typed, but still re-validated/re-checked
-    /// (existence + visibility) here rather than trusted from the form.
-    source: String,
     /// The caller's own username, or a group they can manage — checked
     /// against `access.json`, never trusted as free text (same reasoning
     /// as `repo_new::NewRepoForm::namespace`).
@@ -66,7 +61,7 @@ async fn resolve_dest_owner(
     let Some(group) = group else {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_namespace(locale, namespace)
+            gitquarry_i18n::shared::repo::invalid_namespace(locale, namespace)
         )));
     };
     Ok(OwnerRef::Group(group.uid))
@@ -89,21 +84,23 @@ async fn fork_error_page(
     message: &str,
 ) -> Result<Response, AppError> {
     let locale = effective_locale(ctx, headers).await;
-    let groups = access::list_all_groups(&ctx.backend(), &ctx.cipher).await?;
+    // Only the groups `me` actually belongs to (plus their subgroups), read
+    // from the `user-group` index — not every group in the bucket, which
+    // this used to list just to filter almost all of it back out.
+    let groups = crate::auth::web::groups::visible_groups(ctx, me).await?;
     let topnav = login::topnav(ctx, headers).await;
     let body = html! {
         p class="alert alert-err" { (message) }
-        form method="post" action="/_fork" class="fork-form" {
+        form method="post" action=(format!("/_fork/{}", crate::webui::url_encode(source))) class="fork-form" {
             (maud::PreEscaped(crate::webui::csrf_field(headers)))
-            input type="hidden" name="source" value=(source);
             select name="namespace" {
                 option value=(me.username) selected[namespace == me.username] { (me.username) }
-                @for group in groups.iter().filter(|g| me.is_admin || g.owners.contains(&me.uid)) {
-                    option value=(group.name) selected[namespace == group.name] { (group.name) }
+                @for name in crate::auth::web::groups::manageable_group_names(&groups, &me.uid, me.is_admin) {
+                    option value=(name) selected[namespace == name] { (name) }
                 }
             }
             input name="name" size="20" value=(name);
-            button type="submit" class="btn" { (crate::webui::icons::fork()) " " (gitquarry_i18n::web::repo_summary::fork_button(locale)) }
+            button type="submit" class="btn" { (crate::webui::icons::fork()) " " (gitquarry_i18n::web::repo::summary::fork_button(locale)) }
         }
     }
     .into_string();
@@ -119,8 +116,20 @@ async fn fork_error_page(
     .into_response())
 }
 
+/// `GET` on this POST-only mutation target: what a browser asks for when it
+/// reloads or backs into the URL a rejected submit left in the address bar.
+/// The repo is in the path, so it can land on the repo that was being forked
+/// rather than on the router's generic "back to the index" fallback.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}", url_encode(&repo))).into_response()
+}
+
 pub(crate) async fn handler_fork_post(
     State(ctx): State_,
+    // The repo being forked: from the URL now, not a hidden field, and
+    // still re-validated/re-checked (existence + visibility) below rather
+    // than trusted.
+    Path(source): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ForkForm>,
 ) -> Result<Response, AppError> {
@@ -132,11 +141,11 @@ pub(crate) async fn handler_fork_post(
     let locale = effective_locale(&ctx, &headers).await;
     let namespace = form.namespace.trim();
 
-    let source = validate::sanitize_path(&form.source).map_err(AppError::bad_request)?;
+    let source = validate::sanitize_path(&source).map_err(AppError::bad_request)?;
     let Some(source_resolved) = ctx.resolve_repo(&source).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &source)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &source)
         )));
     };
     let (source_config, _etag) = source_resolved.remote.get_repo_config().await?;
@@ -145,27 +154,44 @@ pub(crate) async fn handler_fork_post(
     if !super::repo::can_view_repo(&ctx, &headers, &source, source_config.visibility).await? {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &source)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &source)
         )));
     }
 
     let dest_owner = match resolve_dest_owner(&ctx, &me, namespace, locale).await {
         Ok(owner) => owner,
         Err(_) => {
-            let msg = gitquarry_i18n::shared::invalid_namespace(locale, namespace);
+            let msg = gitquarry_i18n::shared::repo::invalid_namespace(locale, namespace);
             return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
         }
     };
-    let dest = match validate::sanitize_path(&format!("{namespace}/{}", form.name)) {
+    let dest_display_name = match validate::validate_repo_display_name(&form.name) {
+        Ok(n) => n,
+        Err(e) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &e.to_string()).await,
+    };
+    let Some(slug) = domain::repo::slugify_repo_name(&dest_display_name) else {
+        let msg = "name must contain at least one letter or digit.";
+        return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, msg).await;
+    };
+    let dest = match validate::sanitize_path(&format!("{namespace}/{slug}")) {
         Ok(dest) => dest,
         Err(e) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &e.to_string()).await,
     };
     if dest == source {
-        let msg = gitquarry_i18n::shared::destination_is_same_repo(locale);
+        let msg = gitquarry_i18n::shared::repo::destination_is_same_repo(locale);
         return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
     }
-    let Some(_dest_resolved) = domain::repo::fork(&ctx, &source_resolved, &dest, dest_owner, locale).await? else {
-        let msg = gitquarry_i18n::shared::repo_already_exists_at(locale, &dest);
+    let Some(_dest_resolved) = domain::repo::fork(
+        &ctx,
+        &source_resolved,
+        &dest,
+        Some(dest_display_name),
+        dest_owner,
+        locale,
+    )
+    .await?
+    else {
+        let msg = gitquarry_i18n::shared::repo::repo_already_exists_at(locale, &dest);
         return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
     };
 

@@ -33,7 +33,10 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         tracker: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -213,4 +216,72 @@ fn live_code(secret_b32: &str) -> String {
         .as_secs()
         / totp::STEP_SECS;
     format!("{:06}", totp::hotp(&raw, counter).unwrap())
+}
+
+#[tokio::test]
+async fn record_totp_step_spends_a_step_exactly_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    make_user(&ctx, "alice").await;
+
+    // First use of a step wins.
+    assert!(user::record_totp_step(&ctx, "alice", 42).await.unwrap());
+    // Same step again is a replay, and so is any earlier one.
+    assert!(!user::record_totp_step(&ctx, "alice", 42).await.unwrap());
+    assert!(!user::record_totp_step(&ctx, "alice", 41).await.unwrap());
+    // The next window moves on normally.
+    assert!(user::record_totp_step(&ctx, "alice", 43).await.unwrap());
+
+    let (stored, _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap();
+    assert_eq!(stored.unwrap().totp_last_step, 43);
+}
+
+#[tokio::test]
+async fn record_totp_step_is_false_for_an_unknown_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    assert!(!user::record_totp_step(&ctx, "nobody", 1).await.unwrap());
+}
+
+#[tokio::test]
+async fn enabling_and_disabling_2fa_both_revoke_existing_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    make_user(&ctx, "alice").await;
+    let epoch_at_start = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap()
+        .0
+        .unwrap()
+        .session_epoch;
+
+    user::enable_totp(&ctx, "alice", Locale::En).await.unwrap();
+    let secret = current_secret(&ctx, "alice").await;
+    let code = live_code(&secret);
+    user::confirm_totp(&ctx, "alice", &code, Locale::En).await.unwrap();
+
+    let after_confirm = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap()
+        .0
+        .unwrap()
+        .session_epoch;
+    assert!(
+        after_confirm > epoch_at_start,
+        "confirming 2FA left sessions issued before it still valid"
+    );
+
+    user::disable_totp(&ctx, "alice", Locale::En).await.unwrap();
+    let after_disable = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap()
+        .0
+        .unwrap()
+        .session_epoch;
+    assert!(
+        after_disable > after_confirm,
+        "disabling 2FA left sessions issued before it still valid"
+    );
 }

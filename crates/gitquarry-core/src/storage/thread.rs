@@ -1,6 +1,6 @@
 //! Append-only, chronologically-keyed thread storage — shared by
-//! `pull_requests` (comments, reviews) and the `gitquarry-tracker` crate's
-//! own issue-comment storage. Extracted from `pull_requests` once a second
+//! `merge_requests` (comments, reviews) and the `gitquarry-tracker` crate's
+//! own issue-comment storage. Extracted from `merge_requests` once a second
 //! real consumer (issues) needed the exact same pattern; not a speculative
 //! abstraction, a hoist. `pub`, not `pub(super)`: issues moved into
 //! `gitquarry-tracker` (`docs/tracker-extension-concept.md`), a separate
@@ -34,7 +34,7 @@ fn now_nanos() -> u128 {
 }
 
 /// Appends `value` under a fresh [`thread_key`]. Shared by every append-only,
-/// chronologically-keyed collection hanging off a PR or issue, with the same
+/// chronologically-keyed collection hanging off an MR or issue, with the same
 /// "a `Cas::Conflict` here can only mean a key collision" contract.
 pub async fn append_to_thread<T: Serialize + Sync>(
     collection: &Collection,
@@ -56,9 +56,9 @@ pub async fn append_to_thread<T: Serialize + Sync>(
 /// concurrently but re-sorted by the original (already-chronological)
 /// listing order rather than by completion order — same reasoning as
 /// `storage::audit::list_recent`. Each entry keeps its own storage key:
-/// `mirror::external`'s Track B PR sync needs a stable per-comment identity
-/// (`ExternalPrLink::synced_local_comment_keys`), and neither `PrComment` nor
-/// `PrReview` carries an id of its own on the wire.
+/// `mirror::external`'s Track B MR sync needs a stable per-comment identity
+/// (`ExternalPrLink::synced_local_comment_keys`), and neither `MrComment` nor
+/// `MrReview` carries an id of its own on the wire.
 pub async fn list_thread<T: serde::de::DeserializeOwned + Default + Send + 'static>(
     collection: Collection,
     backend: &Arc<dyn Backend>,

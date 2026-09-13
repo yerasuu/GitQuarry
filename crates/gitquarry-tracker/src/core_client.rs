@@ -5,7 +5,7 @@
 //! already establish.
 
 use anyhow::{Context, Result, bail};
-use gitquarry_wire::PullRequestMeta;
+use gitquarry_wire::MergeRequestMeta;
 use gitquarry_wire::ipc::SignedRequestBuilderExt;
 use serde::Deserialize;
 
@@ -87,12 +87,12 @@ impl CoreClient {
         Ok(body.exists)
     }
 
-    /// `GET /_internal/tracker/pull-request?uid=&number=` — used both by
-    /// [`crate::domain::issue::close_referenced_by_pull_request`]'s
+    /// `GET /_internal/tracker/merge-request?uid=&number=` — used both by
+    /// [`crate::domain::issue::close_referenced_by_merge_request`]'s
     /// "closes #N" text parse and by
-    /// [`crate::domain::board::add_card`]'s PR-card existence check.
-    pub async fn pr_summary(&self, uid: &str, number: u64) -> Result<Option<PullRequestMeta>> {
-        let url = self.url(&format!("/tracker/pull-request?uid={uid}&number={number}"));
+    /// [`crate::domain::board::add_card`]'s MR-card existence check.
+    pub async fn mr_summary(&self, uid: &str, number: u64) -> Result<Option<MergeRequestMeta>> {
+        let url = self.url(&format!("/tracker/merge-request?uid={uid}&number={number}"));
         let resp = self
             .get_request(&url)
             .send()

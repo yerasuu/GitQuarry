@@ -45,7 +45,7 @@ fn router(ctx: Arc<AppContext>) -> Router {
     Router::new()
         .route("/_internal/repos/labels", get(handler_repo_labels))
         .route("/_internal/users/exists", get(handler_user_exists))
-        .route("/_internal/tracker/pull-request", get(handler_tracker_pull_request))
+        .route("/_internal/tracker/merge-request", get(handler_tracker_merge_request))
         .route("/_internal/tracker/event", post(handler_tracker_event))
         .with_state(ctx)
 }
@@ -113,14 +113,14 @@ async fn handler_user_exists(
     json_response(StatusCode::OK, &UserExistsResponse { exists })
 }
 
-/// `GET /_internal/tracker/pull-request?uid=&number=` — `gitquarry-tracker`'s
-/// own PR lookup, uid-keyed (tracker only ever has a uid, never a repo
+/// `GET /_internal/tracker/merge-request?uid=&number=` — `gitquarry-tracker`'s
+/// own MR lookup, uid-keyed (tracker only ever has a uid, never a repo
 /// name — unlike [`handler_pr_detail`]'s `?repo=` name param) and
 /// visibility-unfiltered, same posture [`handler_authorize`]'s own doc
 /// comment establishes: an internal trusted caller, not a public listing.
 /// Feeds both the "closes #N" auto-close text parse (title+description) and
-/// the board PR-card existence check.
-async fn handler_tracker_pull_request(
+/// the board MR-card existence check.
+async fn handler_tracker_merge_request(
     State(ctx): State<Arc<AppContext>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
@@ -135,9 +135,9 @@ async fn handler_tracker_pull_request(
         remote: ctx.remote_for_uid(&uid),
         uid,
     };
-    match domain::pull_request::get(&ctx, &target, number).await {
-        Ok(Some(pr)) => json_response(StatusCode::OK, &pr),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "no such pull request"),
+    match domain::merge_request::get(&ctx, &target, number).await {
+        Ok(Some(mr)) => json_response(StatusCode::OK, &mr),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "no such merge request"),
         Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
     }
 }

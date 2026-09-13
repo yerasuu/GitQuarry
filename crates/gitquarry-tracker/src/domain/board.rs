@@ -12,8 +12,8 @@
 //! Reordering is button-driven (move a card to another column, or swap it
 //! with its neighbor within one), not drag-and-drop.
 //!
-//! `CardRef::PullRequest` cards are validated against `state.core.pr_summary`
-//! — this is the one place tracker code depends on core's pull-request
+//! `CardRef::MergeRequest` cards are validated against `state.core.mr_summary`
+//! — this is the one place tracker code depends on core's merge-request
 //! domain, now over the loopback instead of a direct in-process call.
 
 use crate::domain::issue;
@@ -99,7 +99,7 @@ pub async fn remove_column(
     .await
 }
 
-/// `Issue`/`PullRequest` cards must point at a real, existing issue/PR in
+/// `Issue`/`MergeRequest` cards must point at a real, existing issue/MR in
 /// this same repo (checked here, not left to the caller) — a dangling
 /// number would otherwise render as a permanently broken link.
 pub async fn add_card(
@@ -115,8 +115,8 @@ pub async fn add_card(
                 bail!("{}", i18n::board_card_target_not_found(locale));
             }
         }
-        CardRef::PullRequest(number) => {
-            if state.core.pr_summary(target.uid.as_str(), *number).await?.is_none() {
+        CardRef::MergeRequest(number) => {
+            if state.core.mr_summary(target.uid.as_str(), *number).await?.is_none() {
                 bail!("{}", i18n::board_card_target_not_found(locale));
             }
         }

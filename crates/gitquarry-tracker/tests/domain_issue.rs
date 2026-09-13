@@ -486,18 +486,18 @@ async fn delete_comment_removes_it_but_rejects_a_non_author() {
 
 /// What used to be `pull_request_auto_close.rs`'s own event-bus-consumer
 /// tests before the tracker binary split — `merge`'s side of the push (that
-/// it actually reaches `POST /_internal/tracker/pull-request-merged` with
+/// it actually reaches `POST /_internal/tracker/merge-request-merged` with
 /// the right title/description) is covered on `gitquarry-core`'s own side
-/// now; this only needs to prove `close_referenced_by_pull_request`'s own
+/// now; this only needs to prove `close_referenced_by_merge_request`'s own
 /// "closes #N" keyword parse, given a notification payload directly.
 #[tokio::test]
-async fn close_referenced_by_pull_request_closes_on_a_closing_keyword() {
+async fn close_referenced_by_merge_request_closes_on_a_closing_keyword() {
     let dir = tempfile::tempdir().unwrap();
     let (state, _fake) = test_state(dir.path()).await;
     let target = test_target();
     let issue = create(&state, &target, "Bug", "b", "alice").await.unwrap();
 
-    close_referenced_by_pull_request(
+    close_referenced_by_merge_request(
         &state,
         &target,
         "Add widget",
@@ -512,13 +512,13 @@ async fn close_referenced_by_pull_request_closes_on_a_closing_keyword() {
 }
 
 #[tokio::test]
-async fn close_referenced_by_pull_request_ignores_a_bare_hash_mention() {
+async fn close_referenced_by_merge_request_ignores_a_bare_hash_mention() {
     let dir = tempfile::tempdir().unwrap();
     let (state, _fake) = test_state(dir.path()).await;
     let target = test_target();
     let issue = create(&state, &target, "Bug", "b", "alice").await.unwrap();
 
-    close_referenced_by_pull_request(
+    close_referenced_by_merge_request(
         &state,
         &target,
         "Add widget",

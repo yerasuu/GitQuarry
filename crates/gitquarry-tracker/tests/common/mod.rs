@@ -1,6 +1,6 @@
 //! Shared test fixtures: a `TrackerState` backed by a real `LocalBackend`
 //! plus a tiny in-memory stand-in for `gitquarry-core`'s own
-//! `/_internal/{repos/labels,users/exists,tracker/pull-request}` — same
+//! `/_internal/{repos/labels,users/exists,tracker/merge-request}` — same
 //! `fake_core` pattern `gitquarry-ci`'s own `tests/graph.rs` already
 //! establishes, adapted to what tracker's domain layer actually calls.
 
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 pub struct FakeCore {
     pub labels: Arc<Mutex<HashSet<String>>>,
     pub users: Arc<Mutex<HashSet<String>>>,
-    pub prs: Arc<Mutex<HashSet<u64>>>,
+    pub merge_requests: Arc<Mutex<HashSet<u64>>>,
 }
 
 impl FakeCore {
@@ -27,8 +27,8 @@ impl FakeCore {
     pub fn add_user(&self, username: &str) {
         self.users.lock().unwrap().insert(username.to_string());
     }
-    pub fn add_pr(&self, number: u64) {
-        self.prs.lock().unwrap().insert(number);
+    pub fn add_merge_request(&self, number: u64) {
+        self.merge_requests.lock().unwrap().insert(number);
     }
 }
 
@@ -49,14 +49,14 @@ async fn handler_user_exists(
     axum::Json(serde_json::json!({ "exists": exists }))
 }
 
-async fn handler_pr(
+async fn handler_merge_request(
     State(fake): State<FakeCore>,
     Query(params): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let number: u64 = params.get("number").and_then(|s| s.parse().ok()).unwrap_or(0);
-    if fake.prs.lock().unwrap().contains(&number) {
-        axum::Json(gitquarry_wire::PullRequestMeta {
+    if fake.merge_requests.lock().unwrap().contains(&number) {
+        axum::Json(gitquarry_wire::MergeRequestMeta {
             number,
             ..Default::default()
         })
@@ -75,7 +75,7 @@ pub async fn fake_core() -> (CoreClient, FakeCore) {
     let app = Router::new()
         .route("/repos/labels", get(handler_labels))
         .route("/users/exists", get(handler_user_exists))
-        .route("/tracker/pull-request", get(handler_pr))
+        .route("/tracker/merge-request", get(handler_merge_request))
         .route("/tracker/event", axum::routing::post(handler_event))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

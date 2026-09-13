@@ -1,4 +1,4 @@
-//! Every mutation a [`crate::storage::settings::RepoConfig`] or a repo's
+//! Every mutation a [`crate::storage::entities::RepoConfig`] or a repo's
 //! own identity (name claim, manifest, physical storage) goes through —
 //! the single place `create`/`rename`/`delete`/`fork`/permission-grant
 //! logic lives, so `webui::repo_new`/`webui::fork`/`webui::repo_settings`/
@@ -7,12 +7,12 @@
 //! `git::ssh`'s implicit-create-on-push ended up skipping `RepoConfig`
 //! entirely — see [`create`]'s doc comment).
 //!
-//! Transport-agnostic on purpose: no [`crate::webui::AppError`], no CSRF/
+//! Transport-agnostic on purpose: no `gitquarry_webui::webui::AppError`, no CSRF/
 //! session/actor concerns, no audit logging — those stay in whichever
 //! caller has an HTTP request or an authenticated actor in hand. Errors are
 //! plain `anyhow::Error` with the same user-facing Spanish messages the web
 //! handlers already showed; callers that need a specific HTTP status map
-//! them the same way [`crate::webui::AppError::bad_request`] already does.
+//! them the same way `gitquarry_webui::webui::AppError::bad_request` already does.
 //! Where there's one well-defined "expected" failure (name already taken,
 //! nothing to resolve), the shape is `Result<Option<T>>` — same convention
 //! [`crate::app::AppContext::resolve_repo`]/`create_repo` already use, not
@@ -21,12 +21,14 @@
 use crate::app::{AppContext, ResolvedRepo};
 use crate::auth::access;
 use crate::auth::entities::Permission;
+use crate::crypto::Cipher;
 use crate::storage::entities::{Label, OwnerRef, RepoConfig, Visibility};
-use crate::storage::remote::Manifest;
+use crate::storage::remote::{Manifest, Remote};
 use crate::storage::uid::Uid;
-use crate::storage::{self, Cas};
+use crate::storage::{self, Backend, Cas};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How long a soft-deleted repo (`RepoConfig::deleted_at` set) survives
@@ -93,6 +95,7 @@ pub async fn resolve_owner_ref(ctx: &AppContext, namespace: &str) -> Result<Opti
 pub async fn create(
     ctx: &AppContext,
     full_name: &str,
+    display_name: Option<String>,
     owner: Option<OwnerRef>,
     description: Option<String>,
     visibility: Visibility,
@@ -109,6 +112,7 @@ pub async fn create(
     let config = RepoConfig {
         uid: resolved.uid.clone(),
         full_name: full_name.to_string(),
+        display_name,
         description,
         owner,
         visibility,
@@ -156,8 +160,15 @@ pub async fn rename(
     current_full_name: &str,
     new_full_name: &str,
     new_owner: OwnerRef,
+    new_display_name: Option<String>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<String>> {
+    // Same rule `AppContext::create_repo` applies to a fresh repo: a repo
+    // path and a group path share one URL space, so a rename can't move a
+    // repo onto a name a group namespace already holds.
+    if crate::auth::access::namespace_reserved(ctx.backend().as_ref(), &ctx.cipher, new_full_name).await? {
+        return Ok(None);
+    }
     let claimed = storage::settings::claim_repo_name_self_healing(
         ctx.backend().as_ref(),
         &ctx.cipher,
@@ -177,6 +188,7 @@ pub async fn rename(
     let new_config = RepoConfig {
         full_name: new_full_name.to_string(),
         owner: Some(new_owner),
+        display_name: new_display_name,
         ..current_config
     };
     match storage::settings::put_repo_config(
@@ -290,7 +302,42 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
     }
     storage::settings::set_visible_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     storage::settings::set_deleted_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
+    // `delete_all` above took the repo's own `mirrors/` objects with it, but
+    // this index lives outside the repo prefix: left behind, it makes the
+    // external-mirror sweep resolve and list a uid that no longer exists,
+    // once per tick, forever — one leaked entry per purged repo.
+    let _ =
+        storage::settings::set_mirrors_enabled_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     access::clear_repo_permission_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid).await?;
+    Ok(())
+}
+
+/// Collections a repo duplication (`fork`/`create_from_template`, both
+/// built on `Remote::copy_all_to`, which copies every key it finds) must
+/// strip from the destination.
+///
+/// `mirrors/` is the security-relevant one: an `ExternalMirror` holds a
+/// *usable* forge credential (reversible by necessity — the sync loop
+/// re-authenticates with it on every tick), so inheriting it would hand
+/// whoever forked a public repo both the ability to push that repo's refs
+/// to the original owner's GitHub and — by repointing `remote_url` at a
+/// host they control, which needs no token to do since a blank token field
+/// means "keep the stored one" — the credential itself.
+///
+/// `merges/` and `lfs-locks/` aren't credentials, just wrong: a fork
+/// starting life with the upstream's merge requests, review threads and
+/// held LFS locks isn't what a fork is, and no forge behaves that way.
+const NOT_INHERITED_BY_A_COPY: [&str; 3] = ["mirrors/", "merges/", "lfs-locks/"];
+
+/// Strips [`NOT_INHERITED_BY_A_COPY`] from a freshly copied repo. Runs
+/// *after* the copy rather than filtering inside `copy_all_to`: that
+/// primitive's contract is "every object, re-encrypted under the
+/// destination's key", and which collections a *duplication* should carry
+/// is a domain decision, not a storage one.
+async fn strip_uninheritable(dest: &ResolvedRepo) -> Result<()> {
+    for sub_prefix in NOT_INHERITED_BY_A_COPY {
+        dest.remote.delete_under(sub_prefix).await?;
+    }
     Ok(())
 }
 
@@ -306,6 +353,7 @@ pub async fn fork(
     ctx: &AppContext,
     source: &ResolvedRepo,
     dest_full_name: &str,
+    dest_display_name: Option<String>,
     dest_owner: OwnerRef,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<ResolvedRepo>> {
@@ -319,17 +367,24 @@ pub async fn fork(
     // a copy that silently did nothing must never end with a fork that
     // looks created but isn't.
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
+    strip_uninheritable(&dest).await?;
 
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: dest_display_name,
         description: source_config.description.clone(),
         owner: Some(dest_owner),
         visibility: source_config.visibility,
         archived: false,
         deleted_at: None,
+        // A byte-for-byte copy landing right now is itself a content change
+        // for the new repo, same as a push or a mirror sync would be.
+        last_push: Some(now_secs()),
+        last_push_commits: None,
+        last_push_branch: None,
         // A real byte-for-byte copy (`copy_all_to` just above), unlike
         // `domain::remote_fork`'s peer-sync case — the new owner's quota
         // accounting should reflect what they actually just received, not
@@ -421,12 +476,13 @@ pub async fn create_from_template(
     ctx: &AppContext,
     source: &ResolvedRepo,
     dest_full_name: &str,
+    dest_display_name: Option<String>,
     dest_owner: OwnerRef,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Option<ResolvedRepo>> {
     let (source_config, _etag) = source.remote.get_repo_config().await?;
     if !source_config.is_template {
-        bail!("{}", gitquarry_i18n::shared::repo_not_a_template(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::repo_not_a_template(locale));
     }
     let Some(dest) = ctx.create_repo(dest_full_name).await? else {
         return Ok(None);
@@ -434,17 +490,27 @@ pub async fn create_from_template(
 
     source.remote.copy_all_to(&dest.remote).await?;
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
+    // A template is *published* to be copied by other people, so inheriting
+    // the template author's mirror credential here would be worse than in
+    // `fork`, not better.
+    strip_uninheritable(&dest).await?;
 
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: dest_display_name,
         description: source_config.description.clone(),
         owner: Some(dest_owner),
         visibility: source_config.visibility,
         archived: false,
         deleted_at: None,
+        // Same reasoning as `fork`'s own doc comment on this field: a
+        // byte-for-byte copy landing right now is itself a content change.
+        last_push: Some(now_secs()),
+        last_push_commits: None,
+        last_push_branch: None,
         // Same reasoning as `fork`'s own doc comment on this field: a real
         // byte-for-byte copy, so the new owner's quota should reflect it
         // from the start.
@@ -499,10 +565,21 @@ pub struct ConfPatch {
 }
 
 /// Re-reads the etag right before writing so a concurrent edit CAS-fails
-/// instead of being silently overwritten.
-pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatch) -> Result<Cas> {
+/// instead of being silently overwritten. The `bool` half of the return is
+/// whether `patch` actually differs from what was already stored — a
+/// resubmit of an unchanged form still writes (same CAS-freshness reasoning
+/// as any other save) but isn't real activity, so `webui::repo_settings`
+/// skips the audit-log entry for it (`activity`'s own repo-activity feed
+/// would otherwise be mostly "saved general settings" noise from people just
+/// reopening and resaving the form).
+pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatch) -> Result<(Cas, bool)> {
     let (current, etag) = resolved.remote.get_repo_config().await?;
     let old_owner = current.owner.clone();
+    let changed = patch.description != current.description
+        || patch.owner != current.owner
+        || patch.visibility != current.visibility
+        || patch.archived != current.archived
+        || patch.is_template != current.is_template;
     let config = RepoConfig {
         description: patch.description,
         owner: patch.owner,
@@ -536,7 +613,7 @@ pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatc
         )
         .await;
     }
-    Ok(cas)
+    Ok((cas, changed))
 }
 
 /// The default branch isn't cosmetic metadata: it's `Manifest::head` (not
@@ -548,7 +625,7 @@ pub async fn set_default_branch(resolved: &ResolvedRepo, branch: &str, locale: g
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/heads/{branch}");
     if !manifest.refs.contains_key(&target) {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
     }
     manifest.head = Some(target);
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
@@ -564,7 +641,7 @@ pub async fn create_tag(resolved: &ResolvedRepo, tag: &str, sha: &str, locale: g
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/tags/{tag}");
     if manifest.refs.contains_key(&target) {
-        bail!("{}", gitquarry_i18n::shared::tag_already_exists(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::tag_already_exists(locale, tag));
     }
     manifest.refs.insert(target, sha.to_string());
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
@@ -581,19 +658,19 @@ pub async fn delete_tag(resolved: &ResolvedRepo, tag: &str, locale: gitquarry_i1
     if config.protected_tags.contains(tag) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::protected_tag_cannot_be_deleted(locale, tag)
+            gitquarry_i18n::shared::repo::protected_tag_cannot_be_deleted(locale, tag)
         );
     }
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
     let target = format!("refs/tags/{tag}");
     if manifest.refs.remove(&target).is_none() {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
 
 /// `Err` if `branch` is protected (same unconditional bar [`delete_tag`]
-/// applies, see [`gitquarry_i18n::shared::protected_branch_cannot_be_deleted`]'s
+/// applies, see [`gitquarry_i18n::shared::repo::protected_branch_cannot_be_deleted`]'s
 /// own doc comment on why no owner bypass), is the repo's current default
 /// branch, or doesn't currently exist.
 pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
@@ -601,7 +678,7 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     if config.protected_branches.contains(branch) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::protected_branch_cannot_be_deleted(locale, branch)
+            gitquarry_i18n::shared::repo::protected_branch_cannot_be_deleted(locale, branch)
         );
     }
     let (mut manifest, etag) = resolved.remote.get_manifest().await?;
@@ -609,11 +686,11 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     if manifest.head.as_deref() == Some(target.as_str()) {
         bail!(
             "{}",
-            gitquarry_i18n::shared::default_branch_cannot_be_deleted(locale, branch)
+            gitquarry_i18n::shared::repo::default_branch_cannot_be_deleted(locale, branch)
         );
     }
     if manifest.refs.remove(&target).is_none() {
-        bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
     }
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
@@ -652,7 +729,7 @@ pub async fn set_protected_branches(
     let requested = parse_csv_field(raw_csv);
     for branch in &requested {
         if !valid.contains(branch.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
         }
     }
     config.protected_branches = requested.clone();
@@ -687,7 +764,7 @@ pub async fn set_require_signed_commits(
     let requested = parse_csv_field(raw_csv);
     for branch in &requested {
         if !valid.contains(branch.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_branch(locale, branch));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_branch(locale, branch));
         }
     }
     config.require_signed_commits = requested.clone();
@@ -722,7 +799,7 @@ pub async fn set_protected_tags(
     let requested = parse_csv_field(raw_csv);
     for tag in &requested {
         if !valid.contains(tag.as_str()) {
-            bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+            bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
         }
     }
     config.protected_tags = requested.clone();
@@ -751,6 +828,132 @@ pub fn normalize_topic(raw: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
+const MAX_REPO_SLUG_LEN: usize = 100;
+
+/// Derives a `sanitize_path`-safe local-name segment from a repo's free-text
+/// `display_name` — unlike [`normalize_topic`], case is preserved (a repo
+/// slug isn't a search facet, no reason to force it lowercase) and the
+/// result is meant to round-trip back through `sanitize_path` unchanged, not
+/// just be safe to drop into a link. Characters already in
+/// `sanitize_path`'s allowed set (`[A-Za-z0-9._~-]`) pass through; anything
+/// else (spaces, symbols, non-ASCII) becomes `-`, runs of `-` collapse to
+/// one, and leading/trailing `-`/`.` are trimmed (a leading `-` would
+/// otherwise look like a flag to `sanitize_path`, and to `git` itself
+/// downstream). `None` if nothing survives — a name that's pure emoji/CJK/
+/// punctuation has no safe slug to offer; the caller treats that as a
+/// rejected name, same as an empty one.
+pub fn slugify_repo_name(display_name: &str) -> Option<String> {
+    let mut out = String::with_capacity(display_name.len());
+    let mut last_was_dash = false;
+    for c in display_name.trim().chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '~') {
+            out.push(c);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches(|c| c == '-' || c == '.');
+    let capped = trimmed.get(..trimmed.len().min(MAX_REPO_SLUG_LEN)).unwrap_or(trimmed);
+    let capped = capped.trim_matches(|c| c == '-' || c == '.');
+    (!capped.is_empty()).then(|| capped.to_string())
+}
+
+/// Best-effort backfill for a repo that predates `RepoConfig::display_name`
+/// (or whose slug has otherwise drifted from it): the current `full_name`'s
+/// local segment becomes the public `display_name` (preserved exactly, even
+/// if it has characters `sanitize_path` would now reject), and a clean slug
+/// is derived from it. Never propagates an error — a cosmetic migration
+/// failing must never break the listing page that triggered it (same
+/// fail-quiet spirit `webui::repo::list_visible_repos`'s own doc comment
+/// already applies to privacy checks); a lost race or a name collision on
+/// the derived slug just leaves `config` as it was, retried on the next load.
+///
+/// Deliberately only called from the uid-based listing paths (home index,
+/// profile, group pages) — not from `AppContext::resolve_repo` or any
+/// ssh/http request path, since those resolve a repo by its *current*
+/// `full_name` string, which a legacy repo with an invalid slug can never
+/// again be reached by after `sanitize_path` tightened its charset. A
+/// listing enumerates by uid instead, so it's the one place that can find
+/// such a repo at all in order to fix it.
+pub async fn backfill_slug(
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
+    uid: &Uid,
+    config: RepoConfig,
+    etag: Option<String>,
+) -> RepoConfig {
+    let (namespace, current_local) = config
+        .full_name
+        .rsplit_once('/')
+        .unwrap_or(("", config.full_name.as_str()));
+    if let Some(display_name) = &config.display_name
+        && slugify_repo_name(display_name).as_deref() == Some(current_local)
+    {
+        return config;
+    }
+    let display_name = config.display_name.clone().unwrap_or_else(|| current_local.to_string());
+    let Some(slug) = slugify_repo_name(&display_name) else {
+        return config;
+    };
+    let namespace = namespace.to_string();
+
+    if slug == current_local {
+        // Path's already clean — only `display_name` was missing.
+        let mut updated = config.clone();
+        updated.display_name = Some(display_name);
+        return match storage::settings::put_repo_config(
+            backend.as_ref(),
+            uid.as_str(),
+            &updated,
+            etag.as_deref(),
+            &cipher,
+        )
+        .await
+        {
+            Ok(Cas::Ok) => updated,
+            _ => config,
+        };
+    }
+
+    let new_full_name = if namespace.is_empty() {
+        slug
+    } else {
+        format!("{namespace}/{slug}")
+    };
+    let claimed = storage::settings::claim_repo_name_self_healing(backend.as_ref(), &cipher, &new_full_name, uid, {
+        let backend = Arc::clone(&backend);
+        let cipher = Arc::clone(&cipher);
+        move |existing_uid| {
+            let remote = Remote::new(
+                Arc::clone(&backend),
+                format!("{}/{existing_uid}", crate::storage::REPOS_PREFIX),
+                Arc::clone(&cipher),
+            );
+            async move { remote.exists().await }
+        }
+    })
+    .await;
+    if !matches!(claimed, Ok(true)) {
+        return config;
+    }
+
+    let mut updated = config.clone();
+    updated.full_name = new_full_name.clone();
+    updated.display_name = Some(display_name);
+    match storage::settings::put_repo_config(backend.as_ref(), uid.as_str(), &updated, etag.as_deref(), &cipher).await {
+        Ok(Cas::Ok) => {
+            storage::settings::release_repo_name(backend.as_ref(), &config.full_name).await;
+            updated
+        }
+        _ => {
+            storage::settings::release_repo_name(backend.as_ref(), &new_full_name).await;
+            config
+        }
+    }
+}
+
 /// Topics are cosmetic (discovery/categorization), so unlike
 /// `set_protected_branches`/`set_protected_tags` there's nothing to
 /// validate against — instead each one gets normalized to lowercase
@@ -776,8 +979,8 @@ pub async fn set_topics(ctx: &AppContext, resolved: &ResolvedRepo, raw_csv: &str
 
 /// Parses `"alice, bob, ..."`, hard-validating each name resolves to a real
 /// user — unlike [`set_topics`]'s silently-drop-the-bad-token tolerance, a
-/// typo'd required reviewer would make every future PR on this repo
-/// permanently unmergeable (`domain::pull_request::missing_required_reviewers`
+/// typo'd required reviewer would make every future MR on this repo
+/// permanently unmergeable (`domain::merge_request::missing_required_reviewers`
 /// has no way to know "nobody by that name can ever satisfy this"), so this
 /// bails on the first name that doesn't resolve and names it, same as
 /// `domain::issue::edit`'s assignee validation.
@@ -791,7 +994,7 @@ pub async fn set_required_reviewers(
     for username in raw_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let (user, _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
         if user.is_none() {
-            bail!("{}", gitquarry_i18n::shared::unknown_assignee(locale, username));
+            bail!("{}", gitquarry_i18n::shared::repo::unknown_assignee(locale, username));
         }
         required_reviewers.insert(username.to_string());
     }
@@ -894,7 +1097,7 @@ pub async fn set_permission(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     let (user, etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
-    let mut user = user.with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+    let mut user = user.with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     match perm {
         Some(p) => {
             user.repos.insert(repo_uid.clone(), p);

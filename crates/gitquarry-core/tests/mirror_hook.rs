@@ -98,6 +98,7 @@ fn test_user(name: &str, is_admin: bool) -> gitquarry_core::auth::entities::User
         totp_secret: None,
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
+        totp_last_step: 0,
         locale_default: String::new(),
         storage_quota_bytes: None,
         avatar_content_type: None,
@@ -110,16 +111,13 @@ fn admin_user(name: &str) -> gitquarry_core::auth::entities::User {
 }
 
 fn group_owned_by(group: &str, owner: &gitquarry_core::auth::entities::User) -> gitquarry_core::auth::entities::Group {
-    use std::collections::BTreeSet;
-    let mut owners = BTreeSet::new();
-    owners.insert(owner.uid.clone());
     gitquarry_core::auth::entities::Group {
-        uid: Default::default(),
         name: group.to_string(),
-        description: None,
-        owners,
-        teams: Vec::new(),
-        storage_quota_bytes: None,
+        members: std::collections::BTreeMap::from([(
+            owner.uid.clone(),
+            gitquarry_core::auth::entities::Permission::Owner,
+        )]),
+        ..Default::default()
     }
 }
 

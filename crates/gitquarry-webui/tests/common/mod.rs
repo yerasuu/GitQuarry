@@ -45,7 +45,10 @@ pub async fn setup(root: &std::path::Path) -> (AppContext, ResolvedRepo, Tracker
         git_rate_limiter: Default::default(),
         tracker: Some(link),
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     };
 
     (ctx, target, tracker_state)

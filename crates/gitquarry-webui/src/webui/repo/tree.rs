@@ -10,8 +10,8 @@ use gitquarry_core::git;
 use gitquarry_core::git::browse::CommitInfo;
 use gitquarry_core::validate;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_components as tc;
-use gitquarry_i18n::web::repo_tree as t;
+use gitquarry_i18n::web::repo::components as tc;
+use gitquarry_i18n::web::repo::tree as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashMap;
 use std::path::Path as FsPath;
@@ -20,19 +20,31 @@ pub async fn render_tree(
     ctx: &AppContext,
     bare_repo: &FsPath,
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     locale: Locale,
 ) -> Result<String> {
-    let entries = git::browse::ls_tree(bare_repo, rev, path).await?;
-    let gitmodules = git::browse::read_gitmodules(bare_repo, rev).await?;
-    let recent = git::browse::log(bare_repo, rev, RECENT_LOG_LIMIT, Some(path)).await?;
-    let avatars = commit_avatars(ctx, bare_repo, &recent).await;
+    // Three independent git subprocesses over the same read-only mirror, so
+    // they run together rather than one after another: nothing here reads
+    // another's output, and awaiting them in sequence just added up their
+    // latencies.
+    let (entries, gitmodules, recent) = tokio::try_join!(
+        git::browse::ls_tree(bare_repo, rev, path),
+        git::browse::read_gitmodules(bare_repo, rev),
+        git::browse::log(bare_repo, rev, RECENT_LOG_LIMIT, Some(path)),
+    )?;
+    let mut recent = recent;
+    git::browse::mark_signed(bare_repo, &mut recent).await?;
     let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
     // Bounded, single-pass (see `last_touched`'s own doc comment) — one
     // `git log` walk for every row in this listing, not one per row.
     let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
-    let touched = git::browse::last_touched(bare_repo, rev, path, &names).await?;
+    let (avatars, touched) = tokio::join!(
+        commit_avatars(ctx, bare_repo, &recent),
+        git::browse::last_touched(bare_repo, rev, path, &names),
+    );
+    let touched = touched?;
 
     Ok(html! {
         // Only when scoped to a subdirectory: at the repo root, `breadcrumbs`
@@ -40,7 +52,7 @@ pub async fn render_tree(
         // redundant here, the repo's already named in the page header right
         // above this tab. Same fix `log::render_log` already got.
         @if !path.is_empty() {
-            (PreEscaped(breadcrumbs(repo_name, rev, path, "tree", locale)))
+            (PreEscaped(breadcrumbs(repo_name, display_name, rev, path, "tree", locale)))
         }
         div class="table-scroll" {
         table class="list" {

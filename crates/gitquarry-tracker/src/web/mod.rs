@@ -94,7 +94,7 @@ fn milestone_summary(m: MilestoneMeta) -> MilestoneSummaryDto {
 fn card_ref_from(dto: CardRefDto) -> CardRef {
     match dto {
         CardRefDto::Issue(n) => CardRef::Issue(n),
-        CardRefDto::PullRequest(n) => CardRef::PullRequest(n),
+        CardRefDto::MergeRequest(n) => CardRef::MergeRequest(n),
         CardRefDto::Note(t) => CardRef::Note(t),
     }
 }
@@ -102,7 +102,7 @@ fn card_ref_from(dto: CardRefDto) -> CardRef {
 fn card_ref_dto(card: CardRef) -> CardRefDto {
     match card {
         CardRef::Issue(n) => CardRefDto::Issue(n),
-        CardRef::PullRequest(n) => CardRefDto::PullRequest(n),
+        CardRef::MergeRequest(n) => CardRefDto::MergeRequest(n),
         CardRef::Note(t) => CardRefDto::Note(t),
     }
 }
@@ -546,18 +546,18 @@ async fn handler_milestone_reopen(
 
 // ---- core -> tracker push ----
 
-/// `POST /_internal/tracker/pull-request-merged` — core's own PR-merge code
+/// `POST /_internal/tracker/merge-request-merged` — core's own MR-merge code
 /// path pushes here (`AppContext.tracker`, if configured) right after a
-/// merge lands, carrying the merged PR's `title`/`description` directly so
+/// merge lands, carrying the merged MR's `title`/`description` directly so
 /// this never needs a round trip back to ask for them.
-async fn handler_pull_request_merged(
+async fn handler_merge_request_merged(
     State(state): State<Arc<TrackerState>>,
-    Json(notification): Json<PullRequestMergedNotification>,
+    Json(notification): Json<MergeRequestMergedNotification>,
 ) -> Response {
     let target = TrackerTarget {
         uid: notification.repo_uid,
     };
-    match issue::close_referenced_by_pull_request(
+    match issue::close_referenced_by_merge_request(
         &state,
         &target,
         &notification.title,
@@ -623,8 +623,8 @@ pub fn router(state: Arc<TrackerState>) -> Router {
         .route("/_internal/milestones/{number}/close", post(handler_milestone_close))
         .route("/_internal/milestones/{number}/reopen", post(handler_milestone_reopen))
         .route(
-            "/_internal/tracker/pull-request-merged",
-            post(handler_pull_request_merged),
+            "/_internal/tracker/merge-request-merged",
+            post(handler_merge_request_merged),
         )
         .with_state(state)
 }

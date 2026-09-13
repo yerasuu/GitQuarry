@@ -19,7 +19,7 @@ use gitquarry_i18n::Locale;
 fn tracker_unavailable(locale: Locale) -> AppError {
     AppError::service_unavailable(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::tracker_not_configured(locale)
+        gitquarry_i18n::shared::tracker::tracker_not_configured(locale)
     ))
 }
 
@@ -41,7 +41,7 @@ async fn resolve_target(
     let not_found = || {
         AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         ))
     };
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
@@ -71,7 +71,7 @@ async fn require_manage_permission(
     let Some(issue) = tracker_client::get_issue(tracker, &target.uid, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::issue_not_found(locale, number)
+            gitquarry_i18n::shared::tracker::issue_not_found(locale, number)
         )));
     };
     if issue.author == me.username {
@@ -83,7 +83,7 @@ async fn require_manage_permission(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok(())
@@ -176,7 +176,7 @@ async fn async_issue_actions_response(
     let Some(issue) = tracker_client::get_issue(tracker, &resolved.uid, number).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::issue_not_found(locale, number)
+            gitquarry_i18n::shared::tracker::issue_not_found(locale, number)
         )));
     };
     let can_manage = super::can_manage(ctx, headers, repo_name, &issue.author).await?;
@@ -295,7 +295,7 @@ async fn require_developer_permission(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok(())

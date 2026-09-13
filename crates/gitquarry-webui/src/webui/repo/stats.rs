@@ -1,10 +1,11 @@
 //! The `stats` tab: commits-per-author and commits-per-month bar charts.
 
 use super::STATS_LOG_LIMIT;
+use super::components::width_class;
 use anyhow::Result;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_stats as t;
+use gitquarry_i18n::web::repo::stats as t;
 use maud::{Markup, html};
 use std::collections::BTreeMap;
 use std::path::Path as FsPath;
@@ -40,11 +41,11 @@ fn bar_table(rows: impl Iterator<Item = (u64, String)>, locale: Locale) -> Marku
                 tr { td { em { (t::no_data_hint(locale)) } } }
             }
             @for (n, label) in &rows {
-                @let width = (*n as f64 / max as f64 * 100.0).round() as u32;
+                @let width = 100.0 * *n as f64 / max as f64;
                 tr class="bar-row" {
                     td { (label) }
                     td { (n) }
-                    td style="width:50%" { span class="bar" style=(format!("width:{width}%")) {} }
+                    td class="bar-cell" { span class=(format!("bar {}", width_class(width))) {} }
                 }
             }
         }

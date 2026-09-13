@@ -2,18 +2,13 @@
 //! time and never changed afterward — what every cross-entity reference
 //! (`RepoConfig::owner`, `User::starred`, `Group::owners`, ...) stores
 //! instead of a rename-able display name, so a rename/move never leaves a
-//! dangling or (worse) silently-hijacked-by-a-name-reuse reference
-//! elsewhere. One shared type across all three entity kinds rather than
-//! three phantom-typed newtypes: this codebase doesn't parameterize IDs by
-//! kind anywhere else (`Permission`, `Cas` are plain enums), and a
+//! dangling or hijacked-by-name-reuse reference elsewhere. One shared type
+//! across all three entity kinds rather than three phantom-typed newtypes,
+//! since this codebase doesn't parameterize IDs by kind anywhere else and a
 //! misplaced user-uid-where-a-repo-uid-is-expected is a logic bug either
-//! way, not something a marker type would catch for free without every
-//! call site threading it through.
-//!
-//! Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/PR
+//! way. Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/MR
 //! reference crosses the core/tracker IPC boundary and needs to be the
-//! identical type on both
-//! sides rather than a lookalike newtype per crate.
+//! identical type on both sides.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -48,7 +43,7 @@ impl fmt::Display for Uid {
     }
 }
 
-/// Reconstructs a `Uid` from its own [`Display`]ed text — for reading one
+/// Reconstructs a `Uid` from its own [`fmt::Display`]ed text — for reading one
 /// back from somewhere it was previously written verbatim (an S3 key
 /// segment, a local mirror directory name), never for parsing arbitrary
 /// input: nothing validates the format here, callers already trust the
