@@ -46,7 +46,6 @@ pub async fn setup(root: &std::path::Path) -> (AppContext, ResolvedRepo, Tracker
         tracker: Some(link),
         allow_push_create: false,
         events: Default::default(),
-        mirror_sync: None,
     };
 
     (ctx, target, tracker_state)
