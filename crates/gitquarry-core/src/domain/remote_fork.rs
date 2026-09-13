@@ -75,17 +75,21 @@ pub async fn seed_from_remote(
     // all to CAS against.
     dest.remote.put_manifest(&manifest, None).await?;
     if !dest.remote.exists().await? {
-        bail!("{}", gitquarry_i18n::shared::copy_seems_to_have_failed(locale));
+        bail!("{}", gitquarry_i18n::shared::repo::copy_seems_to_have_failed(locale));
     }
 
     let new_config = RepoConfig {
         uid: dest.uid.clone(),
         full_name: dest_full_name.to_string(),
+        display_name: None,
         description,
         owner: Some(dest_owner),
         visibility: Visibility::Public,
         archived: false,
         deleted_at: None,
+        last_push: None,
+        last_push_commits: None,
+        last_push_branch: None,
         pack_bytes: 0,
         lfs_bytes: 0,
         required_reviewers: Default::default(),

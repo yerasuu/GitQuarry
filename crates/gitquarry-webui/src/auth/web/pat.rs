@@ -12,7 +12,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, copy_button, csrf_field, effective_density, effective_locale,
-    effective_theme, federation_ui_active, layout, render_flash, require_csrf, require_login,
+    effective_theme, federation_ui_active, field, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -49,10 +49,11 @@ pub(crate) async fn handler_pat_get(State(ctx): State_, headers: HeaderMap) -> R
 }
 
 /// Every repo uid referenced across `tokens`' `scopes` maps, resolved to
-/// its current `full_name` — same purpose as `super::users`'s own
+/// its display label ([`crate::webui::repo_label::repo_label`], so a scope
+/// reads as the repo's public name) — same purpose as `super::users`'s own
 /// `repo_uid_to_name_map`, just scoped to one user's own tokens (expected
 /// to stay small, so a plain sequential resolve is fine, no `JoinSet`
-/// needed).
+/// needed) and display-only: nothing here is submitted back.
 async fn repo_uid_to_name_map(
     ctx: &gitquarry_core::app::AppContext,
     tokens: &[PersonalAccessToken],
@@ -62,7 +63,10 @@ async fn repo_uid_to_name_map(
     for uid in uids {
         if let Ok((config, _etag)) = settings::get_repo_config(ctx.backend().as_ref(), uid.as_str(), &ctx.cipher).await
         {
-            map.insert(uid, config.full_name);
+            map.insert(
+                uid,
+                crate::webui::repo_label(&config.full_name, config.display_name.as_deref()),
+            );
         }
     }
     map
@@ -163,7 +167,6 @@ pub(crate) async fn handler_pat_post(
 
     let tokens = access::list_tokens_for_owner(ctx.backend().as_ref(), &ctx.cipher, &me.uid).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &tokens).await;
-    let topnav = login::topnav(&ctx, &headers).await;
     let content = render_pat_page(
         &tokens,
         &repo_names,
@@ -172,6 +175,14 @@ pub(crate) async fn handler_pat_post(
         pending_secret.as_deref(),
         locale,
     );
+    // Async (`data-async-target="#pat-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment) — a created token's one-time secret still shows up
+    // fine in the swapped fragment, it just never triggers a real page
+    // navigation `create`/`revoke` can leave an F5 warning about.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
+    let topnav = login::topnav(&ctx, &headers).await;
     let body = account_settings_page("pat", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "pat",
@@ -197,6 +208,23 @@ async fn create_token(ctx: &gitquarry_core::app::AppContext, me: &User, form: &P
     }
 }
 
+/// Both forms below (revoke, create) target this one `#pat-body` wrapper:
+/// revoking changes the table, creating adds a row *and* shows the
+/// one-time secret banner above it — either way the whole thing has to
+/// refresh, not just the form that submitted, same reasoning
+/// `render_appearance_page`'s own doc comment gives.
+#[cfg(any(test, feature = "test-util"))]
+pub fn render_pat_page(
+    tokens: &[PersonalAccessToken],
+    repo_names: &HashMap<Uid, String>,
+    csrf: &str,
+    message: Option<Flash>,
+    pending_secret: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 fn render_pat_page(
     tokens: &[PersonalAccessToken],
     repo_names: &HashMap<Uid, String>,
@@ -205,10 +233,20 @@ fn render_pat_page(
     pending_secret: Option<&str>,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::pat as t;
+    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
+}
+fn render_pat_page_impl(
+    tokens: &[PersonalAccessToken],
+    repo_names: &HashMap<Uid, String>,
+    csrf: &str,
+    message: Option<Flash>,
+    pending_secret: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
+    use gitquarry_i18n::web::auth::pat as t;
     let action_url = "/_account/pat";
     html! {
-        p class="muted" { (t::page_intro(locale)) }
+      div id="pat-body" {
         (PreEscaped(render_flash(message, locale)))
 
         @if let Some(secret) = pending_secret {
@@ -216,54 +254,58 @@ fn render_pat_page(
             p { pre { (secret) } " " (copy_button(secret, locale)) }
         }
 
-        table class="list" {
-            tr {
-                th { (t::label_column_header(locale)) }
-                th { (t::scopes_column_header(locale)) }
-                th { (t::expires_column_header(locale)) }
-                th { (t::last_used_column_header(locale)) }
-                th {}
-            }
-            @if tokens.is_empty() {
-                tr { td colspan="5" { em { (t::no_tokens_yet_hint(locale)) } } }
-            }
-            @for token in tokens {
+        (settings_section(&t::tokens_heading(locale), Some(&t::page_intro(locale)), html! {
+            table class="list" {
                 tr {
-                    td { (token.label) }
-                    td {
-                        @for (i, (repo_uid, perm)) in token.scopes.iter().enumerate() {
-                            @if i > 0 { ", " }
-                            code { (repo_names.get(repo_uid).map(String::as_str).unwrap_or("?")) ":" (format!("{perm:?}").to_lowercase()) }
+                    th { (t::label_column_header(locale)) }
+                    th { (t::scopes_column_header(locale)) }
+                    th { (t::expires_column_header(locale)) }
+                    th { (t::last_used_column_header(locale)) }
+                    th {}
+                }
+                @if tokens.is_empty() {
+                    tr { td colspan="5" { em { (t::no_tokens_yet_hint(locale)) } } }
+                }
+                @for token in tokens {
+                    tr {
+                        td { (token.label) }
+                        td {
+                            @for (i, (repo_uid, perm)) in token.scopes.iter().enumerate() {
+                                @if i > 0 { ", " }
+                                code { (repo_names.get(repo_uid).map(String::as_str).unwrap_or("?")) ":" (format!("{perm:?}").to_lowercase()) }
+                            }
                         }
-                    }
-                    td { (token.expires_at.as_deref().unwrap_or("—")) }
-                    td { (token.last_used_at.as_deref().unwrap_or("—")) }
-                    td {
-                        form method="post" action=(&action_url) style="display:inline" {
-                            (PreEscaped(csrf))
-                            input type="hidden" name="action" value="revoke";
-                            input type="hidden" name="uid" value=(token.uid.as_str());
-                            button type="submit" { (t::revoke_button(locale)) }
+                        td { (token.expires_at.as_deref().unwrap_or("—")) }
+                        td { (token.last_used_at.as_deref().unwrap_or("—")) }
+                        td {
+                            form method="post" action=(&action_url) class="inline-form" data-async data-async-target="#pat-body" data-confirm=(t::revoke_confirm(locale, &token.label)) {
+                                (PreEscaped(csrf))
+                                input type="hidden" name="action" value="revoke";
+                                input type="hidden" name="uid" value=(token.uid.as_str());
+                                button type="submit" { (t::revoke_button(locale)) }
+                            }
                         }
                     }
                 }
             }
-        }
+        }))
 
-        h4 { (t::create_heading(locale)) }
-        form method="post" action=(&action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="create";
-            p {
-                input name="label" size="30" placeholder=(t::label_placeholder(locale));
+        (settings_section(&t::create_heading(locale), None, html! {
+            form method="post" action=(&action_url) data-async data-async-target="#pat-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="create";
+                (field(&t::label_column_header(locale), None, html! {
+                    input name="label" size="30" placeholder=(t::label_placeholder(locale));
+                }))
+                (field(&t::scopes_column_header(locale), None, html! {
+                    input name="scopes" size="60" placeholder=(t::scopes_placeholder(locale));
+                }))
+                (field(&t::expires_column_header(locale), None, html! {
+                    input name="expires_days" type="number" min="1" size="6" placeholder=(t::expires_days_placeholder(locale));
+                }))
+                button type="submit" { (t::create_button(locale)) }
             }
-            p {
-                input name="scopes" size="60" placeholder=(t::scopes_placeholder(locale));
-            }
-            p {
-                input name="expires_days" type="number" min="1" size="6" placeholder=(t::expires_days_placeholder(locale));
-            }
-            button type="submit" { (t::create_button(locale)) }
-        }
+        }))
+      }
     }
 }

@@ -7,13 +7,13 @@
 
 mod instance;
 pub mod ipc;
-mod pull_request;
+mod merge_request;
 mod repo;
 mod uid;
 
 pub use instance::InstanceInfo;
-pub use pull_request::{
-    CommentAnchor, DiffSide, MergeStrategy, PrComment, PrDetail, PrReview, PrStatus, PullRequestMeta, ReviewVerdict,
+pub use merge_request::{
+    CommentAnchor, DiffSide, MergeRequestMeta, MergeStrategy, MrComment, MrDetail, MrReview, MrStatus, ReviewVerdict,
 };
 pub use repo::RepoSummary;
 pub use uid::Uid;

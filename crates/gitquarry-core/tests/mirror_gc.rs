@@ -44,10 +44,12 @@ fn dummy_ctx(
             region: None,
             endpoint_url: None,
             access_key_id: "test".to_string(),
-            secret_access_key: "test".to_string(),
+            secret_access_key: "test".to_string().into(),
             path_style: false,
+            allow_insecure_http: false,
         }),
         passphrase: "test".to_string(),
+        resilience: Default::default(),
     };
     gitquarry_core::app::AppContext {
         bucket: "test".to_string(),
@@ -55,7 +57,7 @@ fn dummy_ctx(
         mirrors_root,
         config_path: PathBuf::new(),
         exe_path: PathBuf::new(),
-        backend: gitquarry_core::storage::build_backend(&cfg),
+        backend: gitquarry_core::storage::build_backend(&cfg).expect("building the test backend"),
         locks: gitquarry_core::app::Locks::default(),
         cipher: Arc::new(
             gitquarry_core::crypto::Cipher::derive("test", &[0u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
@@ -67,7 +69,10 @@ fn dummy_ctx(
         git_rate_limiter: Default::default(),
         federation: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -121,4 +126,31 @@ async fn sweep_evicts_lru_when_over_size_cap() {
     assert!(!root.path().join("oldest").exists());
     assert!(!root.path().join("middle").exists());
     assert!(root.path().join("newest").exists());
+}
+
+#[tokio::test]
+async fn touch_if_missing_creates_a_marker_but_keeps_an_existing_one() {
+    let root = tempfile::tempdir().unwrap();
+    make_fake_mirror(root.path(), "already-marked", Duration::from_secs(3600), 0);
+    let marked = root.path().join("already-marked");
+    let before = std::fs::metadata(marked.join(LAST_ACCESS_MARKER))
+        .unwrap()
+        .modified()
+        .unwrap();
+
+    let unmarked = root.path().join("no-marker");
+    std::fs::create_dir_all(&unmarked).unwrap();
+
+    touch_last_access_if_missing(&marked).await.unwrap();
+    touch_last_access_if_missing(&unmarked).await.unwrap();
+
+    assert_eq!(
+        std::fs::metadata(marked.join(LAST_ACCESS_MARKER))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        before,
+        "an existing marker keeps the mtime real traffic gave it"
+    );
+    assert!(unmarked.join(LAST_ACCESS_MARKER).is_file());
 }

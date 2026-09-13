@@ -1,6 +1,6 @@
 //! `webui::remote_pulls`'s page copy — federation layer 4's live PR-proxy
 //! tab. Status labels/column headers/comment copy are shared with the
-//! local `pulls` view via [`super::repo_pulls`] directly; only the
+//! local merge-request view via [`super::repo::merges`] directly; only the
 //! proxy-specific "no access without a credential" copy lives here.
 
 use crate::{Locale, msg};

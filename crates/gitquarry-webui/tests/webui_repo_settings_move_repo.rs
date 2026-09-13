@@ -27,6 +27,7 @@ fn user(username: &str, is_admin: bool, repos: &[(&str, Permission)]) -> User {
         totp_secret: None,
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
+        totp_last_step: 0,
         locale_default: String::new(),
         storage_quota_bytes: None,
         avatar_content_type: None,

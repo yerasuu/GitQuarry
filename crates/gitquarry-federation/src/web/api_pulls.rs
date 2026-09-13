@@ -138,7 +138,7 @@ pub(crate) async fn handler_list_get(
     if let Err(resp) = authorize_read(&state, &headers, repo).await {
         return resp;
     }
-    match state.core.list_pull_requests(repo).await {
+    match state.core.list_merge_requests(repo).await {
         Ok(prs) => json_response(StatusCode::OK, &prs),
         Err(e) => json_error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
@@ -158,9 +158,9 @@ pub(crate) async fn handler_detail_get(
     if let Err(resp) = authorize_read(&state, &headers, repo).await {
         return resp;
     }
-    match state.core.pull_request_detail(repo, number).await {
+    match state.core.merge_request_detail(repo, number).await {
         Ok(Some(detail)) => json_response(StatusCode::OK, &detail),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "no such pull request"),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "no such merge request"),
         Err(e) => json_error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
 }
@@ -193,7 +193,7 @@ pub(crate) async fn handler_create_post(State(state): State_, headers: HeaderMap
     };
     match state
         .core
-        .create_pull_request(&crate::core_client::CreatePullRequest {
+        .create_merge_request(&crate::core_client::CreateMergeRequest {
             repo: &form.repo,
             source_repo: &source_repo,
             source_branch: form.source_branch.trim(),
@@ -227,7 +227,7 @@ pub(crate) async fn handler_comment_post(State(state): State_, headers: HeaderMa
     };
     match state
         .core
-        .comment_pull_request(&form.repo, form.number, &owner, form.body.trim())
+        .comment_merge_request(&form.repo, form.number, &owner, form.body.trim())
         .await
     {
         Ok(()) => json_response(StatusCode::OK, &serde_json::json!({ "ok": true })),
@@ -253,7 +253,7 @@ pub(crate) async fn handler_merge_post(State(state): State_, headers: HeaderMap,
     };
     match state
         .core
-        .merge_pull_request(&form.repo, form.number, &owner, form.strategy)
+        .merge_merge_request(&form.repo, form.number, &owner, form.strategy)
         .await
     {
         Ok(outcome) => json_response(StatusCode::OK, &outcome),

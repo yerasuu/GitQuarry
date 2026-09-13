@@ -55,11 +55,14 @@ pub(crate) async fn handler_users_get(
 }
 
 /// Every distinct repo uid referenced across `users`' `repos` maps,
-/// resolved to its current `full_name` — for rendering `User::repos`
-/// (uid-keyed) as clickable/typeable names instead of raw hex. A repo uid
+/// resolved to its current `full_name` paired with its display label
+/// ([`crate::webui::repo_label::repo_label`]) — for rendering `User::repos`
+/// (uid-keyed) as names instead of raw hex. Both halves are needed: the row
+/// shows the label, while its remove form still submits the `full_name`,
+/// which is the only string `auth::domain::user` can resolve. A repo uid
 /// that no longer resolves (deleted) is just absent from the map;
 /// `render_user` falls back to "(deleted repo)" for those.
-async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, users: &[User]) -> HashMap<Uid, String> {
+async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, users: &[User]) -> HashMap<Uid, (String, String)> {
     let uids: BTreeSet<Uid> = users.iter().flat_map(|u| u.repos.keys().cloned()).collect();
     let mut set = JoinSet::new();
     for uid in uids {
@@ -69,7 +72,10 @@ async fn repo_uid_to_name_map(ctx: &gitquarry_core::app::AppContext, users: &[Us
             let name = gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher)
                 .await
                 .ok()
-                .map(|(config, _etag)| config.full_name);
+                .map(|(config, _etag)| {
+                    let label = crate::webui::repo_label(&config.full_name, config.display_name.as_deref());
+                    (config.full_name, label)
+                });
             (uid, name)
         });
     }
@@ -158,7 +164,18 @@ pub(crate) async fn handler_users_post(
     };
 
     let action_result = apply_users_action(&ctx, &form, locale).await?;
+    let is_async = headers.contains_key(crate::webui::ASYNC_HEADER);
 
+    // Async is different from the plain fallback below: neither target a
+    // form on this page can hit (`#user-card-{username}`, `#users-list`)
+    // contains a flash banner (`render_users_page`'s own shell has it,
+    // above the list) — a page-level fragment swapped into either would
+    // corrupt the DOM (`style/app.js`'s `target.replaceWith` taking the
+    // whole `<html>` as the replacement). A rejected action goes through
+    // `AppError` instead on this path: a real non-2xx status, picked up by
+    // `extractFlashMessage`/`showErrorToast` the same way any other failed
+    // `data-async` request already is — same reasoning
+    // `keys::handler_keys_post`'s own doc comment gives for its `fail!`.
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
     let invalid_msg;
     let flash = match &action_result {
@@ -174,28 +191,46 @@ pub(crate) async fn handler_users_post(
             .await;
             Flash::Ok("saved to the bucket.")
         }
-        Ok(Cas::Conflict) => Flash::Err(&cas_conflict_msg),
+        Ok(Cas::Conflict) => {
+            if is_async {
+                return Err(AppError::bad_request(anyhow::anyhow!("{}", cas_conflict_msg)));
+            }
+            Flash::Err(&cas_conflict_msg)
+        }
         Err(msg) => {
+            if is_async {
+                return Err(AppError::bad_request(anyhow::anyhow!("{msg}")));
+            }
             invalid_msg = msg.clone();
             Flash::Err(&invalid_msg)
         }
     };
-    // Async (`data-async-target="#user-card-{username}"`, see `ASYNC_HEADER`'s
-    // own doc comment): for the actions whose whole effect stays contained
-    // inside one user's own card (`is_admin`/`is_federation_moderator`
-    // badge, pubkey/repo-perm tables, TOTP button) -- every other action
-    // here still re-renders the whole page, same as before.
-    if action_result.is_ok()
-        && headers.contains_key(crate::webui::ASYNC_HEADER)
+    // `action_result` is `Ok` past this point (both error arms above
+    // already returned). Two targets, by action: everything whose whole
+    // effect stays contained inside one user's own card (`is_admin`/
+    // `is_federation_moderator` badge, pubkey/repo-perm tables, email,
+    // password, quota, TOTP button) swaps just that card; `add_user`/
+    // `delete_user` change *which* cards exist at all, so those swap the
+    // whole `#users-list`.
+    if is_async
         && matches!(
             form.action.as_str(),
-            "toggle_admin" | "toggle_federation_moderator" | "remove_pubkey" | "remove_repo_perm" | "disable_totp"
+            "toggle_admin"
+                | "toggle_federation_moderator"
+                | "remove_pubkey"
+                | "add_pubkey"
+                | "remove_repo_perm"
+                | "add_repo_perm"
+                | "disable_totp"
+                | "set_email"
+                | "set_password"
+                | "set_storage_quota"
         )
     {
         let (Some(user), _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &form.username).await? else {
             return Err(AppError::not_found(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::account_no_longer_exists(locale)
+                gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
             )));
         };
         let repo_names = repo_uid_to_name_map(&ctx, std::slice::from_ref(&user)).await;
@@ -206,10 +241,7 @@ pub(crate) async fn handler_users_post(
     }
     let users = access::list_all_users(&ctx.backend(), &ctx.cipher).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &users).await;
-    // `delete_user` makes the whole card disappear, not just look
-    // different -- swap the whole `#users-list` fragment instead of one
-    // card that no longer exists to fetch.
-    if headers.contains_key(crate::webui::ASYNC_HEADER) && form.action == "delete_user" {
+    if is_async && matches!(form.action.as_str(), "add_user" | "delete_user") {
         return Ok(axum::response::Html(
             render_users_list(&users, &repo_names, &csrf_field(&headers), locale).into_string(),
         )
@@ -241,6 +273,10 @@ pub(crate) async fn handler_users_post(
 /// exceptional errors (backend/storage via bare `?`) — this whole route is
 /// already admin-gated by the caller, so there's no separate authorization
 /// class to keep apart here the way `groups::apply_groups_action` does.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `AppError` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn apply_users_action(
     ctx: &gitquarry_core::app::AppContext,
     form: &UsersForm,
@@ -268,7 +304,7 @@ pub async fn apply_users_action(
                 Ok(cas) => cas,
                 Err(e) => return Ok(Err(e.to_string())),
             };
-            cas.ok_or_else(|| gitquarry_i18n::shared::name_already_taken(locale, username))
+            cas.ok_or_else(|| gitquarry_i18n::shared::auth::name_already_taken(locale, username))
         }
         "delete_user" => {
             domain::user::delete(ctx, &form.username).await?;
@@ -319,7 +355,7 @@ pub async fn apply_users_action(
         "add_repo_perm" => {
             let repo = form.repo.trim();
             if repo.is_empty() {
-                return Ok(Err(gitquarry_i18n::shared::missing_repo(locale)));
+                return Ok(Err(gitquarry_i18n::shared::auth::missing_repo(locale)));
             }
             let perm = match form.perm.as_str() {
                 "guest" => Permission::Guest,
@@ -327,7 +363,7 @@ pub async fn apply_users_action(
                 "developer" => Permission::Developer,
                 "maintainer" => Permission::Maintainer,
                 "owner" => Permission::Owner,
-                other => return Ok(Err(gitquarry_i18n::shared::invalid_permission(locale, other))),
+                other => return Ok(Err(gitquarry_i18n::shared::auth::invalid_permission(locale, other))),
             };
             domain::user::set_repo_perm(ctx, &form.username, repo, Some(perm), locale)
                 .await
@@ -340,15 +376,19 @@ pub async fn apply_users_action(
     })
 }
 
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_users_page(
     users: &[User],
-    repo_names: &HashMap<Uid, String>,
+    repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
     message: Option<Flash>,
     q: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth::users as t;
     html! {
         p class="muted" {
             (t::intro_stored_prefix(locale)) code { ".conf/users/<username>.json" } (t::intro_bucket_and_keys(locale))
@@ -371,7 +411,7 @@ pub fn render_users_page(
         (render_users_list(users, repo_names, csrf, locale))
 
         h4 { (t::add_user_heading(locale)) }
-        form method="post" action="/_users" {
+        form method="post" action="/_users" data-async data-async-target="#users-list" {
             (PreEscaped(csrf))
             input type="hidden" name="user_action" value="add_user";
             div class="field" {
@@ -406,18 +446,18 @@ pub fn render_users_page(
     }
 }
 
-/// Every user card, wrapped in a stable `id` so `delete_user` can swap just
-/// this fragment (`data-async-target="#users-list"`, see
-/// `crate::webui::ASYNC_HEADER`'s own doc comment) instead of re-rendering
-/// the whole page -- unlike `toggle_admin`/`remove_pubkey`/etc, which target
-/// the one card that survives the mutation.
+/// Every user card, wrapped in a stable `id` so `add_user`/`delete_user`
+/// (which change *which* cards exist) can swap just this fragment
+/// (`data-async-target="#users-list"`, see `crate::webui::ASYNC_HEADER`'s
+/// own doc comment) instead of re-rendering the whole page -- unlike every
+/// other action here, which targets the one card it stays contained in.
 fn render_users_list(
     users: &[User],
-    repo_names: &HashMap<Uid, String>,
+    repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth::users as t;
     html! {
         div id="users-list" {
             @if users.is_empty() {
@@ -432,16 +472,16 @@ fn render_users_list(
 
 pub fn render_user(
     user: &User,
-    repo_names: &HashMap<Uid, String>,
+    repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth::users as t;
     html! {
         @let card_target = format!("#user-card-{}", user.username);
         div class="card card-pad user-card" id=(format!("user-card-{}", user.username)) {
             h4 {
-                (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 24))
+                (crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref()))
                 (user.username)
                 @if let Some(email) = &user.email {
                     " " span class="muted" { (format!("<{email}>")) }
@@ -461,7 +501,7 @@ pub fn render_user(
                     tr {
                         td { code { (fp) } }
                         td {
-                            form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {
+                            form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::remove_pubkey_confirm(locale, &user.username)) {
                                 (PreEscaped(csrf))
                                 input type="hidden" name="user_action" value="remove_pubkey";
                                 input type="hidden" name="username" value=(user.username);
@@ -483,20 +523,20 @@ pub fn render_user(
                 }
                 @for (repo_uid, perm) in &user.repos {
                     @match repo_names.get(repo_uid) {
-                        Some(name) => (repo_perm_row(user, name, name, *perm, csrf, &card_target, locale)),
-                        None => tr { td colspan="3" { em { (gitquarry_i18n::shared::repo_deleted(locale)) } } },
+                        Some((name, label)) => (repo_perm_row(user, label, name, *perm, csrf, &card_target, locale)),
+                        None => tr { td colspan="3" { em { (gitquarry_i18n::shared::repo::repo_deleted(locale)) } } },
                     }
                 }
             }
 
-            form method="post" action="/_users" {
+            form method="post" action="/_users" data-async data-async-target=(card_target) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="add_pubkey";
                 input type="hidden" name="username" value=(user.username);
                 input name="pubkey" size="60" placeholder=(t::pubkey_key_placeholder(locale));
                 button type="submit" { (t::add_key_button(locale)) }
             }
-            form method="post" action="/_users" {
+            form method="post" action="/_users" data-async data-async-target=(card_target) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="add_repo_perm";
                 input type="hidden" name="username" value=(user.username);
@@ -510,7 +550,7 @@ pub fn render_user(
                 }
                 button type="submit" { (t::add_update_repo_button(locale)) }
             }
-            form method="post" action="/_users" {
+            form method="post" action="/_users" data-async data-async-target=(card_target) data-confirm=(t::set_email_confirm(locale, &user.username)) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="set_email";
                 input type="hidden" name="username" value=(user.username);
@@ -518,7 +558,7 @@ pub fn render_user(
                     placeholder=(t::set_email_placeholder(locale));
                 button type="submit" { (t::set_email_button(locale)) }
             }
-            form method="post" action="/_users" {
+            form method="post" action="/_users" data-async data-async-target=(card_target) data-confirm=(t::set_password_confirm(locale, &user.username)) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="set_password";
                 input type="hidden" name="username" value=(user.username);
@@ -528,7 +568,7 @@ pub fn render_user(
                     (if user.password_hash.is_some() { t::change_password_button(locale) } else { t::set_password_button(locale) })
                 }
             }
-            form method="post" action="/_users" {
+            form method="post" action="/_users" data-async data-async-target=(card_target) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="set_storage_quota";
                 input type="hidden" name="username" value=(user.username);
@@ -538,13 +578,13 @@ pub fn render_user(
                 }
                 button type="submit" { (t::set_storage_quota_button(locale)) }
             }
-            form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {
+            form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(if user.is_admin { t::remove_admin_confirm(locale, &user.username) } else { t::make_admin_confirm(locale, &user.username) }) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="toggle_admin";
                 input type="hidden" name="username" value=(user.username);
                 button type="submit" { (if user.is_admin { t::remove_admin_button(locale) } else { t::make_admin_button(locale) }) }
             }
-            form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {
+            form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="toggle_federation_moderator";
                 input type="hidden" name="username" value=(user.username);
@@ -553,14 +593,14 @@ pub fn render_user(
                 }
             }
             @if user.totp_enabled {
-                form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {
+                form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::disable_totp_confirm(locale, &user.username)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="user_action" value="disable_totp";
                     input type="hidden" name="username" value=(user.username);
                     button type="submit" { (t::disable_totp_button(locale)) }
                 }
             }
-            form method="post" action="/_users" style="display:inline" data-async data-async-target="#users-list" {
+            form method="post" action="/_users" class="inline-form" data-async data-async-target="#users-list" data-confirm=(t::delete_user_confirm(locale, &user.username)) {
                 (PreEscaped(csrf))
                 input type="hidden" name="user_action" value="delete_user";
                 input type="hidden" name="username" value=(user.username);
@@ -582,7 +622,7 @@ const PERMISSION_TIERS: [Permission; 5] = [
 ];
 
 fn permission_label(perm: Permission, locale: gitquarry_i18n::Locale) -> String {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth::users as t;
     match perm {
         Permission::Guest => t::permission_guest_label(locale),
         Permission::Reporter => t::permission_reporter_label(locale),
@@ -606,14 +646,14 @@ fn repo_perm_row(
     card_target: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
-    use crate::auth::i18n::users as t;
+    use gitquarry_i18n::web::auth::users as t;
     let perm_label = permission_label(perm, locale);
     html! {
         tr {
             td { code { (display) } }
             td { span class=(crate::webui::permission_badge_class(perm)) { (perm_label) } }
             td {
-                form method="post" action="/_users" style="display:inline" data-async data-async-target=(card_target) {
+                form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::remove_repo_perm_confirm(locale, &user.username)) {
                     (PreEscaped(csrf))
                     input type="hidden" name="user_action" value="remove_repo_perm";
                     input type="hidden" name="username" value=(user.username);

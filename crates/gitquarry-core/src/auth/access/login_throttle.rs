@@ -16,7 +16,7 @@ struct PasswordLoginCount {
 }
 
 /// Reads the running count of users with a password set, for
-/// [`crate::auth::web::login::password_login_available`] — a single tiny GET
+/// `gitquarry_webui::auth::web::login::password_login_available` — a single tiny GET
 /// instead of fetching every user to answer one boolean. `None` means no
 /// user has ever had a password set (the counter object is only ever
 /// created by the first [`bump_password_login_count`] that has anything to

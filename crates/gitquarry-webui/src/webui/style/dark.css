@@ -2,16 +2,15 @@
   --border: #2a2d31; --border-strong: #444; --border-strongest: #555;
   --surface: #1e2124; --surface-2: #1c1f22; --surface-3: #23262a; --surface-4: #2c2f33;
   --code-bg: #1a1c1f; --code-border: #34373b;
-  /* See light.css's matching comment. One-dark-ish, tuned for this
-     background instead of light.css's. */
-  --syn-kw: #c678dd; --syn-str: #98c379; --syn-com: #7f848e; --syn-num: #d19a66;
-  --syn-const: #d19a66; --syn-fn: #61afef; --syn-type: #e5c07b; --syn-tag: #e06c75;
-  --syn-attr: #d19a66;
   /* `#e0574f`, the mockup's brand red — see light.css's matching comment
      on why this is back from teal, and why `--danger` still isn't
      re-aliased to it. */
   --accent: #e0574f; --link: #6ea8fe;
   --diff-add: #4caf50; --diff-del: #ff6b6b; --diff-hunk: #6ea8fe;
+  /* Low-alpha tints of the same hue, for `.diff-add-line`/`.diff-del-line`'s
+     background — `--code-bg` is dark, so a low alpha keeps `highlight.js`'s
+     own `.hljs-*` token colors readable on top instead of washing them out. */
+  --diff-add-bg: rgba(76, 175, 80, 0.18); --diff-del-bg: rgba(255, 107, 107, 0.16);
   --sig-good: #4caf50;
   --flash-ok-bg: #16261a; --flash-ok-fg: #7cd68a;
   /* A dedicated tint, not `var(--danger)` directly: `styler`'s own

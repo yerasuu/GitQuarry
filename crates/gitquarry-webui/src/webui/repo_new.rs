@@ -2,7 +2,7 @@
 //! initial `.conf/config.json` — so `git push` afterward fills in refs the
 //! normal way, same as pushing to a repo that doesn't exist yet already
 //! does implicitly. The repo's folder (and `owner`) is either the creator's
-//! own username or an existing [`gitquarry_core::auth::access::Group`] — never a
+//! own username or an existing [`gitquarry_core::auth::entities::Group`] — never a
 //! free-text namespace: [`crate::auth::web::profile`] reads `owner` back to list "this
 //! user/group's repos", so it has to name something real. Admin-gated like
 //! `/_settings`/`/_users`: creating a repo is an operator action, not
@@ -94,7 +94,25 @@ pub(crate) async fn handler_new_post(
         return Ok(error_page(&ctx, &headers, &me.username, &group_names, "invalid namespace.").await);
     };
 
-    let name = match validate::sanitize_path(&format!("{namespace}/{}", form.name)) {
+    let display_name = match validate::validate_repo_display_name(&form.name) {
+        Ok(n) => n,
+        Err(e) => {
+            let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
+            return Ok(error_page(&ctx, &headers, &me.username, &group_names, &e.to_string()).await);
+        }
+    };
+    let Some(slug) = domain::repo::slugify_repo_name(&display_name) else {
+        let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
+        return Ok(error_page(
+            &ctx,
+            &headers,
+            &me.username,
+            &group_names,
+            "name must contain at least one letter or digit.",
+        )
+        .await);
+    };
+    let name = match validate::sanitize_path(&format!("{namespace}/{slug}")) {
         Ok(name) => name,
         Err(e) => {
             let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
@@ -108,14 +126,22 @@ pub(crate) async fn handler_new_post(
             "private" => Visibility::Private,
             _ => Visibility::Public,
         };
-        domain::repo::create(&ctx, &name, Some(owner), non_empty(form.description), visibility).await?
+        domain::repo::create(
+            &ctx,
+            &name,
+            Some(display_name),
+            Some(owner),
+            non_empty(form.description),
+            visibility,
+        )
+        .await?
     } else {
         let locale = effective_locale(&ctx, &headers).await;
         let Some(source) = ctx.resolve_repo(template).await? else {
             let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
             return Ok(error_page(&ctx, &headers, &me.username, &group_names, "template repo not found.").await);
         };
-        match domain::repo::create_from_template(&ctx, &source, &name, owner, locale).await {
+        match domain::repo::create_from_template(&ctx, &source, &name, Some(display_name), owner, locale).await {
             Ok(created) => created,
             Err(e) => {
                 let group_names = access::list_group_names(ctx.backend().as_ref()).await?;
@@ -171,16 +197,16 @@ async fn error_page(
     group_names: &[String],
     message: &str,
 ) -> Response {
-    let topnav = login::topnav(ctx, headers).await;
     let locale = effective_locale(ctx, headers).await;
-    let body = render_new_form(
+    let content = render_new_form(
         username,
         group_names,
         &csrf_field(headers),
         Some(Flash::Err(message)),
         locale,
-    )
-    .into_string();
+    );
+    let topnav = login::topnav(ctx, headers).await;
+    let body = content.into_string();
     axum::response::Html(layout(
         "new repo",
         "",
@@ -203,6 +229,7 @@ pub fn render_new_form(
 ) -> Markup {
     use gitquarry_i18n::web::repo_new::*;
     html! {
+      div id="new-repo-body" {
         h3 { (repo_new_heading(locale)) }
         p class="muted" {
             (repo_new_prose_creates_empty(locale)) code { "refs.json" } (repo_new_prose_in_bucket_under(locale))
@@ -214,6 +241,16 @@ pub fn render_new_form(
             code { "owner" } (repo_new_prose_owner_note(locale))
         }
         (PreEscaped(render_flash(message, locale)))
+        // Plain, not `data-async`: a successful create redirects to the new
+        // repo's own page (`handler_new_post`'s `Redirect::to`), a real
+        // navigation a `data-async` submit can't do -- `fetch()` follows
+        // that redirect transparently and hands the JS side the *new repo
+        // page's* full HTML, which it would then try to graft into
+        // `#new-repo-body` as if it were a fragment. A validation error
+        // still re-renders the whole page (`error_page`'s plain branch)
+        // instead of swapping a fragment in place, so an F5 afterward can
+        // warn about resubmitting -- an accepted trade for a create that
+        // actually lands on the repo it just made.
         form method="post" action="/_new" {
             (PreEscaped(csrf))
             div class="field" {
@@ -228,6 +265,7 @@ pub fn render_new_form(
             div class="field" {
                 label { (repo_new_name_label(locale)) }
                 input name="name" size="40" placeholder=(repo_new_name_placeholder(locale)) required autofocus;
+                span class="hint" { (repo_new_name_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_description_label(locale)) }
@@ -247,6 +285,7 @@ pub fn render_new_form(
             }
             p { button type="submit" { (repo_new_create_button(locale)) } }
         }
+      }
     }
 }
 #[cfg(not(any(test, feature = "test-util")))]
@@ -259,6 +298,7 @@ fn render_new_form(
 ) -> Markup {
     use gitquarry_i18n::web::repo_new::*;
     html! {
+      div id="new-repo-body" {
         h3 { (repo_new_heading(locale)) }
         p class="muted" {
             (repo_new_prose_creates_empty(locale)) code { "refs.json" } (repo_new_prose_in_bucket_under(locale))
@@ -270,6 +310,16 @@ fn render_new_form(
             code { "owner" } (repo_new_prose_owner_note(locale))
         }
         (PreEscaped(render_flash(message, locale)))
+        // Plain, not `data-async`: a successful create redirects to the new
+        // repo's own page (`handler_new_post`'s `Redirect::to`), a real
+        // navigation a `data-async` submit can't do -- `fetch()` follows
+        // that redirect transparently and hands the JS side the *new repo
+        // page's* full HTML, which it would then try to graft into
+        // `#new-repo-body` as if it were a fragment. A validation error
+        // still re-renders the whole page (`error_page`'s plain branch)
+        // instead of swapping a fragment in place, so an F5 afterward can
+        // warn about resubmitting -- an accepted trade for a create that
+        // actually lands on the repo it just made.
         form method="post" action="/_new" {
             (PreEscaped(csrf))
             div class="field" {
@@ -284,6 +334,7 @@ fn render_new_form(
             div class="field" {
                 label { (repo_new_name_label(locale)) }
                 input name="name" size="40" placeholder=(repo_new_name_placeholder(locale)) required autofocus;
+                span class="hint" { (repo_new_name_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_description_label(locale)) }
@@ -303,5 +354,6 @@ fn render_new_form(
             }
             p { button type="submit" { (repo_new_create_button(locale)) } }
         }
+      }
     }
 }

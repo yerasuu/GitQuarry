@@ -3,7 +3,7 @@
 //! (enforcement itself lives in `mirror::hook`, this only edits the limit).
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, non_empty, repo_link};
+use crate::webui::{AppError, non_empty, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -49,16 +49,14 @@ pub fn render_lfs_limit_form(
         f.lfs_max_blob_size.as_str()
     });
     html! {
-        h4 { (gitquarry_i18n::web::repo_settings::lfs_limit_heading(locale)) }
-        p class="muted" {
-            (gitquarry_i18n::web::repo_settings::lfs_limit_prose(locale))
-        }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_lfs_max_blob_size";
-            input name="lfs_max_blob_size" value=(current) pattern="[0-9]+[BbKkMmGg]?" title="a number optionally followed by B/K/M/G, e.g. 50M"
-                placeholder=(gitquarry_i18n::web::repo_settings::lfs_limit_placeholder(locale));
-            button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
-        }
+        (settings_section(&gitquarry_i18n::web::repo_settings::lfs_limit_heading(locale), Some(&gitquarry_i18n::web::repo_settings::lfs_limit_prose(locale)), html! {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_lfs_max_blob_size";
+                input name="lfs_max_blob_size" value=(current) pattern="[0-9]+[BbKkMmGg]?" title="a number optionally followed by B/K/M/G, e.g. 50M"
+                    placeholder=(gitquarry_i18n::web::repo_settings::lfs_limit_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
+            }
+        }))
     }
 }

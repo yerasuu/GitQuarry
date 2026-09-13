@@ -16,6 +16,7 @@ msg!(audit_tab() { Locale::Es => "auditoria", Locale::En => "audit" });
 
 msg!(profile_tab() { Locale::Es => "perfil", Locale::En => "profile" });
 msg!(favorites_tab() { Locale::Es => "favoritos", Locale::En => "favorites" });
+msg!(keys_tab() { Locale::Es => "claves", Locale::En => "keys" });
 msg!(security_tab() { Locale::Es => "seguridad", Locale::En => "security" });
 msg!(pat_tab() { Locale::Es => "tokens personales", Locale::En => "personal tokens" });
 msg!(tokens_tab() { Locale::Es => "tokens", Locale::En => "tokens" });
@@ -31,6 +32,8 @@ msg!(
 );
 msg!(account_appearance_section() { Locale::Es => "apariencia", Locale::En => "appearance" });
 msg!(settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes de cuenta", Locale::En => "account settings navigation" });
+msg!(repo_settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes del repositorio", Locale::En => "repo settings navigation" });
+msg!(server_settings_sidebar_nav_label() { Locale::Es => "navegacion de ajustes del servidor", Locale::En => "server settings navigation" });
 
 msg!(about_tab() { Locale::Es => "acerca de", Locale::En => "about" });
 msg!(summary_tab() { Locale::Es => "resumen", Locale::En => "summary" });
@@ -39,7 +42,7 @@ msg!(log_tab() { Locale::Es => "historial", Locale::En => "log" });
 msg!(tree_tab() { Locale::Es => "arbol", Locale::En => "tree" });
 msg!(stats_tab() { Locale::Es => "estadisticas", Locale::En => "stats" });
 msg!(releases_tab() { Locale::Es => "lanzamientos", Locale::En => "releases" });
-msg!(pulls_tab() { Locale::Es => "pull requests", Locale::En => "pull requests" });
+msg!(merges_tab() { Locale::Es => "merge requests", Locale::En => "merge requests" });
 
 msg!(repos_nav() { Locale::Es => "repos", Locale::En => "repos" });
 msg!(new_repo_nav() { Locale::Es => "nuevo repo", Locale::En => "new repo" });
@@ -59,5 +62,29 @@ msg!(archived_notice_detail() {
 });
 msg!(owner_label() { Locale::Es => "propietario", Locale::En => "owner" });
 
+msg!(
+    /// Generic client-side failure toast for `app.js`'s `data-async` forms
+    /// (star/watch, theme/text-size toggles, MR close, etc.) -- read from
+    /// `<body data-error-generic>` (see `page_chrome::layout`) rather than
+    /// hardcoded in JS, same reasoning as `data-confirm`'s messages: it's
+    /// user-facing text and this crate is the only place `Locale` is known.
+    async_request_failed() {
+        Locale::Es => "algo fallo, intenta de nuevo",
+        Locale::En => "something went wrong, try again",
+    }
+);
+
 msg!(limited_visibility_badge() { Locale::Es => "limitado", Locale::En => "limited" });
 msg!(private_visibility_badge() { Locale::Es => "privado", Locale::En => "private" });
+msg!(changelog_nav() { Locale::Es => "changelog", Locale::En => "changelog" });
+msg!(source_nav() { Locale::Es => "codigo fuente", Locale::En => "source" });
+msg!(changelog_heading() { Locale::Es => "cambios", Locale::En => "changelog" });
+msg!(changelog_running_version(version: &str) {
+    Locale::Es => "Esta instancia ejecuta la version {version}. Estas notas son las de ese binario, no las de la ultima publicada.",
+    Locale::En => "This instance runs version {version}. These notes are that binary's own, not the latest published ones.",
+});
+msg!(footer_copyright(year: &str, holder: &str) {
+    Locale::Es => "© {year} {holder}",
+    Locale::En => "© {year} {holder}",
+});
+msg!(license_heading() { Locale::Es => "licencia", Locale::En => "license" });

@@ -1,6 +1,6 @@
 //! `/_search`: cross-repo search — filenames and commit messages across
 //! every repo this request can see. Same visibility rule as the index
-//! ([`crate::webui::repo::visible_repo_names`]): `Public` always, `Limited`
+//! ([`crate::webui::repo::visible_searchable_repos`]): `Public` always, `Limited`
 //! only if logged in. A `Private` repo the caller has an explicit grant on
 //! is still reached directly by URL, same as the index — it just doesn't
 //! show up in search results either, consistent with that same scope.
@@ -75,7 +75,20 @@ pub(crate) async fn handler_search_get(
     } else {
         gitquarry_core::validate::validate_query(&q).map_err(AppError::bad_request)?;
         let viewer_logged_in = login::current_user(&ctx, &headers).await.is_some();
-        let mut repo_names = crate::webui::repo::visible_repo_names(&ctx, viewer_logged_in).await?;
+        let repos = crate::webui::repo::visible_searchable_repos(&ctx, viewer_logged_in).await?;
+        // A hit only carries the repo's `full_name` (that's what the scan
+        // was keyed on, and what its links need), so the labels the rows
+        // render come back alongside it as a lookup rather than per hit.
+        let mut repo_names = Vec::with_capacity(repos.len());
+        let mut labels = HashMap::with_capacity(repos.len());
+        for (name, label) in repos {
+            repo_names.push(name.clone());
+            labels.insert(name, label);
+        }
+        // Federation layer 3: a linked peer's repo whose mirror already
+        // exists locally rides the same scan — no label lookup for these,
+        // `labels.get`'s own fallback below just shows their `_remote/...`
+        // path as-is.
         repo_names.extend(list_synced_peer_repos(&ctx).await);
         let (file_hits, files_truncated) = filenames::search_all(&ctx, &repo_names, &q).await;
         let (commit_hits, commits_truncated) = commits::search_all(&ctx, &repo_names, &q).await;
@@ -86,6 +99,7 @@ pub(crate) async fn handler_search_get(
             commit_hits,
             commits_truncated,
             peer_metadata_hits,
+            labels,
         })
     };
 
@@ -146,7 +160,7 @@ async fn mirror_and_head_impl(ctx: &AppContext, repo: &str) -> Option<(std::path
         return Some((path, head));
     }
     let resolved = ctx.resolve_repo(repo).await.ok()??;
-    let mirror = ctx.open_mirror(&resolved).await.ok()?;
+    let mirror = ctx.open_mirror_read(&resolved).await.ok()?;
     let head = gitquarry_core::git::browse::resolve_head(&mirror.path).await.ok()??;
     Some((mirror.path, head))
 }
@@ -266,6 +280,10 @@ pub struct SearchResults {
     pub commit_hits: Vec<commits::CommitHit>,
     pub commits_truncated: bool,
     pub peer_metadata_hits: Vec<PeerMetadataHit>,
+    /// `full_name` -> the label its rows render (absent means "render the
+    /// name as-is"). Built once per request instead of per hit: one repo
+    /// answers many hits.
+    pub labels: HashMap<String, String>,
 }
 #[cfg(not(any(test, feature = "test-util")))]
 struct SearchResults {
@@ -274,6 +292,7 @@ struct SearchResults {
     commit_hits: Vec<commits::CommitHit>,
     commits_truncated: bool,
     peer_metadata_hits: Vec<PeerMetadataHit>,
+    labels: HashMap<String, String>,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -285,8 +304,15 @@ fn render_search_page(q: &str, results: Option<SearchResults>, locale: gitquarry
     render_search_page_impl(q, results, locale)
 }
 
+/// A hit's row label out of [`SearchResults::labels`] — the raw name for a
+/// repo missing from it (no `display_name`, or one added between the scan
+/// and this render).
+fn repo_label<'a>(labels: &'a HashMap<String, String>, name: &'a str) -> &'a str {
+    labels.get(name).map(String::as_str).unwrap_or(name)
+}
+
 fn render_search_page_impl(q: &str, results: Option<SearchResults>, locale: gitquarry_i18n::Locale) -> Markup {
-    use crate::search::i18n as t;
+    use gitquarry_i18n::web::search as t;
     html! {
         p class="muted" { (t::search_intro(locale)) }
         form method="get" action="/_search" {
@@ -302,7 +328,7 @@ fn render_search_page_impl(q: &str, results: Option<SearchResults>, locale: gitq
                     tr { th { (t::table_header_repo(locale)) } th { (t::table_header_path(locale)) } }
                     @for hit in &results.file_hits {
                         tr {
-                            td { a href=(format!("/{}", url_encode(&hit.repo))) { (display_repo(&hit.repo)) } }
+                            td { a href=(format!("/{}", url_encode(&hit.repo))) { (display_repo(repo_label(&results.labels, &hit.repo))) } }
                             td { code { a href=(crate::webui::repo_link(&hit.repo, "blob", &hit.rev).path(&hit.path).to_string()) { (hit.path) } } }
                         }
                     }
@@ -319,7 +345,7 @@ fn render_search_page_impl(q: &str, results: Option<SearchResults>, locale: gitq
                     tr { th { (t::table_header_repo(locale)) } th { (t::table_header_commit(locale)) } }
                     @for hit in &results.commit_hits {
                         tr {
-                            td { a href=(format!("/{}", url_encode(&hit.repo))) { (display_repo(&hit.repo)) } }
+                            td { a href=(format!("/{}", url_encode(&hit.repo))) { (display_repo(repo_label(&results.labels, &hit.repo))) } }
                             td { a href=(crate::webui::repo_link(&hit.repo, "commit", "").sha(&hit.sha).to_string()) { (hit.subject) } }
                         }
                     }

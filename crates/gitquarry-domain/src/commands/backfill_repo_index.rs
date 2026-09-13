@@ -1,10 +1,11 @@
 //! `gitquarry backfill-repo-index`: one-time operator command for buckets
 //! that already had repos (and repo permission grants) before
-//! `.conf/index/repo-owner/`/`.conf/index/repo-visible/`/
+//! `.conf/index/repo-name/`/`.conf/index/repo-owner/`/`.conf/index/repo-visible/`/
 //! `.conf/index/repo-permission/` existed (see `domain::repo`'s
 //! `create`/`rename`/`fork`/`set_conf`/`set_permission`/`delete`, which keep
-//! all three in sync going forward for anything created or edited after
-//! this landed). Without this, a repo created before the index existed is
+//! all four in sync going forward for anything created or edited after
+//! this landed) — and for buckets whose `repo-name` entries predate that
+//! index moving to a base64 key segment, which no lookup finds any more. Without this, a repo created before the index existed is
 //! invisible on `/_profile/<owner>` and (if not `Private`) on `/`, and a
 //! permission granted before the index existed is invisible on the repo's
 //! own settings-tab grid — until something happens to touch that repo's
@@ -31,12 +32,13 @@ use gitquarry_core::storage::uid::Uid;
 use gitquarry_core::{config, storage};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
   gitquarry backfill-repo-index [--bucket NAME] [--apply]
 
-Repopulates .conf/index/repo-owner/, .conf/index/repo-visible/ and
+Repopulates .conf/index/repo-name/, .conf/index/repo-owner/, .conf/index/repo-visible/ and
 .conf/index/repo-permission/ for repos/permissions that already existed
 before those indexes did -- without this, such a repo doesn't show up on
 /_profile/<owner> nor (if not private) on /, and a permission already
@@ -96,12 +98,12 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let bucket = match bucket_arg {
         Some(b) => b,
         None => conf
-            .only_bucket_name()
+            .default_bucket_name()
             .map(str::to_string)
-            .context("--bucket NAME required (config has more than one bucket)")?,
+            .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
-    let backend = storage::build_backend(&bucket_cfg);
+    let backend = storage::build_backend(&bucket_cfg)?;
     let cipher = Arc::new(
         gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?,
     );
@@ -142,6 +144,23 @@ pub async fn run(rest: &[String]) -> Result<()> {
         }
     }
 
+    // `repo-name` moved from a raw key segment to a base64 one when the
+    // storage engine started refusing a `/` inside a segment (a repo's full
+    // name carries one, between namespace and local name). Entries written
+    // under the old layout still exist but no lookup finds them any more,
+    // which is what makes a pre-existing repo unreachable by name until
+    // this rewrites it.
+    let mut needs_name: Vec<(String, Uid)> = Vec::new();
+    for (uid, config) in &configs {
+        if config.full_name.is_empty() {
+            continue;
+        }
+        let claimed = storage::settings::resolve_repo_name(backend.as_ref(), &cipher, &config.full_name).await?;
+        if claimed.as_ref() != Some(uid) {
+            needs_name.push((config.full_name.clone(), uid.clone()));
+        }
+    }
+
     let users = access::list_all_users(&backend, &cipher).await?;
     let mut permission_now: HashMap<Uid, HashSet<Uid>> = HashMap::new();
     let mut needs_permission: Vec<(Uid, Uid)> = Vec::new(); // (repo_uid, user_uid)
@@ -158,14 +177,14 @@ pub async fn run(rest: &[String]) -> Result<()> {
     }
 
     if unset_owners > 0 {
-        println!(
+        warn!(
             "gitquarry: warning: {unset_owners} repo(s) have an 'owner' with an empty uid (the \"unassigned\" \
              sentinel, not a real owner) -- not indexed, review by hand from each one's settings tab."
         );
     }
 
-    if needs_owner.is_empty() && needs_visible.is_empty() && needs_permission.is_empty() {
-        println!(
+    if needs_owner.is_empty() && needs_visible.is_empty() && needs_permission.is_empty() && needs_name.is_empty() {
+        info!(
             "gitquarry: {} repo(s) and {} user(s) checked, indexes already up to date.",
             configs.len(),
             users.len()
@@ -173,18 +192,19 @@ pub async fn run(rest: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "gitquarry: {} repo(s) and {} user(s) checked -- {} owner-index entries, {} visible-index, and {} \
-         permission-index entries missing.",
+    info!(
+        "gitquarry: {} repo(s) and {} user(s) checked -- {} owner-index entries, {} visible-index, {} \
+         permission-index, and {} repo-name entries missing.",
         configs.len(),
         users.len(),
         needs_owner.len(),
         needs_visible.len(),
-        needs_permission.len()
+        needs_permission.len(),
+        needs_name.len()
     );
 
     if !apply {
-        println!("(dry-run -- run again with --apply to write the indexes)");
+        info!("(dry-run -- run again with --apply to write the indexes)");
         return Ok(());
     }
 
@@ -197,6 +217,28 @@ pub async fn run(rest: &[String]) -> Result<()> {
     for (repo_uid, user_uid) in &needs_permission {
         access::add_repo_permission_index(backend.as_ref(), &cipher, repo_uid, user_uid).await;
     }
-    println!("gitquarry: indexes rebuilt.");
+    for (full_name, uid) in &needs_name {
+        // Self-healing rather than a plain create: a name may still carry a
+        // claim pointing at a repo that no longer exists, and the same
+        // liveness callback `domain::repo` uses decides whether this one may
+        // take it over.
+        let claimed = storage::settings::claim_repo_name_self_healing(backend.as_ref(), &cipher, full_name, uid, {
+            let backend = Arc::clone(&backend);
+            let cipher = Arc::clone(&cipher);
+            move |candidate: &Uid| {
+                let candidate = candidate.clone();
+                async move {
+                    let (config, etag) =
+                        storage::settings::get_repo_config(backend.as_ref(), candidate.as_str(), &cipher).await?;
+                    Ok(etag.is_some() && config.deleted_at.is_none())
+                }
+            }
+        })
+        .await?;
+        if !claimed {
+            warn!("gitquarry: warning: '{full_name}' is still claimed by another live repo, left alone.");
+        }
+    }
+    info!("gitquarry: indexes rebuilt.");
     Ok(())
 }

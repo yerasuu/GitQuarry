@@ -1,5 +1,3 @@
-//! `webui::repo_new`'s page copy.
-
 use super::super::{Locale, msg};
 
 msg!(repo_new_heading() { Locale::Es => "nuevo repo", Locale::En => "new repo" });
@@ -41,6 +39,10 @@ msg!(repo_new_namespace_label() { Locale::Es => "espacio de nombres", Locale::En
 msg!(repo_new_me_suffix() { Locale::Es => " (yo)", Locale::En => " (me)" });
 msg!(repo_new_name_label() { Locale::Es => "nombre", Locale::En => "name" });
 msg!(repo_new_name_placeholder() { Locale::Es => "proyecto", Locale::En => "project" });
+msg!(repo_new_name_hint() {
+    Locale::Es => "cualquier texto vale; la url se genera a partir de este nombre.",
+    Locale::En => "any text works; the url is generated from this name."
+});
 msg!(repo_new_description_label() { Locale::Es => "descripción", Locale::En => "description" });
 msg!(repo_new_visibility_label() { Locale::Es => "visibilidad", Locale::En => "visibility" });
 msg!(repo_new_visibility_public() { Locale::Es => "público", Locale::En => "public" });

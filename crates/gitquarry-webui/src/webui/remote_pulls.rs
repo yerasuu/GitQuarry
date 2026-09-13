@@ -1,7 +1,7 @@
-//! Federation layer 4's live PR-proxy tab on a `/_remote/<peer>/<repo>`
+//! Federation layer 4's live MR-proxy tab on a `/_remote/<peer>/<repo>`
 //! view (`docs/federation-concept.md`'s "Capa 4") — list/detail only,
 //! always a live call straight to the peer's own public `/_api/pulls*`
-//! JSON API, never cached (PR access is per-viewer, caching it would mix
+//! JSON API, never cached (MR access is per-viewer, caching it would mix
 //! viewers' results). The *write* side (`/_remote_pulls/comment`) is
 //! `gitquarry-federation`'s job now, proxied from core — see
 //! `gitquarry-federation::web::remote_pulls`'s own doc comment on why the
@@ -9,8 +9,8 @@
 //! state at all, just the viewer's own credential secret (fetched via
 //! `federation_client::lookup_credential`), so it never needed to move.
 //!
-//! No diff/commit-list here, unlike the local `pulls` view
-//! (`crate::webui::repo::pulls::render_pull_detail`) — that needs the
+//! No diff/commit-list here, unlike the local merge-request view
+//! (`crate::webui::repo::merges::render_merge_detail`) — that needs the
 //! peer's actual git objects synced locally first (federation layer 2's
 //! mirror, a separate concern this tab doesn't take on); this is metadata
 //! and comments only.
@@ -19,10 +19,10 @@ use crate::webui::{AppError, csrf_field, repo_link};
 use anyhow::{Context, Result, bail};
 use axum::http::HeaderMap;
 use gitquarry_core::auth::entities::User;
-use gitquarry_core::storage::pull_requests::{PrDetail, PrStatus, ReviewVerdict};
 use gitquarry_i18n::Locale;
 use gitquarry_i18n::web::remote_pulls as remote_pulls_t;
-use gitquarry_i18n::web::repo_pulls as pulls_t;
+use gitquarry_i18n::web::repo::merges as pulls_t;
+use gitquarry_wire::{MrDetail, MrStatus, ReviewVerdict};
 use maud::{PreEscaped, html};
 use std::time::Duration;
 
@@ -39,7 +39,7 @@ async fn fetch_remote_pull_requests(
     web_base_url: &str,
     repo_name: &str,
     credential_secret: Option<&str>,
-) -> Result<Vec<gitquarry_core::storage::pull_requests::PullRequestMeta>> {
+) -> Result<Vec<gitquarry_core::storage::merge_requests::MergeRequestMeta>> {
     let client = http_client()?;
     let url = format!("{}/_api/pulls", web_base_url.trim_end_matches('/'));
     let mut req = client.get(&url).query(&[("repo", repo_name)]);
@@ -60,7 +60,7 @@ async fn fetch_remote_pull_request_detail(
     repo_name: &str,
     number: u64,
     credential_secret: Option<&str>,
-) -> Result<PrDetail> {
+) -> Result<MrDetail> {
     let client = http_client()?;
     let url = format!("{}/_api/pulls/detail", web_base_url.trim_end_matches('/'));
     let mut req = client
@@ -78,11 +78,11 @@ async fn fetch_remote_pull_request_detail(
         .with_context(|| format!("{url} returned malformed JSON"))
 }
 
-fn status_label(status: PrStatus, locale: Locale) -> String {
+fn status_label(status: MrStatus, locale: Locale) -> String {
     match status {
-        PrStatus::Open => pulls_t::open_status(locale),
-        PrStatus::Closed => pulls_t::closed_status(locale),
-        PrStatus::Merged => pulls_t::merged_status(locale),
+        MrStatus::Open => pulls_t::open_status(locale),
+        MrStatus::Closed => pulls_t::closed_status(locale),
+        MrStatus::Merged => pulls_t::merged_status(locale),
     }
 }
 
@@ -128,7 +128,7 @@ pub(super) async fn render_remote_pulls_list(
             @for pr in &prs {
                 tr {
                     td { (pr.number) }
-                    td { a href=(repo_link(link_name, "pull", "").number(pr.number).to_string()) { (pr.title) } }
+                    td { a href=(repo_link(link_name, "merge", "").number(pr.number).to_string()) { (pr.title) } }
                     td { (status_label(pr.status, locale)) }
                     td { (pr.author) }
                 }
@@ -150,10 +150,13 @@ pub(super) async fn render_remote_pull_detail(
     headers: &HeaderMap,
     locale: Locale,
 ) -> Result<String, AppError> {
-    let PrDetail { pr, comments, reviews } =
-        fetch_remote_pull_request_detail(peer_web_base_url, repo_name, number, credential)
-            .await
-            .map_err(AppError::bad_request)?;
+    let MrDetail {
+        mr: pr,
+        comments,
+        reviews,
+    } = fetch_remote_pull_request_detail(peer_web_base_url, repo_name, number, credential)
+        .await
+        .map_err(AppError::bad_request)?;
 
     Ok(html! {
         h3 { "#" (pr.number) " " (pr.title) }
@@ -168,7 +171,7 @@ pub(super) async fn render_remote_pull_detail(
         // Read-only: only commenting is proxied cross-instance
         // (`/_remote_pulls/comment`), so a remote PR's reviews are shown as
         // the peer reports them, with no submit form of their own.
-        @let summary = gitquarry_core::domain::pull_request::review_summary(&reviews);
+        @let summary = gitquarry_core::domain::merge_request::review_summary(&reviews);
         h4 { (pulls_t::reviews_heading(locale)) }
         @if !summary.approved_by.is_empty() {
             p class="muted" { (pulls_t::approved_by_prefix(locale)) (summary.approved_by.join(", ")) }

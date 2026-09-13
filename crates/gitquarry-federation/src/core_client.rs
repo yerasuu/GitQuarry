@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result, bail};
 use gitquarry_wire::ipc::SignedRequestBuilderExt;
-use gitquarry_wire::{PrDetail, PullRequestMeta, RepoSummary, Uid};
+use gitquarry_wire::{MergeRequestMeta, MrDetail, RepoSummary, Uid};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
@@ -156,29 +156,29 @@ impl CoreClient {
         Ok(resp.map(|r| Uid::from(r.uid)))
     }
 
-    /// `GET /_internal/pull-requests/list?repo=` — every PR on `repo`.
-    pub async fn list_pull_requests(&self, repo: &str) -> Result<Vec<PullRequestMeta>> {
+    /// `GET /_internal/merge-requests/list?repo=` — every MR on `repo`.
+    pub async fn list_merge_requests(&self, repo: &str) -> Result<Vec<MergeRequestMeta>> {
         Ok(self
-            .get_json(&format!("/pull-requests/list?repo={}", urlencoding(repo)))
+            .get_json(&format!("/merge-requests/list?repo={}", urlencoding(repo)))
             .await?
             .unwrap_or_default())
     }
 
-    /// `GET /_internal/pull-requests?repo=&number=` — one PR plus its
+    /// `GET /_internal/merge-requests?repo=&number=` — one MR plus its
     /// comments.
-    pub async fn pull_request_detail(&self, repo: &str, number: u64) -> Result<Option<PrDetail>> {
-        self.get_json(&format!("/pull-requests?repo={}&number={number}", urlencoding(repo)))
+    pub async fn merge_request_detail(&self, repo: &str, number: u64) -> Result<Option<MrDetail>> {
+        self.get_json(&format!("/merge-requests?repo={}&number={number}", urlencoding(repo)))
             .await
     }
 
-    /// `POST /_internal/pull-requests` — caller has already authorized
+    /// `POST /_internal/merge-requests` — caller has already authorized
     /// `author` on `repo` via [`Self::authorize`], same division of labor
     /// `gitquarry-core`'s own `internal_api` module doc comment describes.
-    pub async fn create_pull_request(&self, req: &CreatePullRequest<'_>) -> Result<PullRequestMeta> {
-        self.post_json("/pull-requests", req).await
+    pub async fn create_merge_request(&self, req: &CreateMergeRequest<'_>) -> Result<MergeRequestMeta> {
+        self.post_json("/merge-requests", req).await
     }
 
-    pub async fn comment_pull_request(&self, repo: &str, number: u64, author: &str, body: &str) -> Result<()> {
+    pub async fn comment_merge_request(&self, repo: &str, number: u64, author: &str, body: &str) -> Result<()> {
         #[derive(Serialize)]
         struct Req<'a> {
             repo: &'a str,
@@ -193,7 +193,7 @@ impl CoreClient {
         }
         let _: Resp = self
             .post_json(
-                "/pull-requests/comment",
+                "/merge-requests/comment",
                 &Req {
                     repo,
                     number,
@@ -205,7 +205,7 @@ impl CoreClient {
         Ok(())
     }
 
-    pub async fn merge_pull_request(
+    pub async fn merge_merge_request(
         &self,
         repo: &str,
         number: u64,
@@ -220,7 +220,7 @@ impl CoreClient {
             strategy: gitquarry_wire::MergeStrategy,
         }
         self.post_json(
-            "/pull-requests/merge",
+            "/merge-requests/merge",
             &Req {
                 repo,
                 number,
@@ -241,7 +241,7 @@ fn urlencoding(repo: &str) -> String {
 }
 
 #[derive(Serialize)]
-pub struct CreatePullRequest<'a> {
+pub struct CreateMergeRequest<'a> {
     pub repo: &'a str,
     pub source_repo: &'a str,
     pub source_branch: &'a str,

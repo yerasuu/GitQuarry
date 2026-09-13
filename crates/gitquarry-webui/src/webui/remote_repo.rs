@@ -38,7 +38,7 @@ use std::path::Path as FsPath;
 fn federation_unavailable(locale: Locale) -> AppError {
     AppError::not_found(anyhow::anyhow!(
         "{}",
-        gitquarry_i18n::shared::repo_not_found_in_bucket(locale, "federation")
+        gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, "federation")
     ))
 }
 
@@ -63,13 +63,13 @@ pub(crate) async fn handler_remote_repo(
     let Some(peer) = federation_client::lookup_peer(federation, &peer_name).await else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &peer_name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &peer_name)
         )));
     };
     if peer.banned {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &peer_name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &peer_name)
         )));
     }
 
@@ -109,7 +109,7 @@ pub(crate) async fn handler_remote_repo(
     let active_tab = match view {
         "log" | "commit" => "log",
         "summary" => "summary",
-        "pulls" | "pull" => "pulls",
+        "merges" | "merge" => "merges",
         _ => "tree", // tree, blob, blame
     };
     let theme = effective_theme(&ctx, &headers).await;
@@ -130,15 +130,15 @@ pub(crate) async fn handler_remote_repo(
             )
             .await?
         }
-        "tree" => render_tree(&ctx, &mirror.path, &link_name, rev, path, locale).await?,
-        "blob" => render_blob(&mirror.path, &link_name, rev, path, locale).await?,
+        "tree" => render_tree(&ctx, &mirror.path, &link_name, None, rev, path, locale).await?,
+        "blob" => render_blob(&mirror.path, &link_name, None, rev, path, locale).await?,
         "log" => {
             let q = params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
             if let Some(q) = q {
                 validate::validate_query(q).map_err(AppError::bad_request)?;
             }
             let skip: usize = params.get("skip").and_then(|s| s.parse().ok()).unwrap_or(0);
-            render_log(&ctx, &mirror.path, &link_name, rev, path, q, skip, locale).await?
+            render_log(&ctx, &mirror.path, &link_name, None, rev, path, q, skip, locale).await?
         }
         // Not one of the three tabs (only reachable via a commit-table row's
         // own link, same as local `handler_repo`'s "commit" isn't a tab
@@ -147,20 +147,20 @@ pub(crate) async fn handler_remote_repo(
         "commit" => {
             let sha = require_sha(&params, locale)?;
             let (info, diff) = git::browse::show_commit(&mirror.path, sha).await?;
-            render_commit(&ctx, &mirror.path, &link_name, &info, &diff, &headers).await?
+            render_commit(&ctx, &mirror.path, &link_name, &info, &diff, false, &headers).await?
         }
         // Federation layer 4's live PR-proxy tab — always a fresh call to
         // the peer's own API, never cached like the rest of this view
         // (`open_remote_mirror_at`'s synced git objects are). Resolved here
         // (not inside the render fns) so they take an explicit
         // `viewer`/`credential` like `render_remote_summary` already does.
-        "pulls" | "pull" => {
+        "merges" | "merge" => {
             let viewer = login::current_user(&ctx, &headers).await;
             let credential = match &viewer {
                 Some(u) => federation_client::lookup_credential(federation, &peer_name, &u.uid).await,
                 None => None,
             };
-            if view == "pulls" {
+            if view == "merges" {
                 render_remote_pulls_list(
                     &peer.web_base_url,
                     &repo_name,
@@ -188,15 +188,15 @@ pub(crate) async fn handler_remote_repo(
             if path.is_empty() {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::blame_requires_path(locale)
+                    gitquarry_i18n::shared::repo::blame_requires_path(locale)
                 )));
             }
-            render_blame(&mirror.path, &link_name, rev, path, locale).await?
+            render_blame(&mirror.path, &link_name, None, rev, path, locale).await?
         }
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::unknown_view(locale, other)
+                gitquarry_i18n::shared::repo::unknown_view(locale, other)
             )));
         }
     };
@@ -220,7 +220,7 @@ fn render_remote_header(
         ("summary", "summary"),
         ("log", "log"),
         ("tree", "tree"),
-        ("pulls", "pulls"),
+        ("merges", "merges"),
     ];
     maud::html! {
         table class="header" {
@@ -230,7 +230,7 @@ fn render_remote_header(
             tr { td {
                 @for (i, (id, label)) in tabs.iter().enumerate() {
                     @if i > 0 { " | " }
-                    a class=[(active == *id).then_some("active")] href=(repo_link(link_name, id, if *id == "summary" || *id == "pulls" { "" } else { rev }).to_string()) { (label) }
+                    a class=[(active == *id).then_some("active")] href=(repo_link(link_name, id, if *id == "summary" || *id == "merges" { "" } else { rev }).to_string()) { (label) }
                 }
             } }
         }
@@ -258,10 +258,13 @@ async fn render_remote_summary(
     let (branches, tags) = components::split_refs(refs);
     let recent = git::browse::log(bare_repo, rev, RECENT_LOG_LIMIT, None).await?;
     let avatars = components::commit_avatars(ctx, bare_repo, &recent).await;
+    let branch_avatars =
+        components::ref_avatars(ctx, bare_repo, &branches[..branches.len().min(SUMMARY_REFS_LIMIT)]).await;
+    let tag_avatars = components::ref_avatars(ctx, bare_repo, &tags[..tags.len().min(SUMMARY_REFS_LIMIT)]).await;
     Ok(maud::html! {
-        (components::ref_table(link_name, &branches, SUMMARY_REFS_LIMIT, false, &HashMap::new(), locale))
+        (components::ref_table(link_name, &branches, SUMMARY_REFS_LIMIT, false, &branch_avatars, locale))
         @if !tags.is_empty() {
-            (components::ref_table(link_name, &tags, SUMMARY_REFS_LIMIT, false, &HashMap::new(), locale))
+            (components::ref_table(link_name, &tags, SUMMARY_REFS_LIMIT, false, &tag_avatars, locale))
         }
         (components::commit_table(link_name, &recent, &avatars, locale))
         @if let Some(viewer) = viewer {

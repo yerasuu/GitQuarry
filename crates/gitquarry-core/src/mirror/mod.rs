@@ -14,10 +14,12 @@ pub mod gc;
 pub mod hook;
 #[cfg(not(any(test, feature = "test-util")))]
 mod hook;
+pub mod policy;
+pub mod recent;
 
 pub use hook::run_pre_receive_hook;
 
-use crate::app::{AppContext, Mirror};
+use crate::app::{AppContext, Mirror, ResolvedRepo};
 use crate::git;
 use anyhow::{Context, Result};
 use futures::stream::{self, TryStreamExt};
@@ -29,6 +31,69 @@ use tokio::process::{Child, Command};
 /// all-at-once: a repo with hundreds of small packs (pre-`repack`) shouldn't
 /// open hundreds of simultaneous connections to the storage backend.
 const DOWNLOAD_CONCURRENCY: usize = 8;
+
+/// The hook point `gitquarry-mirror-external`'s sync engine plugs into —
+/// core can't depend on that crate directly (it depends on core, for
+/// `AppContext`/`storage`/`git`; the reverse would cycle), so this trait is
+/// the seam: core defines *where* a sync needs to happen and *when*,
+/// `gitquarry-server` (which already depends on both) wires the real
+/// implementation into [`AppContext::mirror_sync`] at startup. `None` (no
+/// binary/deploy wired it up, or the feature is compiled out) just means
+/// nothing runs here — same "`None` = feature fully off" pattern
+/// `AppContext.tracker` already establishes.
+///
+/// `#[async_trait]`/`dyn`-boxed rather than a generic: core has no concrete
+/// type to name here at all — whether this is wired, and to what, is a
+/// `gitquarry-server`-startup decision core never sees.
+#[async_trait::async_trait]
+pub trait MirrorSyncHook: Send + Sync {
+    /// Called right before serving a clone/fetch (`upload-pack`) — see
+    /// [`sync_external_before_serving`], including why a push is
+    /// deliberately not one of the triggers.
+    /// Implementations must never propagate an error or block
+    /// indefinitely: a slow/unreachable external forge must never turn
+    /// into a hung or failed git operation, the single most
+    /// latency-sensitive path in core (`docs/mirror-external-extraction-concept.md`'s
+    /// "never blocks basic git functions" invariant — enforcing the actual
+    /// bound, e.g. a timeout, is this implementation's job now, not core's).
+    async fn sync_before_serving(&self, ctx: &AppContext, resolved: &ResolvedRepo);
+}
+
+/// Lets `#[derive(Debug)]` on [`AppContext`] cover its
+/// `Option<Arc<dyn MirrorSyncHook>>` field without the trait itself needing
+/// a `Debug` supertrait every implementation would have to satisfy.
+impl std::fmt::Debug for dyn MirrorSyncHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<mirror sync hook>")
+    }
+}
+
+/// Calls [`AppContext::mirror_sync`]'s hook, if any is wired, right before
+/// serving a clone/fetch (`upload-pack`) — both [`crate::git::ssh`] and
+/// [`crate::git::http`] call this immediately before their own
+/// [`AppContext::open_mirror`] call, so a client sees the freshest state the
+/// wired-in sync can produce.
+///
+/// Reads only: a push is deliberately *not* a trigger. Pulling from the
+/// external side and then accepting the push means the pull may have moved
+/// the branch first, leaving the pre-receive hook to reject the client's
+/// push as stale — a sync nobody asked for breaking a valid push. Whatever
+/// the push lands goes out on the next sweep regardless.
+///
+/// Skips entirely (zero overhead, not even the virtual call) when either no
+/// hook is wired at all, or this repo has no enabled external mirror —
+/// checked via the same indexed hint the periodic sweep's own repo
+/// discovery uses, so the overwhelming majority of repos (no external
+/// mirror configured) pay nothing beyond one indexed lookup.
+pub async fn sync_external_before_serving(ctx: &AppContext, resolved: &ResolvedRepo) {
+    let Some(hook) = &ctx.mirror_sync else {
+        return;
+    };
+    if !crate::storage::settings::has_enabled_mirror(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid).await {
+        return;
+    }
+    hook.sync_before_serving(ctx, resolved).await;
+}
 
 /// Creates the local bare mirror if missing and installs the `pre-receive`
 /// hook that syncs every push against S3 (with `exe_path` pointed to by
@@ -76,9 +141,59 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Name of the marker file inside a mirror recording the manifest etag it
+/// was last fully synced to — see [`sync_bare_repo_from_s3`]'s fast path.
+const SYNC_MARKER: &str = ".gitquarry-synced-etag";
+
 /// Downloads missing packs and makes the local mirror's refs/HEAD match the
 /// S3 manifest exactly (creates, moves, and deletes as needed).
+///
+/// This runs on every `info/refs`, `upload-pack` *and* every webui page
+/// view of a repo (`AppContext::open_mirror`), not just a push, so for a
+/// repo nobody has pushed to since the last time it was opened, the fast
+/// path below matters more than the batching in the rest of this function:
+/// it skips the S3 `list_pack_names` call (never cached by
+/// `s3db::CachedBackend`, which only caches point `get`s) and the ref diff
+/// entirely, leaving only the manifest `get` -- itself usually a memory hit
+/// off that same cache -- between a browse/clone and local-disk speed.
+/// `true` when `bare_repo` already matches the manifest the bucket holds —
+/// exactly the condition [`sync_bare_repo_from_s3`]'s fast path checks, but
+/// asked *before* taking a write lock, so a reader that needs no sync never
+/// takes one at all (`app::AppContext::open_mirror_read`).
+///
+/// `false` for a mirror that doesn't exist yet, for a bucket whose driver
+/// gives no etag, and for any read error on the marker: all of them mean
+/// "can't prove it's current", and the only cost of being wrong that way is
+/// taking the exclusive path that was the sole path before.
+pub async fn is_synced(remote: &crate::storage::remote::Remote, bare_repo: &Path) -> Result<bool> {
+    let (_manifest, etag) = remote.get_manifest().await?;
+    let Some(etag) = etag else {
+        return Ok(false);
+    };
+    let marker = tokio::fs::read_to_string(bare_repo.join(SYNC_MARKER)).await;
+    Ok(marker.is_ok_and(|m| m.trim() == etag))
+}
+
 pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bare_repo: &Path) -> Result<()> {
+    let (manifest, etag) = remote.get_manifest().await?;
+
+    // Packs are always uploaded before the manifest CAS that references
+    // them (`mirror::hook`'s push path uploads, then calls `put_manifest`),
+    // so an unchanged etag guarantees the packs and refs below are already
+    // exactly what this mirror has. The marker lives as a file *inside*
+    // `bare_repo`, not an in-process cache keyed by uid: `mirror::gc`'s
+    // eviction sweep deletes this whole directory when it evicts a cold
+    // mirror, and it can't do that without taking this file down with it --
+    // an in-process cache disconnected from the mirror's real on-disk state
+    // could otherwise skip a sync into a mirror eviction had just emptied.
+    let marker_path = bare_repo.join(SYNC_MARKER);
+    if let Some(etag) = etag.as_deref()
+        && let Ok(marker) = tokio::fs::read_to_string(&marker_path).await
+        && marker.trim() == etag
+    {
+        return Ok(());
+    }
+
     let remote_packs = remote.list_pack_names().await?;
     let local_packs = git::local_pack_names(bare_repo).await?;
     let dest_dir = git::objects_pack_dir(bare_repo);
@@ -93,21 +208,34 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
         })
         .await?;
 
-    let (manifest, _etag) = remote.get_manifest().await?;
-    let local_refs = git::list_refs(bare_repo).await?;
-
-    for (name, sha) in &manifest.refs {
-        git::update_ref(bare_repo, name, sha).await?;
-    }
-    for name in &local_refs {
-        if !manifest.refs.contains_key(name) {
-            git::delete_ref(bare_repo, name).await?;
-        }
-    }
+    // Diffed against the manifest before writing anything, and applied in
+    // one batched `git update-ref --stdin` call: this sync runs on every
+    // `info/refs` and `upload-pack` (not just a push), so without the diff
+    // every one of those would rewrite every ref via its own subprocess
+    // even when nothing had actually changed since the last sync.
+    let local_refs = git::list_refs_with_oids(bare_repo).await?;
+    let updates: Vec<(String, String)> = manifest
+        .refs
+        .iter()
+        .filter(|(name, sha)| local_refs.get(*name).map(String::as_str) != Some(sha.as_str()))
+        .map(|(name, sha)| (name.clone(), sha.clone()))
+        .collect();
+    let deletes: Vec<String> = local_refs
+        .keys()
+        .filter(|name| !manifest.refs.contains_key(*name))
+        .cloned()
+        .collect();
+    git::apply_ref_changes(bare_repo, &updates, &deletes).await?;
     if let Some(head) = &manifest.head
         && manifest.refs.contains_key(head)
     {
         git::set_head(bare_repo, head).await?;
+    }
+
+    // Best-effort: a failure to write the marker just means the next call
+    // takes the slow path again instead of wrongly skipping a real sync.
+    if let Some(etag) = &etag {
+        let _ = tokio::fs::write(&marker_path, etag).await;
     }
 
     Ok(())

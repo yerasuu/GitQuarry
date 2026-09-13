@@ -20,9 +20,10 @@
 //! password, totp}`.
 //!
 //! The login/security/favorites/preferences/profile/users/groups page
-//! handlers (formerly `web` here) and their template copy (formerly `i18n`
-//! here) now live in the `gitquarry-webui` crate, as `auth::web`/`auth::i18n`
-//! there — presentation, not identity/permission logic.
+//! handlers (formerly `web` here) now live in the `gitquarry-webui` crate,
+//! as `auth::web` there — presentation, not identity/permission logic.
+//! Their template copy lives in `gitquarry-i18n`'s `web::auth_*`, alongside
+//! every other page's.
 
 pub mod access;
 pub mod domain;

@@ -1,17 +1,35 @@
 //! The `blob` tab: a single file — syntax-highlighted text, an inline
 //! image, a "too big"/binary notice, or a link to the raw bytes
 //! ([`super::super::export`]).
+//!
+//! Highlighting itself is entirely client-side (`highlight.js`, vendored —
+//! see `app.js`'s own doc comment for where it's invoked): this just emits
+//! the file's raw text, escaped, inside one `<pre><code id="blob-code"
+//! class="language-*">` block. The `id` is what `app.js` looks for to run
+//! the line-numbers plugin only on this one full-file block (never on a
+//! diff line's own small fragment) — its own doc comment covers why a
+//! whole-file block, not one highlighted per line, is what keeps a
+//! multi-line comment/string correctly classified, and how `#L42`
+//! permalinks (this page's own convention, also what `blame.rs`'s row ids
+//! are for) survive that.
 
 use super::MAX_BLOB_BYTES;
-use crate::webui::{breadcrumbs, export, github_raw_link, highlight, repo_link};
+use crate::webui::{breadcrumbs, export, github_raw_link, language_tag::language_tag, repo_link};
 use anyhow::Result;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
 use maud::{PreEscaped, html};
 use std::path::Path as FsPath;
 
-pub async fn render_blob(bare_repo: &FsPath, repo_name: &str, rev: &str, path: &str, locale: Locale) -> Result<String> {
-    let breadcrumbs = breadcrumbs(repo_name, rev, path, "blob", locale);
+pub async fn render_blob(
+    bare_repo: &FsPath,
+    repo_name: &str,
+    display_name: Option<&str>,
+    rev: &str,
+    path: &str,
+    locale: Locale,
+) -> Result<String> {
+    let breadcrumbs = breadcrumbs(repo_name, display_name, rev, path, "blob", locale);
     let plain_link = github_raw_link(repo_name, rev, path);
 
     let size = git::browse::blob_size(bare_repo, rev, path).await?;
@@ -37,7 +55,6 @@ pub async fn render_blob(bare_repo: &FsPath, repo_name: &str, rev: &str, path: &
     let bytes = git::browse::read_blob(bare_repo, rev, path).await?;
     Ok(match std::str::from_utf8(&bytes) {
         Ok(text) => {
-            let lines = highlight::highlighted_lines(path, text);
             let blame_link = repo_link(repo_name, "blame", rev).path(path).to_string();
             html! {
                 div class="crumbs-row" {
@@ -47,14 +64,8 @@ pub async fn render_blob(bare_repo: &FsPath, repo_name: &str, rev: &str, path: &
                     }
                 }
                 div class="scroll-x" {
-                    table class="blob" {
-                        @for (i, line) in lines.iter().enumerate() {
-                            @let n = i + 1;
-                            tr id=(format!("L{n}")) {
-                                td class="lineno" { a href=(format!("#L{n}")) { (n) } }
-                                td class="code" { (PreEscaped(line)) }
-                            }
-                        }
+                    pre class="blob" {
+                        code id="blob-code" class=(format!("language-{}", language_tag(path))) { (text) }
                     }
                 }
             }

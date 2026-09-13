@@ -5,7 +5,7 @@
 //! object parser needed there.
 
 use crate::git::run;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -69,4 +69,79 @@ fn strip_signature(object: &[u8]) -> Option<(Vec<u8>, String)> {
     }
     let signature = signature_lines.join("\n");
     Some((payload, signature))
+}
+
+/// Which of `shas` carry a `gpgsig` header at all — the cheap half of
+/// "is this commit signed", answered without verifying anything.
+///
+/// This exists because `%G?` doesn't just *report* a grade, it computes
+/// one: `git log --format=…%G?` forks `gpg`/`ssh-keygen` once per commit
+/// it walks. Measured on a 312-commit repo, the same
+/// `git log --name-status -n400` walk costs 10ms without `%G?` and 1036ms
+/// with it, and none of the callers that pay for it can use a git-side
+/// grade anyway — this process never populates git's keyring, so the
+/// verdict that actually reaches a page comes from
+/// [`crate::domain::commit_signature::verified_signer`] against accounts'
+/// own registered keys. One `cat-file --batch` over the same shas answers
+/// the only question `%G?` was really being asked (4ms for 400 commits),
+/// and [`crate::git::browse::CommitInfo::signature_status`] carries it.
+pub async fn signed_shas(git_dir: &Path, shas: &[&str]) -> Result<std::collections::HashSet<String>> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut signed = std::collections::HashSet::new();
+    if shas.is_empty() {
+        return Ok(signed);
+    }
+    let mut child = tokio::process::Command::new("git")
+        .env("GIT_DIR", git_dir)
+        .args(["cat-file", "--batch"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("couldn't run git cat-file --batch")?;
+    let mut stdin = child.stdin.take().context("git cat-file stdin was not piped")?;
+    let query: String = shas.iter().map(|s| format!("{s}\n")).collect();
+    // Written before the output is read, and the handle dropped right
+    // after: `cat-file --batch` only flushes the last object once stdin
+    // closes, so holding it open would deadlock against `wait_with_output`.
+    stdin.write_all(query.as_bytes()).await?;
+    drop(stdin);
+    let out = child.wait_with_output().await?;
+
+    // `<sha> <type> <size>\n<contents>\n` per object, so the record
+    // boundaries come from the declared size rather than from scanning for
+    // a separator a commit message could contain itself. A sha git doesn't
+    // have answers `<sha> missing\n` instead, with no body to skip.
+    let mut rest: &[u8] = &out.stdout;
+    while let Some(nl) = rest.iter().position(|&b| b == b'\n') {
+        let header = String::from_utf8_lossy(&rest[..nl]).into_owned();
+        rest = &rest[nl + 1..];
+        let mut fields = header.split(' ');
+        let Some(sha) = fields.next() else { break };
+        let Some(kind) = fields.next() else { continue };
+        if kind == "missing" {
+            continue;
+        }
+        let Ok(size) = fields.next().unwrap_or("").parse::<usize>() else {
+            continue;
+        };
+        if rest.len() < size {
+            break;
+        }
+        let (body, tail) = rest.split_at(size);
+        // Skip the trailing newline `--batch` writes after every body.
+        rest = tail.strip_prefix(b"\n").unwrap_or(tail);
+        // Only the header block matters, and `gpgsig` can't appear at the
+        // start of a line inside it other than as that header: the block
+        // ends at the first blank line, everything after is the message.
+        let headers = body
+            .windows(2)
+            .position(|w| w == b"\n\n")
+            .map_or(body, |end| &body[..end]);
+        if headers.starts_with(b"gpgsig ") || headers.windows(8).any(|w| w == b"\ngpgsig ") {
+            signed.insert(sha.to_string());
+        }
+    }
+    Ok(signed)
 }

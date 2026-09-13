@@ -37,6 +37,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+use tracing::{info, warn};
 
 /// What `run` hands back to [`crate::serve::run`] once the wizard succeeds —
 /// exactly what it would otherwise have loaded from an existing
@@ -89,8 +90,8 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
     let listener = tokio::net::TcpListener::bind(web_bind)
         .await
         .with_context(|| format!("couldn't listen on {web_bind} for the setup wizard"))?;
-    eprintln!(
-        "gitquarry: {} — open http://{web_bind} to {}",
+    info!(
+        "{} — open http://{web_bind} to {}",
         if is_prefilled {
             format!("{} connects but has no admin user yet", config_path.display())
         } else {
@@ -180,7 +181,7 @@ pub struct WizardForm {
     /// (`auth::domain::user::set_email`), and this account *is* the first
     /// admin. Left blank, every merge commit it stamps carries the
     /// synthetic `<username>@users.noreply.gitquarry` address instead
-    /// (`domain::pull_request::merger_identity`).
+    /// (`domain::merge_request::merger_identity`).
     #[serde(default)]
     pub admin_email: String,
     pub admin_password: String,
@@ -234,7 +235,7 @@ struct WizardForm {
     /// (`auth::domain::user::set_email`), and this account *is* the first
     /// admin. Left blank, every merge commit it stamps carries the
     /// synthetic `<username>@users.noreply.gitquarry` address instead
-    /// (`domain::pull_request::merger_identity`).
+    /// (`domain::merge_request::merger_identity`).
     #[serde(default)]
     admin_email: String,
     admin_password: String,
@@ -267,7 +268,7 @@ async fn handler_post(State(state): State_, Form(form): Form<WizardForm>) -> Res
             .into_response()
         }
         Err(e) => {
-            eprintln!("setup wizard: {e:#}");
+            warn!("setup wizard: {e:#}");
             (
                 StatusCode::BAD_REQUEST,
                 Html(render_form(Some(&format!("{e:#}")), state.prefill.as_ref())),
@@ -301,9 +302,10 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
     let bucket_cfg = BucketConfig {
         backend: backend_cfg,
         passphrase: form.passphrase.clone(),
+        resilience: Default::default(),
     };
 
-    let backend = storage::build_backend(&bucket_cfg);
+    let backend = storage::build_backend(&bucket_cfg)?;
     // The real round trip: wrong creds/endpoint/bucket, or a passphrase
     // that doesn't match a bucket already used before, all fail clearly
     // right here instead of writing a config that can't actually connect.
@@ -366,8 +368,13 @@ fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>
                 region: non_empty(form.s3_region.clone()),
                 endpoint_url: non_empty(form.s3_endpoint_url.clone()),
                 access_key_id,
-                secret_access_key,
+                secret_access_key: secret_access_key.into(),
                 path_style: form.s3_path_style == "1",
+                // Off, deliberately: an `http://` endpoint would put these
+                // credentials and every object body on the wire in the
+                // clear. An operator pointing at a local MinIO opts in by
+                // editing the config by hand.
+                allow_insecure_http: false,
             }))
         }
         "r2" => {
@@ -383,7 +390,7 @@ fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>
                 bucket,
                 account_id,
                 access_key_id,
-                secret_access_key,
+                secret_access_key: secret_access_key.into(),
             }))
         }
         "azure" => {
@@ -402,7 +409,7 @@ fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>
                 account_name,
                 tenant_id,
                 client_id,
-                client_secret,
+                client_secret: client_secret.into(),
             }))
         }
         "gcs" => {
@@ -481,6 +488,7 @@ async fn seed_admin_user(
         totp_secret: None,
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
+        totp_last_step: 0,
         locale_default: String::new(),
         storage_quota_bytes: None,
         avatar_content_type: None,
@@ -596,7 +604,7 @@ impl From<&Prefill> for FieldValues {
                 v.s3_region = s.region.clone().unwrap_or_default();
                 v.s3_endpoint_url = s.endpoint_url.clone().unwrap_or_default();
                 v.s3_access_key_id = s.access_key_id.clone();
-                v.s3_secret_access_key = s.secret_access_key.clone();
+                v.s3_secret_access_key = s.secret_access_key.to_string();
                 v.s3_path_style = s.path_style;
             }
             BackendConfig::R2(r) => {
@@ -604,7 +612,7 @@ impl From<&Prefill> for FieldValues {
                 v.r2_bucket = r.bucket.clone();
                 v.r2_account_id = r.account_id.clone();
                 v.r2_access_key_id = r.access_key_id.clone();
-                v.r2_secret_access_key = r.secret_access_key.clone();
+                v.r2_secret_access_key = r.secret_access_key.to_string();
             }
             BackendConfig::Azure(a) => {
                 v.driver = "azure";
@@ -612,7 +620,7 @@ impl From<&Prefill> for FieldValues {
                 v.azure_account_name = a.account_name.clone();
                 v.azure_tenant_id = a.tenant_id.clone();
                 v.azure_client_id = a.client_id.clone();
-                v.azure_client_secret = a.client_secret.clone();
+                v.azure_client_secret = a.client_secret.to_string();
             }
             BackendConfig::Gcs(g) => {
                 v.driver = "gcs";

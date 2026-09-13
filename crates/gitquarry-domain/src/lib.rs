@@ -7,7 +7,7 @@
 //! [`release`]: release CRUD + asset upload/signature-verify, transport-
 //! agnostic (`anyhow::Result`, no CSRF/session/audit concerns — those stay
 //! in the caller). Only `webui`/`server` ever call it; unlike
-//! `gitquarry_core::domain::{repo,pull_request,remote_fork}`, nothing in
+//! `gitquarry_core::domain::{repo,merge_request,remote_fork}`, nothing in
 //! core's own git-serving path (`git::ssh`/`git::http`/`mirror::hook`) calls
 //! back into it, so it doesn't have to live in core itself.
 //!

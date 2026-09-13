@@ -48,7 +48,10 @@ fn test_ctx(mirrors_root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         federation: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -107,7 +110,6 @@ async fn create_then_get_roundtrips_and_conflicts_on_a_second_create() {
     assert_eq!(release.title, "First");
     assert_eq!(release.created_by, "alice");
 
-    // One release per tag — a second create for the same tag conflicts.
     assert_eq!(
         create(
             &ctx,
@@ -261,7 +263,6 @@ async fn add_asset_then_remove_asset_roundtrips() {
     assert_eq!(release.assets.len(), 1);
     assert_eq!(release.assets[0].filename, "a.bin");
 
-    // Re-adding the same filename is rejected — force delete-then-reupload.
     assert!(
         add_asset(
             &ctx,

@@ -34,7 +34,10 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         federation: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -84,7 +87,10 @@ async fn make_user(ctx: &AppContext, username: &str, quota_bytes: Option<u64>) -
 }
 
 async fn make_group(ctx: &AppContext, name: &str, quota_bytes: Option<u64>) -> OwnerRef {
-    domain::group::create(ctx, name, None).await.unwrap().unwrap();
+    domain::group::create(ctx, name, None, Uid::new(), None, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap()
+        .unwrap();
     let (group, etag) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, name)
         .await
         .unwrap();

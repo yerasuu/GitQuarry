@@ -7,7 +7,7 @@
 //! - [`http`]: git smart-HTTP, layered as middleware onto the web server's
 //!   router (see its own module doc for why) — the only piece here that
 //!   isn't purely transport-agnostic plumbing, since it has to cooperate
-//!   with [`crate::webui`]'s router instead of owning its own listener.
+//!   with `gitquarry_webui::webui`'s router instead of owning its own listener.
 //!
 //! Read-heavy operations for the web UI (log, tree, blame, archive, ...)
 //! live in [`browse`] instead — different concern, different consumers:
@@ -27,6 +27,7 @@ pub mod http;
 pub mod lfs;
 #[cfg(not(any(test, feature = "test-util")))]
 mod lfs;
+pub mod signing;
 pub mod ssh;
 
 use anyhow::{Context, Result, bail};
@@ -85,6 +86,23 @@ pub(crate) async fn run_capped(git_dir: Option<&Path>, args: &[&OsStr], max_byte
 }
 
 async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
+    let (out, truncated) = run_truncating(git_dir, args, max_bytes).await?;
+    if truncated {
+        bail!("git {} produced more than the {max_bytes}-byte limit", describe(args));
+    }
+    Ok(out)
+}
+
+/// `(stdout, whether it was cut short)` — [`run_capped`]'s reader without
+/// its verdict, for a caller that has something better to show than an
+/// error when git's output runs long (a commit page that can offer the raw
+/// patch instead of rendering a 50MB diff into HTML).
+///
+/// Truncation isn't a failure here, so the killed child's exit status is
+/// deliberately not checked in that case: `SIGPIPE`/`SIGKILL` on a producer
+/// we stopped on purpose says nothing about whether the bytes already read
+/// are good, and they are — git writes a patch in order.
+pub(crate) async fn run_truncating(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<(Vec<u8>, bool)> {
     use tokio::io::AsyncReadExt;
 
     let mut cmd = Command::new("git");
@@ -110,7 +128,7 @@ async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64
         if out.len() + n > cap {
             // Don't finish reading just to throw it away: stop the producer.
             let _ = child.kill().await;
-            bail!("git {} produced more than the {max_bytes}-byte limit", describe(args));
+            return Ok((out, true));
         }
         out.extend_from_slice(&buf[..n]);
     }
@@ -123,7 +141,7 @@ async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64
         }
         bail!("git {} failed: {}", describe(args), stderr.trim());
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 /// Same as [`run`] but returns stdout as trimmed text.
@@ -178,9 +196,9 @@ pub async fn is_ancestor(git_dir: &Path, ancestor: &str, descendant: &str) -> Re
 }
 
 /// Fetches `src_rev` from the local bare repo at `src_git_dir` into
-/// `dest_git_dir` under `local_ref` — a cross-fork pull request's target
+/// `dest_git_dir` under `local_ref` — a cross-fork merge request's target
 /// mirror pulling in the fork's objects, without the two repos sharing any
-/// storage (see `domain::pull_request`'s own doc comment: forks are fully
+/// storage (see `domain::merge_request`'s own doc comment: forks are fully
 /// independent S3 prefixes and bare mirrors, there's no other path for one
 /// mirror to see another's objects). `local_ref` is never written back to
 /// `dest_git_dir`'s own manifest/CAS state — it's scratch, fine that the
@@ -290,7 +308,7 @@ pub enum MergeTreeOutcome {
 /// (`--merge-base=<commit>`, added in git 2.40) instead of letting git find
 /// one itself. A real merge of two branches wants `None` (git's own
 /// merge-base search is exactly what a real `git merge` would do); replaying
-/// one commit onto a new parent — [`domain::pull_request::merge`]'s rebase
+/// one commit onto a new parent — [`crate::domain::merge_request::merge`]'s rebase
 /// strategy — wants `Some(that commit's own first parent)`, which is what
 /// turns this 3-way merge into cherry-pick semantics (apply just that
 /// commit's own diff, not everything back to whatever git would've picked
@@ -357,7 +375,7 @@ pub async fn merge_tree(
 /// with, since there's no working tree/index to run a real `git
 /// merge`/`git commit` against a bare mirror. `tree`/`parents` are shas
 /// this code already computed/read (trusted); `message` reaches `-m` as a
-/// single argv value, so a leading `-` (from a PR title) can't be parsed as
+/// single argv value, so a leading `-` (from an MR title) can't be parsed as
 /// a flag — verified directly against git 2.55.
 ///
 /// `author`/`committer` are each `(name, email, date)`, set via
@@ -375,8 +393,33 @@ pub async fn commit_tree(
     message: &str,
     author: (&str, &str, &str),
     committer: (&str, &str, &str),
+    signing_key: Option<&Path>,
 ) -> Result<String> {
-    let mut args: Vec<&OsStr> = vec![OsStr::new("commit-tree"), OsStr::new(tree)];
+    // `-c` before the subcommand, not repo config: the mirror is a
+    // disposable cache (`mirror::gc` evicts it), so anything written into
+    // its own config would have to be re-established on every re-clone.
+    // These three only ever apply to this one invocation.
+    // `-c name=value` is one argument, not two: split across a pair, git
+    // reads the path as the subcommand and reports it as an unknown one.
+    // `user.signingkey` takes the *path* to the private key for SSH
+    // signing; git shells out to `ssh-keygen -Y sign` with it.
+    let signing_setting = signing_key.map(|p| {
+        let mut arg = std::ffi::OsString::from("user.signingkey=");
+        arg.push(p);
+        arg
+    });
+    let mut args: Vec<&OsStr> = Vec::new();
+    if let Some(setting) = signing_setting.as_ref() {
+        args.push(OsStr::new("-c"));
+        args.push(OsStr::new("gpg.format=ssh"));
+        args.push(OsStr::new("-c"));
+        args.push(setting);
+    }
+    args.push(OsStr::new("commit-tree"));
+    if signing_setting.is_some() {
+        args.push(OsStr::new("-S"));
+    }
+    args.push(OsStr::new(tree));
     for parent in parents {
         args.push(OsStr::new("-p"));
         args.push(OsStr::new(parent));
@@ -402,7 +445,7 @@ pub async fn commit_tree(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// One source-branch commit as [`domain::pull_request::merge`]'s rebase
+/// One source-branch commit as [`crate::domain::merge_request::merge`]'s rebase
 /// strategy needs to replay it onto a new parent: enough to call
 /// [`merge_tree`] with `parent` as the explicit merge-base (cherry-pick
 /// semantics) and then [`commit_tree`] with the original author preserved.
@@ -410,7 +453,7 @@ pub async fn commit_tree(
 /// `parent` is `None` for a root commit (no parent to diff against) — the
 /// rebase strategy bails on that rather than guessing a merge base, same as
 /// it bails on an actual merge commit ([`parents`] holding more than one
-/// sha): both are edge cases a linear PR branch doesn't hit in practice, and
+/// sha): both are edge cases a linear MR branch doesn't hit in practice, and
 /// guessing wrong would silently replay the wrong diff.
 ///
 /// [`parents`]: RebaseCommit::parents
@@ -420,6 +463,26 @@ pub struct RebaseCommit {
     pub author_email: String,
     pub author_date: String,
     pub message: String,
+}
+
+/// Count of commits in `range` (e.g. `"old..new"`, or just `"new"` for a
+/// branch that didn't exist before) — `--count` has git report just the
+/// number without ever materializing the sha list, unlike
+/// [`rev_list_range`], so this stays cheap even for a huge initial import.
+pub async fn rev_list_count(git_dir: &Path, range: &str) -> Result<u64> {
+    let out = run_text(
+        Some(git_dir),
+        &[
+            OsStr::new("rev-list"),
+            OsStr::new("--count"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(range),
+        ],
+    )
+    .await?;
+    out.trim()
+        .parse::<u64>()
+        .context("git rev-list --count returned non-numeric output")
 }
 
 /// Oldest-first shas in `range` (e.g. `"base..head"`) — the replay order a
@@ -491,7 +554,7 @@ pub struct PackFiles {
 /// missing one just means "use the environment"): this function's original
 /// caller, the pre-receive hook (`mirror::hook`), only ever runs as a real
 /// git hook, which git itself invokes with `GIT_DIR` already set in the
-/// process environment — but `domain::pull_request::merge`'s server-side
+/// process environment — but `domain::merge_request::merge`'s server-side
 /// merge is a second caller that has no such ambient `GIT_DIR` (the main
 /// process juggles many repos, never sets one process-wide), so both the
 /// `rev-list` and `pack-objects` subprocesses below need it passed in
@@ -727,6 +790,95 @@ pub async fn list_refs(git_dir: &Path) -> Result<Vec<String>> {
     )
     .await?;
     Ok(out.lines().map(str::to_string).collect())
+}
+
+/// Every ref and the sha it currently points to — same set [`list_refs`]
+/// lists, plus the value [`sync_bare_repo_from_s3`]-style callers need to
+/// tell an already-correct ref apart from one that actually needs writing.
+pub(crate) async fn list_refs_with_oids(git_dir: &Path) -> Result<HashMap<String, String>> {
+    let out = run_text(
+        Some(git_dir),
+        &[
+            OsStr::new("for-each-ref"),
+            OsStr::new("--format=%(refname) %(objectname)"),
+            OsStr::new("refs/"),
+        ],
+    )
+    .await?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(name, sha)| (name.to_string(), sha.to_string()))
+        .collect())
+}
+
+/// Applies every ref create/update/delete from one manifest sync in a
+/// single `git update-ref --stdin` call instead of one subprocess per ref.
+/// [`crate::mirror::sync_bare_repo_from_s3`] runs on every `info/refs` and
+/// `upload-pack` call (not just a push), so a repo with even a modest
+/// number of branches/tags used to pay for that many subprocess spawns on
+/// every single git operation — most of them writing back a value that was
+/// already there, since the old code never compared before writing.
+/// `updates`/`deletes` are expected already filtered down to real changes
+/// (see the call site) — this only handles the "how", not the "whether".
+///
+/// Ref names and shas ride on stdin, not argv, so there's no
+/// `--end-of-options`-style flag-injection concern the way a name starting
+/// with `-` would be for a normal argument; the one thing that matters here
+/// is that neither contains a newline, which would inject an extra
+/// `update-ref` command into the stream — checked explicitly since these
+/// values originate from a stored manifest, not a literal in this process.
+pub(crate) async fn apply_ref_changes(git_dir: &Path, updates: &[(String, String)], deletes: &[String]) -> Result<()> {
+    if updates.is_empty() && deletes.is_empty() {
+        return Ok(());
+    }
+    let mut script = String::new();
+    for (name, sha) in updates {
+        if name.contains('\n') || sha.contains('\n') {
+            bail!("ref update line contains a newline: {name:?} {sha:?}");
+        }
+        script.push_str("update ");
+        script.push_str(name);
+        script.push(' ');
+        script.push_str(sha);
+        script.push('\n');
+    }
+    for name in deletes {
+        if name.contains('\n') {
+            bail!("ref delete line contains a newline: {name:?}");
+        }
+        script.push_str("delete ");
+        script.push_str(name);
+        script.push('\n');
+    }
+
+    let mut child = Command::new("git")
+        .env("GIT_DIR", git_dir)
+        .arg("update-ref")
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("couldn't run git update-ref --stdin")?;
+    let mut stdin = child.stdin.take().context("update-ref --stdin stdin")?;
+    stdin
+        .write_all(script.as_bytes())
+        .await
+        .context("writing ref updates to git update-ref --stdin")?;
+    drop(stdin); // `--stdin` reads until EOF, same reasoning as `cat-file --batch-check` above.
+
+    let out = child
+        .wait_with_output()
+        .await
+        .context("waiting for git update-ref --stdin")?;
+    if !out.status.success() {
+        bail!(
+            "git update-ref --stdin failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 pub async fn update_ref(git_dir: &Path, name: &str, sha: &str) -> Result<()> {

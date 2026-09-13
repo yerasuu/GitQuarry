@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock};
+use tracing::warn;
 
 tokio::task_local! {
     /// Per-request `s3db::RequestCache`-wrapped backend, scoped by
@@ -88,12 +89,24 @@ pub struct AppContext {
     /// handler's implicit "first push creates the repo" branch. `false` by
     /// default (see that field's doc comment for why).
     pub allow_push_create: bool,
+    /// `config::Config::trust_forwarded_for` — whether `git::http`'s
+    /// anonymous rate limiter may key on `X-Forwarded-For` instead of the
+    /// socket address. `false` by default; see that field for why it can't
+    /// be on unless a proxy owns the header.
+    pub trust_forwarded_for: bool,
     /// Clone/fetch flood tracker for `git::http`'s `info/refs`/`upload-pack`
     /// handlers — see [`GitRateLimiter`].
     pub git_rate_limiter: GitRateLimiter,
-    /// Fan-out point for domain state changes (push, PR, issue, release) —
+    /// Fan-out point for domain state changes (push, MR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,
+    /// `None` unless `gitquarry-server` wired one in at startup — see
+    /// [`crate::mirror::MirrorSyncHook`]'s own doc comment for why this is
+    /// a trait object rather than a direct dependency on
+    /// `gitquarry-mirror-external`.
+    pub mirror_sync: Option<Arc<dyn crate::mirror::MirrorSyncHook>>,
+    /// Short-TTL cache for [`Self::visible_repo_uids`] — see that method.
+    pub visible_repo_uids_cache: VisibleRepoUidsCache,
 }
 
 /// What core needs to reach `gitquarry-federation`'s own loopback API —
@@ -110,13 +123,33 @@ pub struct FederationLink {
     pub http: reqwest::Client,
 }
 
-/// Local mirror ready to use, with the repo's lock held. While this exists,
-/// nobody else touches that mirror.
+/// Backs [`AppContext::visible_repo_uids`]: the anonymous repo index (the
+/// site's highest-traffic page) lists every visible repo uid on every
+/// render, which is a real `list_prefix` call against the backend —
+/// `s3db::CachedBackend` (wired in by [`crate::storage::build_backend`])
+/// forwards list operations to the driver uncached, it only caches point
+/// `get`s. A few seconds of staleness here is the same "hint, not a fact"
+/// tolerance [`crate::storage::settings::list_visible_repo_uids`]'s own doc
+/// comment already describes — a repo that just turned visible (or private)
+/// shows up a few seconds late either way, self-heals on the next read past
+/// the TTL, and `webui::repo::list_visible_repos` re-checks each uid's real
+/// `RepoConfig::visibility` regardless, so this can never do worse than that
+/// existing lag.
+#[derive(Debug, Default)]
+pub struct VisibleRepoUidsCache {
+    inner: Mutex<Option<(Instant, Vec<Uid>)>>,
+}
+
+const VISIBLE_REPO_UIDS_TTL: Duration = Duration::from_secs(10);
+
+/// Local mirror ready to use, with the repo's lock held — exclusively when
+/// the mirror had to be created or synced, shared when it was already at
+/// the manifest the bucket holds (see [`AppContext::open_mirror_read`]).
 #[derive(Debug)]
 pub struct Mirror {
     pub remote: Remote,
     pub path: PathBuf,
-    _guard: OwnedMutexGuard<()>,
+    _guard: MirrorGuard,
 }
 
 /// A linked peer's specific repo, synced via a real `git fetch` against the
@@ -129,31 +162,65 @@ pub struct Mirror {
 #[derive(Debug)]
 pub struct PeerMirror {
     pub path: PathBuf,
-    _guard: OwnedMutexGuard<()>,
+    _guard: OwnedRwLockWriteGuard<()>,
 }
 
-/// A lock per repo. The local mirror (`mirrors_root/<repo>`) is shared state:
-/// two simultaneous clones of the same repo, or a clone while the web UI is
-/// rendering, would run `git init`/`update-ref`/pack downloads over the same
-/// directory and step on each other. We serialize by repo name.
+/// Which half of [`Locks`] a live [`Mirror`] is holding. An enum rather than
+/// two `Mirror` types because every caller uses the mirror identically; all
+/// that differs is whether anyone else may be reading it at the same time.
+/// Whether an `open_mirror_common` call is somebody actually querying the
+/// repo or the startup prewarm refilling a cold cache. Only a query stamps
+/// the last-access marker and the bucket-side recent index: a prewarm that
+/// stamped them would keep an idle repo warm forever, one restart at a time.
+#[derive(Debug, Clone, Copy)]
+enum Access {
+    Query,
+    Warm,
+}
+
+#[derive(Debug)]
+enum MirrorGuard {
+    Shared(#[allow(dead_code)] OwnedRwLockReadGuard<()>),
+    Exclusive(#[allow(dead_code)] OwnedRwLockWriteGuard<()>),
+}
+
+/// A lock per repo. The local mirror (`mirrors_root/<repo>`) is shared
+/// state, but only *mutating* it conflicts: `git init`, a pack download and
+/// `update-ref` must not run twice over the same directory at once, while
+/// any number of `git log`/`ls-tree`/`upload-pack` readers over an
+/// unchanging directory are fine together.
+///
+/// Hence a read/write lock rather than the plain mutex this used to be:
+/// under that mutex a page holding the lock for its whole render blocked
+/// every other view of the same repo, measured at 11ms → 920ms for a fast
+/// page opened while a slow one was in flight.
 #[derive(Debug, Default)]
 pub struct Locks {
-    inner: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    inner: Mutex<HashMap<String, Arc<AsyncRwLock<()>>>>,
 }
 
 impl Locks {
-    pub async fn lock(&self, repo: &str) -> OwnedMutexGuard<()> {
-        let mutex = {
-            // The sync Mutex only protects the HashMap; it's never held
-            // across an await, so it can't deadlock with the async one.
-            let mut map = self.inner.lock().expect("locks mutex poisoned");
-            // Repos nobody is using (only the map's own ref left) get
-            // dropped: without this the map grows with every distinct path
-            // requested.
-            map.retain(|_, m| Arc::strong_count(m) > 1);
-            map.entry(repo.to_string()).or_default().clone()
-        };
-        mutex.lock_owned().await
+    /// Exclusive: nothing else touches this repo's mirror while the guard
+    /// lives. What every mutation (push, sync, eviction, MR merge) takes.
+    pub async fn lock(&self, repo: &str) -> OwnedRwLockWriteGuard<()> {
+        self.entry(repo).write_owned().await
+    }
+
+    /// Shared: other readers of the same mirror proceed concurrently, no
+    /// writer can start. Only safe once the mirror is known to already
+    /// match the bucket — see [`AppContext::open_mirror_read`].
+    pub async fn lock_shared(&self, repo: &str) -> OwnedRwLockReadGuard<()> {
+        self.entry(repo).read_owned().await
+    }
+
+    fn entry(&self, repo: &str) -> Arc<AsyncRwLock<()>> {
+        // The sync Mutex only protects the HashMap; it's never held across
+        // an await, so it can't deadlock with the async one.
+        let mut map = self.inner.lock().expect("locks mutex poisoned");
+        // Repos nobody is using (only the map's own ref left) get dropped:
+        // without this the map grows with every distinct path requested.
+        map.retain(|_, m| Arc::strong_count(m) > 1);
+        map.entry(repo.to_string()).or_default().clone()
     }
 }
 
@@ -176,21 +243,45 @@ pub const LOGIN_MAX_ATTEMPTS: usize = 5;
 #[cfg(not(any(test, feature = "test-util")))]
 const LOGIN_MAX_ATTEMPTS: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// Ceiling on [`LoginAttempts::penalty`]. Long enough that guessing is
+/// hopeless, short enough that a pile of stalled attempts can't be turned
+/// into a connection-exhaustion attack of its own.
+#[cfg(any(test, feature = "test-util"))]
+pub const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
+#[cfg(not(any(test, feature = "test-util")))]
+const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
 
 impl LoginAttempts {
-    /// `true` if `username` has hit [`LOGIN_MAX_ATTEMPTS`] within the
-    /// current window — checked before even running Argon2 on the
-    /// submitted password, so a lockout doesn't cost anything extra.
-    pub fn is_locked(&self, username: &str) -> bool {
+    /// How long a caller must wait before this attempt is even looked at.
+    /// Zero until [`LOGIN_MAX_ATTEMPTS`] failures inside the window, then
+    /// doubling per further failure up to [`LOGIN_MAX_PENALTY`].
+    ///
+    /// Deliberately a delay rather than the flat rejection this used to be.
+    /// A hard lockout keyed on the username alone is a denial of service
+    /// anyone can aim at anyone: five wrong guesses against a name you know
+    /// locked its real owner out for the rest of the window. A delay costs
+    /// a guesser exactly as much (a few attempts per minute is not a brute
+    /// force) while still letting the account's actual owner in.
+    pub fn penalty(&self, username: &str) -> Duration {
         let map = self.inner.lock().expect("login-attempts mutex poisoned");
         let now = Instant::now();
-        map.get(username).is_some_and(|attempts| {
+        let recent = map.get(username).map_or(0, |attempts| {
             attempts
                 .iter()
                 .filter(|t| now.duration_since(**t) < LOGIN_WINDOW)
                 .count()
-                >= LOGIN_MAX_ATTEMPTS
-        })
+        });
+        Self::penalty_for(recent)
+    }
+
+    /// [`penalty`](Self::penalty)'s arithmetic on its own, so the curve is
+    /// testable without a live tracker.
+    pub fn penalty_for(recent_failures: usize) -> Duration {
+        let Some(over) = recent_failures.checked_sub(LOGIN_MAX_ATTEMPTS) else {
+            return Duration::ZERO;
+        };
+        let secs = 1u64.checked_shl(over.min(16) as u32).unwrap_or(u64::MAX);
+        Duration::from_secs(secs).min(LOGIN_MAX_PENALTY)
     }
 
     /// Records one failed attempt, and opportunistically prunes every
@@ -207,7 +298,6 @@ impl LoginAttempts {
         map.entry(username.to_string()).or_default().push(now);
     }
 
-    /// Clears a username's history on a successful login.
     pub fn clear(&self, username: &str) {
         self.inner
             .lock()
@@ -215,7 +305,7 @@ impl LoginAttempts {
             .remove(username);
     }
 
-    /// How many distinct usernames are currently locked out — for
+    /// How many distinct usernames are currently paying a penalty — for
     /// `webui::health`'s `/_metrics` gauge, a cheap operational signal that
     /// something (a brute-force attempt, or just someone repeatedly
     /// mistyping their own password) is actively tripping the limiter.
@@ -350,6 +440,28 @@ impl AppContext {
             .unwrap_or_else(|_| Arc::clone(&self.backend))
     }
 
+    /// Every repo uid currently indexed as visible
+    /// ([`crate::storage::settings::list_visible_repo_uids`]), through a
+    /// short-TTL in-process cache (see [`VisibleRepoUidsCache`]'s own doc
+    /// comment for why that's safe here) instead of a real backend list
+    /// call on every call. `gitquarry-server`'s startup sequence calls this
+    /// once before binding its listeners so the very first request doesn't
+    /// pay for a cold list — see `serve::run`.
+    pub async fn visible_repo_uids(&self) -> Result<Vec<Uid>> {
+        {
+            let cached = self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned");
+            if let Some((fetched_at, uids)) = cached.as_ref()
+                && fetched_at.elapsed() < VISIBLE_REPO_UIDS_TTL
+            {
+                return Ok(uids.clone());
+            }
+        }
+        let uids = crate::storage::settings::list_visible_repo_uids(self.backend().as_ref()).await?;
+        *self.visible_repo_uids_cache.inner.lock().expect("cache mutex poisoned") =
+            Some((Instant::now(), uids.clone()));
+        Ok(uids)
+    }
+
     /// `pub`, not private: `webui::repo_settings::move_repo` (in the
     /// `gitquarry-webui` crate) also needs to build a `Remote` for an
     /// arbitrary uid (checking whether a repo-name claim it's about to
@@ -391,9 +503,15 @@ impl AppContext {
     /// squatted by a since-deleted repo (see
     /// `storage::settings::claim_repo_name_self_healing`) — the "new repo
     /// identity" primitive shared by `/_new`, fork's destination, and SSH's
-    /// implicit create-on-first-push. `None` only if `full_name` is
-    /// genuinely claimed by a repo that still exists.
+    /// implicit create-on-first-push. `None` if `full_name` is genuinely
+    /// claimed by a repo that still exists, or if it names a user/group
+    /// namespace: a repo at `acme/team` and a subgroup called `acme/team`
+    /// would both answer to `/acme/team`, so whichever exists first wins
+    /// (see `auth::access::namespace_reserved`).
     pub async fn create_repo(&self, full_name: &str) -> Result<Option<ResolvedRepo>> {
+        if crate::auth::access::namespace_reserved(self.backend().as_ref(), &self.cipher, full_name).await? {
+            return Ok(None);
+        }
         let uid = Uid::new();
         let claimed = crate::storage::settings::claim_repo_name_self_healing(
             self.backend().as_ref(),
@@ -412,16 +530,11 @@ impl AppContext {
         }))
     }
 
-    /// Validates `key` stays under `mirrors_root`, takes its lock, creates
-    /// the bare mirror if missing, syncs it via `sync`, and marks it as
-    /// just-queried — the one shape [`Self::open_mirror`] and
-    /// [`Self::open_remote_mirror_at`] otherwise duplicated, differing only
-    /// in which [`crate::mirror::SyncStrategy`] applies.
-    async fn open_mirror_common(
-        &self,
-        key: &str,
-        sync: impl crate::mirror::SyncStrategy,
-    ) -> Result<(PathBuf, OwnedMutexGuard<()>)> {
+    /// Where `key`'s mirror lives, rejecting anything that would escape
+    /// `mirrors_root` — `key` reaches here from a repo uid, but this is the
+    /// one place that turns it into a path, so the check belongs here rather
+    /// than at each caller.
+    fn mirror_path(&self, key: &str) -> Result<PathBuf> {
         let path = self.mirrors_root.join(key);
         if !path.starts_with(&self.mirrors_root) {
             bail!(
@@ -430,34 +543,96 @@ impl AppContext {
                 self.mirrors_root.display()
             );
         }
+        Ok(path)
+    }
+
+    /// `sync` is the one seam between this and [`Self::open_remote_mirror_at`]
+    /// (otherwise identical: validate path, lock, [`crate::mirror::ensure_bare_repo`],
+    /// sync, `gc::touch_last_access`) — which of the two real sync mechanisms
+    /// this codebase has applies, see [`crate::mirror::SyncStrategy`].
+    async fn open_mirror_common(
+        &self,
+        key: &str,
+        sync: impl crate::mirror::SyncStrategy,
+        access: Access,
+    ) -> Result<(PathBuf, OwnedRwLockWriteGuard<()>)> {
+        let path = self.mirror_path(key)?;
         let guard = self.locks.lock(key).await;
         crate::mirror::ensure_bare_repo(&path, &self.exe_path).await?;
+        // Best-effort: without it, commits this instance signed show as
+        // unsigned rather than verified. That's a worse-looking page, never
+        // a broken repository, and must not stop a clone or a push.
+        if let Err(e) = install_instance_allowed_signers(self, &path).await {
+            warn!(error = %e, "couldn't teach the mirror this instance's signing key");
+        }
         sync.sync(&path).await?;
         // Marks this mirror as just-queried so the periodic sweep
         // (`crate::mirror::gc`) doesn't evict it as stale. Best-effort: a failure
         // here would just make this mirror a slightly earlier eviction
         // candidate, not worth failing the whole request over.
-        if let Err(e) = crate::mirror::gc::touch_last_access(&path).await {
-            eprintln!("warning: {e:#}");
+        let touched = match access {
+            Access::Query => crate::mirror::gc::touch_last_access(&path).await,
+            // A mirror the prewarm just created has no marker at all, which
+            // `gc` reads as maximally stale — the next sweep would evict
+            // what startup had just paid to download. Anything already on
+            // disk keeps the mtime it had, so a restart can't reset the
+            // eviction order.
+            Access::Warm => crate::mirror::gc::touch_last_access_if_missing(&path).await,
+        };
+        if let Err(e) = touched {
+            warn!(error = %e, "couldn't touch mirror last-access marker");
+        }
+        if matches!(access, Access::Query) {
+            self.note_mirror_use(key);
         }
         Ok((path, guard))
     }
 
-    /// Takes the repo's lock, creates the bare mirror if missing, and syncs
-    /// it with S3. Keyed by `resolved.uid`, not the display name — the
-    /// local mirror survives a rename untouched, unlike before this uid
-    /// scheme existed (a `move_repo` never touched `mirrors_root`, so a
-    /// renamed repo's old mirror just sat there until `mirror::gc` aged it
-    /// out; now there's nothing to orphan).
+    /// Records, in the bucket, that `key` was just used — the index
+    /// [`crate::mirror::gc::prewarm_recent_mirrors`] reads at startup.
+    ///
+    /// Detached, and through the long-lived backend rather than
+    /// [`Self::backend`]: the write outlives the request that triggered it,
+    /// so it must not borrow that request's own cached backend, and no
+    /// browse or clone should ever wait on a bucket round trip that only
+    /// exists to make the *next* restart faster.
+    fn note_mirror_use(&self, key: &str) {
+        let backend = Arc::clone(&self.backend);
+        let cipher = Arc::clone(&self.cipher);
+        let uid = Uid::from(key.to_string());
+        tokio::spawn(async move {
+            crate::mirror::recent::record_use(backend.as_ref(), &cipher, &uid).await;
+        });
+    }
+
+    /// Brings `uid`'s mirror up to date without counting as a query — what
+    /// the startup prewarm calls. Same work [`Self::open_mirror`] does
+    /// (lock, create, sync), minus the two things that would make a restart
+    /// look like traffic: it neither refreshes an existing last-access
+    /// marker nor re-records the repo as recently used.
+    pub async fn warm_mirror(&self, uid: &Uid) -> Result<()> {
+        let remote = self.remote_for_uid(uid);
+        let sync = crate::mirror::FromBucket { remote: &remote };
+        self.open_mirror_common(uid.as_str(), sync, Access::Warm).await?;
+        Ok(())
+    }
+
+    /// Keyed by `resolved.uid`, not the display name — the local mirror
+    /// survives a rename untouched, unlike before this uid scheme existed (a
+    /// `move_repo` never touched `mirrors_root`, so a renamed repo's old
+    /// mirror just sat there until `mirror::gc` aged it out; now there's
+    /// nothing to orphan).
     pub async fn open_mirror(&self, resolved: &ResolvedRepo) -> Result<Mirror> {
         let sync = crate::mirror::FromBucket {
             remote: &resolved.remote,
         };
-        let (path, guard) = self.open_mirror_common(resolved.uid.as_str(), sync).await?;
+        let (path, guard) = self
+            .open_mirror_common(resolved.uid.as_str(), sync, Access::Query)
+            .await?;
         Ok(Mirror {
             remote: resolved.remote.clone(),
             path,
-            _guard: guard,
+            _guard: MirrorGuard::Exclusive(guard),
         })
     }
 
@@ -488,12 +663,65 @@ impl AppContext {
         let rel = format!("_remote/{peer_label}/{repo_name}");
         let url = format!("{}/{repo_name}", git_base_url.trim_end_matches('/'));
         let sync = crate::mirror::FromRemoteUrl { url: &url };
-        let (path, guard) = self.open_mirror_common(&rel, sync).await?;
+        let (path, guard) = self.open_mirror_common(&rel, sync, Access::Query).await?;
         Ok(PeerMirror { path, _guard: guard })
+    }
+
+    /// [`Self::open_mirror`] for a request that only reads the mirror — a
+    /// web UI page, a clone. Holds the repo's lock *shared* whenever the
+    /// mirror already matches the manifest in the bucket, which is every
+    /// view of a repo nobody has pushed to since the last one, so
+    /// concurrent readers of the same repo stop queueing behind each other.
+    ///
+    /// Falls back to the exclusive path when the mirror is missing or
+    /// stale, because bringing it up to date *is* a write (`git init`, pack
+    /// downloads, `update-ref`). That guard is then kept for the rest of
+    /// the request rather than downgraded: `RwLock` can't downgrade
+    /// atomically, and re-checking freshness a second time just to widen a
+    /// single already-slow render isn't worth another round trip.
+    pub async fn open_mirror_read(&self, resolved: &ResolvedRepo) -> Result<Mirror> {
+        let key = resolved.uid.as_str();
+        let path = self.mirror_path(key)?;
+        let shared = self.locks.lock_shared(key).await;
+        if crate::mirror::is_synced(&resolved.remote, &path).await? {
+            // Debounced, unlike the exclusive path's unconditional touch:
+            // without it a repo that's browsed constantly but never pushed
+            // to would age out of `mirror::gc`'s sweep and be re-downloaded
+            // for no reason. Best-effort for the same reason it is there.
+            if let Err(e) = crate::mirror::gc::touch_last_access_if_stale(&path).await {
+                warn!(error = %e, "couldn't touch mirror last-access marker");
+            }
+            // Debounced the same way inside `recent::record_use`, and for
+            // the same reason: this is the path most repo traffic takes.
+            self.note_mirror_use(key);
+            return Ok(Mirror {
+                remote: resolved.remote.clone(),
+                path,
+                _guard: MirrorGuard::Shared(shared),
+            });
+        }
+        drop(shared);
+        self.open_mirror(resolved).await
     }
 }
 
-/// Default mirrors path for a bucket, under the user's cache dir.
+/// Wires [`crate::git::signing::install_allowed_signers`] up with the key
+/// this bucket owns — split out of [`AppContext::open_mirror_common`] only
+/// so its error can be logged and swallowed there without burying the
+/// happy path in a nested match.
+async fn install_instance_allowed_signers(ctx: &AppContext, bare_repo: &std::path::Path) -> Result<()> {
+    // The presence check first, and only then the key: `install_allowed_signers`
+    // returns early for a mirror that already has the file, but reading the
+    // key to hand it one costs a bucket `get` (and, the very first time,
+    // *creates* the key) — paid on every open of every already-configured
+    // mirror before this check moved up here.
+    if crate::git::signing::allowed_signers_installed(bare_repo).await {
+        return Ok(());
+    }
+    let key = crate::git::signing::load_or_create(ctx.backend().as_ref(), &ctx.cipher).await?;
+    crate::git::signing::install_allowed_signers(bare_repo, &key).await
+}
+
 pub fn default_mirrors_root(bucket: &str) -> PathBuf {
     let sanitized: String = bucket
         .chars()

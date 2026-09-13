@@ -35,7 +35,7 @@ pub async fn add_repo_permission_index(backend: &dyn Backend, cipher: &Cipher, r
 }
 
 pub async fn remove_repo_permission_index(backend: &dyn Backend, cipher: &Cipher, repo_uid: &Uid, user_uid: &Uid) {
-    repo_permission_index(repo_uid)
+    let _ = repo_permission_index(repo_uid)
         .delete(backend, cipher, user_uid.as_str())
         .await;
 }
@@ -49,7 +49,7 @@ pub async fn remove_repo_permission_index(backend: &dyn Backend, cipher: &Cipher
 pub async fn clear_repo_permission_index(backend: &dyn Backend, cipher: &Cipher, repo_uid: &Uid) -> Result<()> {
     let index = repo_permission_index(repo_uid);
     for name in index.list_names(backend).await? {
-        index.delete(backend, cipher, &name).await;
+        let _ = index.delete(backend, cipher, &name).await;
     }
     Ok(())
 }

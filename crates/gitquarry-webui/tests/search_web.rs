@@ -28,6 +28,7 @@ fn render_search_page_shows_hits_and_truncation_notice() {
             name: "acme/other".to_string(),
             description: Some("a peer's repo".to_string()),
         }],
+        labels: Default::default(),
     };
     let html = render_search_page("main", Some(results), gitquarry_i18n::Locale::En).into_string();
     assert!(html.contains("src/main.rs"));
@@ -43,6 +44,25 @@ fn display_repo_labels_a_peer_mirror_as_remote() {
         display_repo("_remote/instance-b/acme/demo"),
         "instance-b/acme/demo (remote)"
     );
+}
+
+#[test]
+fn render_search_page_labels_hits_with_the_repo_display_name() {
+    let results = SearchResults {
+        file_hits: vec![filenames::FilenameHit {
+            repo: "acme/my-proj".to_string(),
+            rev: "main".to_string(),
+            path: "src/main.rs".to_string(),
+        }],
+        files_truncated: false,
+        commit_hits: Vec::new(),
+        commits_truncated: false,
+        peer_metadata_hits: Vec::new(),
+        labels: std::collections::HashMap::from([("acme/my-proj".to_string(), "acme/My Proj!".to_string())]),
+    };
+    let html = render_search_page("main", Some(results), gitquarry_i18n::Locale::En).into_string();
+    assert!(html.contains(r#"href="/acme/my-proj""#), "{html}");
+    assert!(html.contains("acme/My Proj!"), "{html}");
 }
 
 fn test_ctx(root: &std::path::Path) -> AppContext {
@@ -73,7 +93,10 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         federation: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 

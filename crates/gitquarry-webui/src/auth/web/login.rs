@@ -1,5 +1,5 @@
 //! Login for the web UI, two ways in, both resolving to the same
-//! [`gitquarry_core::auth::access::User`]:
+//! [`gitquarry_core::auth::entities::User`]:
 //! - OIDC: the `/_login_oidc` -> IdP -> `/_callback` round trip, resolved
 //!   against `access.json` by verified email.
 //! - password: a plain username/password form, POSTed to `/_login`,
@@ -40,7 +40,6 @@ use openidconnect::core::CoreAuthenticationFlow;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope, TokenResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const FLOW_COOKIE: &str = "oidc-flow";
@@ -59,18 +58,10 @@ const LOGIN_CSRF_TTL_SECS: i64 = 600;
 /// round trip.
 const PENDING_TOTP_TTL_SECS: i64 = 300;
 
-/// A real Argon2id hash nothing will ever match, computed once per process.
-/// [`handler_login_local`] verifies against this when the submitted username
-/// doesn't match any user, so a nonexistent username costs the same Argon2
-/// work as a wrong password for a real one — no timing signal either way.
-#[cfg(any(test, feature = "test-util"))]
-pub static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
-    password::hash_password("dummy-password-for-constant-time-login-checks").expect("hashing the dummy login password")
-});
-#[cfg(not(any(test, feature = "test-util")))]
-static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
-    password::hash_password("dummy-password-for-constant-time-login-checks").expect("hashing the dummy login password")
-});
+/// Re-exported so this module's own call sites (and its tests) keep naming
+/// it locally — the value itself is shared with git-smart-HTTP's Basic auth,
+/// see [`password::DUMMY_HASH`].
+pub use gitquarry_auth_crypto::password::DUMMY_HASH;
 
 /// What survives the redirect to the IdP and back: the CSRF/nonce/PKCE
 /// values `openidconnect` generated for this attempt, plus where to send
@@ -216,7 +207,7 @@ fn build_session_cookie(
         SESSION_COOKIE,
         &serde_json::to_vec(&session)?,
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     Ok(set_cookie(
         headers,
         SESSION_COOKIE,
@@ -233,15 +224,15 @@ fn build_session_cookie(
 fn new_login_csrf(
     headers: &HeaderMap,
     cipher: &gitquarry_core::crypto::Cipher,
-) -> (String, (axum::http::HeaderName, String)) {
+) -> Result<(String, (axum::http::HeaderName, String))> {
     let sealed = cipher.seal(
         LOGIN_CSRF_COOKIE,
         &deadline(LOGIN_CSRF_TTL_SECS).to_le_bytes(),
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     let value = B64.encode(sealed);
     let cookie = set_cookie(headers, LOGIN_CSRF_COOKIE, &value, LOGIN_CSRF_TTL_SECS);
-    (value, cookie)
+    Ok((value, cookie))
 }
 
 /// `true` if at least one user has a password set — what [`handler_login`]
@@ -308,11 +299,11 @@ pub(crate) async fn handler_login(
     // A fresh anchor per visit rather than reusing whatever the request
     // already carried: this page is where the token is handed out, so
     // rotating it here keeps a stale one from staying valid indefinitely.
-    let (anchor, (cookie_header, cookie_value)) = new_login_csrf(&headers, &ctx.cipher);
+    let (anchor, (cookie_header, cookie_value)) = new_login_csrf(&headers, &ctx.cipher)?;
     let body = html! {
         (login_form(locale, &return_to, "", None, &crate::webui::csrf_token(&anchor)))
         @if ctx.oidc.is_some() {
-            p { a href=(format!("/_login_oidc?return_to={}", url_encode(&return_to))) { (crate::auth::i18n::login::log_in_with_oidc_link(locale)) } }
+            p { a href=(format!("/_login_oidc?return_to={}", url_encode(&return_to))) { (gitquarry_i18n::web::auth::login::log_in_with_oidc_link(locale)) } }
         }
     }
     .into_string();
@@ -330,7 +321,7 @@ pub(crate) async fn handler_login(
         cookie_header,
         cookie_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -355,17 +346,17 @@ fn login_form(
             input type="hidden" name="csrf" value=(csrf);
             input type="hidden" name="return_to" value=(return_to);
             div class=(field_class) {
-                label { (crate::auth::i18n::login::username_label(locale)) }
+                label { (gitquarry_i18n::web::auth::login::username_label(locale)) }
                 input type="text" name="username" size="30" value=(username) autofocus;
             }
             div class=(field_class) {
-                label { (crate::auth::i18n::login::password_label(locale)) }
+                label { (gitquarry_i18n::web::auth::login::password_label(locale)) }
                 input type="password" name="password" size="30";
                 @if let Some(msg) = error {
                     div class="field-error" { (msg) }
                 }
             }
-            p { button type="submit" { (crate::auth::i18n::login::log_in_button(locale)) } }
+            p { button type="submit" { (gitquarry_i18n::web::auth::login::log_in_button(locale)) } }
         }
     }
 }
@@ -404,28 +395,12 @@ pub(crate) async fn handler_login_local(
     let csrf = get_cookie(&headers, LOGIN_CSRF_COOKIE)
         .map(|value| crate::webui::csrf_token(&value))
         .unwrap_or_default();
-    if ctx.login_attempts.is_locked(&form.username) {
-        let body = login_form(
-            locale,
-            &form.return_to,
-            &form.username,
-            Some(&gitquarry_i18n::shared::too_many_failed_attempts(locale)),
-            &csrf,
-        )
-        .into_string();
-        return Ok((
-            axum::http::StatusCode::BAD_REQUEST,
-            Html(layout(
-                "login",
-                "",
-                &body,
-                "",
-                effective_theme(&ctx, &headers).await,
-                effective_density(&ctx, &headers).await,
-                locale,
-            )),
-        )
-            .into_response());
+    // Piled-up failures slow this username's attempts down rather than
+    // locking it: a lockout keyed on a name anyone can type is a denial of
+    // service against that name's real owner. See `LoginAttempts::penalty`.
+    let penalty = ctx.login_attempts.penalty(&form.username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
 
     let user = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, &form.username)
@@ -443,7 +418,7 @@ pub(crate) async fn handler_login_local(
             locale,
             &form.return_to,
             &form.username,
-            Some(&gitquarry_i18n::shared::wrong_username_or_password(locale)),
+            Some(&gitquarry_i18n::shared::auth::wrong_username_or_password(locale)),
             &csrf,
         )
         .into_string();
@@ -477,7 +452,7 @@ pub(crate) async fn handler_login_local(
             PENDING_TOTP_COOKIE,
             &serde_json::to_vec(&pending)?,
             gitquarry_core::crypto::CompressionStrategy::None,
-        );
+        )?;
         let (header, value) = set_cookie(
             &headers,
             PENDING_TOTP_COOKIE,
@@ -489,7 +464,7 @@ pub(crate) async fn handler_login_local(
             header,
             value
                 .parse()
-                .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
         );
         return Ok(resp);
     }
@@ -505,7 +480,7 @@ pub(crate) async fn handler_login_local(
         header,
         value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -515,17 +490,22 @@ pub(crate) async fn handler_login_local(
 /// live pending cookie (expired, or navigated here directly) this just sends
 /// the browser back to the start rather than showing a dead-end form.
 pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
-    if get_cookie(&headers, PENDING_TOTP_COOKIE).is_none() {
+    let Some(pending) = get_cookie(&headers, PENDING_TOTP_COOKIE) else {
         return Ok(Redirect::to("/_login").into_response());
-    }
+    };
+    // Anchored on the pending cookie rather than the session, same shape
+    // `/_login` uses with `LOGIN_CSRF_COOKIE`: this step finishes the very
+    // login flow that token exists to protect, and no session exists yet.
+    let csrf = crate::webui::csrf_token(&pending);
     let locale = effective_locale(&ctx, &headers).await;
     let body = html! {
         form method="post" action="/_login_totp" {
+            input type="hidden" name="csrf" value=(csrf);
             div class="field" {
-                label { (crate::auth::i18n::login::code_label(locale)) }
+                label { (gitquarry_i18n::web::auth::login::code_label(locale)) }
                 input name="code" size="10" autofocus;
             }
-            p { button type="submit" { (crate::auth::i18n::login::verify_button(locale)) } }
+            p { button type="submit" { (gitquarry_i18n::web::auth::login::verify_button(locale)) } }
         }
     }
     .into_string();
@@ -544,6 +524,8 @@ pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMa
 #[derive(Deserialize)]
 pub(crate) struct TotpLoginForm {
     code: String,
+    #[serde(default)]
+    csrf: String,
 }
 
 /// `POST /_login_totp`: verifies `code` against the pending cookie's
@@ -561,42 +543,55 @@ pub(crate) async fn handler_login_totp_post(
     Form(form): Form<TotpLoginForm>,
 ) -> Result<Response, AppError> {
     let locale = effective_locale(&ctx, &headers).await;
+    // Same reasoning as `/_login`'s own check, one step later in the same
+    // flow: a cross-site form that completes someone else's second factor
+    // lands them inside an account they didn't choose.
+    crate::webui::require_csrf_for(&headers, PENDING_TOTP_COOKIE, &form.csrf)?;
     let raw = get_cookie(&headers, PENDING_TOTP_COOKIE)
-        .context(gitquarry_i18n::shared::no_totp_login_in_progress(locale))
+        .context(gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale))
         .map_err(AppError::bad_request)?;
     let sealed = B64
         .decode(raw)
-        .context(gitquarry_i18n::shared::invalid_totp_cookie(locale))
+        .context(gitquarry_i18n::shared::auth::invalid_totp_cookie(locale))
         .map_err(AppError::bad_request)?;
     let plain = ctx
         .cipher
         .open(PENDING_TOTP_COOKIE, &sealed)
         .map_err(AppError::bad_request)?;
     let pending: PendingTotpCookie =
-        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::corrupt_totp_cookie(locale))?;
+        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::auth::corrupt_totp_cookie(locale))?;
     if expired(pending.exp) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_totp_login_in_progress(locale)
+            gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale)
         )));
     }
 
-    if ctx.login_attempts.is_locked(&pending.username) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::too_many_failed_attempts(locale)
-        )));
+    let penalty = ctx.login_attempts.penalty(&pending.username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
 
     let user = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, &pending.username)
         .await?
         .0;
-    let code_ok = user.as_ref().is_some_and(|u| {
-        u.totp_enabled
-            && u.totp_secret
-                .as_deref()
-                .is_some_and(|s| gitquarry_auth_crypto::totp::verify_code(s, form.code.trim()))
+    // The step the code matched, kept rather than discarded: a code is
+    // valid across three 30s steps, so without spending the step here an
+    // observed code stays usable for up to 90s after its owner logged in.
+    let matched_step = user.as_ref().and_then(|u| {
+        if !u.totp_enabled {
+            return None;
+        }
+        let step = gitquarry_auth_crypto::totp::matching_step(u.totp_secret.as_deref()?, form.code.trim())?;
+        (step > u.totp_last_step).then_some(step)
     });
+    // Written before the session is built: if the CAS loses to another
+    // login racing this one, that other login spent the step and this one
+    // is a replay.
+    let code_ok = match matched_step {
+        Some(step) => gitquarry_core::auth::domain::user::record_totp_step(&ctx, &pending.username, step).await?,
+        None => false,
+    };
     // A live TOTP code always wins outright; only bother spending a
     // recovery code (one-time use — see `domain::user::consume_recovery_code`)
     // when the submitted string didn't already verify as one.
@@ -606,7 +601,7 @@ pub(crate) async fn handler_login_totp_post(
         ctx.login_attempts.record_failure(&pending.username);
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::incorrect_code(locale)
+            gitquarry_i18n::shared::auth::incorrect_code(locale)
         )));
     };
     ctx.login_attempts.clear(&user.username);
@@ -624,13 +619,13 @@ pub(crate) async fn handler_login_totp_post(
         session_header,
         session_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     resp_headers.append(
         clear_header,
         clear_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -646,7 +641,7 @@ pub(crate) async fn handler_login_oidc(
     let client = ctx
         .oidc
         .as_ref()
-        .context(gitquarry_i18n::shared::oidc_not_configured(locale))
+        .context(gitquarry_i18n::shared::oidc::oidc_not_configured(locale))
         .map_err(AppError::bad_request)?;
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -675,7 +670,7 @@ pub(crate) async fn handler_login_oidc(
         FLOW_COOKIE,
         &serde_json::to_vec(&flow)?,
         gitquarry_core::crypto::CompressionStrategy::None,
-    );
+    )?;
     let (header, value) = set_cookie(&headers, FLOW_COOKIE, &B64.encode(sealed), FLOW_TTL_SECS);
 
     let mut resp = Redirect::to(auth_url.as_str()).into_response();
@@ -683,7 +678,7 @@ pub(crate) async fn handler_login_oidc(
         header,
         value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -705,84 +700,86 @@ pub(crate) async fn handler_callback(
     let client = ctx
         .oidc
         .as_ref()
-        .context(gitquarry_i18n::shared::oidc_not_configured(locale))
+        .context(gitquarry_i18n::shared::oidc::oidc_not_configured(locale))
         .map_err(AppError::bad_request)?;
 
     if let Some(err) = params.error {
         let desc = params.error_description.unwrap_or_default();
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::oidc_provider_rejected_login(locale, &err, &desc)
+            gitquarry_i18n::shared::oidc::oidc_provider_rejected_login(locale, &err, &desc)
         )));
     }
     let code = params
         .code
-        .context(gitquarry_i18n::shared::missing_code_param(locale))
+        .context(gitquarry_i18n::shared::oidc::missing_code_param(locale))
         .map_err(AppError::bad_request)?;
     let state = params
         .state
-        .context(gitquarry_i18n::shared::missing_state_param(locale))
+        .context(gitquarry_i18n::shared::oidc::missing_state_param(locale))
         .map_err(AppError::bad_request)?;
 
     let flow_raw = get_cookie(&headers, FLOW_COOKIE)
-        .context(gitquarry_i18n::shared::no_oidc_login_in_progress(locale))
+        .context(gitquarry_i18n::shared::oidc::no_oidc_login_in_progress(locale))
         .map_err(AppError::bad_request)?;
     let flow_sealed = B64
         .decode(flow_raw)
-        .context(gitquarry_i18n::shared::invalid_oidc_flow_cookie(locale))
+        .context(gitquarry_i18n::shared::oidc::invalid_oidc_flow_cookie(locale))
         .map_err(AppError::bad_request)?;
     let flow_plain = ctx
         .cipher
         .open(FLOW_COOKIE, &flow_sealed)
         .map_err(AppError::bad_request)?;
     let flow: FlowCookie =
-        serde_json::from_slice(&flow_plain).context(gitquarry_i18n::shared::corrupt_oidc_flow_cookie(locale))?;
+        serde_json::from_slice(&flow_plain).context(gitquarry_i18n::shared::oidc::corrupt_oidc_flow_cookie(locale))?;
     if expired(flow.exp) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_oidc_login_in_progress(locale)
+            gitquarry_i18n::shared::oidc::no_oidc_login_in_progress(locale)
         )));
     }
 
     if flow.csrf != state {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::oidc_state_mismatch(locale)
+            gitquarry_i18n::shared::oidc::oidc_state_mismatch(locale)
         )));
     }
 
     let http_client = openidconnect::reqwest::ClientBuilder::new()
         .redirect(openidconnect::reqwest::redirect::Policy::none())
         .build()
-        .context(gitquarry_i18n::shared::failed_to_build_oidc_client(locale))?;
+        .context(gitquarry_i18n::shared::oidc::failed_to_build_oidc_client(locale))?;
 
     let token_response = client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(PkceCodeVerifier::new(flow.pkce_verifier))
         .request_async(&http_client)
         .await
-        .context(gitquarry_i18n::shared::code_token_exchange_failed(locale))?;
+        .context(gitquarry_i18n::shared::oidc::code_token_exchange_failed(locale))?;
 
     let id_token = token_response
         .id_token()
-        .context(gitquarry_i18n::shared::oidc_missing_id_token(locale))?;
+        .context(gitquarry_i18n::shared::oidc::oidc_missing_id_token(locale))?;
     let nonce = Nonce::new(flow.nonce);
     let claims = id_token
         .claims(&client.id_token_verifier(), &nonce)
-        .context(gitquarry_i18n::shared::failed_to_verify_id_token(locale))?;
+        .context(gitquarry_i18n::shared::oidc::failed_to_verify_id_token(locale))?;
 
-    // `None` (provider just doesn't send the claim) is treated as trusting
-    // the issuer, same as any claim it doesn't bother asserting either way.
-    // An explicit `false` is the provider telling us not to trust it.
-    if claims.email_verified() == Some(false) {
+    // Nothing short of an explicit `true` will do. Identity here is the
+    // email and nothing else (`SessionSubject::Email`), so an IdP that
+    // merely *omits* the claim — or one where anyone may self-register an
+    // address — would otherwise let an attacker sign up as an existing
+    // account's email and be handed that account.
+    if claims.email_verified() != Some(true) {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::oidc_email_not_verified(locale)
+            gitquarry_i18n::shared::oidc::oidc_email_not_verified(locale)
         )));
     }
     let email = claims
         .email()
-        .context(gitquarry_i18n::shared::id_token_missing_email_claim(locale))?
+        .context(gitquarry_i18n::shared::oidc::id_token_missing_email_claim(locale))?
         .as_str()
         .to_string();
 
@@ -791,11 +788,50 @@ pub(crate) async fn handler_callback(
     // `current_user`. No match is not an error: the cookie is simply
     // useless (`current_user` finds nobody), so `0` is as good a stamp as
     // any.
-    let epoch = gitquarry_core::auth::access::resolve_by_email(ctx.backend().as_ref(), &ctx.cipher, &email)
+    let account = gitquarry_core::auth::access::resolve_by_email(ctx.backend().as_ref(), &ctx.cipher, &email)
         .await
         .ok()
-        .flatten()
-        .map_or(0, |u| u.session_epoch);
+        .flatten();
+
+    // An account that enrolled TOTP keeps its second factor whichever door
+    // the first one came through — the IdP proved the email, not that this
+    // is the person who holds the authenticator.
+    if let Some(user) = account.as_ref().filter(|u| u.totp_enabled) {
+        let pending = PendingTotpCookie {
+            username: user.username.clone(),
+            return_to: flow.return_to.clone(),
+            exp: deadline(PENDING_TOTP_TTL_SECS),
+        };
+        let sealed = ctx.cipher.seal(
+            PENDING_TOTP_COOKIE,
+            &serde_json::to_vec(&pending)?,
+            gitquarry_core::crypto::CompressionStrategy::None,
+        )?;
+        let (pending_header, pending_value) = set_cookie(
+            &headers,
+            PENDING_TOTP_COOKIE,
+            &B64.encode(sealed),
+            PENDING_TOTP_TTL_SECS,
+        );
+        let (clear_header, clear_value) = set_cookie(&headers, FLOW_COOKIE, "", 0);
+        let mut resp = Redirect::to("/_login_totp").into_response();
+        let resp_headers = resp.headers_mut();
+        resp_headers.append(
+            pending_header,
+            pending_value
+                .parse()
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
+        );
+        resp_headers.append(
+            clear_header,
+            clear_value
+                .parse()
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
+        );
+        return Ok(resp);
+    }
+
+    let epoch = account.map_or(0, |u| u.session_epoch);
     let (session_header, session_value) =
         build_session_cookie(&headers, &ctx.cipher, SessionSubject::Email(email), epoch)?;
     let (clear_header, clear_value) = set_cookie(&headers, FLOW_COOKIE, "", 0);
@@ -806,13 +842,13 @@ pub(crate) async fn handler_callback(
         session_header,
         session_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     resp_headers.append(
         clear_header,
         clear_value
             .parse()
-            .context(gitquarry_i18n::shared::building_set_cookie(locale))?,
+            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
     );
     Ok(resp)
 }
@@ -837,15 +873,46 @@ pub(crate) async fn handler_logout(headers: HeaderMap, Form(form): Form<LogoutFo
     Ok(resp)
 }
 
+tokio::task_local! {
+    /// Memoizes [`current_user`]'s result for the rest of the request it
+    /// was first computed in — scoped alongside
+    /// [`gitquarry_core::app::REQUEST_BACKEND`] by
+    /// `webui::request_cache_middleware`. A single page render calls
+    /// `current_user` many times over (a permission check, `topnav`,
+    /// theme/locale/text-size/density prefs, ...); `RequestCache` already
+    /// serves the repeat *raw* read from memory, but every one of those
+    /// calls still paid to decrypt the cookie and deserialize the `User`
+    /// again. This doesn't weaken the "never cached across requests"
+    /// invariant [`current_user`]'s own doc comment describes — the memo
+    /// never outlives the one request that computed it, same as
+    /// `RequestCache` itself.
+    pub(crate) static CURRENT_USER_MEMO: std::cell::RefCell<Option<Option<User>>>;
+}
+
 /// The [`User`] the current request's session cookie resolves to, or `None`
 /// for anything short of a fully valid, unexpired session naming a user
 /// that still exists — never an error. The cookie only proves "this email
 /// was IdP-verified recently" or "this username's password matched at
-/// login time"; the per-entity store (re-read every call, never cached) is
-/// still what actually grants access, so removing a user (or clearing
-/// their `password_hash`) revokes them immediately even with a live
-/// cookie.
+/// login time"; the per-entity store (re-read every call, never cached
+/// *across requests*) is still what actually grants access, so removing a
+/// user (or clearing their `password_hash`) revokes them immediately even
+/// with a live cookie — [`CURRENT_USER_MEMO`] only dedupes repeat calls
+/// within the one request that's already using whatever answer this
+/// function first gave it.
 pub(crate) async fn current_user(ctx: &AppContext, headers: &HeaderMap) -> Option<User> {
+    if let Ok(Some(memoized)) = CURRENT_USER_MEMO.try_with(|cell| cell.borrow().clone()) {
+        return memoized;
+    }
+    let user = current_user_uncached(ctx, headers).await;
+    // `try_with` rather than `with`: outside a request (a background sweep,
+    // a test calling this directly with no scope set up) there's simply
+    // nothing to memoize into, which is fine — it only ever saves a repeat
+    // call within a request that scoped it.
+    let _ = CURRENT_USER_MEMO.try_with(|cell| *cell.borrow_mut() = Some(user.clone()));
+    user
+}
+
+async fn current_user_uncached(ctx: &AppContext, headers: &HeaderMap) -> Option<User> {
     let raw = get_cookie(headers, SESSION_COOKIE)?;
     let sealed = B64.decode(raw).ok()?;
     let plain = ctx.cipher.open(SESSION_COOKIE, &sealed).ok()?;
@@ -884,18 +951,23 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
             let u = url_encode(&user.username);
             // `<details><summary>` — click-to-toggle/keyboard support from
             // the browser itself, no JS (see base.css's `#topbar
-            // details.dropdown` rules). The 4 links used to sit flat in the
-            // nav; grouping them under one "account" trigger is the one
-            // dropdown this pass adds.
+            // details.dropdown` rules). The 4 links inside it used to sit
+            // flat in the nav; grouping them under one "account" trigger is
+            // the one dropdown this pass adds. `/_repos` stays flat, right
+            // next to the trigger — it's the logged-in viewer's own repo
+            // dashboard, not an account-settings link, so it belongs beside
+            // `/_groups`/`/_new` in the main nav rather than tucked away
+            // behind a click.
             format!(
-                " · <details class=\"dropdown\"><summary>{}{}</summary><div class=\"dropdown-menu\">\
+                " · <a href=\"/_repos\">{}</a> · <details class=\"dropdown\"><summary>{}{}</summary><div class=\"dropdown-menu\">\
                  <a href=\"/_profile/{u}\">{}</a>\
                  <a href=\"/_account/favorites\">{}</a>\
                  <a href=\"/_account/security\">{}</a>\
                  <a href=\"/_account/profile\">{}</a>\
                  <form method=\"post\" action=\"/_logout\" class=\"dropdown-form\">{}<button type=\"submit\">{}</button></form>\
                  </div></details>",
-                crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref(), 18)
+                gitquarry_i18n::web::repos::repos_title(locale),
+                crate::webui::identicon::account_avatar(&user.username, user.avatar_content_type.as_deref())
                     .into_string(),
                 esc(&user.username),
                 gitquarry_i18n::web::chrome::profile_tab(locale),
@@ -903,12 +975,12 @@ pub(crate) async fn topnav(ctx: &AppContext, headers: &HeaderMap) -> String {
                 gitquarry_i18n::web::chrome::security_tab(locale),
                 gitquarry_i18n::web::chrome::account_settings_tab(locale),
                 crate::webui::csrf_field(headers),
-                crate::auth::i18n::login::logout_link(locale)
+                gitquarry_i18n::web::auth::login::logout_link(locale)
             )
         }
         None => format!(
             " · <a href=\"/_login\">{}</a>",
-            crate::auth::i18n::login::login_link(locale)
+            gitquarry_i18n::web::auth::login::login_link(locale)
         ),
     }
 }

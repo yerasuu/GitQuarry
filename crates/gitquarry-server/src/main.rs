@@ -1,5 +1,5 @@
 //! One binary, one unified server, plus one entry point that only git
-//! invokes (not run by a human), plus three operator maintenance commands
+//! invokes (not run by a human), plus five operator maintenance commands
 //! (see [`gitquarry_domain::commands`]):
 //! - `gitquarry --bucket NAME [--web-bind ...] [--ssh-bind ...]`: starts
 //!   the ssh:// server and the web UI (browsing + git smart-HTTP) together,
@@ -9,28 +9,54 @@
 //!   both, since neither of those two can depend on the other (see
 //!   `docs/webui-crate-split-concept.md`).
 //! - `pre-receive-hook`: internal use, invoked by the hook installed on each
-//!   mirror (not run by a human). Spawns `gitquarry-mirror-external sync`
-//!   detached right after a push is accepted, to sync that repo's external
-//!   mirrors without making the push itself wait on it — see
+//!   mirror (not run by a human). It never syncs external mirrors itself —
+//!   the hook process dies with the push, so the `ctx.mirror_sync` hook
+//!   wired up in [`mirror_sync`] picks the repo up on the next read/write
+//!   or on the periodic sweep instead — see
 //!   `docs/mirror-external-extraction-concept.md`.
 //! - `fsck`: human-run, checks for stray objects — see [`gitquarry_domain::commands::fsck`].
 //! - `repack`: human-run, consolidates a repo's packs — see [`gitquarry_domain::commands::repack`].
 //! - `backfill-repo-index`: human-run, one-time backfill for repos/grants
 //!   that existed before the owner/visibility/permission indexes did — see
 //!   [`gitquarry_domain::commands::backfill_repo_index`].
+//! - `migrate`: human-run, reports (and with `--apply` runs) the bucket data
+//!   migrations the server otherwise applies itself at startup — see
+//!   [`gitquarry_domain::commands::migrate`] and
+//!   [`gitquarry_core::migrations`].
+//! - `backup`: human-run (or cron-run), one backup now — see
+//!   [`gitquarry_domain::commands::backup`].
+//! - `restore`: human-run, writes a snapshot back over the live data — see
+//!   [`gitquarry_domain::commands::restore`].
 
 use anyhow::Result;
 use gitquarry::serve;
 use gitquarry_core::mirror;
 use gitquarry_domain::commands;
 use std::process::ExitCode;
+use tracing::error;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // The one place this initializes: every subcommand below (server, hooks,
+    // fsck/repack/backfill/migrate/backup/restore) shares this process and
+    // this filter. `RUST_LOG` overrides; otherwise `info` — errors/warnings
+    // plus the normal lifecycle events, not per-item debug noise.
+    //
+    // Writer is stderr, not the crate default stdout: `pre-receive-hook`
+    // runs as a subprocess git spawns on every push, and only what it writes
+    // to stderr is guaranteed (across git versions) to reach the pushing
+    // client as a "remote: ..." line -- a rejection logged to stdout instead
+    // could go unseen by the very person who needs to read it.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
+
     match dispatch().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("gitquarry: {e:#}");
+            error!("{e:#}");
             ExitCode::FAILURE
         }
     }
@@ -43,6 +69,9 @@ async fn dispatch() -> Result<()> {
         Some("fsck") => commands::fsck::run(&args[2..]).await,
         Some("repack") => commands::repack::run(&args[2..]).await,
         Some("backfill-repo-index") => commands::backfill_repo_index::run(&args[2..]).await,
+        Some("migrate") => commands::migrate::run(&args[2..]).await,
+        Some("backup") => commands::backup::run(&args[2..]).await,
+        Some("restore") => commands::restore::run(&args[2..]).await,
         _ => serve::run(&args[1..]).await,
     }
 }
@@ -51,7 +80,7 @@ async fn run_hook() -> Result<()> {
     if mirror::run_pre_receive_hook().await? {
         Ok(())
     } else {
-        // The reason was already printed with detail; exit != 0 so git
+        // The reason was already logged with detail; exit != 0 so git
         // rejects the push.
         std::process::exit(1);
     }

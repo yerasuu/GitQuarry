@@ -52,10 +52,11 @@ async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
             login_attempts: Default::default(),
             git_rate_limiter: Default::default(),
             federation: None,
-            tracker: None,
             allow_push_create: false,
+            trust_forwarded_for: false,
             events: Default::default(),
             mirror_sync: None,
+            visible_repo_uids_cache: Default::default(),
         }
     }
 

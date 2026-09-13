@@ -162,10 +162,12 @@ fn s3_prefill() -> Prefill {
                 region: Some("us-east-1".to_string()),
                 endpoint_url: None,
                 access_key_id: "AKIA".to_string(),
-                secret_access_key: "s3cret".to_string(),
+                secret_access_key: "s3cret".to_string().into(),
                 path_style: true,
+                allow_insecure_http: false,
             }),
             passphrase: "hunter2".to_string(),
+            resilience: Default::default(),
         },
     }
 }
