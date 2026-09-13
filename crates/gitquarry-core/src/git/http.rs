@@ -4,11 +4,11 @@
 //! <https://git-scm.com/docs/http-protocol>. One of the two publicly
 //! supported transports (alongside [`super::ssh`]); this file owns the wire
 //! protocol only — it never renders HTML and never calls into
-//! [`crate::webui::repo`]/[`crate::webui::repo_settings`], and vice versa. It
-//! has to live alongside [`crate::webui`]'s router rather than owning its own
+//! `gitquarry_webui::webui::repo`/`gitquarry_webui::webui::repo_settings`, and vice versa. It
+//! has to live alongside `gitquarry_webui::webui`'s router rather than owning its own
 //! listener (unlike [`super::ssh`]) because both transports are meant to
 //! share one HTTP port — so it's wired in as [`middleware`], a layer over
-//! the whole router (see [`crate::webui::run_server`]): it short-circuits the
+//! the whole router (see `gitquarry_webui::webui::run_server`): it short-circuits the
 //! three paths above before the browsing-UI's `/{*repo}` catch-all route
 //! ever sees them, and passes everything else through unchanged — same
 //! shape as `webui`'s own `security_headers` layer.
@@ -36,12 +36,20 @@ use gitquarry_auth_crypto::password;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
+use tracing::{error, warn};
 
 /// Request bodies for `POST .../info/lfs/objects/batch` only ever list
 /// oids/sizes, never file content — a generous cap, well above any real
 /// batch, just to keep a malformed/hostile request from buffering unbounded
 /// memory before it's even parsed.
 const MAX_LFS_BATCH_BYTES: usize = 8 * 1024 * 1024;
+
+/// `upload-pack`/`receive-pack` request bodies are real pack data, so this
+/// stays generous enough to never trip on a legitimate push/fetch (well past
+/// any real monorepo pack) -- it exists only so a runaway or hostile client
+/// can't make the server buffer an unbounded body into memory before `git`
+/// ever sees a byte of it.
+const MAX_PACK_BODY_BYTES: usize = 16 * 1024 * 1024 * 1024;
 
 #[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +163,41 @@ fn extract_variable_segment<'a>(path: &'a str, infix: &str, trailing: &str) -> O
     (!repo.is_empty()).then_some((repo, var))
 }
 
+/// What the anonymous rate limiter counts against: the socket address, or
+/// — only when the instance says a proxy owns the header
+/// ([`AppContext::trust_forwarded_for`]) — the first `X-Forwarded-For` hop.
+///
+/// Behind a reverse proxy the socket address is the proxy's, so every
+/// anonymous client in the world shares one bucket and one of them can
+/// spend it for everybody. Trusting the header without a proxy that
+/// overwrites it is the opposite failure: each request picks its own
+/// bucket, and the limit stops existing. Neither is safe to guess, hence
+/// the setting.
+#[cfg(any(test, feature = "test-util"))]
+pub fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+    client_key_impl(ctx, headers, socket_ip)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+    client_key_impl(ctx, headers, socket_ip)
+}
+
+fn client_key_impl(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+    if !ctx.trust_forwarded_for {
+        return socket_ip.to_string();
+    }
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        // `client, proxy1, proxy2` — the first entry is the hop that faced
+        // the client, same reading `webui::cookies::is_https` gives
+        // `X-Forwarded-Proto`.
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|hop| !hop.is_empty())
+        .map_or_else(|| socket_ip.to_string(), str::to_string)
+}
+
 pub async fn middleware(
     State(ctx): State<Arc<AppContext>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -169,10 +212,11 @@ pub async fn middleware(
     }
     let repo = repo.to_string();
     let oid = oid.map(str::to_string);
-    match handle(&ctx, &repo, kind, oid.as_deref(), addr.ip(), req).await {
+    let client = client_key(&ctx, req.headers(), addr.ip());
+    match handle(&ctx, &repo, kind, oid.as_deref(), client, req).await {
         Ok(resp) => resp,
         Err(e) => {
-            eprintln!("gitquarry: git-http: {e:#}");
+            error!(error = %e, "git-http request failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
         }
     }
@@ -183,7 +227,7 @@ async fn handle(
     raw_repo: &str,
     kind: Kind,
     oid: Option<&str>,
-    client_ip: std::net::IpAddr,
+    client_key: String,
     req: Request,
 ) -> Result<Response> {
     let name = validate::sanitize_path(raw_repo)?;
@@ -216,13 +260,30 @@ async fn handle(
             if kind != Kind::ReceivePack {
                 let under_limit = match &actor {
                     Some(username) => ctx.git_rate_limiter.check_authenticated(username),
-                    None => ctx.git_rate_limiter.check_anonymous(&client_ip.to_string()),
+                    None => ctx.git_rate_limiter.check_anonymous(&client_key),
                 };
                 if !under_limit {
                     return Ok(too_many_requests());
                 }
             }
-            let mirror = ctx.open_mirror(&resolved).await?;
+            // Reads only. Syncing right before a push is actively harmful:
+            // a pull that lands first moves the branch, and the pre-receive
+            // hook then rejects the client's own push as stale ("changed in
+            // S3 since the last fetch") — a sync nobody asked for turning a
+            // valid push into a failure. The push's own refs reach the
+            // external side on the next sweep either way.
+            if kind != Kind::ReceivePack {
+                crate::mirror::sync_external_before_serving(ctx, &resolved).await;
+            }
+            // A fetch only reads the mirror, so it takes the repo's lock
+            // shared and stops queueing behind other fetches and web views
+            // of the same repo; `receive-pack` writes it and still needs
+            // the mirror to itself.
+            let mirror = if kind == Kind::ReceivePack {
+                ctx.open_mirror(&resolved).await?
+            } else {
+                ctx.open_mirror_read(&resolved).await?
+            };
             match kind {
                 Kind::InfoRefs => {
                     let query = req.uri().query().unwrap_or("");
@@ -252,7 +313,7 @@ async fn handle(
                     // refreshes the local mirror for the next reader, same as
                     // `ssh.rs` does after a push.
                     if let Err(e) = mirror::sync_bare_repo_from_s3(&mirror.remote, &mirror.path).await {
-                        eprintln!("gitquarry: http: couldn't re-sync after push: {e:#}");
+                        warn!(error = %e, "http: couldn't re-sync after push");
                     }
                     // Detached, same reasoning as `ssh.rs`'s own call to
                     // this: `domain::repo::update_primary_language` takes
@@ -603,19 +664,25 @@ async fn authenticate(
     if let Some(cred) = resolve_local_pat(ctx, &username, repo_uid).await? {
         return Ok(Some(cred));
     }
-    if ctx.login_attempts.is_locked(&username) {
-        return Ok(None);
+    // Repeated failures slow this name down instead of locking it — see
+    // `LoginAttempts::penalty`.
+    let penalty = ctx.login_attempts.penalty(&username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
     }
-    let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
+    let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
         .await?
-        .0
-    else {
-        return Ok(None);
-    };
-    let Some(hash) = &user.password_hash else {
-        return Ok(None);
-    };
-    if password::verify_password(&password, hash) {
+        .0;
+    // Verified against a real-but-unmatchable hash when the username is
+    // unknown, so "no such user" and "wrong password" cost the same Argon2
+    // work — the same equalisation `auth::web::login` does on its own form.
+    let matched = password::verify_password(
+        &password,
+        user.as_ref()
+            .and_then(|u| u.password_hash.as_deref())
+            .unwrap_or(password::DUMMY_HASH.as_str()),
+    );
+    if let Some(user) = user.filter(|u| u.password_hash.is_some() && matched) {
         ctx.login_attempts.clear(&username);
         return Ok(Some(Credential::Password(Box::new(user))));
     }
@@ -755,7 +822,7 @@ async fn pack_response(
     req: Request,
     actor: Option<&str>,
 ) -> Result<Response> {
-    let body = axum::body::to_bytes(req.into_body(), usize::MAX)
+    let body = axum::body::to_bytes(req.into_body(), MAX_PACK_BODY_BYTES)
         .await
         .context("reading request body")?;
     let child = mirror::spawn_git_subcommand_http(

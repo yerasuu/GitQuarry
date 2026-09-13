@@ -148,7 +148,10 @@ fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
         git_rate_limiter: Default::default(),
         ci: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -160,7 +163,7 @@ fn basic_auth_header(username: &str, password: &str) -> HeaderMap {
 }
 
 #[tokio::test]
-async fn authorize_locks_out_a_username_after_too_many_wrong_passwords_over_http() {
+async fn authorize_slows_a_username_down_after_too_many_wrong_passwords_over_http() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     gitquarry_core::auth::domain::user::create(
@@ -197,8 +200,10 @@ async fn authorize_locks_out_a_username_after_too_many_wrong_passwords_over_http
         ));
     }
 
-    // Locked out now -- even the *correct* password is rejected without a
-    // fresh Argon2 check.
+    // Past the cap the account is *slowed*, never locked: the person who
+    // actually knows the password still gets in, so the counter can't be
+    // turned into a denial of service against them.
+    assert!(!ctx.login_attempts.penalty("alice").is_zero());
     let right = basic_auth_header("alice", "correct-password");
     assert!(matches!(
         authorize(
@@ -211,12 +216,12 @@ async fn authorize_locks_out_a_username_after_too_many_wrong_passwords_over_http
         )
         .await
         .unwrap(),
-        Authz::Denied(Denial::Unauthorized)
+        Authz::Allowed(_)
     ));
 }
 
 #[tokio::test]
-async fn authorize_clears_the_lockout_counter_on_a_correct_password() {
+async fn authorize_clears_the_failure_counter_on_a_correct_password() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
     gitquarry_core::auth::domain::user::create(
@@ -324,4 +329,39 @@ async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
         assert_eq!(status, StatusCode::OK);
     }
     assert!(saw_429, "never got rate limited within the cap + margin");
+}
+
+#[test]
+fn the_rate_limit_key_ignores_a_forwarded_header_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
+    // Trusting the header without a proxy that owns it would let any client
+    // pick its own bucket, i.e. opt out of the limit entirely.
+    assert_eq!(
+        gitquarry_core::git::http::client_key(&ctx, &headers, "127.0.0.1".parse().unwrap()),
+        "127.0.0.1"
+    );
+}
+
+#[test]
+fn the_rate_limit_key_uses_the_first_forwarded_hop_when_trusted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = test_ctx(dir.path());
+    ctx.trust_forwarded_for = true;
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-forwarded-for", "9.9.9.9, 10.0.0.1".parse().unwrap());
+    assert_eq!(
+        gitquarry_core::git::http::client_key(&ctx, &headers, "127.0.0.1".parse().unwrap()),
+        "9.9.9.9"
+    );
+
+    // No header (a request that didn't come through the proxy) falls back
+    // to the socket rather than lumping everyone into one empty key.
+    assert_eq!(
+        gitquarry_core::git::http::client_key(&ctx, &axum::http::HeaderMap::new(), "127.0.0.1".parse().unwrap()),
+        "127.0.0.1"
+    );
 }

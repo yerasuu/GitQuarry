@@ -4,7 +4,7 @@
 //! own doc comment); this only edits which branches count.
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, non_empty, repo_link};
+use crate::webui::{AppError, non_empty, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -68,15 +68,16 @@ pub fn render_require_signed_commits_form(
         .join(", ");
     let current = retry.map_or(stored.as_str(), |f| f.signed_required.as_str());
     html! {
-        h4 { (gitquarry_i18n::web::repo_settings::require_signed_commits_heading(locale)) }
-        p class="muted" {
-            (gitquarry_i18n::web::repo_settings::require_signed_commits_prose(locale, &branches.join(", ")))
-        }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_require_signed_commits";
-            input name="signed_required" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::require_signed_commits_placeholder(locale));
-            button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
-        }
+        (settings_section(&gitquarry_i18n::web::repo_settings::require_signed_commits_heading(locale), None, html! {
+            p class="muted" {
+                (gitquarry_i18n::web::repo_settings::require_signed_commits_prose(locale, &branches.join(", ")))
+            }
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" data-confirm=(gitquarry_i18n::web::repo_settings::save_require_signed_commits_confirm(locale)) {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_require_signed_commits";
+                input name="signed_required" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::require_signed_commits_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
+            }
+        }))
     }
 }

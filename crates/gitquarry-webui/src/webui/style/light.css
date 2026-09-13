@@ -2,14 +2,6 @@
   --border: #eee; --border-strong: #ccc; --border-strongest: #999;
   --surface: #f5f5f5; --surface-2: #f7f7f7; --surface-3: #eee; --surface-4: #e2e2e2;
   --code-bg: #f8f8f8; --code-border: #ddd;
-  /* Syntax-highlight token colors (`highlight.rs`'s `class="tok-*"` spans,
-     `base.css`'s matching rules) — a dedicated family, not a reuse of
-     `--accent`/`--good`/etc: a keyword or a type isn't semantically an
-     "ok"/"danger"/brand signal, it just needs to read as its own token
-     kind against `--code-bg`. One-light-ish, tuned for that background. */
-  --syn-kw: #a626a4; --syn-str: #50a14f; --syn-com: #a0a1a7; --syn-num: #986801;
-  --syn-const: #986801; --syn-fn: #4078f2; --syn-type: #c18401; --syn-tag: #e45649;
-  --syn-attr: #986801;
   /* `#8b0000`, the mockup's brand red — restored after briefly living as
      teal (see `ff247da`'s own message on the collision that caused that:
      the crimson `data-accent` preset's `--accent-500` sat right next to
@@ -19,6 +11,10 @@
      red, not literally the same color again. */
   --accent: #8b0000; --link: #00e;
   --diff-add: #070; --diff-del: #a00; --diff-hunk: #06a;
+  /* Low-alpha tints of the same hue, for `.diff-add-line`/`.diff-del-line`'s
+     background (`base.css`) — keeps `highlight.js`'s own `.hljs-*` token
+     colors visible on top instead of a solid block. */
+  --diff-add-bg: rgba(0, 119, 0, 0.12); --diff-del-bg: rgba(170, 0, 0, 0.10);
   --sig-good: #2e7d32;
   --flash-ok-bg: #f0f7ee; --flash-ok-fg: #1b5e20;
   --flash-err-bg: #fdf0ef; --flash-err-fg: var(--danger);

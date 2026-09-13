@@ -14,7 +14,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, TextSize, account_settings_page, csrf_field, effective_density, effective_locale,
-    effective_theme, layout, render_flash, require_csrf, require_login,
+    effective_theme, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -61,6 +61,10 @@ pub(crate) struct AppearanceForm {
     /// "no preference, use the site default (dense)".
     #[serde(default)]
     density: String,
+    /// Only read by `set_locale_pref`: `"es"`/`"en"` (`gitquarry_i18n::Locale::parse`'s
+    /// accepted set), or empty for "no preference, use the site default".
+    #[serde(default)]
+    locale: String,
 }
 
 pub(crate) async fn handler_appearance_post(
@@ -81,7 +85,7 @@ pub(crate) async fn handler_appearance_post(
     let (Some(mut me), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &me.username).await? else {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::account_no_longer_exists(locale)
+            gitquarry_i18n::shared::auth::account_no_longer_exists(locale)
         )));
     };
 
@@ -90,7 +94,7 @@ pub(crate) async fn handler_appearance_post(
             TextSize::parse(&form.text_size).ok_or_else(|| {
                 AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_size(locale, &form.text_size)
+                    gitquarry_i18n::shared::auth::invalid_size(locale, &form.text_size)
                 ))
             })?;
             me.text_size_default = form.text_size.clone();
@@ -99,7 +103,7 @@ pub(crate) async fn handler_appearance_post(
             if !matches!(form.theme.as_str(), "" | "dark" | "light") {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_theme(locale, &form.theme)
+                    gitquarry_i18n::shared::auth::invalid_theme(locale, &form.theme)
                 )));
             }
             me.theme_default = form.theme.clone();
@@ -108,10 +112,19 @@ pub(crate) async fn handler_appearance_post(
             if !matches!(form.density.as_str(), "" | "dense" | "airy") {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::invalid_density(locale, &form.density)
+                    gitquarry_i18n::shared::auth::invalid_density(locale, &form.density)
                 )));
             }
             me.density_default = form.density.clone();
+        }
+        "set_locale_pref" => {
+            if !matches!(form.locale.as_str(), "" | "es" | "en") {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::auth::invalid_locale(locale, &form.locale)
+                )));
+            }
+            me.locale_default = form.locale.clone();
         }
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
@@ -127,8 +140,15 @@ pub(crate) async fn handler_appearance_post(
         Cas::Ok => Flash::Ok("saved."),
         Cas::Conflict => Flash::Err(&cas_conflict_msg),
     };
-    let topnav = login::topnav(&ctx, &headers).await;
     let content = render_appearance_page(&me, &csrf_field(&headers), Some(flash), locale);
+    // Async (`data-async-target="#appearance-body"`, see `crate::webui::ASYNC_HEADER`'s
+    // own doc comment): a JS client's `<form data-async>` never actually
+    // navigates, so there's no POST result for a later F5 to warn about
+    // resubmitting.
+    if headers.contains_key(crate::webui::ASYNC_HEADER) {
+        return Ok(axum::response::Html(content.into_string()).into_response());
+    }
+    let topnav = login::topnav(&ctx, &headers).await;
     let body = account_settings_page("appearance", content, locale).into_string();
     Ok(axum::response::Html(layout(
         "appearance",
@@ -142,6 +162,16 @@ pub(crate) async fn handler_appearance_post(
     .into_response())
 }
 
+/// All 4 forms below share one `#appearance-body` async target instead of
+/// each owning its own: the flash banner sits above all of them (one save
+/// confirms, or rejects, one preference at a time — there's no "which form"
+/// for it to belong to individually), so any of the 4 submits has to
+/// refresh the whole wrapper to get a fresh banner, same reasoning
+/// `settings::web::settings_body`'s own doc comment gives for `/_settings`.
+/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
+/// `pub(crate)` outside that config, which is what makes plain `cargo
+/// check` flag this as exposing a private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub fn render_appearance_page(
     user: &User,
     csrf: &str,
@@ -151,45 +181,60 @@ pub fn render_appearance_page(
     let current = TextSize::parse(&user.text_size_default);
     let action_url = "/_account/appearance";
     html! {
+      div id="appearance-body" {
         (PreEscaped(render_flash(message, locale)))
 
-        h4 { (crate::auth::i18n::appearance::text_size_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::appearance::text_size_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="set_text_size_pref";
-            select name="text_size" {
-                option value="sm" selected[current == Some(TextSize::Sm)] { (crate::auth::i18n::appearance::text_size_small(locale)) }
-                option value="md" selected[current == Some(TextSize::Md)] { (crate::auth::i18n::appearance::text_size_medium(locale)) }
-                option value="lg" selected[current == Some(TextSize::Lg)] { (crate::auth::i18n::appearance::text_size_large(locale)) }
+        (settings_section(&gitquarry_i18n::web::auth::appearance::text_size_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::text_size_description(locale)), html! {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_text_size_pref";
+                select name="text_size" {
+                    option value="sm" selected[current == Some(TextSize::Sm)] { (gitquarry_i18n::web::auth::appearance::text_size_small(locale)) }
+                    option value="md" selected[current == Some(TextSize::Md)] { (gitquarry_i18n::web::auth::appearance::text_size_medium(locale)) }
+                    option value="lg" selected[current == Some(TextSize::Lg)] { (gitquarry_i18n::web::auth::appearance::text_size_large(locale)) }
+                }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
 
-        h4 { (crate::auth::i18n::appearance::theme_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::appearance::theme_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="set_theme_pref";
-            select name="theme" {
-                option value="" selected[user.theme_default.is_empty()] { (crate::auth::i18n::appearance::theme_automatic(locale)) }
-                option value="light" selected[user.theme_default == "light"] { (crate::auth::i18n::appearance::theme_light(locale)) }
-                option value="dark" selected[user.theme_default == "dark"] { (crate::auth::i18n::appearance::theme_dark(locale)) }
+        (settings_section(&gitquarry_i18n::web::auth::appearance::theme_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::theme_description(locale)), html! {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_theme_pref";
+                select name="theme" {
+                    option value="" selected[user.theme_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::theme_automatic(locale)) }
+                    option value="light" selected[user.theme_default == "light"] { (gitquarry_i18n::web::auth::appearance::theme_light(locale)) }
+                    option value="dark" selected[user.theme_default == "dark"] { (gitquarry_i18n::web::auth::appearance::theme_dark(locale)) }
+                }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
 
-        h4 { (crate::auth::i18n::appearance::density_heading(locale)) }
-        p class="muted" { (crate::auth::i18n::appearance::density_description(locale)) }
-        form method="post" action=(action_url) {
-            (PreEscaped(csrf))
-            input type="hidden" name="action" value="set_density_pref";
-            select name="density" {
-                option value="" selected[user.density_default.is_empty()] { (crate::auth::i18n::appearance::density_default_label(locale)) }
-                option value="dense" selected[user.density_default == "dense"] { (crate::auth::i18n::appearance::density_dense_label(locale)) }
-                option value="airy" selected[user.density_default == "airy"] { (crate::auth::i18n::appearance::density_airy_label(locale)) }
+        (settings_section(&gitquarry_i18n::web::auth::appearance::density_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::density_description(locale)), html! {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_density_pref";
+                select name="density" {
+                    option value="" selected[user.density_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::density_default_label(locale)) }
+                    option value="dense" selected[user.density_default == "dense"] { (gitquarry_i18n::web::auth::appearance::density_dense_label(locale)) }
+                    option value="airy" selected[user.density_default == "airy"] { (gitquarry_i18n::web::auth::appearance::density_airy_label(locale)) }
+                }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
             }
-            button type="submit" { (crate::auth::i18n::appearance::save_button(locale)) }
-        }
+        }))
+
+        (settings_section(&gitquarry_i18n::web::auth::appearance::locale_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::locale_description(locale)), html! {
+            form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="action" value="set_locale_pref";
+                select name="locale" {
+                    option value="" selected[user.locale_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::locale_automatic(locale)) }
+                    option value="es" selected[user.locale_default == "es"] { (gitquarry_i18n::web::auth::appearance::locale_es(locale)) }
+                    option value="en" selected[user.locale_default == "en"] { (gitquarry_i18n::web::auth::appearance::locale_en(locale)) }
+                }
+                button type="submit" { (gitquarry_i18n::web::auth::appearance::save_button(locale)) }
+            }
+        }))
+      }
     }
 }

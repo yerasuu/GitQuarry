@@ -8,7 +8,7 @@ use anyhow::Result;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_log as t;
+use gitquarry_i18n::web::repo::log as t;
 use maud::{PreEscaped, html};
 use std::path::Path as FsPath;
 
@@ -17,6 +17,7 @@ pub async fn render_log(
     ctx: &AppContext,
     bare_repo: &FsPath,
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     q: Option<&str>,
@@ -28,16 +29,21 @@ pub async fn render_log(
         None => git::browse::log_page_with_stats(bare_repo, rev, LOG_PAGE_SIZE, skip, Some(path)).await?,
     };
     let commit_infos: Vec<_> = commits.iter().map(|(c, _)| c.clone()).collect();
-    let avatars = commit_avatars(ctx, bare_repo, &commit_infos).await;
 
     // Pagination only applies to the unfiltered log: a search's total match
     // count isn't known without a second, more expensive query, and result
     // sets from a text search are small enough in practice not to need it.
-    let total = if q.is_none() {
-        Some(git::browse::commit_count(bare_repo, rev, Some(path)).await?)
-    } else {
-        None
-    };
+    //
+    // Counted alongside the avatar lookups rather than after them — the two
+    // share nothing, and `rev-list --count` on a long history is the slower
+    // of the pair.
+    let (avatars, total) = tokio::join!(commit_avatars(ctx, bare_repo, &commit_infos), async {
+        match q {
+            Some(_) => Ok(None),
+            None => git::browse::commit_count(bare_repo, rev, Some(path)).await.map(Some),
+        }
+    });
+    let total = total?;
 
     Ok(html! {
         // Only when scoped to a subdirectory: at the repo root, `breadcrumbs`
@@ -45,7 +51,7 @@ pub async fn render_log(
         // redundant here, the repo's already named in the page header right
         // above this tab.
         @if !path.is_empty() {
-            (PreEscaped(breadcrumbs(repo_name, rev, path, "tree", locale)))
+            (PreEscaped(breadcrumbs(repo_name, display_name, rev, path, "tree", locale)))
         }
         form method="get" action=(format!("/{}", url_encode(repo_name))) {
             input type="hidden" name="view" value="log";

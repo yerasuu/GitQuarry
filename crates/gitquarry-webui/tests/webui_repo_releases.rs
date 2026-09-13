@@ -49,7 +49,10 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         ci: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -110,7 +113,7 @@ async fn releases_list_shows_each_release_linked_by_tag() {
     assert!(html.contains("First release"));
     assert!(html.contains("view=release&amp;tag=v1.0") || html.contains("view=release&tag=v1.0"));
     // Anonymous viewer: no create-release form.
-    assert!(!html.contains(r#"action="/_releases""#));
+    assert!(!html.contains(r#"action="/_releases/create/"#));
 }
 
 #[tokio::test]
@@ -369,4 +372,30 @@ async fn release_detail_notes_a_dangling_tag_without_hiding_the_release() {
     assert!(html.contains("a.bin"));
     // Anonymous viewer: no edit/delete/upload forms.
     assert!(!html.contains(r#"action="/_releases/edit""#));
+}
+
+#[test]
+fn the_tag_field_suggests_only_tags_without_a_release_yet() {
+    let refs = [
+        "refs/heads/main".to_string(),
+        "refs/tags/v0.2.0".to_string(),
+        "refs/tags/v0.1.0".to_string(),
+        "refs/tags/v0.3.0".to_string(),
+    ];
+    let released = ["v0.1.0".to_string()];
+
+    let suggested = taggable_tags(refs.iter(), &released);
+
+    // Branches aren't candidates, a tag that already has a release isn't
+    // either (it would only earn the "already has a release" rejection),
+    // and what's left comes back sorted rather than in manifest order.
+    assert_eq!(suggested, vec!["v0.2.0".to_string(), "v0.3.0".to_string()]);
+}
+
+#[test]
+fn the_tag_field_suggests_nothing_when_every_tag_is_released() {
+    let refs = ["refs/tags/v1.0.0".to_string()];
+    assert!(taggable_tags(refs.iter(), &["v1.0.0".to_string()]).is_empty());
+    // And a repo with no tags at all leaves the field a plain text input.
+    assert!(taggable_tags([].iter(), &[]).is_empty());
 }

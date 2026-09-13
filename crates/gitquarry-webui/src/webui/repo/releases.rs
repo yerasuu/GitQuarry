@@ -1,7 +1,7 @@
 //! The `releases` tab: named releases wrapping an existing tag, with
-//! markdown notes and downloadable asset files, plus the `/_releases`,
-//! `/_releases/edit`, `/_releases/delete`, `/_releases/assets`,
-//! `/_releases/assets/delete` mutation handlers those views' forms POST to.
+//! markdown notes and downloadable asset files, plus the
+//! `/_releases/{create,edit,delete,generate_notes,asset_upload,asset_delete}/{repo}`
+//! mutation handlers those views' forms POST to.
 //! Top-level routes, not nested under the repo's own `/{*repo}` path — same
 //! shape as `/_fork` ([`super::super::fork`]'s doc comment explains why:
 //! that path is a full-path catch-all already bound to one POST handler, so
@@ -14,7 +14,7 @@ use crate::webui::{
     AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout, markdown, non_empty,
     raw_link, repo_link, require_csrf, require_login, url_encode,
 };
-use axum::extract::{Form, Multipart, State};
+use axum::extract::{Form, Multipart, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -23,11 +23,12 @@ use gitquarry_core::git;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::validate;
 use gitquarry_domain::release;
-use gitquarry_i18n::web::repo_releases as t;
+use gitquarry_i18n::web::repo::releases as t;
 use maud::{Markup, PreEscaped, html};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tracing::warn;
 
 /// `true` if the current session has at least `Write` on `repo_name` — what
 /// gates showing the create/edit/delete/upload forms at all. The actual
@@ -57,6 +58,25 @@ pub struct ReleaseFormPrefill {
     pub notes: String,
     pub is_prerelease: bool,
     pub is_draft: bool,
+}
+
+/// Tag names the create-release form suggests: every git tag in the repo
+/// that doesn't already have a release, sorted.
+///
+/// Both halves matter. A release can only ever name a tag that already
+/// exists — `domain::release::create` refuses anything else — so an
+/// unassisted text field asks the operator to remember exact tag spelling.
+/// And a tag that already has a release is not a candidate: offering it
+/// would only lead to the "this tag already has a release" rejection.
+#[cfg_attr(not(any(test, feature = "test-util")), doc(hidden))]
+pub fn taggable_tags<'a>(refs: impl Iterator<Item = &'a String>, released: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = refs
+        .filter_map(|r| r.strip_prefix("refs/tags/"))
+        .filter(|name| !released.iter().any(|t| t == name))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names
 }
 
 pub async fn render_releases_list(
@@ -90,6 +110,20 @@ pub async fn render_releases_list_with_prefill(
     }
     releases.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     let locale = effective_locale(ctx, headers).await;
+    // Suggestions for the tag field, the same affordance the new-merge form
+    // gives its branch fields. A release can only ever name a tag that
+    // already exists (`domain::release::create` refuses otherwise), so
+    // without this the one required field is a guess -- and the tags that
+    // already have a release are dropped, since offering those would only
+    // suggest the "this tag already has a release" error.
+    let taggable = if can_write {
+        let (manifest, _etag) = resolved.remote.get_manifest().await?;
+        taggable_tags(manifest.refs.keys(), &tags)
+    } else {
+        // The form these suggestions belong to isn't rendered at all for a
+        // reader, so this is a manifest fetch that would buy nothing.
+        Vec::new()
+    };
 
     Ok(html! {
         div class="table-scroll" {
@@ -136,12 +170,16 @@ pub async fn render_releases_list_with_prefill(
             @if let Some(msg) = error {
                 p class="alert alert-err" { (msg) }
             }
-            form method="post" action="/_releases" {
+            form method="post" action=(format!("/_releases/create/{}", url_encode(repo_name))) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 div class="field" {
                     label { (t::tag_label(locale)) }
-                    input name="tag" size="30" value=(prefill.tag) placeholder=(t::tag_placeholder(locale));
+                    input list="release-tags" name="tag" size="30" value=(prefill.tag) placeholder=(t::tag_placeholder(locale));
+                }
+                datalist id="release-tags" {
+                    @for name in &taggable {
+                        option value=(name) { (name) }
+                    }
                 }
                 div class="field" {
                     label { (t::title_label(locale)) }
@@ -151,7 +189,7 @@ pub async fn render_releases_list_with_prefill(
                     label { (t::notes_label(locale)) }
                     textarea name="notes" rows="4" cols="60" { (prefill.notes) }
                     br;
-                    button type="submit" formaction="/_releases/generate_notes" { (t::generate_notes_button(locale)) }
+                    button type="submit" formaction=(format!("/_releases/generate_notes/{}", url_encode(repo_name))) { (t::generate_notes_button(locale)) }
                 }
                 div class="field" {
                     label { input type="checkbox" name="is_prerelease" value="1" checked[prefill.is_prerelease]; " " (t::prerelease_checkbox_label(locale)) }
@@ -166,7 +204,7 @@ pub async fn render_releases_list_with_prefill(
     .into_string())
 }
 
-/// The asset table alone, wrapped in a stable `id` so `/_releases/assets/delete`
+/// The asset table alone, wrapped in a stable `id` so `/_releases/asset_delete`
 /// can swap just this fragment (`data-async-target="#asset-table"`, see
 /// `crate::webui::ASYNC_HEADER`'s own doc comment) instead of re-rendering
 /// the whole release detail page.
@@ -209,9 +247,8 @@ fn render_asset_table(
                     td { code { (gitquarry_core::validate::short_sha(&asset.sha256)) } }
                     td {
                         @if can_write {
-                            form method="post" action="/_releases/assets/delete" style="display:inline" data-async data-async-target="#asset-table" {
+                            form method="post" action=(format!("/_releases/asset_delete/{}", url_encode(repo_name))) class="inline-form" data-async data-async-target="#asset-table" data-confirm=(t::delete_asset_confirm(locale, &asset.filename)) {
                                 (PreEscaped(csrf_field(headers)))
-                                input type="hidden" name="repo" value=(repo_name);
                                 input type="hidden" name="tag" value=(tag);
                                 input type="hidden" name="filename" value=(&asset.filename);
                                 button type="submit" { (t::delete_button(locale)) }
@@ -243,7 +280,7 @@ pub async fn render_release_detail(
     if etag.is_none() || (release.is_draft && !can_write) {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::release_not_found(locale, tag)
+            gitquarry_i18n::shared::release::release_not_found(locale, tag)
         )));
     }
 
@@ -278,9 +315,8 @@ pub async fn render_release_detail(
 
         @if can_write {
             h4 { (t::upload_asset_heading(locale)) }
-            form method="post" action="/_releases/assets" enctype="multipart/form-data" {
+            form method="post" action=(format!("/_releases/asset_upload/{}", url_encode(repo_name))) enctype="multipart/form-data" {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);
                 input type="file" name="file";
                 br;
@@ -289,9 +325,8 @@ pub async fn render_release_detail(
             }
 
             h4 { (t::edit_heading(locale)) }
-            form method="post" action="/_releases/edit" {
+            form method="post" action=(format!("/_releases/edit/{}", url_encode(repo_name))) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);
                 div class="field" {
                     label { (t::title_label(locale)) }
@@ -311,9 +346,8 @@ pub async fn render_release_detail(
             }
 
             h4 { (t::delete_release_heading(locale)) }
-            form method="post" action="/_releases/delete" {
+            form method="post" action=(format!("/_releases/delete/{}", url_encode(repo_name))) data-confirm=(t::delete_release_confirm(locale, tag)) {
                 (PreEscaped(csrf_field(headers)))
-                input type="hidden" name="repo" value=(repo_name);
                 input type="hidden" name="tag" value=(tag);
                 button type="submit" { (t::delete_release_button(locale)) }
             }
@@ -337,7 +371,7 @@ async fn require_write_target(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let perm =
@@ -346,15 +380,21 @@ async fn require_write_target(
     if perm < Some(Permission::Developer) {
         return Err(AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::write_permission_required(locale)
+            gitquarry_i18n::shared::repo::write_permission_required(locale)
         )));
     }
     Ok((resolved, name))
 }
 
+/// `GET` on a `/_releases/*` mutation target: what a reload or a back
+/// button asks for after a rejected submit left that URL in the address
+/// bar. The repo is in the path, so it lands on that repo's releases.
+pub(crate) async fn handler_mutation_get(Path(repo): Path<String>) -> Response {
+    axum::response::Redirect::to(&format!("/{}?view=releases", url_encode(&repo))).into_response()
+}
+
 #[derive(serde::Deserialize)]
 pub(crate) struct ReleaseForm {
-    repo: String,
     tag: String,
     #[serde(default)]
     title: String,
@@ -372,16 +412,17 @@ pub(crate) struct ReleaseForm {
 
 pub(crate) async fn handler_create_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
 
@@ -410,6 +451,7 @@ pub(crate) async fn handler_create_post(
                 "releases",
                 HeaderExtras {
                     description: config.description.as_deref(),
+                    display_name: config.display_name.as_deref(),
                     archived: config.archived,
                     visibility: config.visibility,
                     branches: &[],
@@ -452,7 +494,9 @@ pub(crate) async fn handler_create_post(
         Err(e) => fail!(e.to_string()),
     };
     if cas == Cas::Conflict {
-        fail!(gitquarry_i18n::shared::release_already_exists_for_tag(locale, tag));
+        fail!(gitquarry_i18n::shared::release::release_already_exists_for_tag(
+            locale, tag
+        ));
     }
 
     gitquarry_core::storage::audit::record(
@@ -485,7 +529,7 @@ pub(crate) async fn handler_create_post(
             release::generate_source_archives(&ctx_bg, &resolved_bg, &repo_name_bg, &tag_bg, &uploaded_by_bg, locale)
                 .await
         {
-            eprintln!("warning: release source archives for {repo_name_bg}@{tag_bg} failed: {e:#}");
+            warn!(repo = %repo_name_bg, tag = %tag_bg, error = %e, "release source archives failed");
         }
     });
 
@@ -503,16 +547,17 @@ pub(crate) async fn handler_create_post(
 /// call site in the create form.
 pub(crate) async fn handler_generate_notes_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim().to_string();
     let (notes, error) = match release::generate_notes(&ctx, &resolved, &tag, locale).await {
@@ -538,6 +583,7 @@ pub(crate) async fn handler_generate_notes_post(
         "releases",
         HeaderExtras {
             description: config.description.as_deref(),
+            display_name: config.display_name.as_deref(),
             archived: config.archived,
             visibility: config.visibility,
             branches: &[],
@@ -561,16 +607,17 @@ pub(crate) async fn handler_generate_notes_post(
 
 pub(crate) async fn handler_edit_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let cas = release::edit(
@@ -605,7 +652,6 @@ pub(crate) async fn handler_edit_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ReleaseDeleteForm {
-    repo: String,
     tag: String,
     #[serde(default)]
     csrf: String,
@@ -613,16 +659,17 @@ pub(crate) struct ReleaseDeleteForm {
 
 pub(crate) async fn handler_delete_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ReleaseDeleteForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     release::delete(&resolved, tag).await?;
@@ -655,27 +702,30 @@ fn encode_hex(bytes: &[u8]) -> String {
     })
 }
 
-/// `POST /_releases/assets`: multipart upload. Every text field (`repo`/
+/// `POST /_releases/asset_upload/{repo}`: multipart upload. Every text field (
 /// `tag`/`csrf`) is read first, the `file` field's bytes are streamed into a
 /// scratch tempfile (hashed and size-counted along the way, capped at
 /// [`MAX_ASSET_UPLOAD_BYTES`]) — never fully buffered in memory. Login/CSRF/
-/// write-permission are only checked *after* the whole body is drained
-/// (multipart fields have to be read in the order the client sent them, and
-/// axum's extractor gives no way to peek `repo`/`csrf` before consuming
-/// `file` if a client sends `file` first); the size cap above is what bounds
-/// the resulting disk-fill exposure from an unauthorized or CSRF-invalid
-/// request in the meantime, not a login gate up front.
+/// A session is required *before* the body is touched: an anonymous client
+/// could otherwise make the server write [`MAX_ASSET_UPLOAD_BYTES`] to disk
+/// per request just by opening one, and the cap bounds a single upload, not
+/// how many an attacker may start. CSRF and the write-permission check stay
+/// after the drain — `csrf` is a body field, and multipart fields can only
+/// be read in the order the client sent them.
 pub(crate) async fn handler_upload_asset_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
-    // Computed before login/CSRF (see this fn's own doc comment on why
-    // those checks wait until after the body drains) — `ctx`/`headers` are
-    // available from the start, so there's no reason for these early
-    // error paths to fall back to a plain default instead.
     let locale = effective_locale(&ctx, &headers).await;
-    let mut repo = String::new();
+    // Headers alone answer "is anyone logged in", so this doesn't have to
+    // wait for the body — and it must not: everything below writes the
+    // uploaded bytes to disk.
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
+        Ok(u) => u,
+        Err(resp) => return Ok(resp),
+    };
     let mut tag = String::new();
     let mut csrf = String::new();
     let mut signature = String::new();
@@ -684,16 +734,10 @@ pub(crate) async fn handler_upload_asset_post(
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::invalid_multipart(locale, e)
+            gitquarry_i18n::shared::release::invalid_multipart(locale, e)
         ))
     })? {
         match field.name() {
-            Some("repo") => {
-                repo = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::bad_request(anyhow::anyhow!("{e}")))?;
-            }
             Some("tag") => {
                 tag = field
                     .text()
@@ -721,7 +765,7 @@ pub(crate) async fn handler_upload_asset_post(
                     .map_err(|e| {
                         AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::creating_temp_file(locale, e)
+                            gitquarry_i18n::shared::release::creating_temp_file(locale, e)
                         ))
                     })?
                     .into_temp_path();
@@ -729,13 +773,16 @@ pub(crate) async fn handler_upload_asset_post(
                 let mut hasher = Sha256::new();
                 let mut size: u64 = 0;
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    AppError::bad_request(anyhow::anyhow!("{}", gitquarry_i18n::shared::reading_file(locale, e)))
+                    AppError::bad_request(anyhow::anyhow!(
+                        "{}",
+                        gitquarry_i18n::shared::release::reading_file(locale, e)
+                    ))
                 })? {
                     size += chunk.len() as u64;
                     if size > MAX_ASSET_UPLOAD_BYTES {
                         return Err(AppError::bad_request(anyhow::anyhow!(
                             "{}",
-                            gitquarry_i18n::shared::asset_too_large(locale, MAX_ASSET_UPLOAD_BYTES)
+                            gitquarry_i18n::shared::release::asset_too_large(locale, MAX_ASSET_UPLOAD_BYTES)
                         )));
                     }
                     hasher.update(&chunk);
@@ -749,17 +796,13 @@ pub(crate) async fn handler_upload_asset_post(
         }
     }
 
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
-        Ok(u) => u,
-        Err(resp) => return Ok(resp),
-    };
     require_csrf(&headers, &csrf)?;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let (filename, tmp_path, size, sha256) = uploaded.ok_or_else(|| {
         AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::missing_file_to_upload(locale)
+            gitquarry_i18n::shared::release::missing_file_to_upload(locale)
         ))
     })?;
     let tag = tag.trim();
@@ -801,7 +844,6 @@ pub(crate) async fn handler_upload_asset_post(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct AssetDeleteForm {
-    repo: String,
     tag: String,
     filename: String,
     #[serde(default)]
@@ -810,16 +852,17 @@ pub(crate) struct AssetDeleteForm {
 
 pub(crate) async fn handler_delete_asset_post(
     State(ctx): State_,
+    Path(repo): Path<String>,
     headers: HeaderMap,
     Form(form): Form<AssetDeleteForm>,
 ) -> Result<Response, AppError> {
-    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
+    let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = require_write_target(&ctx, &me, &form.repo, locale).await?;
+    let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
     let filename = validate::validate_asset_filename(&form.filename).map_err(AppError::bad_request)?;

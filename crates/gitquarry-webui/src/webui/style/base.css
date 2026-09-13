@@ -1,19 +1,24 @@
 * { box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: var(--fs);
-       line-height: var(--lh); margin: 0; padding: 0; color: var(--fg); background: var(--bg); }
-#content { max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; }
+       line-height: var(--lh); margin: 0; padding: 0; color: var(--fg); background: var(--bg);
+       /* Column flexbox purely so the footer's `margin-top: auto` can push
+          it to the viewport bottom on pages too short to fill the screen.
+          Stacking is otherwise identical to the block layout it replaces. */
+       display: flex; flex-direction: column; min-height: 100vh; }
+#content { max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; width: 100%; }
 .skip-link { position: absolute; left: -999px; top: 0; background: var(--bg); color: var(--fg);
              padding: var(--pad-y) var(--pad-x); border: 1px solid var(--accent); border-radius: 0 0 var(--radius-sm) 0; z-index: 10; }
 .skip-link:focus { left: 0; }
 p { line-height: var(--lh); }
 /* Topbar shares the same palette/weight conventions as table.header/table.tabs
    below instead of its own look, so the chrome reads as one page, not two. */
-#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: relative; z-index: 5; }
+#topbar { background: var(--bg); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); position: sticky; top: 0; z-index: 5; }
 #topbar .inner { max-width: 70rem; margin: 0 auto; padding: var(--pad-y) var(--pad-x);
                  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
                  row-gap: var(--gap); column-gap: var(--gap); }
 #topbar .brand { font-weight: bold; letter-spacing: var(--letter); font-size: 1.05em; display: inline-flex; align-items: center; gap: var(--gap); }
 #topbar .brand a { color: var(--fg); display: inline-flex; align-items: center; gap: var(--gap); }
+#topbar .brand svg { width: 20px; height: 20px; flex-shrink: 0; fill: var(--accent); }
 #topbar a { color: var(--fg2); transition: color .15s ease; }
 #topbar a:hover { color: var(--accent); }
 #topbar nav { font-size: 0.9em; color: var(--muted); display: inline-flex; align-items: center; gap: 0; }
@@ -87,7 +92,7 @@ table.tabs { width: 100%; background: var(--surface-3); border-bottom: 1px solid
              margin-bottom: 0.5rem; overflow-x: auto; }
 /* A second (or third) `.tabs`-styled row stacked directly under another one
    -- `page_chrome::project_subnav` under the main tabs bar, and the
-   open/closed/all status filter (`issues`/`pulls`) under that -- reads as
+   open/closed/all status filter (`issues`/`merges`) under that -- reads as
    one continuous nav block instead of several separately-floating bars:
    pulls the seam in against the row above's own `margin-bottom` rather
    than letting both add up. */
@@ -166,6 +171,30 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .settings-sidebar a:hover { background: var(--surface-3); color: var(--fg); }
 .settings-sidebar a.active { background: var(--surface-3); color: var(--accent); font-weight: bold; }
 .settings-content { flex: 1; min-width: 0; }
+/* The page's own title, above its stack of `.settings-section` cards —
+   `account_settings_page` renders it from the same tuple the sidebar entry
+   comes from, so it is never a second, drift-prone copy of the name. */
+.settings-title { margin-top: 0; }
+/* One card per concern. `.card`/`.card-pad` (from `styler`) already own the
+   border/radius/padding/background; this only adds what stacking needs,
+   same division of labour `.sidebar-box`/`.repo-card` above already follow. */
+.settings-section { margin-bottom: 1rem; }
+.settings-section > h3 { margin-top: 0; }
+.settings-section > :last-child { margin-bottom: 0; }
+/* Labelled control: label above, optional hint below. The `div.field`
+   markup existed in `/_settings` and the merge-request forms long before
+   this rule did — with no CSS at all it was an unstyled block, which is why
+   every other form reached for placeholder-only inputs instead. Capped
+   width because a full-bleed text input on a wide screen is harder to scan,
+   not easier: the eye loses which label a control belongs to. */
+.field { display: flex; flex-direction: column; gap: 0.25em; margin-bottom: var(--gap); max-width: 34rem; }
+.field > label { color: var(--fg2); }
+.field > .hint { color: var(--muted); font-size: 0.85em; }
+/* A row of controls that belong to one action (a value plus its
+   confirmation, or a value plus the re-auth it needs) — stacked on mobile
+   by `mobile.css`, side by side when there is room. */
+.field-row { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: flex-end; }
+.field-row .field { margin-bottom: 0; }
 /* Shell (border/radius/padding/background/shadow) comes from `styler`'s
    own `.card`/`.card-pad` now (markup: `class="card card-pad sidebar-box"`)
    — `.sidebar-box` itself only keeps the spacing/layout `.card` doesn't
@@ -175,6 +204,31 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
 .sidebar-box h4 { margin-top: 0; }
 .sidebar-box table.commit-meta { margin: 0; }
 .sidebar-box p:last-child { margin-bottom: 0; }
+/* `.sidebar-box` also hosts `repo::summary::render_clone_urls`'s `<h3>`
+   verbatim (the index page's own clone widget, `repo::handler_index`) —
+   same margin reset as the `h4` above, so a box built around either
+   heading level sits flush the same way. */
+.sidebar-box h3 { margin-top: 0; }
+/* `repo::handler_index`'s own two sidebar boxes (activity/topics) use this
+   instead of a bare `h4` — a small uppercase muted label, not the global
+   `h4`'s accent-colored underlined heading every other `.sidebar-box`
+   still gets: scoped to its own class so it doesn't reach those. */
+.sidebar-box-title { margin: 0 0 0.6rem; font-size: var(--fs-sm); font-weight: bold; color: var(--muted);
+                      text-transform: uppercase; letter-spacing: 0.04em; border-bottom: none; padding-bottom: 0; }
+/* `repo::handler_index`'s "recent activity" sidebar box — a compact
+   timestamp/target/verb row per `ActivityItem`, not `.community-list`'s
+   icon+fact shape (nothing here is a fixed fact, every row is its own
+   event). `time`'s `min-width` keeps every row's timestamp column aligned
+   even though the row itself is a flex row, not a table. */
+.index-activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.55rem; }
+.index-activity li { display: flex; gap: 0.5em; font-size: 0.88em; }
+.index-activity time { color: var(--muted); font-size: 0.85em; flex-shrink: 0; min-width: 2.6em; }
+.index-activity a { color: var(--fg); font-weight: bold; }
+.index-activity .verb { color: var(--muted); }
+/* Same sidebar box's "browse by topic" list — `topic_badges` already emits
+   linked `.badge.accent` pills, this just gives them a wrapping row instead
+   of running on as plain inline text. */
+.index-topics { display: flex; flex-wrap: wrap; gap: 0.35em; }
 /* GitHub-style "About"/community box: a compact wrapping row of icon+count
    stats, then a plain vertical list of icon+link facts — no table, no
    "not found" placeholders (`render_sidebar`'s own doc comment on why the
@@ -198,24 +252,112 @@ table.commit-meta td:first-child { color: var(--muted); padding-right: var(--pad
    name/description/meta (stars, primary language dot, topics) stacked the
    way Codeberg/Forgejo's dashboard lists repos, reusing `.decoration`
    (topics) and `.lang-swatch` (language dot) unmodified. */
-.repo-cards { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+/* Conflicting-file list on a merge request that can't fast-forward, plus
+   the collapsed how-to under it. A plain list, not a table: it is one
+   column of paths and nothing else, and it sits directly under the warning
+   alert that introduces it. */
+.conflict-paths { margin: 0.4rem 0 0.6rem; padding-left: 1.4em; }
+.conflict-paths li { margin: 0.15em 0; }
+.conflict-help { margin-bottom: 1rem; }
+.conflict-help summary { cursor: pointer; color: var(--fg2); }
+.conflict-help pre { margin-top: 0.5em; }
+/* `repo::handler_index`'s terse instance-stats row (repos/namespaces/users/
+   version) — cgit's own plain numeric header, one bordered strip instead of
+   `table.header`'s title-row shape since there's no one repo here to name. */
+.stats-strip { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: var(--radius);
+               background: var(--surface); margin-bottom: 1rem; overflow: hidden; }
+.stats-strip .stat { flex: 1; min-width: 6em; padding: var(--pad-y) var(--pad-x); border-right: 1px solid var(--border); }
+.stats-strip .stat:last-child { border-right: none; }
+.stats-strip .n { font-weight: bold; font-size: 1.3em; font-variant-numeric: tabular-nums; }
+.stats-strip .l { color: var(--muted); font-size: var(--fs-sm); margin-top: 0.15em; }
+/* The index page's search form + `.btn` "new repo" link, side by side —
+   `.btn`/`button` themselves are styler's own (accent fill), this only
+   supplies the row layout neither has on its own. */
+.controls-row { display: flex; align-items: center; gap: var(--gap); margin-bottom: 0.9rem; flex-wrap: wrap; }
+.controls-row form { display: flex; gap: 0.4em; flex: 1; min-width: 220px; }
+.controls-row form input { flex: 1; }
+/* Same literal size as the search button beside it (`form button`'s own
+   16px/`--pad-y-sm`/`--pad-x-sm`/`--radius-sm`) instead of `.btn`'s own
+   (styler's `--comp-*` sizing) — two buttons on one row read as mismatched
+   otherwise, even though both are "a button". Only size overridden: the
+   accent fill/color stay `.btn`'s own. */
+.controls-row a.btn { font-size: 16px; padding: var(--pad-y-sm) var(--pad-x-sm); border-radius: var(--radius-sm); }
+/* Index page repo listing has two markups always rendered
+   (`repo::handler_index`), CSS picking which one shows — same
+   `[data-density='airy']`-driven swap `.header-lang`/`.sidebar-lang` above
+   already use for this axis, just applied to the whole listing instead of
+   one block within it. Dense (the `:root` default, no attribute) gets the
+   cgit-flavored `.repo-list-compact` table; airy gets these cards. */
+.repo-cards { display: none; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+:root[data-density='airy'] .repo-cards { display: flex; }
+:root[data-density='airy'] .repo-list-compact { display: none; }
 /* Shell comes from `styler`'s `.card`/`.card-pad` now (markup:
    `class="card card-pad repo-card"`) — `.repo-cards`'s own `gap` above
    already spaces the cards, so `.repo-card` itself only keeps the hover
    feedback `.card` doesn't provide on its own. */
 .repo-card { transition: box-shadow .15s ease, border-color .15s ease; }
 .repo-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); }
-.repo-card-title { font-size: 1.05em; font-weight: bold; }
+/* `flex`/`gap` instead of the markup's own literal " " between link/badge/
+   pills doing the spacing: a flex container drops whitespace-only text
+   nodes from layout entirely, so `gap` alone spaces everything evenly and
+   the literal spaces `repo::handler_index`'s markup still emits go inert
+   rather than doubling up. Also what lets `.clone-url` below push itself
+   to the row's far end via `margin-left: auto`. */
+.repo-card-title { font-size: 1.05em; font-weight: bold; display: flex; align-items: center; flex-wrap: wrap; gap: 0.4em; }
 .repo-card-title a { color: var(--fg); }
 .repo-card-desc { color: var(--fg2); margin: 0.3em 0; }
 .repo-card-meta { display: flex; align-items: center; gap: var(--gap); font-size: 0.85em; color: var(--muted); margin-top: 0.4em; }
-.repo-card-meta .lang-swatch { margin-right: 0.15em; }
+/* No `.lang-swatch` override here (unlike this rule's old self) — the dot
+   and language name are one flex item now, not two flex siblings the
+   container's own `gap` used to separate, so the global `.lang-swatch`
+   margin below is what has to carry that spacing instead. A narrower
+   override tuned for the old two-siblings shape left it looking glued to
+   the name. */
+/* Topic pills on the index page (cards, the compact table, and the
+   "browse by topic" sidebar box — everywhere `topic_badges` renders inside
+   these three containers) as an outline pill instead of `.badge.accent`'s
+   own filled one. Scoped to these containers rather than restyling
+   `.badge.accent` itself: that class is also `owner`'s permission-tier
+   badge elsewhere (`.decoration-*`'s own doc comment), which should keep
+   its filled weight. */
+.repo-card-title .badge.accent, .rl-topics .badge.accent, .index-topics .badge.accent {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+}
+/* Per-card ssh clone hint, index cards only (`repo::handler_index`).
+   Hidden below `760px`: at card width there's no room next to a real repo
+   name without wrapping awkwardly. */
+.clone-url { margin-left: auto; font-size: 0.78em; color: var(--muted); background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius-sm); padding: 0.1em 0.5em; display: none; }
+@media (min-width: 760px) { .clone-url { display: inline-block; } }
 /* Section header row above a namespace's repos — same weight as
    `table.list tr.section-header` used, just as a plain block since cards
-   aren't inside a table anymore. */
+   aren't inside a table anymore. Unscoped by density on purpose: it sits
+   between whichever listing is visible either way, so it isn't part of
+   the `.repo-cards`/`.repo-list-compact` swap above. */
 .repo-cards-ns { font-weight: bold; color: var(--muted); font-size: 0.85em; text-transform: uppercase;
                  letter-spacing: 0.03em; margin: 1rem 0 0.3rem; }
 .repo-cards-ns:first-child { margin-top: 0; }
+/* Dense default: a plain bordered table instead of cards, one row per
+   repo — same fields as `.repo-card` (name/archived, description, topics,
+   lang+stars), just laid out to read at a glance across many repos rather
+   than skimmed one card at a time. `.repo-cards-ns` above still separates
+   namespaces, shared with the cards view. */
+.repo-list-compact { display: block; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 1rem; }
+.rl-row { display: grid; grid-template-columns: 1.6fr 2.2fr auto auto; gap: var(--gap); align-items: center;
+          padding: var(--pad-y-sm) var(--pad-x-sm); font-size: 0.92em; border-top: 1px solid var(--border); }
+.rl-row:first-child { border-top: none; }
+.rl-row:hover { background: var(--surface); }
+.rl-name { font-weight: bold; }
+.rl-name a { color: var(--fg); }
+.rl-desc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-topics { display: flex; flex-wrap: wrap; gap: 0.3em; }
+.rl-meta { display: flex; align-items: center; gap: var(--gap); color: var(--muted); font-size: 0.92em; white-space: nowrap; }
+/* No `.lang-swatch` override here either — same reasoning as `.repo-card-meta`'s
+   own comment above: the dot's global margin is the only spacing left once
+   it and the language name share one flex item instead of two. */
+@media (max-width: 640px) {
+  .rl-row { grid-template-columns: 1fr; row-gap: 0.2em; }
+  .rl-desc { white-space: normal; }
+}
 /* `<details><summary>` action-menu — free click-to-toggle/keyboard support
    from the browser, no JS. Was `#topbar`-scoped ("the only one in this
    pass") until the repo header's ref switcher became a second consumer;
@@ -303,29 +445,62 @@ table.blob td { padding: 0 var(--pad-x-sm); white-space: pre; }
 table.blob td.lineno { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--code-border); }
 table.blob td.lineno a { color: var(--muted); }
 table.blob img { display: block; max-width: 100%; }
+/* Companion CSS for `highlightjs-line-numbers.js`'s generated markup
+   (`app.js`'s own doc comment on where it's invoked, `scripts/vendor-hljs.sh`
+   for where the plugin itself comes from) — it ships none of its own, only
+   the `.hljs-ln-*` classes/`data-line-number` attribute it stamps onto each
+   row it builds inside the blob view's `#blob-code`. Same look as
+   `table.blob`'s own `td.lineno` above, since this replaces it for the
+   blob view specifically (`blame.rs` still uses `table.blob` directly). */
+table.hljs-ln { width: 100%; border-collapse: collapse; }
+.hljs-ln-numbers { text-align: right; color: var(--muted); user-select: none;
+                   border-right: 1px solid var(--code-border); padding: 0 var(--pad-x-sm); white-space: nowrap; vertical-align: top; }
+.hljs-ln-numbers a { color: var(--muted); }
+.hljs-ln-code { padding: 0 var(--pad-x-sm); white-space: pre; width: 100%; }
 .diff-add { color: var(--diff-add); }
 .diff-del { color: var(--diff-del); }
 .diff-hunk { color: var(--diff-hunk); }
 .diff-meta { color: var(--muted); font-weight: bold; }
-/* Syntax-highlight token classes (`highlight.rs`'s own doc comment) — an
-   unmatched token has no class at all and just inherits this same plain
-   code color, so no `.tok-default`/`.tok-plain` rule exists to fall back
-   to; there's nothing for one to override. */
-.tok-kw { color: var(--syn-kw); }
-.tok-str { color: var(--syn-str); }
-.tok-com { color: var(--syn-com); font-style: italic; }
-.tok-num { color: var(--syn-num); }
-.tok-const { color: var(--syn-const); }
-.tok-fn { color: var(--syn-fn); }
-.tok-type { color: var(--syn-type); }
-.tok-tag { color: var(--syn-tag); }
-.tok-attr { color: var(--syn-attr); }
-table.diff-split { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
-                   border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+/* Added/removed *code* lines in every diff renderer (`repo::components::
+   color_diff`/`side_by_side_diff`, `repo::merges::annotated_diff`) use
+   these instead of `.diff-add`/`.diff-del` above: a tinted background, not
+   a solid text color, so `highlight.js`'s own `.hljs-*` token colors stay
+   visible inside them. `display: block` makes the tint span the full line
+   width even inside `pre.diff`'s single-column text flow (`color_diff`),
+   where a `<span>` would otherwise only tint the glyphs themselves.
+   Distinct from `.diff-add`/`.diff-del`: those stay the commit log's
+   insertion/deletion count badge (`commit_table`), an unrelated feature
+   that keeps its own solid text color. */
+.diff-add-line, .diff-del-line { display: block; }
+.diff-add-line { background: var(--diff-add-bg); }
+.diff-del-line { background: var(--diff-del-bg); }
+/* `table-layout: fixed`, paired with the `<colgroup>` `side_by_side_diff`
+   emits (4 columns — old lineno, old code, new lineno, new code, GitHub's
+   own split-view convention): without it, column widths are only a hint
+   under the default auto layout, and a long line would grow its own
+   column at the other columns' expense, since auto layout sizes columns
+   from content width first. */
+table.diff-split { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--code-bg);
+                   border: 1px solid var(--code-border); border-radius: var(--radius-sm);
+                   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
                    font-size: var(--fs-sm); }
-table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre; vertical-align: top; width: 50%; }
-table.diff-split td:first-child:not([colspan]) { border-right: 1px solid var(--code-border); }
-/* The PR view's unified diff: same monospace slab as `.diff-split`, but with
+/* `pre-wrap`, not `pre`: a long line wraps within its own column instead of
+   forcing a horizontal scrollbar, so both sides stay readable without
+   scrolling sideways to compare them — indentation and interior spacing
+   still render exactly as written, `pre-wrap` only adds wrap *opportunities*
+   at existing whitespace/line-break points, it never collapses any.
+   `overflow-wrap` is the fallback for the one case plain whitespace-based
+   wrapping can't handle: a single unbroken run (a long string literal, a
+   URL) with no space for the browser to wrap at. */
+table.diff-split td { padding: 0 var(--pad-x-sm); white-space: pre-wrap; overflow-wrap: break-word; vertical-align: top; }
+table.diff-split td.lineno { text-align: right; color: var(--muted); user-select: none;
+                             border-right: 1px solid var(--code-border); }
+/* Separates the old side's two columns from the new side's, not just
+   `:first-child`: that was the boundary back when each side was a single
+   column, but the old side is columns 1-2 now that each has its own
+   lineno gutter. */
+table.diff-split td:nth-child(2):not([colspan]) { border-right: 1px solid var(--code-border); }
+/* The MR view's unified diff: same monospace slab as `.diff-split`, but with
    old/new line-number gutters and comment rows spliced between the lines. */
 table.diff-annotated { width: 100%; border-collapse: collapse; background: var(--code-bg); border: 1px solid var(--code-border);
                        border-radius: var(--radius-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
@@ -396,11 +571,44 @@ table.diff-annotated tr.diff-comment td { white-space: normal; padding: var(--pa
    text-size toggle scales them too) instead of their own fixed pixel
    attrs, colored by whatever text color they're dropped into. */
 .icon { width: 1em; height: 1em; vertical-align: -0.15em; flex-shrink: 0; }
-/* `web::identicon`'s per-user SVGs — square with soft corners (not a full
-   circle, stays closer to this project's flat/square aesthetic than a
-   photo-style avatar would), sized per call site via the `width`/`height`
-   attrs already on the element rather than a fixed class size. */
-.avatar { border-radius: 3px; vertical-align: middle; margin-right: 0.4em; flex-shrink: 0; }
+/* `web::identicon`'s per-user SVGs *and* uploaded photos — square with soft
+   corners (not a full circle, stays closer to this project's flat/square
+   aesthetic than a photo-style avatar would), sized per call site via the
+   `width`/`height` attrs already on the element rather than a fixed class
+   size. The uploaded half used to carry `border-radius:50%` inline, so the
+   two shapes disagreed: a photo came out round and a generated identicon
+   square, on the very same row.
+   A percentage radius rather than a fixed `3px`: the same rule has to look
+   right from a 14px table row to a 48px settings page, and a fixed radius
+   reads as a sharp square at the large end and an almost-circle at the
+   small one. `object-fit` matters only for the uploaded half — an identicon
+   is always square — but costs nothing on an SVG and keeps one rule for
+   both. */
+.avatar {
+  /* Sized off the surrounding text, exactly like `.icon` above, instead of
+     the per-call-site pixel attrs this used to carry. A filled square reads
+     heavier than the letters beside it, so a fixed 14px next to a name sat
+     taller than the name itself — and the ratio then drifted again with the
+     density switch and the text-size toggle, which move the text but not a
+     pixel constant. Twice the text size: an avatar that only matched the
+     text read as a bullet point rather than a picture of someone, and at
+     `2em` it spans roughly two lines' worth of cap height — recognisable at
+     a glance, still clearly subordinate to the name it labels. */
+  width: 2em;
+  height: 2em;
+  border-radius: 22%;
+  object-fit: cover;
+  /* `middle`, not a small negative baseline nudge: at twice the text size
+     the box is taller than the line it sits on, so it has to be centred
+     against the text rather than dropped slightly below the baseline. */
+  vertical-align: middle;
+  margin-right: 0.4em;
+  flex-shrink: 0;
+}
+/* The one avatar that isn't beside a name: the account settings page shows
+   it on its own as the thing being edited, so it keeps the explicit size
+   its call site asks for. */
+.avatar-fixed { width: auto; height: auto; }
 .bar-row td { padding: 0.15em 0.5em; }
 /* Repo summary's language bar: one stacked row of same-line segments
    (unlike `.bar-row`'s independent bar-per-row), each segment's width/hue
@@ -521,3 +729,20 @@ form button:active { background: var(--surface-4); box-shadow: none; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* Narrow-viewport overrides live in their own `mobile.css` now — see that
    file's own doc comment for why. */
+
+/* Mirrors `#content`'s column so the notice lines up with the page text
+   rather than the viewport, and `margin-top: auto` pins it to the bottom of
+   short pages instead of leaving it floating mid-screen. */
+.site-footer { max-width: 70rem; margin: auto auto 0; padding: 1.5rem 1rem;
+               border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85em; }
+.site-footer a { color: var(--muted); }
+
+/* The licence is hard-wrapped at ~70 columns already, so it needs no
+   reflow -- only a scrollbar for the few lines that overrun a narrow
+   viewport, rather than the whole page scrolling sideways with them. */
+.license-text { white-space: pre-wrap; overflow-x: auto; font-size: 0.85em; }
+
+/* Same markdown styling as a README, without the rule and gap that
+   separate that one from the file listing above it -- an MR body and each
+   comment are already inside their own block. */
+.readme.plain { border-top: none; padding-top: 0; margin-top: 0.3em; }

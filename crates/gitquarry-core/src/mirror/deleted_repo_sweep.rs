@@ -13,6 +13,7 @@ use crate::storage;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::warn;
 
 /// Much coarser than [`super::gc::run_periodic_sweep`]'s interval:
 /// purging a repo is a rare, deliberate-consequence event, not a cache
@@ -21,14 +22,14 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Runs [`sweep_once`] forever on [`SWEEP_INTERVAL`]. Meant to run detached
 /// (`tokio::spawn`), same as [`super::gc::run_periodic_sweep`] and
-/// [`super::external::run_periodic_sync`] — a sweep failure must never take
+/// `gitquarry_mirror_external::engine::run_periodic_sync` — a sweep failure must never take
 /// down ssh://, git-smart-HTTP, or the web UI.
 pub async fn run_periodic_sweep(ctx: Arc<AppContext>) {
     let mut ticker = tokio::time::interval(SWEEP_INTERVAL);
     loop {
         ticker.tick().await;
         if let Err(e) = sweep_once(&ctx).await {
-            eprintln!("gitquarry: warning: deleted-repo sweep failed: {e:#}");
+            warn!(error = %e, "deleted-repo sweep failed");
         }
     }
 }
@@ -52,7 +53,7 @@ async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
         let (config, _etag) = match resolved.remote.get_repo_config().await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("gitquarry: deleted-repo sweep: couldn't read config for {uid}: {e:#}");
+                warn!(%uid, error = %e, "deleted-repo sweep: couldn't read config");
                 continue;
             }
         };
@@ -68,7 +69,7 @@ async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
             continue;
         }
         if let Err(e) = domain::repo::purge(ctx, &resolved, &config.full_name).await {
-            eprintln!("gitquarry: deleted-repo sweep: couldn't purge {uid}: {e:#}");
+            warn!(%uid, error = %e, "deleted-repo sweep: couldn't purge");
         }
     }
     Ok(())

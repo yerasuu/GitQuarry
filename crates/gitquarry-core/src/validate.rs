@@ -22,7 +22,11 @@ const MAX_REV_LEN: usize = 255;
 /// Turns the path requested by the client (`/projectA`, `team/projectB.git`,
 /// `%2e%2e/etc`, ...) into a clean S3 prefix: no leading `/`, no `.`/`..`
 /// segments (anti path-traversal), no `.git` suffix on the last segment
-/// (usual convention of git clients).
+/// (usual convention of git clients), and each segment restricted to
+/// `[A-Za-z0-9._~-]` — a repo name doubles as a URL path segment and an
+/// `ssh://` clone-URL component, so anything needing escaping there (a
+/// space first among them) is rejected up front instead of surfacing later
+/// as a broken clone command or an inconsistently-encoded link.
 pub fn sanitize_path(pathname: &str) -> Result<String> {
     if pathname.len() > MAX_PATH_LEN {
         bail!("repo path too long (max {MAX_PATH_LEN} bytes)");
@@ -35,8 +39,16 @@ pub fn sanitize_path(pathname: &str) -> Result<String> {
             s if s.starts_with('-') => {
                 bail!("invalid repo path (segment starts with '-'): {pathname}")
             }
-            s if s.contains(|c: char| c.is_control() || c == '\\') => {
-                bail!("invalid repo path (disallowed characters): {pathname}")
+            // Same charset `url_encode` (gitquarry-webui) leaves unescaped: a
+            // name outside it would round-trip through a link as %XX-encoded
+            // while the raw clone-URL display (`ssh://host:port/<name>`,
+            // `repo::summary::render_clone_urls`) shows it verbatim — a space
+            // or other reserved char there breaks the copy-pasted command.
+            s if !s
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~')) =>
+            {
+                bail!("invalid repo path (only letters, digits, '-', '_', '.', '~' allowed): {pathname}")
             }
             s => segments.push(s),
         }
@@ -78,7 +90,6 @@ pub fn validate_rev(rev: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validates a full object sha (sha1 or sha256).
 pub fn validate_sha(sha: &str) -> Result<()> {
     if !matches!(sha.len(), 40 | 64) || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
         bail!("invalid sha: {sha}");
@@ -139,6 +150,25 @@ pub fn validate_issue_title(title: &str) -> Result<String> {
     Ok(title.to_string())
 }
 
+const MAX_REPO_DISPLAY_NAME_LEN: usize = 256;
+
+/// Validates a repo's free-text `display_name` before it's stored — unlike
+/// [`sanitize_path`], no charset restriction: this is the cosmetic name
+/// shown as the repo's page heading, not the URL (`domain::repo::slugify_repo_name`
+/// derives that separately). Same shape as [`validate_issue_title`]: trimmed,
+/// non-empty, length-capped, control characters rejected (it still renders
+/// straight into HTML/page-title text).
+pub fn validate_repo_display_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_REPO_DISPLAY_NAME_LEN {
+        bail!("empty or too-long name (max {MAX_REPO_DISPLAY_NAME_LEN} bytes)");
+    }
+    if name.contains(|c: char| c.is_control()) {
+        bail!("invalid name (control characters)");
+    }
+    Ok(name.to_string())
+}
+
 /// Validates an issue-label color: `#` followed by exactly 6 hex digits.
 /// Unlike `topics`' silent-normalize-or-drop leniency, this hard-rejects a
 /// malformed value instead — a broken color isn't cosmetic, it breaks the
@@ -151,7 +181,7 @@ pub fn validate_hex_color(color: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validates a path inside the repo tree. Empty = root.
+/// Empty = root.
 pub fn validate_tree_path(path: &str) -> Result<()> {
     if path.is_empty() {
         return Ok(());
@@ -223,7 +253,11 @@ pub fn sniff_avatar_content_type(bytes: &[u8]) -> Result<&'static str> {
 
 /// Short sha for display in the UI, without cutting a char in half.
 pub fn short_sha(sha: &str) -> &str {
-    &sha[..sha.len().min(12)]
+    // `get`, not a plain byte slice: every caller passes hex today, but a
+    // byte index that lands mid-character panics, and a display helper is
+    // the last place that should be able to take a request down. Falls back
+    // to the whole string when 12 isn't a character boundary.
+    sha.get(..sha.len().min(12)).unwrap_or(sha)
 }
 
 /// Validates a log search term before it's passed straight into
@@ -242,4 +276,32 @@ pub fn validate_query(q: &str) -> Result<()> {
         bail!("invalid search query (control characters)");
     }
     Ok(())
+}
+
+const MAX_BACKUP_ID_LEN: usize = 64;
+
+/// Validates a snapshot id before it becomes a key segment under
+/// `.conf/backups/`. An id reaches this from an operator's command line
+/// (`gitquarry backup --id`, `gitquarry restore <id>`), which is enough for
+/// it to need checking: an id of `..` or `../repos` wouldn't produce an
+/// oddly-named snapshot, it would write into live data's namespace. Same
+/// one-flat-segment rule as [`validate_asset_filename`], plus no leading
+/// `.` — `s3db`'s own collection listing treats a dot-prefixed first
+/// component as its internal bookkeeping and would skip such a snapshot
+/// entirely.
+pub fn validate_backup_id(id: &str) -> Result<String> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > MAX_BACKUP_ID_LEN {
+        bail!("empty or too-long backup id (max {MAX_BACKUP_ID_LEN} bytes)");
+    }
+    if id.starts_with('.') {
+        bail!("invalid backup id (can't start with '.'): {id}");
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        bail!("invalid backup id (allowed: letters, digits, '-', '_', '.'): {id}");
+    }
+    Ok(id.to_string())
 }

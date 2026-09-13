@@ -12,13 +12,14 @@ use std::path::Path as FsPath;
 pub async fn render_blame(
     bare_repo: &FsPath,
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     locale: Locale,
 ) -> Result<String> {
     let lines = git::browse::blame(bare_repo, rev, path).await?;
     Ok(html! {
-        (PreEscaped(breadcrumbs(repo_name, rev, path, "blob", locale)))
+        (PreEscaped(breadcrumbs(repo_name, display_name, rev, path, "blob", locale)))
         div class="scroll-x" {
             table class="blob" {
                 @for (i, l) in lines.iter().enumerate() {

@@ -8,13 +8,14 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 // Which storage driver a bucket uses, and that driver's connection
 // parameters, now live in the `s3db` crate (it needs them to build a
 // `Backend` without depending on gitquarry) — re-exported here so
 // `gitquarry.toml` parsing and every existing call site keep working
 // unchanged.
-pub use s3db::{AzureParams, BackendConfig, GcsParams, LocalEngine, LocalParams, R2Params, S3Params};
+pub use s3db::{AzureParams, BackendConfig, GcsParams, LocalEngine, LocalParams, R2Params, ResilienceConfig, S3Params};
 
 /// The main toml (buckets/credentials/passphrase) lives loose at the project
 /// root, NOT under `.conf/`: `.conf/` is for everything else (remote config
@@ -34,6 +35,14 @@ pub struct BucketConfig {
     /// the backend; only the salt derived from it (see
     /// [`crate::crypto::bootstrap`]).
     pub passphrase: String,
+    /// Concurrency caps, retry/backoff, circuit breaker, and the
+    /// cross-request raw-bytes LRU (`resilience.cache.*`) that
+    /// [`crate::storage::build_backend`] wraps this bucket's driver in.
+    /// Missing entirely from `gitquarry.toml` (or any field within it) falls
+    /// back to `s3db`'s own defaults — a 10k-entry/30s-TTL cache and
+    /// 64/32/16 concurrent get/put/list.
+    #[serde(default)]
+    pub resilience: ResilienceConfig,
 }
 
 /// `[ci]` in `gitquarry.toml` — optional, same "`None` = feature fully off"
@@ -61,12 +70,31 @@ pub struct RawConfig {
     pub buckets: BTreeMap<String, BucketConfig>,
     #[serde(default)]
     ci: Option<CiSection>,
+    /// Which bucket this instance serves when no `--bucket` is passed. Only
+    /// meaningful with several sections configured, which is the normal
+    /// shape once a bucket exists purely as a backup destination
+    /// (`backup::dest::Dest::Bucket`) or a mirror target: those are never
+    /// served, so leaving the choice to "there is only one" stopped being
+    /// enough. Must name a configured bucket — a typo here would otherwise
+    /// only surface at startup as "bucket not configured".
+    #[serde(default)]
+    pub default_bucket: Option<String>,
     /// Whether `git push` to a repo name that doesn't exist yet creates it
     /// (same as `webui::repo_new`, just reached via `git push` instead of
     /// `/_new`). Defaults to off: a typo'd repo name in the push URL should
     /// fail loudly, not silently create a new empty repo.
     #[serde(default)]
     allow_push_create: bool,
+    /// Whether `X-Forwarded-For`'s first hop may be taken as the client
+    /// address for anonymous git rate limiting. Off by default, and it has
+    /// to stay off unless a reverse proxy in front of this server always
+    /// *overwrites* that header: a client that can set it freely rotates
+    /// its own rate-limit bucket at will, which is strictly worse than the
+    /// socket address. On, behind such a proxy, it's the only way the limit
+    /// distinguishes clients at all — every request otherwise arrives from
+    /// the proxy's single address and shares one bucket.
+    #[serde(default)]
+    trust_forwarded_for: bool,
 }
 
 /// Mirror of `RawConfig` for writing instead of reading — kept separate so
@@ -83,7 +111,9 @@ struct RawConfigOut<'a> {
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
     ci: Option<CiSection>,
+    default_bucket: Option<String>,
     allow_push_create: bool,
+    trust_forwarded_for: bool,
     /// Where it was loaded from. Goes into error messages so you can fix it
     /// without guessing which candidate won.
     path: PathBuf,
@@ -113,10 +143,21 @@ impl Config {
                 );
             }
         }
+        if let Some(name) = &raw.default_bucket
+            && !raw.buckets.contains_key(name)
+        {
+            bail!(
+                "default_bucket = \"{name}\" in {} names no configured bucket (add [buckets.{name}] \
+                 or fix the name)",
+                path.display()
+            );
+        }
         Ok(Config {
             buckets: raw.buckets,
             ci: raw.ci,
+            default_bucket: raw.default_bucket,
             allow_push_create: raw.allow_push_create,
+            trust_forwarded_for: raw.trust_forwarded_for,
             path: path.to_path_buf(),
         })
     }
@@ -132,6 +173,11 @@ impl Config {
         self.allow_push_create
     }
 
+    /// See [`RawConfig::trust_forwarded_for`]'s doc comment.
+    pub fn trust_forwarded_for(&self) -> bool {
+        self.trust_forwarded_for
+    }
+
     /// Config path that would be used per the usual resolution order. Useful
     /// for propagating it explicitly via `GITQUARRY_CONFIG` to subprocesses
     /// (e.g. git hooks) that run with a different cwd and wouldn't resolve it
@@ -140,9 +186,15 @@ impl Config {
         resolve_path()
     }
 
-    /// If the config has exactly one bucket configured, its name. Lets the
-    /// server start without passing `--bucket` when there's no ambiguity.
-    pub fn only_bucket_name(&self) -> Option<&str> {
+    /// Which bucket to work on when no `--bucket` was given: whatever
+    /// `default_bucket` names, or the single configured bucket when there's
+    /// only one and so no ambiguity. `None` with several buckets and no
+    /// `default_bucket` — the caller turns that into the error telling the
+    /// operator to pick.
+    pub fn default_bucket_name(&self) -> Option<&str> {
+        if let Some(name) = &self.default_bucket {
+            return Some(name.as_str());
+        }
         match self.buckets.len() {
             1 => self.buckets.keys().next().map(String::as_str),
             _ => None,
@@ -159,7 +211,7 @@ impl Config {
     }
 
     /// Writes a brand-new `gitquarry.toml` with a single `[buckets.<name>]`
-    /// section — what the first-run setup wizard ([`setup`]) calls once
+    /// section — what the first-run setup wizard (`gitquarry-server`'s `setup`) calls once
     /// it already has a bucket config it verified works against S3. Refuses
     /// to touch `path` if anything is there already: this only ever creates
     /// a config from nothing, never edits or replaces an existing one (that
@@ -211,12 +263,10 @@ pub fn warn_if_world_readable(path: &Path) {
         if let Ok(meta) = std::fs::metadata(path) {
             let mode = meta.permissions().mode();
             if mode & 0o077 != 0 {
-                eprintln!(
-                    "gitquarry: warning: {} has permissions {:o} and holds credentials; \
-                     consider `chmod 600 {}`",
-                    path.display(),
-                    mode & 0o777,
-                    path.display()
+                warn!(
+                    path = %path.display(),
+                    mode = %format_args!("{:o}", mode & 0o777),
+                    "config file holds credentials but is not private; consider `chmod 600`"
                 );
             }
         }

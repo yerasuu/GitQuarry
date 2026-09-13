@@ -1,7 +1,7 @@
 //! Default branch — `Manifest::head`, not `RepoConfig` (see [`save_default_branch`]).
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, repo_link};
+use crate::webui::{AppError, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::remote::Manifest;
@@ -62,19 +62,20 @@ pub fn render_default_branch_form(
     }
     let retry_branch = retry.map(|f| f.branch.trim());
     html! {
-        h4 { (gitquarry_i18n::web::repo_settings::default_branch_heading(locale)) }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_default_branch";
-            select name="branch" {
-                @for branch in branches {
-                    option value=(branch) selected[retry_branch.map_or_else(
-                        || manifest.head.as_deref() == Some(&format!("refs/heads/{branch}")),
-                        |b| b == branch,
-                    )] { (branch) }
+        (settings_section(&gitquarry_i18n::web::repo_settings::default_branch_heading(locale), None, html! {
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_default_branch";
+                select name="branch" {
+                    @for branch in branches {
+                        option value=(branch) selected[retry_branch.map_or_else(
+                            || manifest.head.as_deref() == Some(&format!("refs/heads/{branch}")),
+                            |b| b == branch,
+                        )] { (branch) }
+                    }
                 }
+                button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
             }
-            button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
-        }
+        }))
     }
 }

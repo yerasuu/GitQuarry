@@ -54,7 +54,7 @@ async fn require_ci_authority(
     Ok(Some(
         AppError::forbidden(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::insufficient_repo_permission(locale)
+            gitquarry_i18n::shared::repo::insufficient_repo_permission(locale)
         ))
         .into_response(),
     ))
@@ -73,7 +73,7 @@ pub(crate) async fn handler_ci_pending_get(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let Some(ci) = &ctx.ci else {
@@ -167,7 +167,7 @@ pub(crate) async fn handler_ci_approve_post(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
         )));
     };
     let Some(ci) = &ctx.ci else {

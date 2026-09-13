@@ -203,6 +203,34 @@ fn normalize_topic_caps_length() {
 }
 
 #[test]
+fn slugify_repo_name_replaces_unsafe_characters_and_preserves_case() {
+    assert_eq!(slugify_repo_name("My Cool Repo!").as_deref(), Some("My-Cool-Repo"));
+    assert_eq!(slugify_repo_name("  weird///na@me  ").as_deref(), Some("weird-na-me"));
+    assert_eq!(
+        slugify_repo_name("already-clean_v1.0").as_deref(),
+        Some("already-clean_v1.0")
+    );
+}
+
+#[test]
+fn slugify_repo_name_drops_names_with_nothing_safe_to_keep() {
+    assert_eq!(slugify_repo_name("   "), None);
+    assert_eq!(slugify_repo_name("!!!"), None);
+    assert_eq!(slugify_repo_name("日本語"), None);
+}
+
+#[test]
+fn slugify_repo_name_caps_length_and_retrims() {
+    let long = "a".repeat(150);
+    let slug = slugify_repo_name(&long).unwrap();
+    assert_eq!(slug.len(), 100);
+
+    let long_with_trailing_dash = format!("{}-{}", "a".repeat(99), "b".repeat(50));
+    let slug = slugify_repo_name(&long_with_trailing_dash).unwrap();
+    assert!(!slug.ends_with('-'));
+}
+
+#[test]
 fn parse_labels_csv_parses_name_color_pairs() {
     let labels = parse_labels_csv("bug:#d73a4a, enhancement:#a2eeef").unwrap();
     assert_eq!(labels.len(), 2);

@@ -34,7 +34,7 @@ pub struct ServerSettings {
     #[serde(default)]
     pub mirrors_max_size: Option<String>,
     /// OIDC login for the web UI (admin pages + reading `private` repos as a
-    /// matching [`crate::auth::access::User`]). All four fields are required
+    /// matching [`crate::auth::entities::User`]). All four fields are required
     /// together — see [`gitquarry_auth_crypto::oidc::discover`] — or OIDC stays off and
     /// admin pages stay exactly as open as they are without this configured.
     #[serde(default)]
@@ -48,12 +48,106 @@ pub struct ServerSettings {
     /// registered with the IdP is `{this}/_callback`.
     #[serde(default)]
     pub oidc_redirect_base_url: Option<String>,
+    /// Extra hosts an external mirror (`gitquarry-mirror-external`) may
+    /// point at, beyond the ones every build already allows — exact names
+    /// or `*.` patterns.
+    ///
+    /// *Additional*, never a replacement: the public host of each forge
+    /// this build has a client for is always allowed
+    /// (`gitquarry_forge_clients::PUBLIC_FORGE_HOSTS`, unioned in by
+    /// `gitquarry_mirror_external::validate::effective_allowed_hosts`), so a
+    /// stock instance mirrors to GitHub/GitLab/Codeberg with nothing to
+    /// configure and this field only ever names a self-hosted forge the
+    /// instance also trusts.
+    ///
+    /// What it's for: mirroring makes *the server* open connections to a
+    /// host chosen by whoever configures the mirror, from the server's own
+    /// network position. Everything outside the built-in set plus this list
+    /// is refused — which is what keeps that from reaching an internal
+    /// address. Matching is on the name, never on a resolved address: the
+    /// ref sync shells out to `git`, which resolves inside its own process,
+    /// so an address check would be a TOCTOU with DNS rebinding behind it.
+    #[serde(default, alias = "mirror_allowed_hosts")]
+    pub mirror_extra_hosts: Vec<String>,
+    /// Where scheduled backups go — `bucket:<name>` (a section of the local
+    /// `gitquarry.toml`), `path:/abs/dir`, or `self`. Parsed by
+    /// [`crate::backup::dest::Dest::parse`]; never credentials, since this
+    /// object lives inside the very bucket being backed up (see that
+    /// module's own doc comment).
+    #[serde(default)]
+    pub backup_dest: Option<String>,
+    /// Whether the periodic backup job runs at all. Off by default: a
+    /// backup writes to somewhere an operator hasn't necessarily chosen yet,
+    /// so it starts only once someone says so.
+    #[serde(default)]
+    pub backup_enabled: bool,
+    /// `crate::mirror::gc::parse_age` syntax (`"24h"`, `"7d"`, ...), same as
+    /// [`Self::mirrors_max_age`]. `None` uses
+    /// `crate::backup::schedule::DEFAULT_INTERVAL`.
+    #[serde(default)]
+    pub backup_interval: Option<String>,
+    /// Per-class opt-outs. `None` means "whatever
+    /// [`crate::backup::inventory::Selection::default`] says", which is
+    /// everything except the derived classes — so an instance that never
+    /// touches these gets a sensible backup, and a `false` here is always a
+    /// deliberate choice someone made.
+    #[serde(default)]
+    pub backup_include_git: Option<bool>,
+    #[serde(default)]
+    pub backup_include_lfs: Option<bool>,
+    #[serde(default)]
+    pub backup_include_releases: Option<bool>,
+    #[serde(default)]
+    pub backup_include_avatars: Option<bool>,
+    #[serde(default)]
+    pub backup_include_entities: Option<bool>,
+    #[serde(default)]
+    pub backup_include_audit: Option<bool>,
+    /// Caches and rebuildable indexes (`search-index/`, `commit-sig/`, the
+    /// four indexes `backfill-repo-index` repopulates). Off unless set: a
+    /// restore pairs with that command plus a re-index instead, which is
+    /// much cheaper than carrying one cache object per commit on every run.
+    #[serde(default)]
+    pub backup_include_derived: Option<bool>,
+    /// Whether each run also takes a re-sealed snapshot
+    /// (`crate::backup::snapshot`) of the mutable config set. `None` means
+    /// yes: it's the only half of the backup that keeps *history*, and it's
+    /// small.
+    #[serde(default)]
+    pub backup_snapshot: Option<bool>,
+    /// How many snapshots to keep. `None` keeps every one — deleting a
+    /// snapshot destroys the only copy of what the live data used to be, so
+    /// it doesn't happen unless an operator asks for it.
+    #[serde(default)]
+    pub backup_keep: Option<u32>,
+    /// How many months of `.conf/audit/` to keep at the destination. `None`
+    /// keeps all of them. The audit trail is the one class that grows without
+    /// bound, which is why it gets a retention knob the other classes don't.
+    #[serde(default)]
+    pub backup_audit_keep_months: Option<u32>,
+    /// How long a key deleted at the source survives at the replica before
+    /// the (opt-in) prune pass removes it. `None` disables that pass
+    /// entirely, which is the default: never propagating a deletion is what
+    /// makes an accidental purge recoverable from the backup at all.
+    #[serde(default)]
+    pub backup_delete_grace_days: Option<u32>,
+    /// Concurrent object copies per run. `None` uses
+    /// `crate::backup::replica::DEFAULT_CONCURRENCY`.
+    #[serde(default)]
+    pub backup_concurrency: Option<u32>,
+    /// The footer's "source" link — either an absolute `http(s)://` URL, or
+    /// a `namespace/name` repo already hosted on this instance (rendered as
+    /// `/namespace/name`). `None` hides the link entirely rather than
+    /// guessing at one: this project's own repo layout (a fork's included)
+    /// varies too much per deployment to default to anything real.
+    #[serde(default)]
+    pub source_link: Option<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
 /// transports (`crate::git::ssh`, `crate::git::http`) are untouched by any
 /// of this — both already require an explicit per-repo
-/// [`crate::auth::access::Permission`] grant regardless of tier, so they're
+/// [`crate::auth::entities::Permission`] grant regardless of tier, so they're
 /// already gated in the sense that matters there, with one asymmetry:
 /// `ssh://` can't have a fully anonymous caller (opening a connection at
 /// all needs a pubkey that resolves to a user), while `crate::git::http`
@@ -77,8 +171,8 @@ pub enum Visibility {
     Private,
 }
 
-/// Who a repo belongs to — a [`crate::auth::access::User`] or
-/// [`crate::auth::access::Group`], named by uid rather than by the
+/// Who a repo belongs to — a [`crate::auth::entities::User`] or
+/// [`crate::auth::entities::Group`], named by uid rather than by the
 /// namespace segment of the repo's own path (those two aren't guaranteed
 /// to agree: an admin can transfer ownership via `webui::repo_settings::save_conf`
 /// without moving the repo). Internally tagged (`{"kind":"user","uid":"..."}`)
@@ -105,12 +199,24 @@ pub struct RepoConfig {
     #[serde(default)]
     #[entity(key)]
     pub uid: Uid,
-    /// Canonical current display name (`namespace/local-name`). Once the
-    /// physical layout is uid-keyed this is the only place a repo's name
-    /// lives — renaming/moving becomes rewriting this field plus the
-    /// `repo-name` index below, never relocating any git data.
+    /// Canonical current path (`namespace/slug`) — the repo-name index key,
+    /// the ssh/http clone path segment, and the S3-prefix-adjacent name.
+    /// Always [`crate::validate::sanitize_path`]-clean; free-text naming
+    /// lives in `display_name` below, derived into this via
+    /// `domain::repo::slugify_repo_name`. Once the physical layout is
+    /// uid-keyed this is the only place a repo's path lives — renaming/
+    /// moving becomes rewriting this field plus the `repo-name` index,
+    /// never relocating any git data.
     #[serde(default)]
     pub full_name: String,
+    /// Free-text public name shown as the repo's page heading — any
+    /// characters, unlike `full_name`. `None` for a repo that predates this
+    /// field: `domain::repo::backfill_slug` fills it in (from the current
+    /// `full_name`'s local segment) the first time that repo is loaded by a
+    /// uid-based listing, since it can't be reached by path if `full_name`
+    /// itself has since become invalid under `sanitize_path`'s charset.
+    #[serde(default)]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     /// The user or group this repo belongs to — a uid, not a name, so a
@@ -136,6 +242,33 @@ pub struct RepoConfig {
     /// the actual irreversible wipe this field used to trigger directly.
     #[serde(default)]
     pub deleted_at: Option<u64>,
+    /// Unix seconds of the last successful manifest write — set by
+    /// `storage::settings::touch_last_push`, called from both
+    /// `mirror::hook::run_pre_receive_hook` (a real push) and
+    /// `gitquarry-mirror-external`'s sync engine (a pull landing new refs):
+    /// either one is "this repo's content changed", not just a human push.
+    /// `None` for a repo nothing has ever pushed to. Best-effort like
+    /// [`Self::pack_bytes`] — a write that loses a CAS race here just means
+    /// the home page's "updated" stamp is briefly stale, never wrong in a
+    /// way that matters.
+    #[serde(default)]
+    pub last_push: Option<u64>,
+    /// Commit count for the same push [`Self::last_push`] stamps — how many
+    /// new commits `git rev-list --count` found in that push's `old..new`
+    /// range (or just `new` for a branch that didn't exist before). Set
+    /// alongside `last_push`, same best-effort tolerance, same two callers.
+    /// Purely for the home page's "N commits pushed to `<branch>`" activity
+    /// line — nothing else reads it, so a stale/missing value there is the
+    /// entire blast radius.
+    #[serde(default)]
+    pub last_push_commits: Option<u32>,
+    /// Short name (`refs/heads/` stripped) of the branch [`Self::last_push`]
+    /// landed on — always the repo's default branch, since that's the only
+    /// branch this ever fires for, but stored rather than re-derived so the
+    /// home page's activity line doesn't need its own `Manifest` fetch just
+    /// to name it.
+    #[serde(default)]
+    pub last_push_branch: Option<String>,
     /// Best-effort running total of this repo's own `.pack` bytes —
     /// incremented alongside each successful pack upload
     /// (`mirror::hook::run_pre_receive_hook`), never decremented from there.
@@ -160,12 +293,12 @@ pub struct RepoConfig {
     #[serde(default)]
     pub lfs_bytes: u64,
     /// Usernames who must have approved (their latest review verdict is
-    /// `ReviewVerdict::Approved`) before `domain::pull_request::merge` lets
-    /// a PR land — on top of, never instead of, whatever a `CODEOWNERS`
+    /// `ReviewVerdict::Approved`) before `domain::merge_request::merge` lets
+    /// an MR land — on top of, never instead of, whatever a `CODEOWNERS`
     /// file at the target branch's root additionally requires for the
-    /// specific paths a PR touches (see
-    /// `domain::pull_request::missing_required_reviewers`). Empty means no
-    /// repo-wide requirement (the default): a PR just needs no pending
+    /// specific paths an MR touches (see
+    /// `domain::merge_request::missing_required_reviewers`). Empty means no
+    /// repo-wide requirement (the default): an MR just needs no pending
     /// `ChangesRequested`, same as before this field existed.
     #[serde(default)]
     pub required_reviewers: std::collections::BTreeSet<String>,

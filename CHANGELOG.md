@@ -9,6 +9,12 @@ on a per-release versioning scheme.
 
 ## Git hosting & transport
 
+- Commits this server builds for you — a merge request's merge, squash or
+  rebase commit — are signed with a key the instance generates and keeps for
+  itself. They show as verified, in a colour distinct from a signature made
+  by an account's own key: the instance can only attest that it built the
+  commit, never who wrote it.
+
 - Serve git repositories directly from S3-compatible object storage, with no
   separate git server process required.
 - Embedded SSH server with public-key authentication, later reworked around
@@ -20,10 +26,37 @@ on a per-release versioning scheme.
 
 ## Web UI & browsing
 
+- Every form target now carries the repo in its own URL
+  (`/_merges/merge/{repo}`, `/_releases/edit/{repo}`, `/_tags/delete/{repo}`,
+  ...), and answers a stray `GET` by sending the reader to that repo's page
+  instead of a blank 405. A rejected submit no longer strands the browser on
+  a URL that means nothing.
+- A rejected action explains itself on the page it sends you back to (the
+  merge request, the releases list) rather than on a bare error page — and a
+  merge request refused for a branch that isn't on the server re-offers the
+  branches that are.
+
 - cgit-inspired browsing UI covering summary, refs, tree, blob, log, commit
   diff, blame, and stats views.
 - Compare view between two arbitrary refs.
-- Commit signature verification badge.
+- Commit signature verification badge. It now says only what this instance
+  can stand behind: verified by a registered account's key, verified as
+  built by this instance, or unverified. The old grades taken from git's own
+  check against the server's system keyring ("valid but untrusted",
+  "invalid", "revoked") are gone — this process never populates that
+  keyring, so they asserted more than had actually been checked. A verdict
+  not yet computed also shows as unverified until it is.
+- A commit whose diff runs past the page's ceiling renders the part that
+  fits and links to the raw patch for the rest.
+- Syntax highlighting (blob view, every diff view, and markdown fenced code
+  blocks) is client-side now, via a vendored `highlight.js` — covers far
+  more languages than the old server-side highlighter did, and a blob's
+  `#L42` line permalinks come from the same pass instead of a bespoke
+  per-line table.
+- Side-by-side diff view reworked to match GitHub's split layout:
+  independent line numbers on each side, a fixed 50/50 column split
+  regardless of content length, and a long line wraps instead of forcing a
+  horizontal scrollbar.
 - Create-tag form on the refs tab.
 - Markdown rendering gained syntax-highlighted fenced code blocks and
   GitHub-style alert blockquotes (note/tip/important/warning/caution) in
@@ -36,13 +69,45 @@ on a per-release versioning scheme.
 - Per-language byte-size bar on the repo summary page.
 - HTML rendering migrated from ad hoc string templates to a typed templating
   engine (maud) across the entire UI.
+- Site footer carrying the copyright, the licence and the running version,
+  linking to the changelog the binary itself was built from (`/_changelog`).
+- Instance-level source-link setting shown in the footer.
+- Repo index page: a stats strip, an activity/clone sidebar with a
+  browse-by-topic list, a per-card ssh clone hint, and a card/compact-table
+  density toggle. New-repo button next to the search form; pickaxe logo mark
+  and a real groups link on the sticky topbar.
+- Home page's recent-activity rail now describes push/release/MR events
+  instead of raw repo names, and shows each repo's last-push time — a merge
+  landing on the default branch now counts as a push there too.
+- Settings, account, admin and destructive actions (deletes, MR close/merge)
+  ask for confirmation before submitting, and submit without a full page
+  reload.
 
 ## Internationalization
 
 - Full English/Spanish bilingual UI, driven by a locale-aware message and
   template catalog threaded through every page.
+- Per-account default language, set from account settings — the session-only
+  locale override still takes precedence when set, same precedence order as
+  theme/density.
 
 ## Auth & permissions
+
+- The admin pages are closed on a fresh instance too. Until a login method
+  exists there is no session to check, so opening them needs a token the
+  process prints at startup, exchanged once at `/_bootstrap`. It dies with
+  the process and stops working the moment the first account has a password.
+- Repeated wrong passwords slow an account's login attempts down rather than
+  locking it, so knowing a username isn't enough to keep its owner out.
+- Account settings reorganized into profile (avatar and email addresses),
+  security (password, two-factor, recovery codes) and keys (SSH and GPG),
+  instead of one flat page mixing all three. Every settings page now uses
+  the same card layout with labelled fields.
+- Changing your own password asks for it twice, so a typo can't lock you out
+  of an account with no other way in.
+- An account can change its own primary email, but only where OIDC isn't
+  configured — with OIDC that address decides which account a login lands
+  on, so it stays admin-managed.
 
 - OIDC login alongside local admin and local user accounts, with a unified
   admin page design.
@@ -56,6 +121,9 @@ on a per-release versioning scheme.
 - Security hardening: CSRF double-submit tokens on authenticated forms,
   standard security response headers (CSP, X-Frame-Options, etc.), and
   per-username login rate limiting.
+- Groups drop the old team abstraction for direct members with a role, and
+  can now nest as subgroups under an existing group. A permission granted on
+  a parent group reaches every subgroup and repo underneath it.
 
 ## Repos & organizations
 
@@ -66,6 +134,10 @@ on a per-release versioning scheme.
 - Editable group description page.
 - Default branch selector, backed by the repo's real HEAD.
 - Delete a repo from its settings tab, confirmed by typing its name.
+- Repo settings reorganized into separate tabs (general, default branch,
+  protected branches/tags, signed commits, topics, required reviewers,
+  labels, LFS limit, permissions, mirrors, move, danger zone) instead of one
+  long stacked page — same treatment account settings already had.
 - Move a repo to a new namespace or name.
 - Archive a repo: archived repos reject pushes and are badged throughout the
   UI.
@@ -76,9 +148,41 @@ on a per-release versioning scheme.
 - Repo topics for discoverability.
 - Watched repos alongside starred repos, with a watch button.
 - Public user profile page listing a user's repos.
+- Merge requests can be merged by fast-forward, which creates no commit at
+  all: what lands is the author's own commits, carrying the author's own
+  signatures. Offered alongside merge, squash and rebase, and greyed out
+  once the branches have diverged.
+- A merge request that can't merge cleanly says so on its own page, listing
+  the conflicting files and the commands to resolve them locally, instead of
+  turning the merge button into an error page.
+- A merged MR still renders after its source branch is deleted.
+- Repos dashboard split into personal, group and granted-access sections.
+- A repo can carry a free-text display name alongside its URL slug, shown
+  everywhere a repo is listed or titled; existing repos get one backfilled
+  automatically the first time they're listed.
+
+## External mirroring
+
+- Mirror a repo to GitHub, GitLab or Codeberg — push, pull or both — with
+  per-ref status on the repo's settings tab. Only real fast-forwards sync;
+  a genuine divergence is reported and never forced, and a branch deleted
+  on one side is not re-created from the other.
+- What a mirror pulls in passes the same checks a push does: protected
+  branches and tags, required signatures, the LFS blob ceiling and the
+  owner's storage quota.
+- Optional two-way merge request sync per mirror — title, description,
+  open/closed state, merges and comments — with the bookkeeping that keeps
+  a comment from echoing between the two sides.
+- An instance-wide host allowlist decides where a mirror may point. The
+  forges with a built-in client are always allowed; a self-hosted GitLab or
+  Gitea is added in the instance settings.
+- Configuring or hand-syncing a mirror needs the repo's owner tier and is
+  recorded in the audit log.
 
 ## Releases & assets
 
+- The create-release form suggests the repo's own tags, minus the ones that
+  already have a release.
 - Releases: create, edit, and delete releases with notes; list/detail views;
   and attach or download binary assets.
 
@@ -91,6 +195,19 @@ on a per-release versioning scheme.
   Azure Blob Storage, and Google Cloud Storage.
 - First-run setup wizard, including storage-driver selection and a
   double-entry admin password confirmation.
+
+## Backup & disaster recovery
+
+- Replicate the whole bucket to another bucket at the same keys, or snapshot
+  it as a versioned point-in-time copy — configurable per-instance and
+  scheduled, or triggered once by hand.
+- Retention pruning on the backup destination, so scheduled runs don't grow
+  it unbounded.
+- `gitquarry backup`/`gitquarry restore` operator commands, and a matching
+  backup settings section in the web UI to configure and trigger it.
+- `default_bucket` in `gitquarry.toml` names the bucket the instance serves,
+  so extra `[buckets.*]` sections can exist purely as backup destinations or
+  mirror targets without every command needing `--bucket`.
 
 ## Search
 
@@ -111,9 +228,15 @@ on a per-release versioning scheme.
 
 ## Ops & admin tooling
 
+- `trust_forwarded_for` in the config, for a deployment behind a reverse
+  proxy: the anonymous git rate limit keys on the forwarded client address
+  instead of the proxy's own. Off unless the proxy owns that header.
 - `gitquarry fsck` to detect stray objects in a repo.
 - `gitquarry repack` to consolidate a repo's packs.
-- Audit log of admin and repo actions.
+- `gitquarry migrate` to run pending bucket data-version migrations by hand;
+  the server applies the same migrations to itself automatically at startup.
+- Audit log of admin and repo actions, now including a `repo.push` entry for
+  every real git push, not just webui-driven actions.
 - Idle- and size-based eviction of local repo mirrors.
 - Graceful shutdown.
 - Server settings editable from the web UI and stored in the bucket, with

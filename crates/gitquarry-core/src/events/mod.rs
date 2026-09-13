@@ -52,7 +52,7 @@ pub fn diff_refs(before: &BTreeMap<String, String>, after: &BTreeMap<String, Str
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PullRequestAction {
+pub enum MergeRequestAction {
     Opened,
     Updated,
     Merged,
@@ -66,7 +66,7 @@ pub enum IssueAction {
 }
 
 /// Carries just the ids/shas needed to identify what changed, not full
-/// domain objects — a consumer that needs more (a PR's title, an issue's
+/// domain objects — a consumer that needs more (an MR's title, an issue's
 /// body, ...) fetches it via the existing `domain::*` functions, same as any
 /// other caller would.
 #[derive(Debug, Clone)]
@@ -76,10 +76,10 @@ pub enum RepoEvent {
         refs: Vec<RefUpdate>,
         pusher: Option<String>,
     },
-    PullRequest {
+    MergeRequest {
         repo_uid: Uid,
         number: u64,
-        action: PullRequestAction,
+        action: MergeRequestAction,
     },
     Issue {
         repo_uid: Uid,
@@ -114,7 +114,6 @@ impl EventBus {
     }
 }
 
-/// Fans `event` out to every consumer registered on `ctx.events`.
 pub fn emit(ctx: &AppContext, event: RepoEvent) {
     let consumers = ctx.events.consumers.lock().expect("event bus mutex poisoned");
     for consumer in consumers.iter() {

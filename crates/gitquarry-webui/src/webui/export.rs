@@ -71,19 +71,43 @@ fn respond(content_type: &str, body: Vec<u8>, disposition: Option<&str>) -> Resp
 /// since `Content-Disposition` doesn't apply to a subresource load.
 const FORCE_DOWNLOAD_TYPES: &[&str] = &["image/svg+xml", "application/pdf"];
 
+/// One `Content-Disposition: attachment` value, with the filename made
+/// safe to sit inside its quoted-string.
+///
+/// A repo name only goes through `validate::sanitize_path`, which rejects
+/// control characters and `..` but not a `"` — so a repo called `a"b` used
+/// to end the quoted string early and let the rest of the name read as
+/// header parameters. Quotes and backslashes become `'`, and anything a
+/// header value can't carry at all is dropped rather than left to make the
+/// whole response fail to build.
+pub fn attachment(filename: &str) -> String {
+    let safe: String = filename
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| if c == '"' || c == '\\' { '\'' } else { c })
+        .collect();
+    let safe = if safe.trim().is_empty() {
+        "file".to_string()
+    } else {
+        safe
+    };
+    format!("attachment; filename=\"{safe}\"")
+}
+
 /// `Content-Disposition` to force on a `plain()` response, if any — see
 /// [`FORCE_DOWNLOAD_TYPES`].
 pub fn raw_disposition(path: &str, content_type: &str) -> Option<String> {
     FORCE_DOWNLOAD_TYPES.contains(&content_type).then(|| {
-        let filename = Path::new(path)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("file")
-            .replace('"', "'");
-        format!("attachment; filename=\"{filename}\"")
+        let filename = Path::new(path).file_name().and_then(|f| f.to_str()).unwrap_or("file");
+        attachment(filename)
     })
 }
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; `AppError` goes `pub(crate)` outside that config,
+/// which is what makes plain `cargo check` flag this as exposing a
+/// private type.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn plain(
     bare_repo: &Path,
     rev: &str,
@@ -94,7 +118,7 @@ pub async fn plain(
     if size > PLAIN_MAX_BYTES {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::file_too_large(locale, size, PLAIN_MAX_BYTES)
+            gitquarry_i18n::shared::release::file_too_large(locale, size, PLAIN_MAX_BYTES)
         )));
     }
     let bytes = git::browse::read_blob(bare_repo, rev, path).await?;
@@ -103,13 +127,16 @@ pub async fn plain(
     Ok(respond(content_type, bytes, disposition.as_deref()))
 }
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; see [`plain`]'s doc comment for why.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn patch(bare_repo: &Path, sha: &str) -> Result<Response, AppError> {
     let text = git::browse::format_patch(bare_repo, sha).await?;
     let filename = format!("{}.patch", validate::short_sha(sha));
     Ok(respond(
         "text/plain; charset=utf-8",
         text.into_bytes(),
-        Some(&format!("attachment; filename=\"{filename}\"")),
+        Some(&attachment(&filename)),
     ))
 }
 
@@ -118,6 +145,9 @@ pub(crate) async fn rawdiff(bare_repo: &Path, sha: &str) -> Result<Response, App
     Ok(respond("text/plain; charset=utf-8", diff.into_bytes(), None))
 }
 
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; see [`plain`]'s doc comment for why.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
 pub async fn snapshot(
     bare_repo: &Path,
     repo_name: &str,
@@ -135,29 +165,38 @@ pub async fn snapshot(
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::invalid_snapshot_format(locale, other)
+                gitquarry_i18n::shared::release::invalid_snapshot_format(locale, other)
             )));
         }
     };
     let bytes = git::browse::archive_one(bare_repo, rev, fmt).await?;
     let filename = git::browse::archive_filename(repo_name, rev, fmt);
-    Ok(respond(
-        content_type,
-        bytes,
-        Some(&format!("attachment; filename=\"{filename}\"")),
-    ))
+    Ok(respond(content_type, bytes, Some(&attachment(&filename))))
 }
 
 const ATOM_ENTRY_LIMIT: usize = 20;
 
-pub async fn atom(bare_repo: &Path, repo_name: &str, rev: &str) -> Result<Response, AppError> {
+/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
+/// under `test-util`; see [`plain`]'s doc comment for why.
+#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
+pub async fn atom(
+    bare_repo: &Path,
+    repo_name: &str,
+    display_name: Option<&str>,
+    rev: &str,
+) -> Result<Response, AppError> {
     let commits = git::browse::log(bare_repo, rev, ATOM_ENTRY_LIMIT, None).await?;
     let updated = commits.first().map_or("1970-01-01T00:00:00Z", |c| c.date.as_str());
     let log_link = esc(&repo_link(repo_name, "log", "").to_string());
 
     let mut xml = String::from(r#"<?xml version="1.0" encoding="utf-8"?>"#);
     xml.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\">");
-    xml.push_str(&format!("<title>{}</title>", esc(repo_name)));
+    // Title is the repo's public name; the `<id>` stays keyed on the slug —
+    // a feed id has to be stable across a repo being renamed for display.
+    xml.push_str(&format!(
+        "<title>{}</title>",
+        esc(&crate::webui::repo_label(repo_name, display_name))
+    ));
     xml.push_str(&format!("<id>urn:gitquarry:{}</id>", esc(repo_name)));
     xml.push_str(&format!("<updated>{}</updated>", esc(updated)));
     xml.push_str(&format!("<link rel=\"alternate\" href=\"{log_link}\"/>"));
@@ -198,11 +237,11 @@ pub(crate) async fn release_asset(
     if etag.is_none() || !release.assets.iter().any(|a| a.filename == filename) {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::no_asset_on_release(locale, &filename, tag)
+            gitquarry_i18n::shared::release::no_asset_on_release(locale, &filename, tag)
         )));
     }
 
-    let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::creating_temp_dir_for_asset(locale))?;
+    let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::release::creating_temp_dir_for_asset(locale))?;
     let tmp_path = tmp_dir.path().join(&filename);
     remote.download_asset(tag, &filename, &tmp_path).await?;
 
@@ -227,10 +266,7 @@ pub(crate) async fn release_asset(
         [
             (header::CONTENT_TYPE, guess_content_type(&filename).to_string()),
             (header::CONTENT_LENGTH, len.to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
-            ),
+            (header::CONTENT_DISPOSITION, attachment(&filename)),
         ],
         Body::from_stream(body_stream),
     )

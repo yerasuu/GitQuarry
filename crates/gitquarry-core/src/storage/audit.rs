@@ -15,12 +15,18 @@ use s3db::Collection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 /// Collection-prefix root (no trailing slash — [`Collection::new_owned`]
 /// adds the `/` itself). One [`Collection`] per month bucket, built at
 /// [`audit_collection`] — see [`month_bucket`] for why entries are split
 /// this way instead of one flat collection.
 const AUDIT_ROOT: &str = ".conf/audit";
+/// Same value as [`AUDIT_ROOT`], public because the backup retention pass
+/// (`crate::backup::prune`) deletes whole month prefixes under it at a
+/// *destination* bucket, and hardcoding the string in a second place is how
+/// the two would eventually disagree.
+pub const AUDIT_ROOT_PUBLIC: &str = AUDIT_ROOT;
 #[cfg(any(test, feature = "test-util"))]
 pub const AUDIT_PREFIX: &str = ".conf/audit/";
 #[cfg(not(any(test, feature = "test-util")))]
@@ -141,7 +147,9 @@ async fn recent_keys(backend: &dyn Backend) -> Result<Vec<String>> {
     for _ in 0..MAX_MONTHS_BACK {
         let (y, mo, _d) = cursor;
         let coll = audit_collection(&format!("{y:04}-{mo:02}"));
-        collected.extend(coll.list_names(backend).await?.into_iter().map(|name| coll.key(&name)));
+        for name in coll.list_names(backend).await? {
+            collected.push(coll.key(&name)?);
+        }
         if collected.len() >= LIST_LIMIT {
             collected.sort_unstable_by(|a, b| b.cmp(a));
             collected.truncate(LIST_LIMIT);
@@ -181,12 +189,9 @@ pub async fn record(
     match coll.put(backend, cipher, &name, &entry, None).await {
         Ok(Cas::Ok) => {}
         Ok(Cas::Conflict) => {
-            eprintln!(
-                "gitquarry: warning: key collision in audit log ({}), entry lost",
-                coll.key(&name)
-            )
+            warn!(key = %coll.key(&name).unwrap_or(name), "key collision in audit log, entry lost")
         }
-        Err(e) => eprintln!("gitquarry: warning: couldn't write audit log: {e:#}"),
+        Err(e) => warn!(error = %e, "couldn't write audit log"),
     }
 }
 

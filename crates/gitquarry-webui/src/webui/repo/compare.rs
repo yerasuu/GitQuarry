@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::git;
 use gitquarry_i18n::Locale;
-use gitquarry_i18n::web::repo_compare as t;
+use gitquarry_i18n::web::repo::compare as t;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 
@@ -29,7 +29,8 @@ pub(super) async fn render_compare(
     // Two-dot: commits reachable from `head` but not `base` — "what `head`
     // adds", matching the three-dot diff above (changes since divergence).
     let range = format!("{base}..{head}");
-    let commits = git::browse::log(bare_repo, &range, usize::MAX, None).await?;
+    let mut commits = git::browse::log(bare_repo, &range, usize::MAX, None).await?;
+    git::browse::mark_signed(bare_repo, &mut commits).await?;
     let avatars = commit_avatars(ctx, bare_repo, &commits).await;
     let diff_view = effective_diff_view(headers);
     let return_to = format!(

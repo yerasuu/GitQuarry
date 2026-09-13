@@ -31,12 +31,11 @@ fn keeps_safe_links() {
 fn highlights_a_fenced_code_block_with_a_language_tag() {
     let html = render("```rust\nfn main() {}\n```");
     assert!(html.contains("<pre class=\"blob\">"));
-    // A semantic class, not a baked color — theme-agnostic on purpose (see
-    // `highlight.rs`'s own doc comment): a plain, unhighlighted
-    // `<pre><code>fn main() {}</code></pre>` wouldn't have this. `fn` itself
-    // scopes as `storage.type` in Rust's grammar (`tok-type`), same bucket
-    // as `let`/`impl` — not `tok-kw`, that's control-flow (`if`/`return`/...).
-    assert!(html.contains("class=\"tok-type\""));
+    // The fence's language token becomes the `language-*` class
+    // `highlight.js` (client-side, vendored) looks for -- no server-side
+    // tokenizing happens here, see `markdown.rs`'s own doc comment.
+    assert!(html.contains("class=\"language-rust\""));
+    assert!(html.contains("fn main() {}"));
 }
 
 #[test]

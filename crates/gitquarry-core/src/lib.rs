@@ -8,11 +8,14 @@
 
 pub mod app;
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod crypto;
 pub mod domain;
 pub mod events;
 pub mod git;
+pub mod internal_api;
+pub mod migrations;
 pub mod mirror;
 pub mod storage;
 pub mod validate;

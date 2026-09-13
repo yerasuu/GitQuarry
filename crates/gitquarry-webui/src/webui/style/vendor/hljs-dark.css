@@ -1,0 +1,96 @@
+/* highlight.js dark theme (github-dark, cdnjs) -- selectors
+   mechanically re-prefixed by scripts/vendor-hljs.sh from the unmodified
+   upstream file (`.hljs`'s own `background` dropped, same reasoning as
+   `hljs-light.css`; its theme-independent layout resets skipped, they
+   live in `hljs-light.css` only) so it slots into this app's existing
+   light-is-default/dark-is-override cascade (see dark.css's own doc
+   comment) without any special-casing at the page_chrome.rs include
+   site: same guard conditions as every other theme file, just written as
+   real selectors instead of bare custom properties (a plain
+   `.hljs-keyword{...}` rule can't be dropped inside a
+   `:root[data-theme='dark']{ }` block the way a `--x: value;` declaration
+   can, without CSS nesting syntax this project otherwise avoids). */
+@media (prefers-color-scheme: dark) {
+:root:not([data-theme='light']) .hljs{color:#c9d1d9}
+:root:not([data-theme='light']) .hljs-doctag{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-keyword{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-meta .hljs-keyword{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-template-tag{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-template-variable{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-type{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-variable.language_{color:#ff7b72}
+:root:not([data-theme='light']) .hljs-title{color:#d2a8ff}
+:root:not([data-theme='light']) .hljs-title.class_{color:#d2a8ff}
+:root:not([data-theme='light']) .hljs-title.class_.inherited__{color:#d2a8ff}
+:root:not([data-theme='light']) .hljs-title.function_{color:#d2a8ff}
+:root:not([data-theme='light']) .hljs-attr{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-attribute{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-literal{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-meta{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-number{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-operator{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-selector-attr{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-selector-class{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-selector-id{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-variable{color:#79c0ff}
+:root:not([data-theme='light']) .hljs-meta .hljs-string{color:#a5d6ff}
+:root:not([data-theme='light']) .hljs-regexp{color:#a5d6ff}
+:root:not([data-theme='light']) .hljs-string{color:#a5d6ff}
+:root:not([data-theme='light']) .hljs-built_in{color:#ffa657}
+:root:not([data-theme='light']) .hljs-symbol{color:#ffa657}
+:root:not([data-theme='light']) .hljs-code{color:#8b949e}
+:root:not([data-theme='light']) .hljs-comment{color:#8b949e}
+:root:not([data-theme='light']) .hljs-formula{color:#8b949e}
+:root:not([data-theme='light']) .hljs-name{color:#7ee787}
+:root:not([data-theme='light']) .hljs-quote{color:#7ee787}
+:root:not([data-theme='light']) .hljs-selector-pseudo{color:#7ee787}
+:root:not([data-theme='light']) .hljs-selector-tag{color:#7ee787}
+:root:not([data-theme='light']) .hljs-subst{color:#c9d1d9}
+:root:not([data-theme='light']) .hljs-section{color:#1f6feb;font-weight:700}
+:root:not([data-theme='light']) .hljs-bullet{color:#f2cc60}
+:root:not([data-theme='light']) .hljs-emphasis{color:#c9d1d9;font-style:italic}
+:root:not([data-theme='light']) .hljs-strong{color:#c9d1d9;font-weight:700}
+:root:not([data-theme='light']) .hljs-addition{color:#aff5b4;background-color:#033a16}
+:root:not([data-theme='light']) .hljs-deletion{color:#ffdcd7;background-color:#67060c}
+}
+:root[data-theme='dark'] .hljs{color:#c9d1d9}
+:root[data-theme='dark'] .hljs-doctag{color:#ff7b72}
+:root[data-theme='dark'] .hljs-keyword{color:#ff7b72}
+:root[data-theme='dark'] .hljs-meta .hljs-keyword{color:#ff7b72}
+:root[data-theme='dark'] .hljs-template-tag{color:#ff7b72}
+:root[data-theme='dark'] .hljs-template-variable{color:#ff7b72}
+:root[data-theme='dark'] .hljs-type{color:#ff7b72}
+:root[data-theme='dark'] .hljs-variable.language_{color:#ff7b72}
+:root[data-theme='dark'] .hljs-title{color:#d2a8ff}
+:root[data-theme='dark'] .hljs-title.class_{color:#d2a8ff}
+:root[data-theme='dark'] .hljs-title.class_.inherited__{color:#d2a8ff}
+:root[data-theme='dark'] .hljs-title.function_{color:#d2a8ff}
+:root[data-theme='dark'] .hljs-attr{color:#79c0ff}
+:root[data-theme='dark'] .hljs-attribute{color:#79c0ff}
+:root[data-theme='dark'] .hljs-literal{color:#79c0ff}
+:root[data-theme='dark'] .hljs-meta{color:#79c0ff}
+:root[data-theme='dark'] .hljs-number{color:#79c0ff}
+:root[data-theme='dark'] .hljs-operator{color:#79c0ff}
+:root[data-theme='dark'] .hljs-selector-attr{color:#79c0ff}
+:root[data-theme='dark'] .hljs-selector-class{color:#79c0ff}
+:root[data-theme='dark'] .hljs-selector-id{color:#79c0ff}
+:root[data-theme='dark'] .hljs-variable{color:#79c0ff}
+:root[data-theme='dark'] .hljs-meta .hljs-string{color:#a5d6ff}
+:root[data-theme='dark'] .hljs-regexp{color:#a5d6ff}
+:root[data-theme='dark'] .hljs-string{color:#a5d6ff}
+:root[data-theme='dark'] .hljs-built_in{color:#ffa657}
+:root[data-theme='dark'] .hljs-symbol{color:#ffa657}
+:root[data-theme='dark'] .hljs-code{color:#8b949e}
+:root[data-theme='dark'] .hljs-comment{color:#8b949e}
+:root[data-theme='dark'] .hljs-formula{color:#8b949e}
+:root[data-theme='dark'] .hljs-name{color:#7ee787}
+:root[data-theme='dark'] .hljs-quote{color:#7ee787}
+:root[data-theme='dark'] .hljs-selector-pseudo{color:#7ee787}
+:root[data-theme='dark'] .hljs-selector-tag{color:#7ee787}
+:root[data-theme='dark'] .hljs-subst{color:#c9d1d9}
+:root[data-theme='dark'] .hljs-section{color:#1f6feb;font-weight:700}
+:root[data-theme='dark'] .hljs-bullet{color:#f2cc60}
+:root[data-theme='dark'] .hljs-emphasis{color:#c9d1d9;font-style:italic}
+:root[data-theme='dark'] .hljs-strong{color:#c9d1d9;font-weight:700}
+:root[data-theme='dark'] .hljs-addition{color:#aff5b4;background-color:#033a16}
+:root[data-theme='dark'] .hljs-deletion{color:#ffdcd7;background-color:#67060c}

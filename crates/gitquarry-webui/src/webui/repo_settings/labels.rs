@@ -1,7 +1,7 @@
 //! Labels — a repo's name+color issue-label vocabulary.
 
 use super::{FlashOutcome, RepoConfForm};
-use crate::webui::{AppError, repo_link};
+use crate::webui::{AppError, repo_link, settings_section};
 use gitquarry_core::domain;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::RepoConfig;
@@ -56,23 +56,21 @@ pub fn render_labels_form(
         .join(", ");
     let current = retry.map_or(stored.as_str(), |f| f.labels.as_str());
     html! {
-        h4 { (gitquarry_i18n::web::repo_settings::labels_heading(locale)) }
-        p class="muted" {
-            (gitquarry_i18n::web::repo_settings::labels_prose(locale))
-        }
-        @if !config.labels.is_empty() {
-            p {
-                @for label in &config.labels {
-                    span class="decoration" style={"border-color:" (label.color) ";color:" (label.color)} { (label.name) }
-                    " "
+        (settings_section(&gitquarry_i18n::web::repo_settings::labels_heading(locale), Some(&gitquarry_i18n::web::repo_settings::labels_prose(locale)), html! {
+            @if !config.labels.is_empty() {
+                p {
+                    @for label in &config.labels {
+                        span class="decoration" style={"border-color:" (label.color) ";color:" (label.color)} { (label.name) }
+                        " "
+                    }
                 }
             }
-        }
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
-            (PreEscaped(csrf))
-            input type="hidden" name="conf_action" value="set_labels";
-            input name="labels" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::labels_placeholder(locale));
-            button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
-        }
+            form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" data-confirm=(gitquarry_i18n::web::repo_settings::save_labels_confirm(locale)) {
+                (PreEscaped(csrf))
+                input type="hidden" name="conf_action" value="set_labels";
+                input name="labels" value=(current) size="60" placeholder=(gitquarry_i18n::web::repo_settings::labels_placeholder(locale));
+                button type="submit" { (gitquarry_i18n::web::repo_settings::save_button(locale)) }
+            }
+        }))
     }
 }

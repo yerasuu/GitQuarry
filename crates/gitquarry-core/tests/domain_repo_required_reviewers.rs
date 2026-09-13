@@ -30,7 +30,10 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         git_rate_limiter: Default::default(),
         ci: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -41,6 +44,7 @@ async fn set_required_reviewers_rejects_an_unknown_username() {
     let resolved = repo::create(
         &ctx,
         "team/proj",
+        None,
         None,
         None,
         gitquarry_core::storage::entities::Visibility::Public,
@@ -65,6 +69,7 @@ async fn set_required_reviewers_stores_every_real_username() {
     let resolved = repo::create(
         &ctx,
         "team/proj",
+        None,
         None,
         None,
         gitquarry_core::storage::entities::Visibility::Public,

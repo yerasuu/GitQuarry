@@ -9,7 +9,7 @@
 //     *replaces the form itself* (see `<form data-async>` in `actions.rs`/
 //     `theme_pref.rs`) -- unless the form also has `data-async-target`
 //     (a selector), in which case *that* element gets replaced instead
-//     (see `pulls/mod.rs`'s `#pr-actions`: closing a PR changes the status
+//     (see `merges/mod.rs`'s `#mr-actions`: closing an MR changes the status
 //     line and which button shows next, not just the clicked button's own
 //     label, so more than the form itself has to refresh) -- and/or
 //     `data-async-extra-target` (another selector) for a *second*, disjoint
@@ -42,7 +42,7 @@
 //
 // A fifth: `form[data-confirm="message"]` -- a plain `confirm()` prompt in
 // front of a one-click irreversible action that isn't already behind a
-// type-the-name modal (mirror delete, comment delete, PR merge). Native
+// type-the-name modal (mirror delete, comment delete, MR merge). Native
 // `confirm()` rather than a `styler` modal: these are single table-row/
 // inline buttons, not a whole section worth a modal's own markup.
 //
@@ -54,11 +54,80 @@
 // what already works with JS off: nothing here is needed to open or use
 // one, only to auto-close it.
 
-function fetchFragment(url, init, onHtml) {
+// Renders in-place via styler's own toast (top-right, auto-dismissing)
+// instead of a native `alert()` -- a native dialog blocks the main thread
+// and reads as "another window" popping up, exactly what a `data-async`
+// form is meant to avoid by not doing a real page navigation on submit.
+// `message` defaults to `page_chrome::layout`'s `data-error-generic`
+// (`gitquarry_i18n::web::chrome::async_request_failed`, the same idiom as
+// `data-confirm`'s messages) -- only used when the caller has no more
+// specific text of its own, e.g. a network failure with no response body
+// to read one from at all. Whenever a response body *is* available (see
+// `extractFlashMessage` below), that's the one message this app already
+// writes for "your last action failed" (`webui::error::AppError`'s own
+// `render_flash(Flash::Err(...))`), so the toast says the same thing the
+// inline `.flash-err` banner would have on a plain, non-async submit of
+// the same failure -- one authored message, two delivery mechanisms,
+// instead of a second, generic one invented just for the async path.
+function showErrorToast(message) {
+  const text = message || document.body.dataset.errorGeneric || "something went wrong, try again";
+  if (window.Styler && typeof window.Styler.toast === "function") {
+    window.Styler.toast({ message: text, type: "error" });
+  } else {
+    console.error("gitquarry:", text);
+  }
+}
+
+// Pulls the message back out of `flash::render_flash(Flash::Err(...))`'s
+// own markup (`<p class="... flash-err"><span>{message}</span>...`) -- see
+// `AppError::into_response` (`webui/error.rs`), which always renders this
+// on a failed request's body, `data-async` or not. Returns `null` (not the
+// generic fallback) when the body isn't that shape at all, so the caller
+// can tell "no message here" apart from "the message was empty".
+function extractFlashMessage(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const span = template.content.querySelector(".flash-err span");
+  return span ? span.textContent.trim() || null : null;
+}
+
+class AsyncRequestError extends Error {
+  constructor(status, body) {
+    super(`request failed: ${status}`);
+    this.body = body;
+  }
+}
+
+function fetchFragment(url, init, onHtml, onError) {
   fetch(url, init)
-    .then((resp) => (resp.ok ? resp.text() : Promise.reject(new Error(`request failed: ${resp.status}`))))
-    .then(onHtml)
-    .catch((err) => console.error("gitquarry: async request failed", err));
+    .then((resp) =>
+      resp.ok
+        ? resp.text()
+        : resp.text().then((body) => Promise.reject(new AsyncRequestError(resp.status, body))),
+    )
+    .then((html) => {
+      try {
+        onHtml(html);
+      } catch (err) {
+        // The request itself succeeded -- the server already applied
+        // whatever it was asked to -- so a bug in *this* callback (an
+        // unexpected fragment shape, a selector that no longer matches)
+        // must not fall into the `catch` below: that one means the request
+        // failed and is what triggers `onError`'s optimistic-UI rollback,
+        // which would be wrong here since nothing needs undoing.
+        console.error("gitquarry: fragment handler failed", err);
+      }
+    })
+    .catch((err) => {
+      console.error("gitquarry: async request failed", err);
+      if (onError) {
+        // A network failure (offline, DNS, CORS) never reached the server
+        // at all, so there's no `AppError`-authored body to read a message
+        // from -- `onError` gets `null` and its caller falls back to the
+        // generic string.
+        onError(err instanceof AsyncRequestError ? extractFlashMessage(err.body) : null);
+      }
+    });
 }
 
 function runLiveSearch(form) {
@@ -69,9 +138,23 @@ function runLiveSearch(form) {
   }
   const url = new URL(form.action, window.location.href);
   url.searchParams.set(field.name, field.value);
-  fetchFragment(url, { headers: { "X-GQ-Async": "1" } }, (html) => {
-    target.innerHTML = html;
-  });
+  // Typing fast enough sends overlapping GETs; nothing guarantees they
+  // resolve in the order they were sent. `_gqSearchSeq` lives on `target`
+  // itself (not `form`) because that's the node a stale response would
+  // otherwise stomp -- a slower response for an earlier keystroke arriving
+  // after a faster one for a later keystroke is simply dropped.
+  const searchSeq = (target._gqSearchSeq = (target._gqSearchSeq || 0) + 1);
+  fetchFragment(
+    url,
+    { headers: { "X-GQ-Async": "1" } },
+    (html) => {
+      if (target._gqSearchSeq !== searchSeq) {
+        return;
+      }
+      target.innerHTML = html;
+    },
+    (message) => showErrorToast(message),
+  );
 }
 
 let liveSearchTimer = null;
@@ -90,7 +173,7 @@ document.addEventListener("submit", (event) => {
   }
   // `data-confirm="message"`: a native `confirm()` gate in front of an
   // otherwise one-click irreversible action (mirror delete, comment
-  // delete, PR merge) -- checked first, ahead of the async/live-search
+  // delete, MR merge) -- checked first, ahead of the async/live-search
   // branches below, so declining stops the request before either of
   // those ever sees the submit.
   if (form.hasAttribute("data-confirm") && !window.confirm(form.dataset.confirm)) {
@@ -126,6 +209,42 @@ document.addEventListener("submit", (event) => {
   if (event.submitter && event.submitter.name) {
     body.set(event.submitter.name, event.submitter.value);
   }
+  const htmlAttr = form.dataset.htmlAttr;
+  const pickedValue = event.submitter && event.submitter.value;
+  const classTarget = form.dataset.classTarget && document.querySelector(form.dataset.classTarget);
+  const classValue = form.dataset.classValue;
+  const toggleLabel = form.dataset.toggleLabel;
+  const labelEl = form.querySelector(".btn-label");
+  const optimisticDeltaAttr = form.dataset.optimisticDelta;
+  const optimisticDelta = Number(optimisticDeltaAttr);
+  const optimisticEl = form.dataset.optimisticTarget && document.querySelector(form.dataset.optimisticTarget);
+  const targetSelector = form.dataset.asyncTarget;
+  const extraTargetSelector = form.dataset.asyncExtraTarget;
+  const target = targetSelector ? document.querySelector(targetSelector) : form;
+  const extraTarget = extraTargetSelector ? document.querySelector(extraTargetSelector) : null;
+  // Every node this submit will optimistically paint or eventually swap,
+  // deduplicated. Locked for the round trip so a *different* form reaching
+  // the same node (star + watch both repaint `#community-stats`, the three
+  // text-size buttons all repaint `#about-body`, two MR-action forms both
+  // repaint `#mr-actions`) can't race this one -- and so a double-click on
+  // *this* form's own button can't either, since `form` is always in the
+  // set. Replaces the old per-form `_gqRequestSeq` counter, which only
+  // caught a form racing itself and only guarded the failure path, not
+  // success: a locked node simply refuses a second submit outright, so
+  // there's no "which of two in-flight responses wins" question left to
+  // get half-answered.
+  const lockedNodes = Array.from(new Set([form, target, extraTarget, classTarget, optimisticEl].filter(Boolean)));
+  if (lockedNodes.some((node) => node._gqLocked)) {
+    return;
+  }
+  lockedNodes.forEach((node) => {
+    node._gqLocked = true;
+  });
+  const unlock = () => {
+    lockedNodes.forEach((node) => {
+      node._gqLocked = false;
+    });
+  };
   // `data-html-attr` (theme/density toggles): flip `<html>`'s own attribute
   // the instant the button's clicked -- everything either one affects is
   // plain CSS keyed off that attribute (colors/spacing, and now syntax
@@ -134,8 +253,7 @@ document.addEventListener("submit", (event) => {
   // repaint. The fetch below still persists the pick server-side (the
   // cookie, so it's still picked on the next full page load too) and
   // swaps the button pair same as any other data-async form.
-  const htmlAttr = form.dataset.htmlAttr;
-  const pickedValue = event.submitter && event.submitter.value;
+  const originalHtmlAttrValue = htmlAttr ? document.documentElement.getAttribute(htmlAttr) : null;
   if (htmlAttr && pickedValue) {
     document.documentElement.setAttribute(htmlAttr, pickedValue);
   }
@@ -147,8 +265,7 @@ document.addEventListener("submit", (event) => {
   // to piggyback on. `!== undefined`, not a truthiness check: the "medium"
   // size's class is the empty string, which is a real, intentional value
   // here (it clears the class), not a missing one.
-  const classTarget = form.dataset.classTarget && document.querySelector(form.dataset.classTarget);
-  const classValue = form.dataset.classValue;
+  const originalClassName = classTarget ? classTarget.className : null;
   if (classTarget && classValue !== undefined) {
     classTarget.className = classValue;
   }
@@ -156,26 +273,20 @@ document.addEventListener("submit", (event) => {
   // (star/watch, see `actions.rs`): same "paint it before the round trip"
   // idea as `data-html-attr` above, for a toggle whose repaint isn't pure
   // CSS -- the button's own label text and a count shown elsewhere on the
-  // page. Flips the `.btn-label` text against its own stored opposite (so
-  // a second click before the first response lands still toggles
-  // correctly) and nudges the count target by `delta`, then negates
-  // `delta` for next time. The real response a moment later still fully
-  // replaces both (`data-async`/`data-async-extra-target`), so a wrong
-  // guess here -- a lost CAS race, another tab -- self-corrects within the
-  // same round trip instead of drifting.
-  const toggleLabel = form.dataset.toggleLabel;
-  const labelEl = form.querySelector(".btn-label");
+  // page. Flips the `.btn-label` text against its own stored opposite and
+  // nudges the count target by `delta`. The lock above already rules out a
+  // second submit touching these same nodes before this one settles, so
+  // there's no concurrent guess to defend against here anymore.
+  const originalLabelText = labelEl ? labelEl.textContent : null;
   if (toggleLabel && labelEl) {
-    form.dataset.toggleLabel = labelEl.textContent;
+    form.dataset.toggleLabel = originalLabelText;
     labelEl.textContent = toggleLabel;
   }
-  const optimisticDelta = Number(form.dataset.optimisticDelta);
-  const optimisticEl = form.dataset.optimisticTarget && document.querySelector(form.dataset.optimisticTarget);
+  const originalOptimisticText = optimisticEl ? optimisticEl.textContent : null;
   if (optimisticEl && Number.isFinite(optimisticDelta)) {
-    optimisticEl.textContent = String(Number(optimisticEl.textContent) + optimisticDelta);
+    optimisticEl.textContent = String(Number(originalOptimisticText) + optimisticDelta);
     form.dataset.optimisticDelta = String(-optimisticDelta);
   }
-  const targetSelector = form.dataset.asyncTarget;
   // `data-async-extra-target` (star/watch, see `actions.rs`): for a button
   // whose toggle also has to repaint a count shown somewhere else on the
   // page (the sidebar's star/watcher tally, nowhere near the button itself
@@ -184,24 +295,67 @@ document.addEventListener("submit", (event) => {
   // selector, independently of whatever the primary swap above targets.
   // Every other data-async form leaves this attribute unset, so its
   // response is still exactly one element and this branch never runs.
-  const extraTargetSelector = form.dataset.asyncExtraTarget;
-  fetchFragment(form.action, { method: form.method || "POST", body, headers: { "X-GQ-Async": "1" } }, (html) => {
-    const template = document.createElement("template");
-    template.innerHTML = html.trim();
-    const replacement = template.content.firstElementChild;
-    if (!replacement) {
-      return;
-    }
-    const extraReplacement = extraTargetSelector ? replacement.nextElementSibling : null;
-    const target = targetSelector ? document.querySelector(targetSelector) : form;
-    if (target) {
-      target.replaceWith(replacement);
-    }
-    const extraTarget = extraTargetSelector ? document.querySelector(extraTargetSelector) : null;
-    if (extraTarget && extraReplacement) {
-      extraTarget.replaceWith(extraReplacement);
-    }
-  });
+  fetchFragment(
+    form.action,
+    { method: form.method || "POST", body, headers: { "X-GQ-Async": "1" } },
+    (html) => {
+      unlock();
+      const template = document.createElement("template");
+      template.innerHTML = html.trim();
+      const replacement = template.content.firstElementChild;
+      if (!replacement) {
+        return;
+      }
+      const extraReplacement = extraTargetSelector ? replacement.nextElementSibling : null;
+      if (target) {
+        target.replaceWith(replacement);
+      }
+      if (extraTarget && extraReplacement) {
+        extraTarget.replaceWith(extraReplacement);
+      }
+    },
+    // A failed request otherwise leaves every optimistic paint above
+    // (label, count, html/class attribute) stuck in the guessed state with
+    // no visible error. Unlike the drag-and-drop handler below (whose
+    // failure fallback is a full reload -- a moved DOM card has no cheap
+    // undo), every optimistic branch here recorded its own prior value, so
+    // the honest fix is to put each one back and surface the failure in
+    // place, not to bounce the user off the page they were just on.
+    (message) => {
+      unlock();
+      if (htmlAttr) {
+        if (originalHtmlAttrValue === null) {
+          document.documentElement.removeAttribute(htmlAttr);
+        } else {
+          document.documentElement.setAttribute(htmlAttr, originalHtmlAttrValue);
+        }
+      }
+      if (classTarget) {
+        classTarget.className = originalClassName;
+      }
+      if (labelEl && originalLabelText !== null) {
+        labelEl.textContent = originalLabelText;
+        // `toggleLabel` is `undefined` when the form never had
+        // `data-toggle-label` set in the first place -- `dataset` coerces
+        // `undefined` to the literal string `"undefined"`, so an absent
+        // original is a `delete`, not an assignment.
+        if (toggleLabel === undefined) {
+          delete form.dataset.toggleLabel;
+        } else {
+          form.dataset.toggleLabel = toggleLabel;
+        }
+      }
+      if (optimisticEl && originalOptimisticText !== null) {
+        optimisticEl.textContent = originalOptimisticText;
+        if (optimisticDeltaAttr === undefined) {
+          delete form.dataset.optimisticDelta;
+        } else {
+          form.dataset.optimisticDelta = optimisticDeltaAttr;
+        }
+      }
+      showErrorToast(message);
+    },
+  );
 });
 
 document.addEventListener("click", (event) => {
@@ -221,15 +375,21 @@ document.addEventListener("click", (event) => {
   if (!btn) {
     return;
   }
-  navigator.clipboard.writeText(btn.dataset.copy).then(() => {
-    const original = btn.textContent;
-    btn.textContent = btn.dataset.copiedLabel || original;
-    btn.disabled = true;
-    setTimeout(() => {
-      btn.textContent = original;
-      btn.disabled = false;
-    }, 1200);
-  });
+  navigator.clipboard
+    .writeText(btn.dataset.copy)
+    .then(() => {
+      const original = btn.textContent;
+      btn.textContent = btn.dataset.copiedLabel || original;
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 1200);
+    })
+    .catch((err) => {
+      console.error("gitquarry: clipboard write failed", err);
+      showErrorToast();
+    });
 });
 
 // Per-hunk diff collapse (`annotated_diff.rs`'s `.hunk-toggle`). Not
@@ -310,3 +470,58 @@ document.addEventListener("drop", (event) => {
     }
   }).catch(() => window.location.reload());
 });
+
+// A fifth shape, run once at load rather than delegated: client-side syntax
+// highlighting (`/_assets/hljs.js`, `/_assets/hljs-line-numbers.js`, both
+// loaded `defer` ahead of this file -- see `page_chrome.rs`'s `layout()`).
+// `repo::blob::render_blob` and every diff renderer
+// (`repo::components::color_diff`/`side_by_side_diff`,
+// `repo::merges::annotated_diff`) emit plain, unhighlighted
+// `<code class="language-*">` -- this is the one place that actually
+// tokenizes it, so every page pays one `hljs.highlightAll()` call (a no-op
+// scan on a page with no code) instead of duplicating the wiring per view.
+//
+// `cssSelector` widens `highlightAll()`'s default `pre code` match: diff
+// lines wrap their `<code>` in a `<span>`/`<td>`, not a `<pre>`, so the
+// default selector would silently skip every one of them.
+if (window.hljs) {
+  hljs.configure({ cssSelector: 'code[class*="language-"]' });
+  hljs.highlightAll();
+
+  // Line numbers only for the blob view's single full-file block (diff
+  // lines are already one fragment per line -- numbering them the same way
+  // would just repeat what the diff's own gutter already shows). Sync, not
+  // the plugin's default async (`setTimeout`) variant: this runs once at
+  // load, nothing else needs to happen before the numbered rows exist.
+  const blobCode = document.getElementById("blob-code");
+  if (blobCode && window.hljs.lineNumbersBlockSync) {
+    hljs.lineNumbersBlockSync(blobCode);
+    // The plugin numbers rows but doesn't link them -- `blob.rs`'s own
+    // permalink convention (`#L42`, also `blame.rs`'s row ids) still needs
+    // a real `id` on each row and a real `<a>` a reader can click/copy, so
+    // this fills in both from the `data-line-number` the plugin already
+    // stamped on each number cell.
+    blobCode.querySelectorAll(".hljs-ln-numbers").forEach((cell) => {
+      const n = cell.dataset.lineNumber;
+      const row = cell.closest("tr");
+      if (row) {
+        row.id = `L${n}`;
+      }
+      const numberBox = cell.querySelector(".hljs-ln-n");
+      if (numberBox && !numberBox.firstChild) {
+        const link = document.createElement("a");
+        link.href = `#L${n}`;
+        link.textContent = n;
+        numberBox.appendChild(link);
+      }
+    });
+    // The target row's real `id` only exists as of the loop above -- a
+    // page load that already carried `#L42` in its URL (a shared
+    // permalink, not a same-page click) needs its own scroll now, since
+    // the browser's own initial scroll-to-fragment ran before this
+    // deferred script did.
+    if (location.hash) {
+      document.getElementById(location.hash.slice(1))?.scrollIntoView();
+    }
+  }
+}
