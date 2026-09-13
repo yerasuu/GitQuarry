@@ -117,7 +117,7 @@ pub(crate) async fn handler_toggle_diff_view(headers: HeaderMap, Form(form): For
 pub fn render_diff_view_buttons(return_to: &str, current: DiffView) -> String {
     maud::html! {
         @for (view, label) in [(DiffView::Unified, "unified"), (DiffView::Split, "side by side")] {
-            form method="post" action="/_prefs/diff_view" style="display:inline" {
+            form method="post" action="/_prefs/diff_view" class="inline-form" {
                 input type="hidden" name="view" value=(view.as_cookie());
                 input type="hidden" name="return_to" value=(return_to);
                 button type="submit" class={"size-btn" @if view == current { " active" }} { (label) }
@@ -130,7 +130,7 @@ pub fn render_diff_view_buttons(return_to: &str, current: DiffView) -> String {
 pub(crate) fn render_diff_view_buttons(return_to: &str, current: DiffView) -> String {
     maud::html! {
         @for (view, label) in [(DiffView::Unified, "unified"), (DiffView::Split, "side by side")] {
-            form method="post" action="/_prefs/diff_view" style="display:inline" {
+            form method="post" action="/_prefs/diff_view" class="inline-form" {
                 input type="hidden" name="view" value=(view.as_cookie());
                 input type="hidden" name="return_to" value=(return_to);
                 button type="submit" class={"size-btn" @if view == current { " active" }} { (label) }

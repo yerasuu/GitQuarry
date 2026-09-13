@@ -9,9 +9,6 @@
 //! the repo index ([`handler_index`]) and the per-repo dispatcher
 //! ([`handler_repo`]) that picks a view by `?view=` and calls its `render_*`.
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod activity;
-#[cfg(not(any(test, feature = "test-util")))]
 mod activity;
 pub(crate) mod blame;
 pub(crate) mod blob;
@@ -25,11 +22,12 @@ mod compare;
 pub mod components;
 #[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod components;
+mod diff;
 pub(crate) mod log;
 #[cfg(any(test, feature = "test-util"))]
-pub mod pulls;
+pub mod merges;
 #[cfg(not(any(test, feature = "test-util")))]
-pub(crate) mod pulls;
+pub(crate) mod merges;
 #[cfg(any(test, feature = "test-util"))]
 pub mod refs;
 #[cfg(not(any(test, feature = "test-util")))]
@@ -68,7 +66,7 @@ use compare::render_compare;
 pub use log::render_log;
 #[cfg(not(any(test, feature = "test-util")))]
 use log::render_log;
-use pulls::{NewPullFormValues, render_new_pull_form, render_pull_detail, render_pulls_list};
+use merges::{NewMergeFormValues, render_merge_detail, render_merges_list, render_new_merge_form};
 #[cfg(any(test, feature = "test-util"))]
 pub use refs::render_refs;
 #[cfg(not(any(test, feature = "test-util")))]
@@ -86,7 +84,8 @@ use tree::render_tree;
 
 use super::{
     AppError, HeaderExtras, Page, State_, compound_path, effective_density, effective_locale, effective_theme,
-    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_link, repo_settings, url_encode,
+    header_bar, layout, render_repo_action_buttons, render_text_size_buttons, repo_label, repo_link, repo_settings,
+    url_encode,
 };
 use crate::auth::web::login;
 use crate::settings::web::require_admin;
@@ -95,10 +94,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use gitquarry_core::app::AppContext;
+use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::{git, storage, validate};
-use std::collections::HashMap;
+use gitquarry_core::{domain, git, storage, validate};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -113,6 +113,13 @@ pub(crate) const SUMMARY_REFS_LIMIT: usize = 5;
 /// memory and highlighting/escaping it multiplies its size several times
 /// over. `export::plain` has its own, larger cap for raw downloads.
 const MAX_BLOB_BYTES: u64 = 1 << 20;
+/// How much of a commit's patch the commit page renders before handing the
+/// reader the raw patch instead. Same reasoning as [`MAX_BLOB_BYTES`] and
+/// the same order of magnitude — escaping and colorizing a diff several
+/// times its own size, then asking a browser to lay it out, is the cost
+/// being bounded, not git's own work. `export::patch`/`export::rawdiff`
+/// stay uncapped.
+const MAX_DIFF_BYTES: u64 = 512 << 10;
 
 /// One index row's worth of `RepoConfig`, not the whole thing: the index
 /// only ever needs these three, and threading the full config through would
@@ -120,11 +127,168 @@ const MAX_BLOB_BYTES: u64 = 1 << 20;
 /// repo's own page, not the list of all of them.
 struct IndexRepo {
     name: String,
+    /// What every row renders ([`crate::webui::repo_label::repo_label`]),
+    /// while `name` above stays the string the row's href is built from.
+    /// Derived once here rather than per render site: this page renders each
+    /// row twice (cards and the compact table), sorts and filters on it too.
+    label: String,
     description: Option<String>,
     archived: bool,
     topics: std::collections::BTreeSet<String>,
     star_count: u32,
     primary_language: Option<String>,
+    last_push: Option<u64>,
+    last_push_commits: Option<u32>,
+    last_push_branch: Option<String>,
+}
+
+/// Compact stamp ("2h", "3d") for the sidebar's own `<time>` column and the
+/// compact table's dense `.rl-meta` row, both too tight for full words —
+/// coarse, single-unit buckets rather than a full duration breakdown.
+/// Unlocalized like the rest of this fragment already is (`results`, below,
+/// has no `locale` in scope — see its own doc comment): threading one
+/// through just for this string would be the only i18n on an otherwise-
+/// English page.
+#[cfg(any(test, feature = "test-util"))]
+pub fn relative_time_ago(then: u64, now: u64) -> String {
+    relative_time_ago_impl(then, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+pub(crate) fn relative_time_ago(then: u64, now: u64) -> String {
+    relative_time_ago_impl(then, now)
+}
+fn relative_time_ago_impl(then: u64, now: u64) -> String {
+    let diff = now.saturating_sub(then);
+    if diff < 60 {
+        return "just now".to_string();
+    }
+    let (value, unit) = if diff < 3600 {
+        (diff / 60, "m")
+    } else if diff < 86400 {
+        (diff / 3600, "h")
+    } else if diff < 604_800 {
+        (diff / 86400, "d")
+    } else if diff < 2_629_800 {
+        (diff / 604_800, "w")
+    } else if diff < 31_557_600 {
+        (diff / 2_629_800, "mo")
+    } else {
+        (diff / 31_557_600, "y")
+    };
+    format!("{value}{unit} ago")
+}
+
+/// Full-words form ("updated 3 hours ago", "updated yesterday") for the
+/// repo card's own meta line — that line has room `relative_time_ago`'s
+/// compact stamp doesn't need to save, and reads better spelled out next to
+/// the language name and star count it sits beside.
+#[cfg(any(test, feature = "test-util"))]
+pub fn relative_time_words(then: u64, now: u64) -> String {
+    relative_time_words_impl(then, now)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn relative_time_words(then: u64, now: u64) -> String {
+    relative_time_words_impl(then, now)
+}
+fn relative_time_words_impl(then: u64, now: u64) -> String {
+    let diff = now.saturating_sub(then);
+    fn plural(n: u64, unit: &str) -> String {
+        format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+    }
+    if diff < 60 {
+        return "just now".to_string();
+    }
+    if diff < 3600 {
+        return plural(diff / 60, "minute");
+    }
+    if diff < 86400 {
+        return plural(diff / 3600, "hour");
+    }
+    if diff < 172_800 {
+        return "yesterday".to_string();
+    }
+    if diff < 604_800 {
+        return plural(diff / 86400, "day");
+    }
+    if diff < 2_629_800 {
+        return plural(diff / 604_800, "week");
+    }
+    if diff < 31_557_600 {
+        return plural(diff / 2_629_800, "month");
+    }
+    plural(diff / 31_557_600, "year")
+}
+
+/// One entry in the home page's "recent activity" sidebar — deliberately
+/// only these three: a push to a repo's default branch (`IndexRepo::last_push`
+/// et al, never `storage::audit`, see that field's own doc comment), a
+/// release, or a merged MR. All three read as "important code changed" the
+/// way GitHub's own dashboard activity does; everything else `storage::audit`
+/// tracks (config saves, permission grants, star/watch toggles, ...) is
+/// exactly what a repo's own `?view=activity` page deliberately dropped —
+/// pulling it back in here just because this widget also touches `audit`
+/// for release/MR entries would undo that.
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityKind {
+    Push { commits: u32, branch: Option<String> },
+    Release { tag: String },
+    MrMerged { number: u64 },
+}
+#[cfg(not(any(test, feature = "test-util")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActivityKind {
+    Push { commits: u32, branch: Option<String> },
+    Release { tag: String },
+    MrMerged { number: u64 },
+}
+
+impl ActivityKind {
+    pub fn describe(&self) -> String {
+        match self {
+            ActivityKind::Push { commits, branch } => {
+                let plural = if *commits == 1 { "" } else { "s" };
+                match branch {
+                    Some(b) => format!("{commits} commit{plural} pushed to {b}"),
+                    None => format!("{commits} commit{plural} pushed"),
+                }
+            }
+            ActivityKind::Release { tag } => format!("tagged {tag}"),
+            ActivityKind::MrMerged { number } => format!("MR #{number} merged"),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityItem {
+    pub repo: String,
+    pub at: u64,
+    pub kind: ActivityKind,
+}
+#[cfg(not(any(test, feature = "test-util")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActivityItem {
+    repo: String,
+    at: u64,
+    kind: ActivityKind,
+}
+
+/// Newest-first, capped at `limit` — the merge-sort half of the sidebar,
+/// split out from the audit-reading/`IndexRepo`-scanning half above it so
+/// it's testable without either.
+#[cfg(any(test, feature = "test-util"))]
+pub fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    top_recent_activity_impl(items, limit)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    top_recent_activity_impl(items, limit)
+}
+fn top_recent_activity_impl(mut items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+    items.sort_by_key(|i| std::cmp::Reverse(i.at));
+    items.truncate(limit);
+    items
 }
 
 pub(crate) async fn handler_index(
@@ -134,7 +298,18 @@ pub(crate) async fn handler_index(
 ) -> Page {
     let viewer_logged_in = login::current_user(&ctx, &headers).await.is_some();
     let mut repos = list_visible_repos(&ctx, viewer_logged_in).await?;
-    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sorted on the label, not the slug: the rows below are ordered by what
+    // the reader can actually see. Namespaces stay contiguous either way —
+    // a label keeps its `<namespace>/` prefix.
+    repos.sort_by(|a, b| a.label.cmp(&b.label));
+    // Both stay unaffected by `?q=` below: they describe the whole visible
+    // set, not the current search/filter.
+    let repo_count = repos.len();
+    let ns_count = repos
+        .iter()
+        .filter_map(|r| r.name.rsplit_once('/').map(|(ns, _)| ns))
+        .collect::<HashSet<_>>()
+        .len();
 
     let q = params.get("q").map(String::as_str).unwrap_or("");
     let q_lower = q.to_ascii_lowercase();
@@ -145,6 +320,9 @@ pub(crate) async fn handler_index(
         .filter(|r| {
             q.is_empty()
                 || r.name.to_ascii_lowercase().contains(&q_lower)
+                // Matched on the label too, not just the slug — otherwise
+                // typing what's on screen finds nothing.
+                || r.label.to_ascii_lowercase().contains(&q_lower)
                 || r.topics.iter().any(|t| t.contains(&q_lower))
         })
         .collect();
@@ -156,12 +334,27 @@ pub(crate) async fn handler_index(
     let rows: Vec<(Option<&str>, &IndexRepo)> = filtered
         .iter()
         .map(|repo| {
-            let ns = repo.name.split_once('/').map(|(ns, _)| ns);
+            let ns = repo.name.rsplit_once('/').map(|(ns, _)| ns);
             let header = if ns != last_ns { ns } else { None };
             last_ns = ns;
             (header, *repo)
         })
         .collect();
+
+    // Per-card ssh clone hint (cards view only) — same host/port derivation
+    // `summary::render_clone_urls` uses for a single repo's own clone table,
+    // just inlined here instead of reused: that helper renders a whole
+    // `<h3>+table>`, not a bare string, so there's nothing smaller to call.
+    let ssh_host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.split(':').next())
+        .unwrap_or("<host>");
+    let ssh_port = ctx.ssh_bind.rsplit_once(':').map(|(_, p)| p).unwrap_or(&ctx.ssh_bind);
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     // `#repo-list`'s own inner content, factored out so the async path below
     // (live search-as-you-type, `style/app.js`'s `data-live-search`) can
@@ -179,26 +372,74 @@ pub(crate) async fn handler_index(
                 }
                 div class="card card-pad repo-card" {
                     div class="repo-card-title" {
-                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.name) }
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.label) }
                         @if repo.archived {
                             " " span class="badge" { "archived" }
                         }
                         (maud::PreEscaped(super::topic_badges(&repo.topics)))
+                        code class="clone-url" { "ssh://" (ssh_host) ":" (ssh_port) "/" (repo.name) }
                     }
                     @if let Some(desc) = &repo.description {
                         @if !desc.is_empty() {
                             p class="repo-card-desc" { (desc) }
                         }
                     }
-                    @if repo.star_count > 0 || repo.primary_language.is_some() {
+                    @if repo.star_count > 0 || repo.primary_language.is_some() || repo.last_push.is_some() {
                         div class="repo-card-meta" {
                             @if let Some(lang) = &repo.primary_language {
-                                span class="lang-swatch" style=(format!("background:{}", summary::language_color(lang))) {}
-                                span { (lang) }
+                                span {
+                                    span class=(format!("lang-swatch {}", summary::language_class(lang))) {}
+                                    (lang)
+                                }
                             }
                             @if repo.star_count > 0 {
                                 span { (repo.star_count) " \u{2605}" }
                             }
+                            @if let Some(last_push) = repo.last_push {
+                                span { "updated " (relative_time_words(last_push, now_unix)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Same rows, cgit-flavored dense table instead of cards — CSS-only
+        // swap (`base.css`'s `[data-density='airy']` rule), same pattern as
+        // `.header-lang`/`.sidebar-lang` already use for this axis: both
+        // markups always render, `data-density` on `<html>` picks which one
+        // is visible, no JS needed to switch view when the toggle fires.
+        div class="repo-list-compact" {
+            @for (header, repo) in &rows {
+                @if let Some(ns) = header {
+                    p class="repo-cards-ns" { (ns) }
+                }
+                div class="rl-row" {
+                    div class="rl-name" {
+                        a href=(format!("/{}", url_encode(&repo.name))) { (repo.label) }
+                        @if repo.archived {
+                            " " span class="badge" { "archived" }
+                        }
+                    }
+                    div class="rl-desc" {
+                        @if let Some(desc) = &repo.description {
+                            @if !desc.is_empty() {
+                                (desc)
+                            }
+                        }
+                    }
+                    div class="rl-topics" { (maud::PreEscaped(super::topic_badges(&repo.topics))) }
+                    div class="rl-meta" {
+                        @if let Some(lang) = &repo.primary_language {
+                            span {
+                                span class=(format!("lang-swatch {}", summary::language_class(lang))) {}
+                                (lang)
+                            }
+                        }
+                        @if repo.star_count > 0 {
+                            span { (repo.star_count) " \u{2605}" }
+                        }
+                        @if let Some(last_push) = repo.last_push {
+                            span class="muted" { (relative_time_ago(last_push, now_unix)) }
                         }
                     }
                 }
@@ -208,13 +449,118 @@ pub(crate) async fn handler_index(
     if headers.contains_key(super::ASYNC_HEADER) {
         return Ok(Html(results.into_string()));
     }
-    let body = maud::html! {
-        form method="get" action="/" data-async data-live-search="#repo-list" {
-            input name="q" value=(q) placeholder="search repos or topics";
-            button type="submit" { "search" }
+    // Chrome around `results` that only a full page load needs — skipped on
+    // the live-search fragment above, same reasoning `results` itself is
+    // factored out for: no point re-fetching the user count or walking the
+    // audit log on every keystroke.
+    let user_count = access::list_usernames(ctx.backend().as_ref())
+        .await
+        .map(|names| names.len())
+        .unwrap_or(0);
+    // Pushes come from each repo's own `last_push*` fields (see
+    // `ActivityKind`'s own doc comment for why, never generic `storage::audit`
+    // noise); releases and merged MRs are the two `storage::audit` actions
+    // narrow and code-relevant enough to earn a deliberate exception. Same
+    // visibility `repos` already has from `list_visible_repos` above, so
+    // this can never surface a repo the viewer couldn't otherwise see.
+    let visible_names: HashSet<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+    let mut activity: Vec<ActivityItem> = repos
+        .iter()
+        .filter_map(|r| {
+            Some(ActivityItem {
+                repo: r.name.clone(),
+                at: r.last_push?,
+                kind: ActivityKind::Push {
+                    commits: r.last_push_commits.unwrap_or(0),
+                    branch: r.last_push_branch.clone(),
+                },
+            })
+        })
+        .collect();
+    for e in storage::audit::list_recent(&ctx.backend(), &ctx.cipher)
+        .await
+        .unwrap_or_default()
+    {
+        let Some(at) = gitquarry_mirror_external::stamp::to_unix(&e.at).and_then(|s| u64::try_from(s).ok()) else {
+            continue;
+        };
+        match e.action.as_str() {
+            "release.create" => {
+                if let Some((repo, tag)) = e.target.rsplit_once('@')
+                    && visible_names.contains(repo)
+                {
+                    activity.push(ActivityItem {
+                        repo: repo.to_string(),
+                        at,
+                        kind: ActivityKind::Release { tag: tag.to_string() },
+                    });
+                }
+            }
+            "merge_request.merge" => {
+                if let Some((repo, number)) = e.target.rsplit_once('#')
+                    && visible_names.contains(repo)
+                    && let Ok(number) = number.parse::<u64>()
+                {
+                    activity.push(ActivityItem {
+                        repo: repo.to_string(),
+                        at,
+                        kind: ActivityKind::MrMerged { number },
+                    });
+                }
+            }
+            _ => {}
         }
-        p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
-        div id="repo-list" { (results) }
+    }
+    let recent_activity = top_recent_activity(activity, 5);
+    // `ActivityItem::repo` is a `full_name` (it's also built from audit
+    // targets, which only ever carry that), so the sidebar looks its label
+    // back up here rather than carrying one per item.
+    let labels: HashMap<&str, &str> = repos.iter().map(|r| (r.name.as_str(), r.label.as_str())).collect();
+    let all_topics: std::collections::BTreeSet<String> = repos.iter().flat_map(|r| r.topics.iter().cloned()).collect();
+    let body = maud::html! {
+        div class="stats-strip" {
+            div class="stat" { div class="n" { (repo_count) } div class="l" { "repositories" } }
+            div class="stat" { div class="n" { (ns_count) } div class="l" { "namespaces" } }
+            div class="stat" { div class="n" { (user_count) } div class="l" { "users" } }
+            div class="stat" { div class="n" { "v" (env!("CARGO_PKG_VERSION")) } div class="l" { "server" } }
+        }
+        div class="repo-layout" {
+            div class="repo-main" {
+                div class="controls-row" {
+                    form method="get" action="/" data-async data-live-search="#repo-list" {
+                        input name="q" value=(q) placeholder="search repos or topics";
+                        button type="submit" { "search" }
+                    }
+                    a class="btn" href="/_new" { "+ new repo" }
+                }
+                p class="muted" { a href="/_search" { "search filenames and commits across every repo" } }
+                div id="repo-list" { (results) }
+            }
+            aside class="repo-sidebar" {
+                @if !recent_activity.is_empty() {
+                    div class="card card-pad sidebar-box" {
+                        h4 class="sidebar-box-title" { "recent activity" }
+                        ul class="index-activity" {
+                            @for item in &recent_activity {
+                                li {
+                                    time { (relative_time_ago(item.at, now_unix)) }
+                                    div {
+                                        a href=(format!("/{}", url_encode(&item.repo))) { (labels.get(item.repo.as_str()).copied().unwrap_or(item.repo.as_str())) }
+                                        " " span class="verb" { "— " (item.kind.describe()) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                @if !all_topics.is_empty() {
+                    div class="card card-pad sidebar-box" {
+                        h4 class="sidebar-box-title" { "browse by topic" }
+                        div class="index-topics" { (maud::PreEscaped(super::topic_badges(&all_topics))) }
+                    }
+                }
+            }
+        }
     }
     .into_string();
     let topnav = login::topnav(&ctx, &headers).await;
@@ -247,7 +593,10 @@ pub(crate) async fn handler_index(
 /// turned `Private` might still be in it until the next config write
 /// self-heals it), never trusted on its own for a privacy decision.
 async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<Vec<IndexRepo>> {
-    let uids = storage::settings::list_visible_repo_uids(ctx.backend().as_ref()).await?;
+    // Short-TTL-cached (`AppContext::visible_repo_uids`'s own doc comment):
+    // this is a `list_prefix` call, which `CachedBackend` never caches, so
+    // it used to hit the backend fresh on every single index/search render.
+    let uids = ctx.visible_repo_uids().await?;
     let mut set = JoinSet::new();
     for uid in uids {
         let backend = ctx.backend();
@@ -255,12 +604,17 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         set.spawn(async move {
             // A fetch error hides the repo rather than showing it: fail
             // closed on a privacy check, not open.
-            storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await
+            let (config, etag) = storage::settings::get_repo_config(backend.as_ref(), uid.as_str(), &cipher).await?;
+            // First uid-based load of a repo predating `display_name`
+            // backfills it (and its slug, if drifted) — see
+            // `domain::repo::backfill_slug`'s own doc comment for why this
+            // has to happen on a listing rather than on a resolve-by-path.
+            anyhow::Ok(domain::repo::backfill_slug(backend, cipher, &uid, config, etag).await)
         });
     }
     let mut visible = Vec::new();
     while let Some(result) = set.join_next().await {
-        let Ok(Ok((config, _etag))) = result else { continue };
+        let Ok(Ok(config)) = result else { continue };
         let show = match config.visibility {
             Visibility::Public => true,
             Visibility::Limited => viewer_logged_in,
@@ -268,27 +622,35 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         };
         if show {
             visible.push(IndexRepo {
+                label: crate::webui::repo_label(&config.full_name, config.display_name.as_deref()),
                 name: config.full_name,
                 description: config.description,
                 archived: config.archived,
                 topics: config.topics,
                 star_count: config.star_count,
                 primary_language: config.primary_language,
+                last_push: config.last_push,
+                last_push_commits: config.last_push_commits,
+                last_push_branch: config.last_push_branch,
             });
         }
     }
     Ok(visible)
 }
 
-/// Just the names out of [`list_visible_repos`] — what `search::web` needs
-/// to fan a cross-repo search out over, without exposing [`IndexRepo`]
-/// (private to this module, and its `archived`/`topics`/`star_count` fields
-/// are index-page-only concerns search has no use for).
-pub(crate) async fn visible_repo_names(ctx: &AppContext, viewer_logged_in: bool) -> Result<Vec<String>> {
+/// Just the `(full_name, label)` pairs out of [`list_visible_repos`] — what
+/// `search::web` needs to fan a cross-repo search out over (the name) and to
+/// label the hits it gets back, without exposing [`IndexRepo`] (private to
+/// this module, and its `archived`/`topics`/`star_count` fields are
+/// index-page-only concerns search has no use for).
+pub(crate) async fn visible_searchable_repos(
+    ctx: &AppContext,
+    viewer_logged_in: bool,
+) -> Result<Vec<(String, String)>> {
     Ok(list_visible_repos(ctx, viewer_logged_in)
         .await?
         .into_iter()
-        .map(|r| r.name)
+        .map(|r| (r.name, r.label))
         .collect())
 }
 
@@ -324,7 +686,7 @@ pub(crate) async fn can_view_repo(
 pub(crate) fn require_sha(params: &HashMap<String, String>, locale: gitquarry_i18n::Locale) -> Result<&str, AppError> {
     let sha = params
         .get("sha")
-        .context(gitquarry_i18n::shared::missing_sha_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_sha_param(locale))
         .map_err(AppError::bad_request)?;
     validate::validate_sha(sha).map_err(AppError::bad_request)?;
     Ok(sha.as_str())
@@ -333,7 +695,7 @@ pub(crate) fn require_sha(params: &HashMap<String, String>, locale: gitquarry_i1
 pub(crate) fn require_tag(params: &HashMap<String, String>, locale: gitquarry_i18n::Locale) -> Result<&str, AppError> {
     let tag = params
         .get("tag")
-        .context(gitquarry_i18n::shared::missing_tag_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_tag_param(locale))
         .map_err(AppError::bad_request)?;
     validate::validate_rev(tag).map_err(AppError::bad_request)?;
     Ok(tag.as_str())
@@ -346,7 +708,7 @@ pub(crate) fn require_number(
     params
         .get("number")
         .and_then(|s| s.parse().ok())
-        .context(gitquarry_i18n::shared::missing_number_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_number_param(locale))
         .map_err(AppError::bad_request)
 }
 
@@ -357,7 +719,7 @@ pub(crate) fn require_filename(
     params
         .get("filename")
         .map(String::as_str)
-        .context(gitquarry_i18n::shared::missing_filename_param(locale))
+        .context(gitquarry_i18n::shared::repo::missing_filename_param(locale))
         .map_err(AppError::bad_request)
 }
 
@@ -405,7 +767,7 @@ pub(crate) async fn handler_repo(
     let Some(resolved) = ctx.resolve_repo(&name).await? else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     };
 
@@ -418,7 +780,7 @@ pub(crate) async fn handler_repo(
     let owner = owner.as_deref();
 
     let view = params.get("view").map_or("about", String::as_str);
-    if view == "settings" {
+    if view == "settings" || view.starts_with("settings_") {
         // Exempt from the visibility check below: it's the only place
         // Private -> Public is reversible from, and (once logged in, if a
         // login method is configured — see the admin gate right below) this
@@ -435,6 +797,7 @@ pub(crate) async fn handler_repo(
             "settings",
             HeaderExtras {
                 description,
+                display_name: config.display_name.as_deref(),
                 archived: config.archived,
                 visibility: config.visibility,
                 branches: &[],
@@ -449,7 +812,10 @@ pub(crate) async fn handler_repo(
         let granted =
             gitquarry_core::auth::access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
         let (manifest, _etag) = resolved.remote.get_manifest().await?;
-        let body = repo_settings::render_settings_page(
+        let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
+        let mr_links_by_mirror = repo_settings::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
+        let body = repo_settings::render_settings_section(
+            view,
             &name,
             &config,
             owner.unwrap_or(""),
@@ -460,17 +826,20 @@ pub(crate) async fn handler_repo(
             repo_settings::RepoState {
                 manifest: &manifest,
                 granted: &granted,
+                mirrors: &mirrors_list,
+                mr_links: &mr_links_by_mirror,
             },
             repo_settings::PageChrome {
                 csrf: &crate::webui::csrf_field(&headers),
                 message: None,
+                pending_mirror_token: None,
                 retry: None,
                 locale,
             },
         )
         .into_string();
         return Ok(Html(layout(
-            &name,
+            &repo_label(&name, config.display_name.as_deref()),
             &header,
             &body,
             &topnav,
@@ -485,12 +854,12 @@ pub(crate) async fn handler_repo(
         // is merely hidden vs. genuinely absent.
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
-            gitquarry_i18n::shared::repo_not_found_in_bucket(locale, &name)
+            gitquarry_i18n::shared::repo::repo_not_found_in_bucket(locale, &name)
         )));
     }
 
     let topnav = login::topnav(&ctx, &headers).await;
-    let mirror = ctx.open_mirror(&resolved).await?;
+    let mirror = ctx.open_mirror_read(&resolved).await?;
 
     let Some(head) = git::browse::resolve_head(&mirror.path).await? else {
         let size = crate::webui::effective_text_size(&ctx, &headers).await;
@@ -506,6 +875,7 @@ pub(crate) async fn handler_repo(
             "about",
             HeaderExtras {
                 description,
+                display_name: config.display_name.as_deref(),
                 archived: config.archived,
                 visibility: config.visibility,
                 branches: &[],
@@ -517,7 +887,7 @@ pub(crate) async fn handler_repo(
         );
         let body = empty_repo_body(&ctx, &name, &headers).await?;
         return Ok(Html(layout(
-            &name,
+            &repo_label(&name, config.display_name.as_deref()),
             &header,
             &body,
             &topnav,
@@ -553,11 +923,11 @@ pub(crate) async fn handler_repo(
 }
 
 /// Reads `filename` from the repo's default branch tree, if any — the
-/// pre-fill source for `new_issue`/`new_pull`'s body/description textarea
-/// (`ISSUE_TEMPLATE.md`/`PULL_REQUEST_TEMPLATE.md`, GitHub's own file
+/// pre-fill source for `new_issue`/`new_merge`'s body/description textarea
+/// (`ISSUE_TEMPLATE.md`/`MERGE_REQUEST_TEMPLATE.md`, GitHub's own file
 /// names and root-level-only location). `None` for a missing file, a repo
 /// with no default branch yet, or any git error — this is a convenience,
-/// never something worth failing the new-issue/new-PR page render over.
+/// never something worth failing the new-issue/new-MR page render over.
 async fn read_repo_template(
     resolved: &gitquarry_core::app::ResolvedRepo,
     mirror_path: &std::path::Path,
@@ -597,7 +967,7 @@ async fn render_repo_view(
         "about" | "activity" => "about",
         "summary" => "summary",
         "releases" | "release" => "releases",
-        "pulls" | "pull" | "new_pull" => "pulls",
+        "merges" | "merge" | "new_merge" => "merges",
         _ => "tree", // tree, blob, blame
     };
     let density = effective_density(ctx, headers).await;
@@ -639,6 +1009,7 @@ async fn render_repo_view(
         active_tab,
         HeaderExtras {
             description,
+            display_name: config.display_name.as_deref(),
             archived: config.archived,
             visibility: config.visibility,
             branches: &branches,
@@ -655,29 +1026,51 @@ async fn render_repo_view(
         "summary" => render_summary(ctx, &mirror.path, &name, rev, headers).await?,
         "activity" => render_activity(ctx, &mirror.path, &name, rev, locale).await?,
         "refs" => render_refs(ctx, &mirror.path, &name, headers, None, None, locale).await?,
-        "tree" => render_tree(ctx, &mirror.path, &name, rev, path, locale).await?,
-        "blob" => render_blob(&mirror.path, &name, rev, path, locale).await?,
+        "tree" => {
+            render_tree(
+                ctx,
+                &mirror.path,
+                &name,
+                config.display_name.as_deref(),
+                rev,
+                path,
+                locale,
+            )
+            .await?
+        }
+        "blob" => render_blob(&mirror.path, &name, config.display_name.as_deref(), rev, path, locale).await?,
         "log" => {
             let q = params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
             if let Some(q) = q {
                 validate::validate_query(q).map_err(AppError::bad_request)?;
             }
             let skip: usize = params.get("skip").and_then(|s| s.parse().ok()).unwrap_or(0);
-            render_log(ctx, &mirror.path, &name, rev, path, q, skip, locale).await?
+            render_log(
+                ctx,
+                &mirror.path,
+                &name,
+                config.display_name.as_deref(),
+                rev,
+                path,
+                q,
+                skip,
+                locale,
+            )
+            .await?
         }
         "commit" => {
             let sha = require_sha(params, locale)?;
-            let (info, diff) = git::browse::show_commit(&mirror.path, sha).await?;
-            render_commit(ctx, &mirror.path, &name, &info, &diff, headers).await?
+            let (info, diff, truncated) = git::browse::show_commit_capped(&mirror.path, sha, MAX_DIFF_BYTES).await?;
+            render_commit(ctx, &mirror.path, &name, &info, &diff, truncated, headers).await?
         }
         "compare" => {
             let base = params
                 .get("base")
-                .context(gitquarry_i18n::shared::missing_base_param(locale))
+                .context(gitquarry_i18n::shared::repo::missing_base_param(locale))
                 .map_err(AppError::bad_request)?;
             let head = params
                 .get("head")
-                .context(gitquarry_i18n::shared::missing_head_param(locale))
+                .context(gitquarry_i18n::shared::repo::missing_head_param(locale))
                 .map_err(AppError::bad_request)?;
             validate::validate_rev(base).map_err(AppError::bad_request)?;
             validate::validate_rev(head).map_err(AppError::bad_request)?;
@@ -689,27 +1082,28 @@ async fn render_repo_view(
             let tag = require_tag(params, locale)?;
             render_release_detail(ctx, &resolved, &name, tag, headers, locale).await?
         }
-        "pulls" => {
+        "merges" => {
             let status = params.get("status").map(String::as_str).unwrap_or("open");
             let q = params.get("q").filter(|q| !q.is_empty()).map(String::as_str);
             if let Some(q) = q {
                 validate::validate_query(q).map_err(AppError::bad_request)?;
             }
-            render_pulls_list(ctx, &resolved, &name, status, q, headers, locale).await?
+            render_merges_list(ctx, &resolved, &name, status, q, headers, locale).await?
         }
-        "pull" => {
+        "merge" => {
             let number = require_number(params, locale)?;
-            render_pull_detail(ctx, &resolved, &name, &mirror.path, number, params, headers, locale).await?
+            render_merge_detail(ctx, &resolved, &name, &mirror.path, number, params, headers, locale).await?
         }
-        "new_pull" => {
+        "new_merge" => {
             let refs = git::list_refs(&mirror.path).await?;
             let ref_names: Vec<&str> = refs.iter().filter_map(|r| r.strip_prefix("refs/heads/")).collect();
-            let template = read_repo_template(&resolved, &mirror.path, "PULL_REQUEST_TEMPLATE.md").await;
-            render_new_pull_form(
+            let template = read_repo_template(&resolved, &mirror.path, "MERGE_REQUEST_TEMPLATE.md").await;
+            render_new_merge_form(
                 &name,
+                &resolved.uid,
                 &ref_names,
                 template.as_deref(),
-                NewPullFormValues {
+                NewMergeFormValues {
                     source_repo: "",
                     source_branch: "",
                     target_branch: "",
@@ -726,19 +1120,22 @@ async fn render_repo_view(
             if path.is_empty() {
                 return Err(AppError::bad_request(anyhow::anyhow!(
                     "{}",
-                    gitquarry_i18n::shared::blame_requires_path(locale)
+                    gitquarry_i18n::shared::repo::blame_requires_path(locale)
                 )));
             }
-            render_blame(&mirror.path, &name, rev, path, locale).await?
+            render_blame(&mirror.path, &name, config.display_name.as_deref(), rev, path, locale).await?
         }
         other => {
             return Err(AppError::bad_request(anyhow::anyhow!(
                 "{}",
-                gitquarry_i18n::shared::unknown_view(locale, other)
+                gitquarry_i18n::shared::repo::unknown_view(locale, other)
             )));
         }
     };
-    Ok(Html(layout(&name, &header, &body, topnav, theme, density, locale)).into_response())
+    // The browser tab reads the repo's public name, same as the heading —
+    // the slug is already in the url right next to it.
+    let title = repo_label(&name, config.display_name.as_deref());
+    Ok(Html(layout(&title, &header, &body, topnav, theme, density, locale)).into_response())
 }
 
 /// `git push` never happened yet (see [`git::browse::resolve_head`]) — same

@@ -1,22 +1,21 @@
 //! The default view (`?view=summary`): clone URLs, README, a handful of
 //! branches/tags, and recent commits — the "front page" of a single repo.
 
-use super::components::{commit_avatars, commit_table_with_stats, ref_avatars, ref_table, split_refs};
+use super::components::{commit_avatars, commit_table_with_stats, ref_avatars, ref_table, split_refs, width_class};
 use super::{MAX_BLOB_BYTES, RECENT_LOG_LIMIT, SUMMARY_REFS_LIMIT};
 use crate::auth::web::login;
 use crate::webui::{
     effective_locale, effective_text_size, esc, github_blob_link, icons, markdown, raw_link, repo_link, topic_badges,
     url_encode,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
-use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::{Group, User};
 use gitquarry_core::git;
 use gitquarry_core::storage;
 use gitquarry_core::storage::entities::RepoConfig;
-use gitquarry_i18n::web::repo_summary as t;
+use gitquarry_i18n::web::repo::summary as t;
 use maud::{Markup, PreEscaped, html};
 use std::path::Path as FsPath;
 
@@ -110,16 +109,36 @@ pub(super) async fn render_about(
     // etag (source deleted) or errors just omits the line below, instead of
     // rendering a dead link. Recovers the source's current name too, so
     // this line survives the source being renamed any number of times.
-    let forked_from_name = match &config.forked_from {
+    let forked_from = match &config.forked_from {
         Some(uid) => storage::settings::get_repo_config(ctx.backend().as_ref(), uid.as_str(), &ctx.cipher)
             .await
             .ok()
             .filter(|(_, etag)| etag.is_some())
-            .map(|(source_config, _etag)| source_config.full_name),
+            .map(|(source_config, _etag)| {
+                let label = crate::webui::repo_label(&source_config.full_name, source_config.display_name.as_deref());
+                (source_config.full_name, label)
+            }),
         None => None,
     };
-    let readme = render_readme(bare_repo, rev).await?;
-    let sidebar = render_sidebar(ctx, resolved, bare_repo, repo_name, rev, headers, config, languages).await?;
+    // Fetched once and threaded through both calls below: `render_readme`
+    // and `render_sidebar` used to each `ls_tree` the root independently
+    // (and `render_sidebar` did it three more times internally, once per
+    // README/CONTRIBUTING/LICENSE lookup) — four subprocess spawns of the
+    // exact same listing on one page load.
+    let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
+    let readme = render_readme_from_entries(bare_repo, rev, &root_entries).await?;
+    let sidebar = render_sidebar(
+        ctx,
+        resolved,
+        bare_repo,
+        repo_name,
+        rev,
+        headers,
+        config,
+        languages,
+        &root_entries,
+    )
+    .await?;
 
     Ok(html! {
         // `id="about-body"`: `text_size.rs`'s `render_text_size_buttons`
@@ -132,12 +151,12 @@ pub(super) async fn render_about(
             div class="repo-layout" {
                 div class="repo-main" {
                     p {
-                        a href=(raw_link("snapshot", repo_name, rev).fmt("tar.gz").to_string()) { (gitquarry_i18n::shared::snapshot_tar_gz(locale)) }
+                        a href=(raw_link("snapshot", repo_name, rev).fmt("tar.gz").to_string()) { (gitquarry_i18n::shared::repo::snapshot_tar_gz(locale)) }
                         " · "
-                        a href=(raw_link("snapshot", repo_name, rev).fmt("zip").to_string()) { (gitquarry_i18n::shared::snapshot_zip(locale)) }
+                        a href=(raw_link("snapshot", repo_name, rev).fmt("zip").to_string()) { (gitquarry_i18n::shared::repo::snapshot_zip(locale)) }
                     }
-                    @if let Some(source_name) = &forked_from_name {
-                        p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_name) } }
+                    @if let Some((source_name, source_label)) = &forked_from {
+                        p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_label) } }
                     }
 
                     @if let Some(readme) = &readme {
@@ -210,16 +229,15 @@ const LICENSE_NAMES: &[&str] = &[
 ];
 
 /// Name of the root-level blob matching one of `candidates` (case-
-/// insensitive), or `None` if there's no such file at `rev`'s root. Shared
-/// by [`render_readme`] (which then loads and renders it) and
-/// [`render_community_box`] (which only needs to know a CONTRIBUTING file
-/// exists, not render it).
-async fn find_root_entry(bare_repo: &FsPath, rev: &str, candidates: &[&str]) -> Result<Option<String>> {
-    let entries = git::browse::ls_tree(bare_repo, rev, "").await?;
-    Ok(entries
-        .into_iter()
+/// insensitive) among an already-fetched root listing, or `None` if there's
+/// no such file. Pure lookup, no I/O — every caller shares one `ls_tree` of
+/// the root ([`render_about`]'s `root_entries`) instead of each fetching its
+/// own.
+fn find_root_entry(entries: &[git::browse::TreeEntry], candidates: &[&str]) -> Option<String> {
+    entries
+        .iter()
         .find(|e| e.kind == "blob" && candidates.contains(&e.name.to_ascii_lowercase().as_str()))
-        .map(|e| e.name))
+        .map(|e| e.name.clone())
 }
 
 /// Best-effort SPDX-ish identifier for the root license file's content, from
@@ -350,8 +368,25 @@ fn license_kind_from_text(text: &str) -> Option<&'static str> {
 /// Renders the root README as markdown (`.md`/`.markdown`) or as preformatted
 /// text otherwise. `None` if the repo has no README at `rev`'s root, it's too
 /// big, or it isn't valid UTF-8.
+///
+/// Only called from cross-crate `tests/*.rs` (`render_about` calls
+/// [`render_readme_from_entries`] directly instead, sharing one `ls_tree`)
+/// — dead outside `test-util`, which is what `cargo check` flags.
+#[cfg(any(test, feature = "test-util"))]
 pub async fn render_readme(bare_repo: &FsPath, rev: &str) -> Result<Option<String>> {
-    let Some(name) = find_root_entry(bare_repo, rev, README_NAMES).await? else {
+    let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
+    render_readme_from_entries(bare_repo, rev, &root_entries).await
+}
+
+/// [`render_readme`]'s body, taking an already-fetched root listing so
+/// [`render_about`] can share one `ls_tree` across this and
+/// [`render_sidebar`] instead of each doing their own.
+async fn render_readme_from_entries(
+    bare_repo: &FsPath,
+    rev: &str,
+    root_entries: &[git::browse::TreeEntry],
+) -> Result<Option<String>> {
+    let Some(name) = find_root_entry(root_entries, README_NAMES) else {
         return Ok(None);
     };
 
@@ -366,30 +401,44 @@ pub async fn render_readme(bare_repo: &FsPath, rev: &str) -> Result<Option<Strin
 
     let lower = name.to_ascii_lowercase();
     let rendered = if lower.ends_with(".md") || lower.ends_with(".markdown") {
-        markdown::render(text)
+        // Parsing + syntax-highlighting fenced code blocks is synchronous
+        // CPU work (same reasoning as `blob::render_blob`'s own
+        // `spawn_blocking` for a source file) — a large README with a lot
+        // of highlighted code shouldn't stall an async worker thread.
+        let owned_text = text.to_string();
+        tokio::task::spawn_blocking(move || markdown::render(&owned_text))
+            .await
+            .context("readme markdown rendering task panicked")?
     } else {
         format!("<pre>{}</pre>", esc(text))
     };
     Ok(Some(format!("<div id=\"readme\" class=\"readme\">{rendered}</div>")))
 }
 
-/// The star/watch/fork count row alone, `id="community-stats"` so the
-/// star/watch buttons' async toggle response (see `actions.rs`'s
+/// The star/watch/fork count row alone, `id="community-stats-{repo_uid}"` so
+/// the star/watch buttons' async toggle response (see `actions.rs`'s
 /// `data-async-extra-target`) can replace just this row in place — without
 /// an id to swap by, a click on either button would flip the button's own
 /// label but leave this row showing the pre-toggle count until a full
 /// reload, since the button (in the header) and this row (in the sidebar)
 /// are two different subtrees the single-target `data-async` swap can't
-/// reach at once.
-pub(crate) fn community_stats_html(config: &RepoConfig, locale: gitquarry_i18n::Locale) -> Markup {
+/// reach at once. `repo_uid` in every id here, not a fixed string: this is
+/// the entity `actions.rs`'s buttons resolve against too, so a page that
+/// ever ends up rendering more than one repo's stats (a list, not just this
+/// single-repo sidebar) still bumps the right one's count.
+pub(crate) fn community_stats_html(
+    config: &RepoConfig,
+    repo_uid: &gitquarry_core::storage::uid::Uid,
+    locale: gitquarry_i18n::Locale,
+) -> Markup {
     html! {
-        div id="community-stats" class="community-stats" {
-            // `id="star-count-value"`/`id="watcher-count-value"` around the
-            // number alone (not the icon/label): `actions.rs`'s
+        div id=(format!("community-stats-{repo_uid}")) class="community-stats" {
+            // `id="star-count-value-{repo_uid}"`/`"watcher-count-value-{repo_uid}"`
+            // around the number alone (not the icon/label): `actions.rs`'s
             // `data-optimistic-target` needs to bump just the digits, in
             // place, the instant star/watch is clicked.
-            span class="community-stat" { (icons::star()) " " span id="star-count-value" { (config.star_count) } " " (t::stars_label(locale)) }
-            span class="community-stat" { (icons::eye()) " " span id="watcher-count-value" { (config.watcher_count) } " " (t::watchers_label(locale)) }
+            span class="community-stat" { (icons::star()) " " span id=(format!("star-count-value-{repo_uid}")) { (config.star_count) } " " (t::stars_label(locale)) }
+            span class="community-stat" { (icons::eye()) " " span id=(format!("watcher-count-value-{repo_uid}")) { (config.watcher_count) } " " (t::watchers_label(locale)) }
             span class="community-stat" { (icons::fork()) " " (config.fork_count) " " (t::forks_label(locale)) }
         }
     }
@@ -404,11 +453,12 @@ pub(crate) fn community_stats_html(config: &RepoConfig, locale: gitquarry_i18n::
 /// (count only, linking to the releases tab — that tab already renders the
 /// full list, no need to duplicate release details here).
 ///
-/// Re-checks README existence itself (a plain `ls_tree` name lookup, not the
-/// full read+render [`render_readme`] already did for the caller) rather
-/// than taking it as one more parameter — keeps this function's arg count
-/// under clippy's `too_many_arguments` threshold without an arbitrary
-/// options-struct just to dodge the lint.
+/// Takes the caller's already-fetched root listing (`root_entries`) rather
+/// than re-`ls_tree`-ing the root itself for each of README/CONTRIBUTING/
+/// LICENSE — a lookup against a slice already in memory adds no argument-
+/// count pressure the way three more scalar fields would, so this still
+/// avoids the arbitrary options-struct [`render_about`]'s own doc comment
+/// reasons about.
 /// `config.fork_count`/`config.star_count` are the caller's already-loaded
 /// `RepoConfig` — see those fields' own doc comments for why neither is a
 /// bucket-wide scan anymore; unlike the old `access.json`-scan version, this
@@ -424,23 +474,23 @@ async fn render_sidebar(
     headers: &HeaderMap,
     config: &RepoConfig,
     languages: &[(String, u64)],
+    root_entries: &[git::browse::TreeEntry],
 ) -> Result<Markup> {
     let locale = effective_locale(ctx, headers).await;
-    let readme_exists = find_root_entry(bare_repo, rev, README_NAMES).await?.is_some();
-    let contributing_name = find_root_entry(bare_repo, rev, CONTRIBUTING_NAMES).await?;
-    let license_name = find_root_entry(bare_repo, rev, LICENSE_NAMES).await?;
+    let readme_exists = find_root_entry(root_entries, README_NAMES).is_some();
+    let contributing_name = find_root_entry(root_entries, CONTRIBUTING_NAMES);
+    let license_name = find_root_entry(root_entries, LICENSE_NAMES);
     let license_kind = match &license_name {
         Some(name) => detect_license_kind(bare_repo, rev, name).await?,
         None => None,
     };
     let viewer = login::current_user(ctx, headers).await;
-    // Only needed now for the fork form's namespace list ("every group I
-    // can manage") — the star count no longer depends on this fetch at all,
-    // and enumerating groups is unavoidable here: there's no reverse index
-    // from user to "groups I own", so the fork form has to look at all of
-    // them.
+    // Only needed for the fork form's namespace list ("every group I can
+    // manage") — read from the `user-group` index rather than by
+    // enumerating every group in the bucket, which is what this had to do
+    // before that index existed.
     let groups = match &viewer {
-        Some(_) => Some(access::list_all_groups(&ctx.backend(), &ctx.cipher).await?),
+        Some(me) => Some(crate::auth::web::groups::visible_groups(ctx, me).await?),
         None => None,
     };
     let release_count = resolved.remote.list_release_tags().await?.len();
@@ -468,7 +518,7 @@ async fn render_sidebar(
             // follows that same "only show what exists" convention for
             // readme/contributing/license), then a plain vertical list of
             // icon+link rows instead of a two-column label/value table.
-            (community_stats_html(config, locale))
+            (community_stats_html(config, &resolved.uid, locale))
             ul class="community-list" {
                 @if readme_exists {
                     li { (icons::book()) " " a href="#readme" { (t::readme_label(locale)) } }
@@ -508,81 +558,89 @@ async fn render_sidebar(
     })
 }
 
-/// The color GitHub's own Linguist assigns each language (`languages.yml`)
-/// — matches every name [`git::browse::language_for_extension`] can
-/// produce, so the language bar reads the same "Rust is orange, Python is
-/// blue" way GitHub's own repo page does, instead of an arbitrary hash-hue.
-/// `JSX` has no color of its own in Linguist (`.jsx` is just JavaScript
+/// The slug naming a language's colour class, for every name
+/// [`gitquarry_core::git::browse::language_for_extension`] can produce, so
+/// the language bar reads the same "Rust is orange, Python is blue" way
+/// GitHub's own repo page does instead of an arbitrary hash-hue. The
+/// colours themselves are Linguist's (`languages.yml`) and live in
+/// `style/utilities.css` as `.lang-c-<slug>`: a class, not a `style`
+/// attribute, because the CSP allows no inline styles and no nonce can
+/// cover an attribute. `tests/webui_csp.rs` fails if a slug here has no
+/// rule there.
+///
+/// `JSX` has no colour of its own in Linguist (`.jsx` is just JavaScript
 /// there) — reuses JavaScript's, the closest honest answer.
-fn linguist_color(name: &str) -> Option<&'static str> {
+fn known_language_slug(name: &str) -> Option<&'static str> {
     Some(match name {
-        "Rust" => "#dea584",
-        "Python" => "#3572A5",
-        "JavaScript" | "JSX" => "#f1e05a",
-        "TypeScript" => "#3178c6",
-        "TSX" => "#3178c6",
-        "Go" => "#00ADD8",
-        "Java" => "#b07219",
-        "Kotlin" => "#A97BFF",
-        "C" => "#555555",
-        "C++" => "#f34b7d",
-        "C#" => "#178600",
-        "Ruby" => "#701516",
-        "PHP" => "#4F5D95",
-        "Swift" => "#F05138",
-        "Scala" => "#c22d40",
-        "Haskell" => "#5e5086",
-        "Elixir" => "#6e4a7e",
-        "Erlang" => "#B83998",
-        "Lua" => "#000080",
-        "Perl" => "#0298c3",
-        "Shell" => "#89e051",
-        "PowerShell" => "#012456",
-        "SQL" => "#e38c00",
-        "HTML" => "#e34c26",
-        "CSS" => "#563d7c",
-        "SCSS" => "#c6538c",
-        "Vue" => "#41b883",
-        "Svelte" => "#ff3e00",
-        "JSON" => "#292929",
-        "YAML" => "#cb171e",
-        "TOML" => "#9c4221",
-        "Markdown" => "#083fa1",
-        "Dockerfile" => "#384d54",
-        "Nix" => "#7e7eff",
-        "Zig" => "#ec915c",
-        "Dart" => "#00B4AB",
-        "R" => "#198CE7",
-        "Julia" => "#a270ba",
+        "Rust" => "rust",
+        "Python" => "python",
+        "JavaScript" | "JSX" => "javascript",
+        "TypeScript" => "typescript",
+        "TSX" => "tsx",
+        "Go" => "go",
+        "Java" => "java",
+        "Kotlin" => "kotlin",
+        "C" => "c",
+        "C++" => "cpp",
+        "C#" => "cs",
+        "Ruby" => "ruby",
+        "PHP" => "php",
+        "Swift" => "swift",
+        "Scala" => "scala",
+        "Haskell" => "haskell",
+        "Elixir" => "elixir",
+        "Erlang" => "erlang",
+        "Lua" => "lua",
+        "Perl" => "perl",
+        "Shell" => "shell",
+        "PowerShell" => "powershell",
+        "SQL" => "sql",
+        "HTML" => "html",
+        "CSS" => "css",
+        "SCSS" => "scss",
+        "Vue" => "vue",
+        "Svelte" => "svelte",
+        "JSON" => "json",
+        "YAML" => "yaml",
+        "TOML" => "toml",
+        "Markdown" => "markdown",
+        "Dockerfile" => "dockerfile",
+        "Nix" => "nix",
+        "Zig" => "zig",
+        "Dart" => "dart",
+        "R" => "r",
+        "Julia" => "julia",
         _ => return None,
     })
 }
 
-/// Color for a language name — [`linguist_color`] when it's one of the
-/// languages [`git::browse::language_for_extension`] can produce, else a
-/// fixed hash-to-hue fallback (djb2-style) so an unrecognized name still
-/// gets a stable, distinct color instead of a missing one.
+/// The class carrying a language's colour: [`known_language_slug`]'s when
+/// Linguist names one, else one of twelve palette hues picked by a
+/// djb2-style hash of the name, so an unrecognized language still gets a
+/// stable, distinct colour instead of a missing one. Twelve and not one
+/// per hue because every one of them is a rule in `style/utilities.css`
+/// (see [`known_language_slug`] on why this can't be a `style` attribute).
 #[cfg(any(test, feature = "test-util"))]
-pub fn language_color(name: &str) -> String {
-    if let Some(hex) = linguist_color(name) {
-        return hex.to_string();
-    }
-    let mut hash: u32 = 5381;
-    for b in name.bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(u32::from(b));
-    }
-    format!("hsl({} 55% 45%)", hash % 360)
+pub fn language_class(name: &str) -> String {
+    language_class_impl(name)
 }
 #[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn language_color(name: &str) -> String {
-    if let Some(hex) = linguist_color(name) {
-        return hex.to_string();
+pub(super) fn language_class(name: &str) -> String {
+    language_class_impl(name)
+}
+
+/// How many `.lang-c-h*` fallback hues `style/utilities.css` defines.
+const FALLBACK_HUES: u32 = 12;
+
+fn language_class_impl(name: &str) -> String {
+    if let Some(slug) = known_language_slug(name) {
+        return format!("lang-c-{slug}");
     }
     let mut hash: u32 = 5381;
     for b in name.bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(u32::from(b));
     }
-    format!("hsl({} 55% 45%)", hash % 360)
+    format!("lang-c-h{}", hash % FALLBACK_HUES)
 }
 
 /// One stacked bar (segment width = byte share) plus a legend underneath —
@@ -601,7 +659,7 @@ pub fn render_language_bar(languages: &[(String, u64)], locale: gitquarry_i18n::
             div class="lang-bar" {
                 @for (lang, bytes) in languages {
                     span
-                        style=(format!("width:{:.2}%;background:{}", 100.0 * *bytes as f64 / total as f64, language_color(lang)))
+                        class=(format!("{} {}", width_class(100.0 * *bytes as f64 / total as f64), language_class(lang)))
                         title=(lang) {}
                 }
             }
@@ -609,7 +667,7 @@ pub fn render_language_bar(languages: &[(String, u64)], locale: gitquarry_i18n::
                 @for (i, (lang, bytes)) in languages.iter().enumerate() {
                     @if i > 0 { " " }
                     span class="lang-key-item" {
-                        span class="lang-swatch" style=(format!("background:{}", language_color(lang))) {}
+                        span class=(format!("lang-swatch {}", language_class(lang))) {}
                         (lang) " " (format!("{:.1}%", 100.0 * *bytes as f64 / total as f64))
                     }
                 }
@@ -627,7 +685,7 @@ pub(super) fn render_language_bar(languages: &[(String, u64)], locale: gitquarry
             div class="lang-bar" {
                 @for (lang, bytes) in languages {
                     span
-                        style=(format!("width:{:.2}%;background:{}", 100.0 * *bytes as f64 / total as f64, language_color(lang)))
+                        class=(format!("{} {}", width_class(100.0 * *bytes as f64 / total as f64), language_class(lang)))
                         title=(lang) {}
                 }
             }
@@ -635,7 +693,7 @@ pub(super) fn render_language_bar(languages: &[(String, u64)], locale: gitquarry
                 @for (i, (lang, bytes)) in languages.iter().enumerate() {
                     @if i > 0 { " " }
                     span class="lang-key-item" {
-                        span class="lang-swatch" style=(format!("background:{}", language_color(lang))) {}
+                        span class=(format!("lang-swatch {}", language_class(lang))) {}
                         (lang) " " (format!("{:.1}%", 100.0 * *bytes as f64 / total as f64))
                     }
                 }
@@ -679,13 +737,12 @@ fn render_fork_form(
         @if let Some(msg) = error {
             p class="alert alert-err" { (msg) }
         }
-        form method="post" action="/_fork" class="fork-form" {
+        form method="post" action=(format!("/_fork/{}", crate::webui::url_encode(repo_name))) class="fork-form" {
             (PreEscaped(crate::webui::csrf_field(headers)))
-            input type="hidden" name="source" value=(repo_name);
             select name="namespace" {
                 option value=(viewer.username) { (viewer.username) " " (t::you_suffix(locale)) }
-                @for group in groups.iter().filter(|g| viewer.is_admin || g.owners.contains(&viewer.uid)) {
-                    option value=(group.name) { (group.name) }
+                @for name in crate::auth::web::groups::manageable_group_names(groups, &viewer.uid, viewer.is_admin) {
+                    option value=(name) { (name) }
                 }
             }
             input name="name" size="20" value=(name_value) placeholder=(t::name_placeholder(locale));

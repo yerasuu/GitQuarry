@@ -1,43 +1,93 @@
-//! Every mutation of a [`crate::auth::access::Group`]/[`crate::auth::access::Team`]
-//! goes through here. See [`crate::domain::repo`]'s doc comment for the
-//! `domain`/`web` boundary this follows.
+//! Every mutation of a [`crate::auth::entities::Group`] goes through here.
+//! See [`crate::domain::repo`]'s doc comment for the `domain`/`web`
+//! boundary this follows.
 //!
-//! `set_description`/`add_owner`/`remove_owner`/`add_team`/`delete_team`/
-//! `add_team_member`/`remove_team_member` all take `&mut Group` rather than
-//! fetching and CAS-writing themselves — `auth::web::groups` does one fetch, one
-//! mutation, one `put_group` per form submit (same shape
-//! `apply_group_action` already used), so a single edit never costs more
-//! than one CAS write regardless of which of these it calls. `create`/
-//! `delete` are the exception: there's no existing record to mutate.
+//! `set_description`/`set_storage_quota`/`set_member`/`remove_member` all
+//! take `&mut Group` rather than fetching and CAS-writing themselves —
+//! `auth::web::groups` does one fetch, one mutation, one `put_group` per
+//! form submit, so a single edit never costs more than one CAS write
+//! regardless of which of these it calls. `create`/`delete` are the
+//! exception: there's no existing record to mutate.
 
 use crate::app::AppContext;
 use crate::auth::access;
-use crate::auth::entities::{Group, Permission, Team};
+use crate::auth::entities::{Group, Permission};
 use crate::storage::Cas;
 use crate::storage::uid::Uid;
 use anyhow::{Context, Result, bail};
 use s3db::txn::{self, TxnOp};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Reserves the namespace (shared with [`crate::auth::access::User`]
+/// Reserves the namespace (shared with [`crate::auth::entities::User`]
 /// names) and writes the group object in one create-only [`txn::run`]
-/// transaction — same reasoning as [`crate::domain::user::create`]: either
+/// transaction — same reasoning as [`crate::auth::domain::user::create`]: either
 /// both land or neither does, no manual rollback-on-failure in between.
-/// `None` if `name` is already taken (by a user, a group, or a stray
-/// namespace entry).
-pub async fn create(ctx: &AppContext, name: &str, description: Option<String>) -> Result<Option<Cas>> {
-    access::validate_username(name)?; // same charset rules as a username
+/// `None` if the resulting path is already taken (by a user, a group, or a
+/// stray namespace entry).
+///
+/// `parent` nests this group inside an existing one: the stored `name`
+/// becomes `<parent>/<segment>` — a group's name *is* its full path (see
+/// [`Group`]'s doc comment) — and members of `parent` inherit their tier
+/// here (`access::effective_permission`). `None` creates a top-level group.
+///
+/// `creator` starts as the group's sole [`Permission::Owner`] member —
+/// without this, a group admin creates comes out with no members at all,
+/// manageable only through the `is_admin` bypass
+/// [`super::super::access::can_manage_group`] also grants; that's fine while
+/// the creator stays a global admin, but silently strands the group the
+/// moment they're demoted (nobody left who can add a member, since adding
+/// one already needs to manage the group). Every other forge
+/// (GitLab/GitHub/Codeberg groups and orgs, ...) makes the creator an owner
+/// for the same reason.
+pub async fn create(
+    ctx: &AppContext,
+    segment: &str,
+    description: Option<String>,
+    creator: Uid,
+    parent: Option<&Group>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Option<Cas>> {
+    access::validate_username(segment)?; // same charset rules as a username
+    let name = match parent {
+        Some(parent) => {
+            // `+ 1` for the segment about to be appended: the cap is on the
+            // resulting path, and past it `ancestor_group_names` would stop
+            // short of the new group, silently dropping its own members from
+            // every permission check on its repos.
+            if access::ancestor_group_names(&parent.name).len() + 1 > access::MAX_GROUP_DEPTH {
+                bail!(
+                    "{}",
+                    gitquarry_i18n::shared::auth::group_nesting_too_deep(locale, access::MAX_GROUP_DEPTH)
+                );
+            }
+            format!("{}/{segment}", parent.name)
+        }
+        None => segment.to_string(),
+    };
+    // A group path and a repo path share one URL space (`/<namespace>/<name>`),
+    // so a subgroup can't take a name a repo already holds — the namespace
+    // reservation below only guards against other users/groups, which is the
+    // other half of the same rule (`access::namespace_reserved`, checked by
+    // `AppContext::create_repo`).
+    if crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, &name)
+        .await?
+        .is_some()
+    {
+        return Ok(None);
+    }
     let group = Group {
         uid: Uid::new(),
-        name: name.to_string(),
+        name,
         description,
-        owners: BTreeSet::new(),
-        teams: Vec::new(),
+        members: BTreeMap::from([(creator, Permission::Owner)]),
+        parent: parent.map(|p| p.uid.clone()),
         storage_quota_bytes: None,
+        legacy_owners: BTreeSet::new(),
+        legacy_teams: Vec::new(),
     };
     let ops = vec![
         TxnOp::create(
-            access::NAMESPACE_INDEX.key(name),
+            access::namespace_reservation_key(&group.name)?,
             &access::NamespaceReservation {
                 kind: "group".to_string(),
             },
@@ -49,14 +99,44 @@ pub async fn create(ctx: &AppContext, name: &str, description: Option<String>) -
         return Ok(None);
     }
     let _ = group.claim_uid(ctx.backend().as_ref(), &ctx.cipher).await;
+    if let Some(parent_uid) = &group.parent {
+        access::add_child_group_index(ctx.backend().as_ref(), &ctx.cipher, parent_uid, &group.uid).await;
+    }
+    for member_uid in group.members.keys() {
+        access::add_user_group_index(ctx.backend().as_ref(), &ctx.cipher, member_uid, &group.uid).await;
+    }
     Ok(Some(cas))
 }
 
-/// Best-effort: deletes the group object then releases its uid/namespace
-/// index entries. A no-op if `name` doesn't exist.
-pub async fn delete(ctx: &AppContext, name: &str) -> Result<()> {
+/// Best-effort: deletes the group object then releases its uid/namespace/
+/// child index entries. A no-op if `name` doesn't exist.
+///
+/// `Err` while the group still has subgroups: their own names are paths
+/// under this one (`<name>/<child>`), so freeing this namespace would let a
+/// *different* user or group claim `name` and inherit membership over
+/// descendants nobody meant to hand them. The operator deletes the
+/// subgroups first — nothing here deletes a tree recursively, same as
+/// nothing deletes a group's repos for it.
+pub async fn delete(ctx: &AppContext, name: &str, locale: gitquarry_i18n::Locale) -> Result<()> {
     if let Some(group) = access::get_group(ctx.backend().as_ref(), &ctx.cipher, name).await?.0 {
-        group.release_uid(ctx.backend().as_ref()).await;
+        let children = access::list_child_groups(ctx.backend().as_ref(), &ctx.cipher, &group.uid).await?;
+        if !children.is_empty() {
+            bail!(
+                "{}",
+                gitquarry_i18n::shared::auth::group_still_has_subgroups(locale, children.len())
+            );
+        }
+        if let Some(parent_uid) = &group.parent {
+            access::remove_child_group_index(ctx.backend().as_ref(), &ctx.cipher, parent_uid, &group.uid).await;
+        }
+        // Every member's own "groups I belong to" pointer, including the
+        // legacy ones: a leftover entry is harmless (`list_groups_for_user`
+        // drops what no longer resolves) but keeps a deleted group showing
+        // up in that listing's fetch cost forever.
+        for member_uid in group.effective_members().keys() {
+            access::remove_user_group_index(ctx.backend().as_ref(), &ctx.cipher, member_uid, &group.uid).await;
+        }
+        let _ = group.release_uid(ctx.backend().as_ref()).await;
     }
     access::delete_group_object(ctx.backend().as_ref(), &ctx.cipher, name).await;
     access::release_namespace(ctx.backend().as_ref(), name).await;
@@ -73,132 +153,53 @@ pub fn set_storage_quota(group: &mut Group, quota_bytes: Option<u64>) {
     group.storage_quota_bytes = quota_bytes;
 }
 
-/// `Err` if `username` doesn't name an existing user.
-pub async fn add_owner(
+/// Grants `username` the `permission_str` tier across the whole group —
+/// also the way an existing member's tier is *changed*, since the map entry
+/// is simply overwritten. `Err` if `username` doesn't name an existing user
+/// or `permission_str` isn't one of the five [`Permission`] tier names.
+pub async fn set_member(
     ctx: &AppContext,
     group: &mut Group,
     username: &str,
-    locale: gitquarry_i18n::Locale,
-) -> Result<()> {
-    let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
-        .await?
-        .0
-        .with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
-    group.owners.insert(user.uid);
-    Ok(())
-}
-
-/// No existence check, unlike [`add_owner`]: if `username` was since
-/// deleted there's no uid left to look up by name, but that's harmless — an
-/// orphaned uid in `owners` never matches anyone (`effective_permission`/
-/// `can_manage_group` re-fetch the live `User` and compare `.uid`), nothing
-/// needs cleaning up.
-pub async fn remove_owner(ctx: &AppContext, group: &mut Group, username: &str) -> Result<()> {
-    if let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?.0 {
-        group.owners.remove(&user.uid);
-    }
-    Ok(())
-}
-
-/// `Err` if a team named `name` already exists on `group`, `permission_str`
-/// isn't one of the five [`Permission`] tier names, or `repos_csv` names a
-/// repo that doesn't exist (see [`parse_team_repos`]).
-pub async fn add_team(
-    ctx: &AppContext,
-    group: &mut Group,
-    name: &str,
     permission_str: &str,
-    repos_csv: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
-    if group.teams.iter().any(|t| t.name == name) {
-        bail!("{}", gitquarry_i18n::shared::team_already_exists(locale, name));
-    }
     let permission = match permission_str {
         "guest" => Permission::Guest,
         "reporter" => Permission::Reporter,
         "developer" => Permission::Developer,
         "maintainer" => Permission::Maintainer,
         "owner" => Permission::Owner,
-        other => bail!("{}", gitquarry_i18n::shared::invalid_permission(locale, other)),
+        other => bail!("{}", gitquarry_i18n::shared::auth::invalid_permission(locale, other)),
     };
-    let repos = parse_team_repos(ctx, &group.name, repos_csv, locale).await?;
-    group.teams.push(Team {
-        name: name.trim().to_string(),
-        members: BTreeSet::new(),
-        permission,
-        repos,
-    });
-    Ok(())
-}
-
-pub fn delete_team(group: &mut Group, name: &str) {
-    group.teams.retain(|t| t.name != name);
-}
-
-/// `Err` if `team` doesn't exist on `group` or `username` doesn't name an
-/// existing user.
-pub async fn add_team_member(
-    ctx: &AppContext,
-    group: &mut Group,
-    team: &str,
-    username: &str,
-    locale: gitquarry_i18n::Locale,
-) -> Result<()> {
     let user = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
         .await?
         .0
-        .with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
-    find_team_mut(group, team, locale)?.members.insert(user.uid);
+        .with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
+    access::add_user_group_index(ctx.backend().as_ref(), &ctx.cipher, &user.uid, &group.uid).await;
+    group.members.insert(user.uid, permission);
     Ok(())
 }
 
-/// Same "no cleanup needed, harmless if it can't be found by name anymore"
-/// reasoning as [`remove_owner`]. `Err` if `team` doesn't exist on `group`.
-pub async fn remove_team_member(
-    ctx: &AppContext,
-    group: &mut Group,
-    team: &str,
-    username: &str,
-    locale: gitquarry_i18n::Locale,
-) -> Result<()> {
+/// Drops `username` from the group entirely. Also strips them out of the
+/// legacy fields ([`Group::legacy_owners`]/[`Group::legacy_teams`]): those
+/// still grant access until the `group-members` data migration runs, so removing only
+/// the [`Group::members`] entry would leave a removed member with their old
+/// tier intact — a silent no-op exactly where one is least acceptable.
+///
+/// No existence check, unlike [`set_member`]: if `username` was since
+/// deleted there's no uid left to look up by name, but that's harmless — an
+/// orphaned uid in `members` never matches anyone (`effective_permission`/
+/// `can_manage_group` re-fetch the live `User` and compare `.uid`), nothing
+/// needs cleaning up.
+pub async fn remove_member(ctx: &AppContext, group: &mut Group, username: &str) -> Result<()> {
     if let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?.0 {
-        find_team_mut(group, team, locale)?.members.remove(&user.uid);
+        group.members.remove(&user.uid);
+        group.legacy_owners.remove(&user.uid);
+        for team in &mut group.legacy_teams {
+            team.members.remove(&user.uid);
+        }
+        access::remove_user_group_index(ctx.backend().as_ref(), &ctx.cipher, &user.uid, &group.uid).await;
     }
     Ok(())
-}
-
-fn find_team_mut<'a>(group: &'a mut Group, team: &str, locale: gitquarry_i18n::Locale) -> Result<&'a mut Team> {
-    group
-        .teams
-        .iter_mut()
-        .find(|t| t.name == team)
-        .with_context(|| gitquarry_i18n::shared::team_not_found(locale, team))
-}
-
-/// Resolves each comma-separated repo-local name (relative to `group_name`
-/// — the part after `<group>/`, same convention the form field uses) to
-/// that repo's uid, existence-validated against the repo-name index — a
-/// real tightening from the old scheme, which accepted arbitrary text with
-/// zero validation (unlike `protected_branches`, checked against the
-/// manifest). Empty input still means "every repo in the group".
-pub async fn parse_team_repos(
-    ctx: &AppContext,
-    group_name: &str,
-    s: &str,
-    locale: gitquarry_i18n::Locale,
-) -> Result<Option<BTreeSet<Uid>>> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    let mut uids = BTreeSet::new();
-    for local in s.split(',').map(str::trim).filter(|r| !r.is_empty()) {
-        let full_name = format!("{group_name}/{local}");
-        let uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, &full_name)
-            .await?
-            .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, &full_name))?;
-        uids.insert(uid);
-    }
-    Ok(Some(uids))
 }

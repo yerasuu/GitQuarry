@@ -26,10 +26,12 @@ fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
-        ci: None,
         artifacts: None,
         allow_push_create: false,
+        trust_forwarded_for: false,
         events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
@@ -62,9 +64,12 @@ async fn clone_urls_show_ssh_even_without_a_saved_remote_setting() {
 }
 
 #[test]
-fn language_color_is_deterministic_and_varies_by_name() {
-    assert_eq!(language_color("Rust"), language_color("Rust"));
-    assert_ne!(language_color("Rust"), language_color("Python"));
+fn language_class_is_deterministic_and_varies_by_name() {
+    assert_eq!(language_class("Rust"), language_class("Rust"));
+    assert_ne!(language_class("Rust"), language_class("Python"));
+    // A name Linguist doesn't know still lands on a class that exists.
+    assert_eq!(language_class("Brainfuck"), language_class("Brainfuck"));
+    assert!(language_class("Brainfuck").starts_with("lang-c-h"));
 }
 
 #[test]
@@ -109,7 +114,8 @@ fn license_kind_none_for_unrecognized_text() {
 fn language_bar_shows_each_language_with_its_percentage() {
     let languages = vec![("Rust".to_string(), 75u64), ("CSS".to_string(), 25u64)];
     let html = render_language_bar(&languages, gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("width:75.00%"), "{html}");
+    // The share is a class now, not a style attribute -- see webui_csp.rs.
+    assert!(html.contains(r#"class="w-75 lang-c-rust""#), "{html}");
     assert!(html.contains("Rust 75.0%"), "{html}");
     assert!(html.contains("CSS 25.0%"), "{html}");
 }

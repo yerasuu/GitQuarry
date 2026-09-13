@@ -1,5 +1,3 @@
-//! `webui::audit`'s page copy.
-
 use super::super::{Locale, msg};
 
 msg!(
@@ -29,7 +27,7 @@ msg!(on_column() { Locale::Es => "en", Locale::En => "on" });
 msg!(detail_column() { Locale::Es => "detalle", Locale::En => "detail" });
 
 msg!(
-    /// Table body placeholder when [`crate::storage::audit::list_recent`]
+    /// Table body placeholder when `storage::audit::list_recent`
     /// comes back empty.
     no_entries_hint() {
         Locale::Es => "(vacio)",

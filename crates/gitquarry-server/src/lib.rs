@@ -2,5 +2,6 @@
 //! integration tests can link against this crate — a plain binary target
 //! has no rlib to link against.
 
+pub mod mirror_sync;
 pub mod serve;
 pub mod setup;

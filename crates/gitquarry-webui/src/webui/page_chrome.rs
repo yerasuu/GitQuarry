@@ -7,7 +7,7 @@ use super::repo_link::repo_link;
 /// The tab links themselves — the familiar ` | `-separated inline row above
 /// `mobile.css`'s breakpoint, a plain stacked vertical list below it
 /// (`.tabs-list a` forces `display: block`) either way. Shared by
-/// [`tabs_bar`] and `pulls`'s own status filter — duplicating this
+/// [`tabs_bar`] and `merges`'s own status filter — duplicating this
 /// list/separator markup risked one copy drifting (a missing
 /// `aria-hidden`) in a way a shared helper can't.
 ///
@@ -21,7 +21,7 @@ use super::repo_link::repo_link;
 /// saving room on.
 ///
 /// `id` must be unique *on the page* when given: more than one of these
-/// can render together (the pull-request list shows the main tabs bar and
+/// can render together (the merge-request list shows the main tabs bar and
 /// its own status filter at once), and `:checked ~` needs each row's own
 /// checkbox/list pair matched unambiguously — not shared with a sibling
 /// row's.
@@ -170,7 +170,11 @@ fn title_bar(
 pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> String {
     use gitquarry_i18n::web::chrome;
     let tabs: &[(&str, String, String)] = &[
-        ("settings", "/_settings".to_string(), chrome::settings_tab(locale)),
+        (
+            "settings",
+            "/_settings/footer".to_string(),
+            chrome::settings_tab(locale),
+        ),
         ("users", "/_users".to_string(), chrome::users_tab(locale)),
         ("groups", "/_groups".to_string(), chrome::groups_tab(locale)),
         ("audit", "/_audit".to_string(), chrome::audit_tab(locale)),
@@ -183,12 +187,12 @@ pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> Stri
 }
 
 /// Section ids/hrefs/labels for [`account_settings_page`]'s sidebar —
-/// `"profile"`/`"appearance"`/`"security"`/`"favorites"`/`"pat"`,
+/// `"profile"`/`"appearance"`/`"security"`/`"keys"`/`"favorites"`/`"pat"`,
 /// each a top-level `/_account/<id>` route (no username in the URL: unlike
 /// the public [`crate::auth::web::profile`] page, every one of these only
 /// ever operates on the logged-in session's own account, resolved
 /// server-side — there's nothing here a URL segment could usefully name).
-fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 5] {
+fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 6] {
     use gitquarry_i18n::web::chrome;
     [
         ("profile", "/_account/profile", chrome::account_profile_section(locale)),
@@ -198,6 +202,7 @@ fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static 
             chrome::account_appearance_section(locale),
         ),
         ("security", "/_account/security", chrome::security_tab(locale)),
+        ("keys", "/_account/keys", chrome::keys_tab(locale)),
         ("favorites", "/_account/favorites", chrome::favorites_tab(locale)),
         ("pat", "/_account/pat", chrome::pat_tab(locale)),
     ]
@@ -221,6 +226,16 @@ pub(crate) fn account_settings_page(
 ) -> maud::Markup {
     use gitquarry_i18n::web::chrome;
     let sections = account_sections(locale);
+    // The page's own `h2` comes from the same tuple the sidebar entry does,
+    // so the two can never drift apart and no page needs a second copy of
+    // its own title as a separate message. Without it every account page
+    // opened straight into an `h3`/`h4` with no heading above it, leaving
+    // the section unnamed for anyone not reading the sidebar's active row.
+    let title = sections
+        .iter()
+        .find(|(id, _, _)| *id == active)
+        .map(|(_, _, label)| label.clone())
+        .unwrap_or_default();
     maud::html! {
         div class="settings-layout" {
             nav class="settings-sidebar" aria-label=(chrome::settings_sidebar_nav_label(locale)) {
@@ -232,7 +247,49 @@ pub(crate) fn account_settings_page(
                     }
                 }
             }
-            div class="settings-content" { (content) }
+            div class="settings-content" {
+                h2 class="settings-title" { (title) }
+                (content)
+            }
+        }
+    }
+}
+
+/// One settings block: a card with its own `h3`, optional explanatory
+/// prose, and whatever form/table `body` is. Every `/_account/*` page (and
+/// the admin `/_settings`) is a stack of these rather than a flat run of
+/// `h4` + bare `<form>` — a long page like `security` was otherwise a wall
+/// of controls with nothing marking where one concern ended and the next
+/// began.
+///
+/// `heading` is an `h3` because [`account_settings_page`] already owns the
+/// page's `h2`: the old pages started at `h4` with nothing above them,
+/// skipping two levels for anyone navigating by headings.
+pub(crate) fn settings_section(heading: &str, prose: Option<&str>, body: maud::Markup) -> maud::Markup {
+    maud::html! {
+        section class="card card-pad settings-section" {
+            h3 { (heading) }
+            @if let Some(prose) = prose {
+                p class="muted" { (prose) }
+            }
+            (body)
+        }
+    }
+}
+
+/// One labelled control: `label` above it, hint below when there is one.
+/// The `div.field` markup predates this (`/_settings`, the MR forms) but
+/// had no CSS rule at all, so it rendered as a bare block and every account
+/// page skipped labels entirely in favour of placeholders — which vanish on
+/// first keystroke, aren't announced as labels, and give no click target.
+pub(crate) fn field(label: &str, hint: Option<&str>, control: maud::Markup) -> maud::Markup {
+    maud::html! {
+        div class="field" {
+            label { (label) }
+            (control)
+            @if let Some(hint) = hint {
+                span class="hint" { (hint) }
+            }
         }
     }
 }
@@ -242,6 +299,11 @@ pub(crate) fn account_settings_page(
 /// own doc comment): adding `locale` as an 8th positional arg would trip
 /// clippy's `too_many_arguments`.
 pub(crate) struct HeaderExtras<'a> {
+    /// The repo's free-text public name (`RepoConfig::display_name`) — shown
+    /// as the page heading in place of the raw slug when set. `None` for a
+    /// repo not yet backfilled (`domain::repo::backfill_slug`) or predating
+    /// the field, in which case [`header_bar`] falls back to `bare_name`.
+    pub(crate) display_name: Option<&'a str>,
     pub(crate) description: Option<&'a str>,
     pub(crate) archived: bool,
     pub(crate) visibility: gitquarry_core::storage::entities::Visibility,
@@ -278,6 +340,7 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     // (always `<namespace>/<repo>`, see [`gitquarry_core::validate`]'s own
     // invariant), not from this separately-resolved display name.
     let HeaderExtras {
+        display_name,
         description,
         archived,
         visibility,
@@ -298,12 +361,12 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
         ("stats", chrome::stats_tab(locale)),
         ("releases", chrome::releases_tab(locale)),
     ];
-    tab_defs.push(("pulls", chrome::pulls_tab(locale)));
+    tab_defs.push(("merges", chrome::merges_tab(locale)));
     tab_defs.push(("settings", chrome::settings_tab(locale)));
     let tabs: Vec<(&str, String, String)> = tab_defs
         .iter()
         .map(|(view, label)| {
-            let rev_for_link = if matches!(*view, "settings" | "releases" | "pulls") {
+            let rev_for_link = if matches!(*view, "settings" | "releases" | "merges") {
                 ""
             } else {
                 rev
@@ -357,8 +420,9 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     // separately-resolved owner string through just for this.
     let (owner_slug, bare_name) = repo_name.rsplit_once('/').unwrap_or(("", repo_name));
     let owner_slug = (!owner_slug.is_empty()).then_some(owner_slug);
+    let title = display_name.unwrap_or(bare_name);
     maud::html! {
-        (title_bar(bare_name, owner_slug, badge, Some(&atom_link), ref_switcher, sub))
+        (title_bar(title, owner_slug, badge, Some(&atom_link), ref_switcher, sub))
         (below_header)
         (tabs_bar(&tabs, active, &menu_extra, &chrome::page_tabs_nav_label(locale), &chrome::page_tabs_toggle_label(locale)))
         (sub_tabs)
@@ -366,11 +430,16 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
     .into_string()
 }
 
+/// `display_name`: the repo's `RepoConfig::display_name`, rendered as the
+/// first crumb in place of the slug the crumb's own href still uses — same
+/// split [`header_bar`] makes for the title above it.
+///
 /// `leaf_view`: view to use for the link of the last segment (the actual
 /// file/folder being shown) — "tree" while navigating folders, "blob" while
 /// viewing a file. Intermediate segments are always folders.
 pub(crate) fn breadcrumbs(
     repo_name: &str,
+    display_name: Option<&str>,
     rev: &str,
     path: &str,
     leaf_view: &str,
@@ -403,7 +472,7 @@ pub(crate) fn breadcrumbs(
         nav aria-label=(chrome::breadcrumb_nav_label(locale)) {
             ol class="breadcrumb" {
                 li class="breadcrumb-item" {
-                    a href=(repo_link(repo_name, "tree", rev).to_string()) { (repo_name) }
+                    a href=(repo_link(repo_name, "tree", rev).to_string()) { (super::repo_label(repo_name, display_name)) }
                 }
                 @for (i, (href, seg)) in crumbs.iter().enumerate() {
                     li class="breadcrumb-sep" aria-hidden="true" { "/" }
@@ -436,6 +505,24 @@ pub(crate) fn permission_badge_class(perm: gitquarry_core::auth::entities::Permi
         Permission::Developer => "decoration decoration-developer",
         Permission::Maintainer => "decoration decoration-maintainer",
         Permission::Owner => "badge accent",
+    }
+}
+
+/// The translated name of a [`gitquarry_core::auth::entities::Permission`]
+/// tier — shared by every page that shows a tier to a reader
+/// (`auth::web::groups`' member rows, `auth::web::group`'s member list), so
+/// the five words are translated in exactly one place.
+pub(crate) fn permission_label(
+    perm: gitquarry_core::auth::entities::Permission,
+    locale: gitquarry_i18n::Locale,
+) -> String {
+    use gitquarry_core::auth::entities::Permission;
+    match perm {
+        Permission::Guest => gitquarry_i18n::web::auth::groups::groups_permission_guest(locale),
+        Permission::Reporter => gitquarry_i18n::web::auth::groups::groups_permission_reporter(locale),
+        Permission::Developer => gitquarry_i18n::web::auth::groups::groups_permission_developer(locale),
+        Permission::Maintainer => gitquarry_i18n::web::auth::groups::groups_permission_maintainer(locale),
+        Permission::Owner => gitquarry_i18n::web::auth::groups::groups_permission_owner(locale),
     }
 }
 
@@ -526,6 +613,18 @@ pub(crate) fn copy_button(value: &str, locale: gitquarry_i18n::Locale) -> maud::
 /// styler's own token names (`--text`, `--ok`, `--warn`, ...) to values
 /// already defined here, so those components render in this exact
 /// palette instead of styler's own default one.
+///
+/// `style/vendor/hljs-light.css`/`hljs-dark.css` — `highlight.js`'s own
+/// vendored theme (`scripts/vendor-hljs.sh`), placed after `base.css` since
+/// it's real selectors rather than variables (see the include site below
+/// for why that means no wrapper block here, unlike `light.css`/`dark.css`).
+///
+/// Served as its own `/_assets/style.css` (see
+/// `webui::handler_style_css`), not spliced into `<head>`: at ~150KB it was
+/// 96% of every HTML response, re-sent on every navigation and re-brotli'd
+/// per request — measured at +21ms on a page that otherwise rendered in
+/// 1.8ms. As a file it compresses once, caches for a year against its own
+/// `ETag`, and lets the CSP drop `style-src 'unsafe-inline'`.
 pub(crate) const STYLE: &str = concat!(
     include_str!("style/vendor/styler.css"),
     ":root {\n",
@@ -544,7 +643,20 @@ pub(crate) const STYLE: &str = concat!(
     include_str!("style/airy.css"),
     "}\n",
     include_str!("style/base.css"),
+    // `highlight.js`'s vendored theme — real selectors, not custom
+    // properties, so unlike `light.css`/`dark.css` above each file governs
+    // its own light/dark guarding internally (see `hljs-light.css`/
+    // `hljs-dark.css`'s own header comments) instead of needing a wrapper
+    // here. Light first, unguarded default; dark after it, both its guard
+    // conditions strictly more specific so it wins when either applies
+    // regardless of source order.
+    include_str!("style/vendor/hljs-light.css"),
+    include_str!("style/vendor/hljs-dark.css"),
     include_str!("style/mobile.css"),
+    // Last: the per-render utility classes (widths, language colours,
+    // `display:inline`) a view picks by name instead of writing a `style`
+    // attribute the CSP would have to allow. See the file's own header.
+    include_str!("style/utilities.css"),
 );
 
 /// General cgit/kernel.org-style layout: sans-serif, dense tables with thin
@@ -575,6 +687,57 @@ pub(crate) const STYLE: &str = concat!(
 /// to `--accent` (see their own comments), so the two are still visually
 /// distinct where it matters most (that alias is what actually caused the
 /// original collision, not this preset choice alone).
+/// Who the copyright line names, and from when. Constants rather than a
+/// setting: this is the project's own notice, not something a deploy
+/// customises — a fork changes it here, in the same commit it changes the
+/// name everywhere else.
+/// The quarry-block mark, as one `<path d>`: the topbar's brand link draws
+/// it inline (filled by CSS, so it follows the accent), and
+/// `webui::handler_favicon_svg` wraps this same string in a standalone SVG
+/// document for the tab icon. One copy — a redrawn logo can't end up
+/// matching in the header and stale in the tab.
+pub(crate) const BRAND_MARK_PATH: &str = "M12 1.5 2 7v10l10 5.5L22 17V7L12 1.5Zm0 2.3 7.6 4.18L12 12.1 4.4 7.98 12 3.8Zm-8 5.86 7.2 3.95v7.7L4 17.2V9.66Zm9.2 11.65v-7.7L20.4 9.66v7.54l-7.2 4.11Z";
+
+const COPYRIGHT_HOLDER: &str = "Yerasuu";
+const COPYRIGHT_YEAR: &str = "2026";
+
+/// The footer's "source" link (`ServerSettings::source_link`, already
+/// resolved to an href — see [`resolve_source_link_href`]) — a
+/// process-wide `OnceLock`, not a `layout` parameter: `layout` renders on
+/// every single page (~35 call sites across the crate), and this one link
+/// changes only when an admin edits `/_settings` and the process restarts
+/// to apply it (same "restart to apply" contract every other `ServerSettings`
+/// field already has), so it isn't worth threading a new argument through
+/// every one of them. `gitquarry-server`'s `serve::run` calls
+/// [`init_source_link`] once at startup, right after resolving
+/// `ServerSettings`; unset (tests, or before that runs) reads as "no link".
+static SOURCE_LINK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Called once at startup with the already-resolved href — see
+/// [`resolve_source_link_href`]. A second call (there shouldn't be one) is
+/// silently ignored rather than panicking: a `OnceLock` staying at whatever
+/// value it first got is a safer failure mode for page chrome than crashing
+/// the server over it.
+pub fn init_source_link(href: Option<String>) {
+    let _ = SOURCE_LINK.set(href);
+}
+
+/// `ServerSettings::source_link`'s raw stored value (either an absolute
+/// `http(s)://` URL or a `namespace/name` repo path) resolved to what
+/// actually belongs in `href=`. Pulled out of [`init_source_link`]'s call
+/// site so it's independently testable without a real `OnceLock` write.
+pub fn resolve_source_link_href(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        Some(raw.to_string())
+    } else {
+        Some(format!("/{raw}"))
+    }
+}
+
 pub fn layout(
     title: &str,
     header: &str,
@@ -595,15 +758,28 @@ pub fn layout(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " - GitQuarry" }
-                style { (maud::PreEscaped(STYLE)) }
-                script src="/_assets/styler.js" defer {}
-                script src="/_assets/app.js" defer {}
+                link rel="icon" type="image/svg+xml" href="/_assets/favicon.svg";
+                link rel="stylesheet" href=(super::style_css_url());
+                script src=(super::styler_js_url()) defer {}
+                // Both before `app.js`: it calls into `window.hljs` (see its
+                // own doc comment) once the DOM is parsed, which `defer`
+                // guarantees happens after these two have already run.
+                script src=(super::hljs_js_url()) defer {}
+                script src=(super::hljs_line_numbers_js_url()) defer {}
+                script src=(super::app_js_url()) defer {}
             }
-            body {
+            body data-error-generic=(chrome::async_request_failed(locale)) {
                 a class="skip-link" href="#content" { (chrome::skip_to_content(locale)) }
                 div id="topbar" {
                     div class="inner" {
-                        span class="brand" { a href="/" { "GitQuarry" } }
+                        span class="brand" {
+                            a href="/" {
+                                svg viewBox="0 0 24 24" aria-hidden="true" {
+                                    path d=(BRAND_MARK_PATH) {}
+                                }
+                                "GitQuarry"
+                            }
+                        }
                         // Pure-CSS collapse (no JS in this codebase at all):
                         // a hidden checkbox + its `<label>` as the visible
                         // hamburger toggle, `nav` shown via the sibling
@@ -614,10 +790,11 @@ pub fn layout(
                         label for="nav-toggle" class="nav-toggle-btn" aria-label=(chrome::menu_toggle_label(locale)) { (super::icons::menu()) }
                         nav {
                             a href="/" { (chrome::repos_nav(locale)) } " · "
-                            a href="/_new" { (chrome::new_repo_nav(locale)) }
+                            a href="/_new" { (chrome::new_repo_nav(locale)) } " · "
+                            a href="/_groups" { (chrome::groups_tab(locale)) }
                             (maud::PreEscaped(topnav_auth))
                             " · "
-                            a href="/_settings" { (chrome::settings_tab(locale)) }
+                            a href="/_settings/footer" { (chrome::settings_tab(locale)) }
                             " · "
                             (super::theme_pref::render_theme_toggle(theme))
                             " · "
@@ -626,8 +803,27 @@ pub fn layout(
                     }
                 }
                 main id="content" tabindex="-1" {
+                    // A message parked by `flash::redirect` on the response
+                    // before this one. Rendered here rather than by each
+                    // handler so a mutation only has to redirect somewhere
+                    // sensible to have its outcome shown.
+                    (maud::PreEscaped(super::flash::render_current(locale)))
                     (maud::PreEscaped(header))
                     (maud::PreEscaped(body))
+                }
+                // Outside `main`, so "skip to content" lands on the page's
+                // own content and a screen reader reaching the end of it
+                // isn't handed the same three links on every page.
+                footer class="site-footer" {
+                    span { (chrome::footer_copyright(locale, COPYRIGHT_YEAR, COPYRIGHT_HOLDER)) }
+                    @if let Some(link) = SOURCE_LINK.get().and_then(|v| v.as_deref()) {
+                        " · "
+                        a href=(link) { (chrome::source_nav(locale)) }
+                    }
+                    " · "
+                    a href="/_license" rel="license" { "AGPL-3.0-or-later" }
+                    " · "
+                    a href="/_changelog" { (chrome::changelog_nav(locale)) " " (env!("CARGO_PKG_VERSION")) }
                 }
             }
         }

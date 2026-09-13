@@ -85,7 +85,7 @@ pub fn render_density_toggle(density: &str) -> maud::Markup {
         // See `theme_pref::render_theme_toggle`'s matching comment on
         // `data-html-attr` — same gap, same fix, same reason `<html>`
         // itself never got the pick until a reload.
-        form method="post" action="/_prefs/density" style="display:inline" data-async data-html-attr="data-density" {
+        form method="post" action="/_prefs/density" class="inline-form" data-async data-html-attr="data-density" {
             button type="submit" name="density" value="dense"
                 class={"density-btn" @if density != "airy" { " active" }} title="dense layout" aria-label="dense layout" aria-pressed=(if density != "airy" { "true" } else { "false" }) { "▤" }
             button type="submit" name="density" value="airy"

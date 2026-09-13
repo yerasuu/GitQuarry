@@ -30,7 +30,7 @@ pub(super) async fn save_conf(
     form: &RepoConfForm,
     actor: &str,
 ) -> Result<FlashOutcome, AppError> {
-    let namespace = name.split_once('/').map(|(ns, _)| ns).unwrap_or(name);
+    let namespace = name.rsplit_once('/').map(|(ns, _)| ns).unwrap_or(name);
     let new_owner = domain::repo::resolve_owner_ref(ctx, namespace).await?;
     let visibility = match form.visibility.as_str() {
         "limited" => Visibility::Limited,
@@ -47,19 +47,21 @@ pub(super) async fn save_conf(
         is_template,
     };
     Ok(match domain::repo::set_conf(ctx, resolved, patch).await? {
-        Cas::Ok => {
-            gitquarry_core::storage::audit::record(
-                ctx.backend().as_ref(),
-                &ctx.cipher,
-                actor,
-                "repo.set_conf",
-                name,
-                Some(format!("archived={archived} is_template={is_template}")),
-            )
-            .await;
+        (Cas::Ok, changed) => {
+            if changed {
+                gitquarry_core::storage::audit::record(
+                    ctx.backend().as_ref(),
+                    &ctx.cipher,
+                    actor,
+                    "repo.set_conf",
+                    name,
+                    Some(format!("archived={archived} is_template={is_template}")),
+                )
+                .await;
+            }
             FlashOutcome::Ok("saved to the bucket.")
         }
-        Cas::Conflict => FlashOutcome::Conflict,
+        (Cas::Conflict, _) => FlashOutcome::Conflict,
     })
 }
 
@@ -90,7 +92,7 @@ pub fn render_repo_conf_form(
             (t::repo_conf_prose_prefix(locale)) code { (repo_name) "/.conf/config.json" } (t::repo_conf_prose_suffix(locale))
         }
         (PreEscaped(render_flash(message, locale)))
-        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) {
+        form method="post" action=(repo_link(repo_name, "settings", "").to_string()) data-async data-async-target="#repo-settings-body" data-confirm=(t::save_general_confirm(locale)) {
             (PreEscaped(csrf))
             div class="field" {
                 label { (t::field_label_description(locale)) }

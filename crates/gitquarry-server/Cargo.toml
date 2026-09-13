@@ -1,16 +1,17 @@
 [package]
 name = "gitquarry"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Git remote backed by S3: ssh:// and git-smart-HTTP servers plus a read-only web UI"
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 gitquarry-core = { path = "../gitquarry-core" }
 gitquarry-i18n = { path = "../gitquarry-i18n" }
 gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
 gitquarry-domain = { path = "../gitquarry-domain" }
+gitquarry-mirror-external = { path = "../gitquarry-mirror-external" }
 gitquarry-webui = { path = "../gitquarry-webui" }
 
 # dyn-dispatch for gitquarry_core::mirror::MirrorSyncHook (mirror_sync.rs)
@@ -19,7 +20,7 @@ async-trait = "0.1.91"
 # Storage engine, direct dep only for the stale-transaction recovery sweep
 # in serve.rs (`s3db::txn::recover_stale`) -- see gitquarry-core/Cargo.toml
 # for why this is a git dependency pinned by tag.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.3.0", features = ["streaming"] }
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
 
 tokio = { version = "1.53.1", features = [
     "rt-multi-thread",
@@ -43,6 +44,8 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls", 
 
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [features]
 # Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see

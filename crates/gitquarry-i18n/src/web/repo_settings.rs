@@ -1,5 +1,3 @@
-//! `webui::repo_settings`'s page copy.
-
 use super::super::{Locale, msg};
 
 // Reused across several of the page's sub-forms (default branch, protected
@@ -8,6 +6,34 @@ use super::super::{Locale, msg};
 // instead of six near-identical entries (same dedup the groups.rs catalog
 // already uses for its own "remove" button, reused across owner/team rows).
 msg!(save_button() { Locale::Es => "guardar", Locale::En => "save" });
+msg!(change_perm_confirm(username: &str) {
+    Locale::Es => "¿cambiar el acceso de '{username}' a este repo?",
+    Locale::En => "change '{username}''s access to this repo?",
+});
+msg!(save_general_confirm() {
+    Locale::Es => "¿guardar los ajustes generales? incluye visibilidad y archivado.",
+    Locale::En => "save general settings? this includes visibility and archived state.",
+});
+msg!(save_protected_branches_confirm() {
+    Locale::Es => "¿guardar la lista de ramas protegidas? quitar una entrada le retira la proteccion.",
+    Locale::En => "save the protected branches list? removing an entry unprotects it.",
+});
+msg!(save_protected_tags_confirm() {
+    Locale::Es => "¿guardar la lista de tags protegidos? quitar una entrada le retira la proteccion.",
+    Locale::En => "save the protected tags list? removing an entry unprotects it.",
+});
+msg!(save_required_reviewers_confirm() {
+    Locale::Es => "¿guardar la lista de reviewers requeridos?",
+    Locale::En => "save the required reviewers list?",
+});
+msg!(save_require_signed_commits_confirm() {
+    Locale::Es => "¿guardar la lista de ramas con commits firmados requeridos? quitar una entrada le retira el requisito.",
+    Locale::En => "save the signed-commits-required branch list? removing an entry drops the requirement.",
+});
+msg!(save_labels_confirm() {
+    Locale::Es => "¿guardar las etiquetas? una etiqueta quitada de la lista se elimina tambien de los issues/MRs existentes.",
+    Locale::En => "save labels? a label removed from the list is also removed from existing issues/MRs.",
+});
 
 // Both the delete-repo and move-repo forms end their confirmation prose the
 // same way: "... Type the full name (<code>repo</code>) to confirm." — shared
@@ -62,15 +88,15 @@ msg!(topics_placeholder() { Locale::Es => "rust, cli, git", Locale::En => "rust,
 
 msg!(required_reviewers_heading() { Locale::Es => "reviewers requeridos", Locale::En => "required reviewers" });
 msg!(required_reviewers_prose() {
-    Locale::Es => "Deben aprobar antes de poder mergear un PR, ademas de lo que pida un CODEOWNERS en la raiz del repo para los archivos que toque.",
-    Locale::En => "Must approve before a PR can merge, on top of whatever a CODEOWNERS file at the repo root additionally requires for the files it touches.",
+    Locale::Es => "Deben aprobar antes de poder mergear un MR, ademas de lo que pida un CODEOWNERS en la raiz del repo para los archivos que toque.",
+    Locale::En => "Must approve before an MR can merge, on top of whatever a CODEOWNERS file at the repo root additionally requires for the files it touches.",
 });
 msg!(required_reviewers_placeholder() { Locale::Es => "alice, bob", Locale::En => "alice, bob" });
 
 msg!(labels_heading() { Locale::Es => "etiquetas", Locale::En => "labels" });
 msg!(labels_prose() {
-    Locale::Es => "Vocabulario de etiquetas asignables a issues y pull requests de este repo, formato nombre:#color separado por comas.",
-    Locale::En => "This repo's label vocabulary, assignable to issues and pull requests, name:#color pairs, comma-separated.",
+    Locale::Es => "Vocabulario de etiquetas asignables a issues y merge requests de este repo, formato nombre:#color separado por comas.",
+    Locale::En => "This repo's label vocabulary, assignable to issues and merge requests, name:#color pairs, comma-separated.",
 });
 msg!(labels_placeholder() { Locale::Es => "bug:#d73a4a, mejora:#a2eeef", Locale::En => "bug:#d73a4a, enhancement:#a2eeef" });
 
@@ -130,6 +156,10 @@ msg!(move_repo_prose_intro() {
 msg!(new_namespace_label() { Locale::Es => "nuevo namespace", Locale::En => "new namespace" });
 msg!(new_name_label() { Locale::Es => "nuevo nombre", Locale::En => "new name" });
 msg!(new_name_placeholder() { Locale::Es => "proyecto", Locale::En => "project" });
+msg!(new_name_hint() {
+    Locale::Es => "cualquier texto vale; la url se genera a partir de este nombre.",
+    Locale::En => "any text works; the url is generated from this name."
+});
 msg!(confirm_label() { Locale::Es => "confirmar", Locale::En => "confirm" });
 msg!(move_button() { Locale::Es => "mover", Locale::En => "move" });
 
@@ -164,3 +194,63 @@ msg!(radio_owner_label() { Locale::Es => "propietario", Locale::En => "owner" })
 msg!(add_access_heading() { Locale::Es => "agregar acceso", Locale::En => "add access" });
 msg!(username_placeholder() { Locale::Es => "usuario", Locale::En => "username" });
 msg!(add_button() { Locale::Es => "agregar", Locale::En => "add" });
+msg!(permissions_heading() { Locale::Es => "permisos por usuario", Locale::En => "per-user permissions" });
+
+msg!(mirrors_heading() { Locale::Es => "espejos externos", Locale::En => "external mirrors" });
+msg!(mirrors_prose() {
+    Locale::Es => "Sincroniza refs (ramas/tags) con un repo en GitHub, GitLab o Codeberg via git plano — sin API de proveedor, solo push/pull por https con un token embebido en la URL. Barrido periodico, mas \"sincronizar ahora\" por mirror.",
+    Locale::En => "Syncs refs (branches/tags) with a repo on GitHub, GitLab, or Codeberg over plain git — no provider API, just push/pull over https with a token embedded in the URL. Periodic sweep, plus a per-mirror \"sync now\".",
+});
+msg!(no_mirrors_hint() { Locale::Es => "(sin espejos configurados todavia)", Locale::En => "(no mirrors configured yet)" });
+msg!(mirror_table_header_label() { Locale::Es => "etiqueta", Locale::En => "label" });
+msg!(mirror_table_header_provider() { Locale::Es => "proveedor", Locale::En => "provider" });
+msg!(mirror_table_header_direction() { Locale::Es => "direccion", Locale::En => "direction" });
+msg!(mirror_table_header_status() { Locale::Es => "estado por ref", Locale::En => "status by ref" });
+msg!(mirror_table_header_actions() { Locale::Es => "acciones", Locale::En => "actions" });
+msg!(mirror_field_label_url() { Locale::Es => "url remota", Locale::En => "remote url" });
+msg!(mirror_url_placeholder() { Locale::Es => "https://github.com/duenio/repo.git", Locale::En => "https://github.com/owner/repo.git" });
+msg!(mirror_field_label_token() { Locale::Es => "token", Locale::En => "token" });
+msg!(mirror_token_placeholder_new() { Locale::Es => "token de acceso personal", Locale::En => "personal access token" });
+msg!(mirror_token_placeholder_unchanged() {
+    Locale::Es => "sin cambios (dejar en blanco)",
+    Locale::En => "unchanged (leave blank)",
+});
+msg!(mirror_field_label_label() { Locale::Es => "etiqueta", Locale::En => "label" });
+msg!(mirror_label_placeholder() { Locale::Es => "backup en github", Locale::En => "github backup" });
+msg!(mirror_field_label_enabled() { Locale::Es => "habilitado", Locale::En => "enabled" });
+msg!(direction_push_only_option() { Locale::Es => "solo push", Locale::En => "push only" });
+msg!(direction_pull_only_option() { Locale::Es => "solo pull", Locale::En => "pull only" });
+msg!(direction_bidirectional_option() { Locale::Es => "bidireccional", Locale::En => "bidirectional" });
+msg!(direction_push_only_label() { Locale::Es => "push", Locale::En => "push" });
+msg!(direction_pull_only_label() { Locale::Es => "pull", Locale::En => "pull" });
+msg!(direction_bidirectional_label() { Locale::Es => "push+pull", Locale::En => "push+pull" });
+msg!(ref_status_in_sync() { Locale::Es => "al dia", Locale::En => "in sync" });
+msg!(ref_status_diverged() { Locale::Es => "divergido", Locale::En => "diverged" });
+msg!(ref_status_error() { Locale::Es => "error", Locale::En => "error" });
+msg!(mirror_last_error() { Locale::Es => "sync fallido", Locale::En => "sync failed" });
+msg!(add_mirror_heading() { Locale::Es => "agregar espejo", Locale::En => "add mirror" });
+msg!(sync_now_button() { Locale::Es => "sincronizar ahora", Locale::En => "sync now" });
+msg!(delete_mirror_button() { Locale::Es => "eliminar", Locale::En => "delete" });
+msg!(delete_mirror_confirm(label: &str) {
+    Locale::Es => "¿eliminar el espejo '{label}'? no se puede deshacer.",
+    Locale::En => "delete mirror '{label}'? this cannot be undone.",
+});
+msg!(add_mirror_button() { Locale::Es => "agregar espejo", Locale::En => "add mirror" });
+msg!(save_mirror_button() { Locale::Es => "guardar espejo", Locale::En => "save mirror" });
+msg!(mirror_token_shown_once_prefix() {
+    Locale::Es => "Token guardado para \"",
+    Locale::En => "Token saved for \"",
+});
+msg!(mirror_token_shown_once_suffix() {
+    Locale::Es => "\" — se muestra una sola vez, guardalo ahora:",
+    Locale::En => "\" — shown only once, save it now:",
+});
+msg!(mirror_field_label_sync_merge_requests() {
+    Locale::Es => "sincronizar merge requests",
+    Locale::En => "sync merge requests",
+});
+msg!(linked_mrs_heading() { Locale::Es => "merge requests vinculados", Locale::En => "linked merge requests" });
+msg!(no_linked_mrs_hint() { Locale::Es => "(sin merge requests vinculados todavia)", Locale::En => "(no linked merge requests yet)" });
+msg!(mr_link_table_header_local() { Locale::Es => "local", Locale::En => "local" });
+msg!(mr_link_table_header_external() { Locale::Es => "externa", Locale::En => "external" });
+msg!(mr_link_table_header_cursor() { Locale::Es => "ultimo sync", Locale::En => "last synced" });

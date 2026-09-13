@@ -1,4 +1,4 @@
-//! Every mutation of an [`crate::auth::access::User`] goes through here —
+//! Every mutation of an [`crate::auth::entities::User`] goes through here —
 //! `auth::web::users` calls this instead of orchestrating
 //! `reserve_namespace`/`claim_pubkey`/`claim_email`/`put_user` (and their
 //! rollback-on-failure ordering) inline. See [`crate::domain::repo`]'s doc
@@ -16,7 +16,7 @@ use s3db::txn::{self, TxnOp};
 use std::collections::BTreeMap;
 
 /// Creates a new user: bundles the namespace reservation (shared with
-/// [`crate::auth::access::Group`] names), the pubkey/email claims if given,
+/// [`crate::auth::entities::Group`] names), the pubkey/email claims if given,
 /// and the user object write itself into one create-only [`txn::run`]
 /// transaction — either all of them land, or none do, with no manual
 /// rollback-on-failure dance needed in between. `None` if any of those keys
@@ -59,7 +59,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
     };
 
     let mut ops = vec![TxnOp::create(
-        access::NAMESPACE_INDEX.key(username),
+        access::namespace_reservation_key(username)?,
         &access::NamespaceReservation {
             kind: "user".to_string(),
         },
@@ -70,7 +70,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         Some(pk) => {
             let fingerprint = access::key_fingerprint(pk)?;
             ops.push(TxnOp::create(
-                access::PUBKEY_INDEX.key(&fingerprint),
+                access::PUBKEY_INDEX.key(&fingerprint)?,
                 &access::UsernamePointer {
                     username: username.to_string(),
                 },
@@ -101,11 +101,13 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         totp_secret: None,
         totp_enabled: false,
         totp_recovery_codes: Default::default(),
+        totp_last_step: 0,
         locale_default: String::new(),
         storage_quota_bytes: None,
         avatar_content_type: None,
         secondary_emails: Default::default(),
     };
+    reject_if_claimed_as_secondary(ctx, user.email.as_deref(), locale).await?;
     if let Some(op) = user.email_claim_op()? {
         ops.push(op);
     }
@@ -131,16 +133,59 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
         return Ok(());
     };
     access::delete_user_object(ctx.backend().as_ref(), &ctx.cipher, username).await;
-    user.release_uid(ctx.backend().as_ref()).await;
+    let _ = user.release_uid(ctx.backend().as_ref()).await;
     for pubkey in &user.pubkeys {
         if let Ok(fp) = access::key_fingerprint(pubkey) {
             access::release_pubkey(ctx.backend().as_ref(), &fp).await;
         }
     }
-    user.release_email(ctx.backend().as_ref()).await;
+    let _ = user.release_email(ctx.backend().as_ref()).await;
     access::release_namespace(ctx.backend().as_ref(), username).await;
     if user.password_hash.is_some() {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, -1).await;
+    }
+    // Every verdict this account's keys ever produced now names a user
+    // that no longer exists, and its emails are free for someone else to
+    // claim — both change what a cached verdict should say.
+    invalidate_cached_signatures(ctx).await;
+    Ok(())
+}
+
+/// Marks every cached commit-signature verdict stale, so the next render
+/// recomputes instead of trusting an answer derived from key/email state
+/// that just changed — see `storage::commit_sig`'s own doc comment for why
+/// this is one global stamp rather than a per-user one.
+async fn invalidate_cached_signatures(ctx: &AppContext) {
+    crate::storage::commit_sig::bump_signing_epoch(ctx.backend().as_ref(), &ctx.cipher).await;
+}
+
+/// `Err` if `email` is already claimed as somebody's *secondary* address.
+///
+/// The primary claim itself goes through `#[entity(index)]`'s generated
+/// `email_claim_op`, which only knows `EMAIL_INDEX` — nothing in it looks
+/// at `SECONDARY_EMAIL_INDEX`. Without this check the two indexes can each
+/// hand the same address to a different account, and
+/// [`access::resolve_by_any_email`] tries the primary one first, so the
+/// account that claimed it *second* would silently take over
+/// commit-author matching (avatars, GPG-verified-signer attribution) for
+/// the account that had it all along.
+///
+/// Rejected even when it is the caller's own secondary: promoting one
+/// would have to release the secondary claim in the same breath, and a
+/// half-done promotion leaves exactly the split-brain this guards against.
+/// Removing it from the additional addresses first is one extra step and
+/// leaves nothing to get wrong.
+async fn reject_if_claimed_as_secondary(
+    ctx: &AppContext,
+    email: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<()> {
+    let Some(email) = email else { return Ok(()) };
+    if access::resolve_by_secondary_email(ctx.backend().as_ref(), &ctx.cipher, email)
+        .await?
+        .is_some()
+    {
+        bail!("{}", gitquarry_i18n::shared::auth::email_claimed_as_secondary(locale));
     }
     Ok(())
 }
@@ -150,12 +195,11 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
 /// `User::email` was immutable in practice until this existed — only
 /// [`create`] ever claimed `EMAIL_INDEX`, so an account created without one
 /// could never acquire one, which `setup.rs`'s bootstrap admin always is.
-/// That was never a deliberate rule, just a missing operation: the reason
-/// the field is off-limits to *self*-service is that OIDC resolves a login
-/// to a `User` by it, so letting someone assign their own would let them
-/// claim another account's identity. An admin action carries no such
-/// problem — it is the same authority that picks the address at `add_user`
-/// time.
+/// That was never a deliberate rule, just a missing operation. This is the
+/// admin-authority version, allowed unconditionally — it is the same
+/// authority that picks the address at `add_user` time. The self-service
+/// route ([`set_own_email`]) exists too, but only where the address isn't
+/// also a login identity; see that function for why.
 ///
 /// The new address is claimed *before* the old one is released, and only
 /// released once the user record actually points somewhere else: the
@@ -177,6 +221,7 @@ pub async fn set_email(
     if user.email == email {
         return Ok(Cas::Ok);
     }
+    reject_if_claimed_as_secondary(ctx, email.as_deref(), locale).await?;
 
     let previous = user.clone();
     let mut user = user;
@@ -184,17 +229,61 @@ pub async fn set_email(
     if let Some(op) = user.email_claim_op()?
         && txn::run(ctx.backend().as_ref(), &ctx.cipher, vec![op]).await? == Cas::Conflict
     {
-        bail!("{}", gitquarry_i18n::shared::email_already_associated(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::email_already_associated(locale));
     }
 
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     match cas {
         // Nothing points at the old address any more.
-        Cas::Ok => previous.release_email(ctx.backend().as_ref()).await,
+        Cas::Ok => {
+            // Best-effort, as it always was: a failed release leaves a
+            // claim pointing at an address nobody uses, which the next
+            // claim self-heals — never a reason to fail the edit that
+            // already committed.
+            let _ = previous.release_email(ctx.backend().as_ref()).await;
+            invalidate_cached_signatures(ctx).await;
+        }
         // A concurrent edit won; the claim we just took belongs to nobody.
-        Cas::Conflict => user.release_email(ctx.backend().as_ref()).await,
+        Cas::Conflict => {
+            let _ = user.release_email(ctx.backend().as_ref()).await;
+        }
     }
     Ok(cas)
+}
+
+/// [`set_email`] for the account's own owner rather than an admin.
+///
+/// Refused outright while OIDC is configured, and deliberately checked here
+/// rather than at the call site: OIDC resolves a login to a `User` by its
+/// primary address, so a self-assignable one lets anybody claim an address
+/// a colleague hasn't logged in with *yet* and receive their session when
+/// they do. The email index only rejects addresses already claimed, which
+/// is exactly the case that attack avoids. Nothing about re-authentication
+/// helps — the attacker is the legitimate owner of their own account.
+///
+/// With no OIDC client wired, the address is not an identity key at all:
+/// it feeds commit-author matching and nothing that grants access, so
+/// there's no identity to steal and an account may set its own. If an
+/// operator later turns OIDC on, addresses set this way become
+/// login-relevant — which is the same trust decision they make for every
+/// address an admin assigned by hand, and theirs to make knowingly.
+///
+/// Verifying ownership by mailing a confirmation link would lift the
+/// restriction, and is the reason this is a hard refusal rather than a
+/// warning: there is no mail transport in this codebase to send one with.
+pub async fn set_own_email(
+    ctx: &AppContext,
+    username: &str,
+    email: Option<&str>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Cas> {
+    if ctx.oidc.is_some() {
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::auth::primary_email_is_admin_managed(locale)
+        );
+    }
+    set_email(ctx, username, email, locale).await
 }
 
 /// `password_plain: None` clears the password (SSH/OIDC-only afterward).
@@ -249,7 +338,7 @@ pub async fn toggle_admin(ctx: &AppContext, username: &str, locale: gitquarry_i1
 pub async fn add_pubkey(ctx: &AppContext, username: &str, pubkey: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
     let fingerprint = access::key_fingerprint(pubkey)?;
     if !access::claim_pubkey(ctx.backend().as_ref(), &ctx.cipher, &fingerprint, username).await? {
-        bail!("{}", gitquarry_i18n::shared::key_already_associated(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::key_already_associated(locale));
     }
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.pubkeys.push(pubkey.to_string());
@@ -289,7 +378,11 @@ pub async fn add_gpg_key(
         armored: armored_key.to_string(),
         fingerprint,
     });
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+    let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
+    if cas == Cas::Ok {
+        invalidate_cached_signatures(ctx).await;
+    }
+    Ok(cas)
 }
 
 pub async fn remove_gpg_key(
@@ -300,7 +393,11 @@ pub async fn remove_gpg_key(
 ) -> Result<Cas> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.gpg_keys.retain(|k| k.fingerprint != fingerprint);
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+    let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
+    if cas == Cas::Ok {
+        invalidate_cached_signatures(ctx).await;
+    }
+    Ok(cas)
 }
 
 /// Sets (or, `perm: None`, clears) `username`'s per-repo grant for `repo` —
@@ -323,7 +420,7 @@ pub async fn set_repo_perm(
             Some(p) => {
                 let repo_uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo)
                     .await?
-                    .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, repo))?;
+                    .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, repo))?;
                 user.repos.insert(repo_uid, p);
             }
             None => {
@@ -350,7 +447,7 @@ pub async fn set_repo_perm(
 pub async fn enable_totp(ctx: &AppContext, username: &str, locale: gitquarry_i18n::Locale) -> Result<(Cas, String)> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     if user.totp_enabled {
-        bail!("{}", gitquarry_i18n::shared::totp_already_enabled(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::totp_already_enabled(locale));
     }
     let secret = totp::generate_secret();
     user.totp_secret = Some(secret.clone());
@@ -396,13 +493,19 @@ pub async fn confirm_totp(
     let secret = user
         .totp_secret
         .clone()
-        .with_context(|| gitquarry_i18n::shared::no_pending_totp_enrollment(locale))?;
+        .with_context(|| gitquarry_i18n::shared::auth::no_pending_totp_enrollment(locale))?;
     if !totp::verify_code(&secret, code) {
-        bail!("{}", gitquarry_i18n::shared::incorrect_code(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::incorrect_code(locale));
     }
     let (plaintext, hashed) = fresh_recovery_codes()?;
     user.totp_enabled = true;
     user.totp_recovery_codes = hashed;
+    // Turning 2FA on is a statement about who may hold this account, so
+    // every session that predates it goes — same reasoning as
+    // [`set_password`]'s own bump. A session issued before enrollment was
+    // established with one factor and would otherwise outlive the decision
+    // to require two.
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     Ok((cas, plaintext))
 }
@@ -420,7 +523,7 @@ pub async fn regenerate_recovery_codes(
 ) -> Result<(Cas, Vec<String>)> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     if !user.totp_enabled {
-        bail!("{}", gitquarry_i18n::shared::no_pending_totp_enrollment(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::no_pending_totp_enrollment(locale));
     }
     let (plaintext, hashed) = fresh_recovery_codes()?;
     user.totp_recovery_codes = hashed;
@@ -433,7 +536,7 @@ pub async fn regenerate_recovery_codes(
 /// removal itself is persisted, so a match that then lost a concurrent CAS
 /// race to another login attempt correctly reports failure rather than
 /// letting the same code work twice. `Ok(false)` for no match, a user with
-/// 2FA off, or a user that doesn't exist — [`crate::auth::web::login`] treats
+/// 2FA off, or a user that doesn't exist — `gitquarry_webui::auth::web::login` treats
 /// every one of those identically to a wrong TOTP code, never leaking which.
 pub async fn consume_recovery_code(ctx: &AppContext, username: &str, code: &str) -> Result<bool> {
     let (Some(mut user), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await? else {
@@ -453,6 +556,24 @@ pub async fn consume_recovery_code(ctx: &AppContext, username: &str, code: &str)
     Ok(access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok)
 }
 
+/// Records `step` as the newest TOTP step spent by a successful login, so
+/// the same code can't be presented twice inside its validity window.
+/// `Ok(false)` if the stored record moved underneath us (another login
+/// racing this one) or already sits at or past `step` — either way the
+/// caller must treat this attempt as failed rather than issue a session,
+/// which is what makes the check a real one-shot rather than an advisory
+/// note.
+pub async fn record_totp_step(ctx: &AppContext, username: &str, step: u64) -> Result<bool> {
+    let (Some(mut user), etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await? else {
+        return Ok(false);
+    };
+    if step <= user.totp_last_step {
+        return Ok(false);
+    }
+    user.totp_last_step = step;
+    Ok(access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok)
+}
+
 /// Disables 2FA and clears the secret plus every recovery code. No re-auth
 /// check happens here — that's the caller's job: `auth::web::security`'s
 /// self-service action checks the account password or a live code before
@@ -464,6 +585,10 @@ pub async fn disable_totp(ctx: &AppContext, username: &str, locale: gitquarry_i1
     user.totp_secret = None;
     user.totp_enabled = false;
     user.totp_recovery_codes = Vec::new();
+    // Also a credential change, and this one is reachable by an admin with
+    // no re-auth at all (the break-glass path above) — all the more reason
+    // for whatever sessions existed to stop counting.
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 
@@ -478,11 +603,15 @@ pub async fn add_secondary_email(
 ) -> Result<Cas> {
     let email = crate::validate::validate_secondary_email(email)?;
     if !access::claim_secondary_email(ctx.backend().as_ref(), &ctx.cipher, &email, username).await? {
-        bail!("{}", gitquarry_i18n::shared::email_already_associated(locale));
+        bail!("{}", gitquarry_i18n::shared::auth::email_already_associated(locale));
     }
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.secondary_emails.insert(email);
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+    let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
+    if cas == Cas::Ok {
+        invalidate_cached_signatures(ctx).await;
+    }
+    Ok(cas)
 }
 
 pub async fn remove_secondary_email(
@@ -496,6 +625,7 @@ pub async fn remove_secondary_email(
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     if cas == Cas::Ok {
         access::release_secondary_email(ctx.backend().as_ref(), email).await;
+        invalidate_cached_signatures(ctx).await;
     }
     Ok(cas)
 }
@@ -541,7 +671,7 @@ async fn require_user(
     locale: gitquarry_i18n::Locale,
 ) -> Result<(User, Option<String>)> {
     let (user, etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await?;
-    let user = user.with_context(|| gitquarry_i18n::shared::user_not_found(locale, username))?;
+    let user = user.with_context(|| gitquarry_i18n::shared::auth::user_not_found(locale, username))?;
     Ok((user, etag))
 }
 
@@ -566,7 +696,7 @@ async fn parse_repos_field(
         }
         let (repo, perm) = entry
             .split_once(':')
-            .with_context(|| gitquarry_i18n::shared::invalid_entry(locale, entry))?;
+            .with_context(|| gitquarry_i18n::shared::auth::invalid_entry(locale, entry))?;
         let repo = repo.trim();
         let perm = match perm.trim() {
             "guest" => Permission::Guest,
@@ -574,7 +704,7 @@ async fn parse_repos_field(
             "developer" => Permission::Developer,
             "maintainer" => Permission::Maintainer,
             "owner" => Permission::Owner,
-            other => bail!("{}", gitquarry_i18n::shared::invalid_permission(locale, other)),
+            other => bail!("{}", gitquarry_i18n::shared::auth::invalid_permission(locale, other)),
         };
         if repo == "*" {
             default_permission = Some(perm);
@@ -582,7 +712,7 @@ async fn parse_repos_field(
         }
         let uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo)
             .await?
-            .with_context(|| gitquarry_i18n::shared::repo_not_found(locale, repo))?;
+            .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, repo))?;
         repos.insert(uid, perm);
     }
     Ok((repos, default_permission))

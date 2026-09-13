@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
+use tracing::warn;
 
 /// Zero sha: git uses it in the hook for "this ref didn't exist" (creation)
 /// or "doesn't exist anymore" (deletion).
@@ -95,7 +96,7 @@ struct HookCtx {
 async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> Result<HookCtx> {
     let cfg = config::Config::load_from(config_path)?;
     let bucket_cfg = cfg.bucket(bucket)?;
-    let backend = crate::storage::build_backend(bucket_cfg);
+    let backend = crate::storage::build_backend(bucket_cfg)?;
     let cipher =
         Arc::new(crate::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?);
     let remote = Remote::new(Arc::clone(&backend), repo_prefix, Arc::clone(&cipher));
@@ -107,10 +108,10 @@ async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> 
 }
 
 /// Whether `actor` may push directly to a protected branch: a global admin,
-/// the repo's own owner (user-owned repo), or an owner of the group that
-/// owns it — the same "who runs this namespace" set
+/// the repo's own owner (user-owned repo), or a `Permission::Owner` member
+/// of the group that owns it — the same "who runs this namespace" set
 /// `auth::web::groups`/`webui::repo_settings` already use, never just plain
-/// `Permission::Developer` (which team members also have). Fetches only the
+/// `Permission::Developer` (which most group members have). Fetches only the
 /// actor's own record, plus (if the owner names a group) that one group's,
 /// never the rest of the bucket's users/groups. Split from
 /// [`can_push_protected_decision`] so the actual decision logic stays
@@ -142,7 +143,9 @@ pub fn can_push_protected_decision(
     }
     match owner {
         Some(OwnerRef::User(owner_uid)) => user.is_some_and(|u| &u.uid == owner_uid),
-        Some(OwnerRef::Group(_)) => user.is_some_and(|u| owner_group.is_some_and(|g| g.owners.contains(&u.uid))),
+        Some(OwnerRef::Group(_)) => user.is_some_and(|u| {
+            owner_group.is_some_and(|g| g.role_of(&u.uid) >= Some(crate::auth::entities::Permission::Owner))
+        }),
         None => false,
     }
 }
@@ -158,7 +161,9 @@ fn can_push_protected_decision(
     }
     match owner {
         Some(OwnerRef::User(owner_uid)) => user.is_some_and(|u| &u.uid == owner_uid),
-        Some(OwnerRef::Group(_)) => user.is_some_and(|u| owner_group.is_some_and(|g| g.owners.contains(&u.uid))),
+        Some(OwnerRef::Group(_)) => user.is_some_and(|u| {
+            owner_group.is_some_and(|g| g.role_of(&u.uid) >= Some(crate::auth::entities::Permission::Owner))
+        }),
         None => false,
     }
 }
@@ -289,27 +294,10 @@ async fn check_signed_commits(
             continue; // deletion, nothing new to check
         }
         for sha in git::new_commit_shas(git_dir, &update.new, have_tips).await? {
-            let Some(info) = git::browse::log(git_dir, &sha, 1, None).await?.into_iter().next() else {
-                continue;
-            };
-            let signer = crate::domain::commit_signature::verified_signer(
-                backend,
-                cipher,
-                git_dir,
-                &info.sha,
-                info.signature_status,
-                &info.author_email,
-            )
-            .await?;
-            let authorized = match &signer {
-                Some(username) => {
-                    let perm =
-                        access::effective_permission_for(backend.as_ref(), cipher, username, repo_full_name).await?;
-                    perm >= Some(crate::auth::entities::Permission::Developer)
-                }
-                None => false,
-            };
-            if !authorized {
+            // Shared with the inbound-mirror gate (`super::policy`), which
+            // has to answer this exact question for a ref that never went
+            // through a push at all.
+            if !super::policy::commit_signature_authorized(backend, cipher, git_dir, repo_full_name, &sha).await? {
                 let short = update.refname.rsplit('/').next().unwrap_or(&update.refname);
                 return Ok(Some(format!(
                     "branch '{short}' requires signed commits: {} isn't signed by a registered key with push access.",
@@ -345,19 +333,21 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
 
     let (repo_config, _) = remote.get_repo_config().await?;
     if repo_config.deleted_at.is_some() {
-        eprintln!("gitquarry: repo is deleted, rejecting pushes.");
+        warn!("repo is deleted, rejecting pushes");
         return Ok(false);
     }
     if repo_config.archived {
-        eprintln!("gitquarry: repo is archived, rejecting pushes.");
+        warn!("repo is archived, rejecting pushes");
         return Ok(false);
     }
     if let Some((used, limit)) =
         crate::auth::access::check_quota(hook_ctx.backend.as_ref(), &hook_ctx.cipher, repo_config.owner.as_ref())
             .await?
     {
-        eprintln!(
-            "gitquarry: push rejected -- owner is over their storage quota ({used} of {limit} bytes used). Free up space or ask an admin to raise the limit."
+        warn!(
+            used_bytes = used,
+            limit_bytes = limit,
+            "push rejected: owner is over their storage quota (free up space or ask an admin to raise the limit)"
         );
         return Ok(false);
     }
@@ -398,11 +388,11 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
         )
         .await?
         {
-            eprintln!("gitquarry: {msg}");
+            warn!("{msg}");
             return Ok(false);
         }
         if let Some(msg) = check_protected(Path::new(&git_dir), &tags_touched, allowed, false, "protected tag").await? {
-            eprintln!("gitquarry: {msg}");
+            warn!("{msg}");
             return Ok(false);
         }
     }
@@ -420,7 +410,7 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
         )
         .await?
         {
-            eprintln!("gitquarry: {msg}");
+            warn!("{msg}");
             return Ok(false);
         }
     }
@@ -432,9 +422,11 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
             .cloned()
             .unwrap_or_else(|| zero_sha_like(&update.new));
         if manifest_sha != update.old {
-            eprintln!(
-                "gitquarry: '{}' changed in S3 since the last fetch (expected {}, currently at {manifest_sha}). Fetch and retry.",
-                update.refname, update.old
+            warn!(
+                refname = %update.refname,
+                expected = %update.old,
+                current = %manifest_sha,
+                "ref changed in S3 since the last fetch, fetch and retry"
             );
             return Ok(false);
         }
@@ -452,11 +444,11 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
             }
             let oversized = git::oversized_new_blobs(Path::new(&git_dir), &update.new, &check_tips, max_size).await?;
             if !oversized.is_empty() {
-                eprintln!("gitquarry: push rejected, blob(s) over {raw_limit} without LFS:");
+                warn!(limit = %raw_limit, "push rejected, blob(s) over the limit without LFS");
                 for (path, size) in &oversized {
-                    eprintln!("  {path} ({size} bytes)");
+                    warn!(%path, size, "oversized blob");
                 }
-                eprintln!("gitquarry: track these with `git lfs track` and re-commit before pushing.");
+                warn!("track these with `git lfs track` and re-commit before pushing");
                 return Ok(false);
             }
             check_tips.push(update.new.clone());
@@ -499,19 +491,60 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
 
     match remote.put_manifest(&new_manifest, etag.as_deref()).await? {
         Cas::Ok => {
+            let uid = crate::storage::uid::Uid::from(repo_uid.clone());
             if uploaded_bytes > 0 {
                 crate::storage::settings::bump_pack_bytes(
                     hook_ctx.backend.as_ref(),
                     &hook_ctx.cipher,
-                    &crate::storage::uid::Uid::from(repo_uid.clone()),
+                    &uid,
                     uploaded_bytes,
                 )
                 .await;
             }
+            // Only the default branch moves the "last updated" stamp: a
+            // push that only touches a feature branch or a tag isn't code
+            // landing on the repo's main line, which is what the home
+            // page's "updated X ago" is meant to answer.
+            if let Some(default_update) = updates
+                .iter()
+                .find(|u| new_manifest.head.as_deref() == Some(u.refname.as_str()))
+            {
+                // A brand-new default branch has no `old` to range from —
+                // every commit reachable from `new` is new to this repo.
+                let range = if is_zero_sha(&default_update.old) {
+                    default_update.new.clone()
+                } else {
+                    format!("{}..{}", default_update.old, default_update.new)
+                };
+                let commits = git::rev_list_count(Path::new(&git_dir), &range).await.unwrap_or(0);
+                let branch = default_update
+                    .refname
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(&default_update.refname);
+                crate::storage::settings::touch_last_push(
+                    hook_ctx.backend.as_ref(),
+                    &hook_ctx.cipher,
+                    &uid,
+                    commits.try_into().unwrap_or(u32::MAX),
+                    branch,
+                )
+                .await;
+            }
+            // The push itself never triggers an external-mirror sync
+            // directly — this hook process is short-lived (git kills it as
+            // soon as it exits), so it can't hold a long-running task past
+            // its own return the way an in-process `tokio::spawn` inside
+            // the main server can. Whatever's wired into `ctx.mirror_sync`
+            // instead picks this repo up the next time anyone reads or
+            // writes it (`mirror::sync_external_before_serving`, called
+            // from `git::ssh`/`git::http` before every upload-pack/
+            // receive-pack) or on the periodic sweep `gitquarry-server`
+            // spawns in-process at startup — see
+            // `docs/mirror-external-extraction-concept.md`.
             Ok(true)
         }
         Cas::Conflict => {
-            eprintln!("gitquarry: conflict updating refs.json in S3 (another push won the race). Retry.");
+            warn!("conflict updating refs.json in S3 (another push won the race), retry");
             Ok(false)
         }
     }

@@ -53,11 +53,11 @@ const FIRST_RELEASE_COMMIT_CAP: usize = 200;
 /// `--sort=-creatordate`, same ordering the releases list already sorts
 /// by) — a rough draft meant to be edited before publishing, not a
 /// curated changelog. `Err` if `tag` isn't an actual tag on this repo.
-/// This walks raw commits rather than merged PRs: a `Merge`/`Squash`
-/// [`gitquarry_core::domain::pull_request::merge`] leaves the PR number right in the
-/// merge commit's own subject line (`"Merge pull request #{number} from
+/// This walks raw commits rather than merged MRs: a `Merge`/`Squash`
+/// [`gitquarry_core::domain::merge_request::merge`] leaves the MR number right in the
+/// merge commit's own subject line (`"Merge merge request #{number} from
 /// ..."` / `"{title} (#{number})"`), so it shows up here for free without
-/// this needing to cross-reference PR metadata at all — a `Rebase` merge
+/// this needing to cross-reference MR metadata at all — a `Rebase` merge
 /// doesn't leave that marker, same asymmetry the git history itself has.
 pub async fn generate_notes(
     ctx: &AppContext,
@@ -66,7 +66,7 @@ pub async fn generate_notes(
     locale: gitquarry_i18n::Locale,
 ) -> Result<String> {
     if !tag_exists(resolved, tag).await? {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     let mirror_path = ctx.open_mirror(resolved).await?.path.clone();
     let tags = git::browse::list_refs_detailed(&mirror_path, "refs/tags/").await?;
@@ -81,7 +81,7 @@ pub async fn generate_notes(
     };
 
     if commits.is_empty() {
-        return Ok(gitquarry_i18n::shared::no_commits_since_previous_tag(locale));
+        return Ok(gitquarry_i18n::shared::release::no_commits_since_previous_tag(locale));
     }
     let mut notes = String::new();
     for commit in &commits {
@@ -109,7 +109,7 @@ pub async fn create(
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
     if !tag_exists(resolved, tag).await? {
-        bail!("{}", gitquarry_i18n::shared::not_a_tag(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::repo::not_a_tag(locale, tag));
     }
     let release = ReleaseMeta {
         tag: tag.to_string(),
@@ -147,7 +147,7 @@ pub async fn edit(
 ) -> Result<Cas> {
     let (mut release, etag) = resolved.remote.get_release(tag).await?;
     if etag.is_none() {
-        bail!("{}", gitquarry_i18n::shared::release_not_found(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
     release.title = title.to_string();
     release.notes = notes.to_string();
@@ -204,10 +204,13 @@ pub async fn add_asset(ctx: &AppContext, resolved: &ResolvedRepo, asset: NewAsse
     } = asset;
     let (mut release, etag) = resolved.remote.get_release(tag).await?;
     if etag.is_none() {
-        bail!("{}", gitquarry_i18n::shared::release_not_found(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
     if release.assets.iter().any(|a| a.filename == filename) {
-        bail!("{}", gitquarry_i18n::shared::asset_already_exists(locale, filename));
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::release::asset_already_exists(locale, filename)
+        );
     }
     let signature_verified = match signature {
         Some(sig) => {
@@ -250,12 +253,12 @@ pub async fn remove_asset(
 ) -> Result<Cas> {
     let (mut release, etag) = resolved.remote.get_release(tag).await?;
     if etag.is_none() {
-        bail!("{}", gitquarry_i18n::shared::release_not_found(locale, tag));
+        bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
     let before = release.assets.len();
     release.assets.retain(|a| a.filename != filename);
     if release.assets.len() == before {
-        bail!("{}", gitquarry_i18n::shared::asset_not_found(locale, filename));
+        bail!("{}", gitquarry_i18n::shared::release::asset_not_found(locale, filename));
     }
     let cas = resolved.remote.put_release(&release, etag.as_deref()).await?;
     if cas == Cas::Ok {

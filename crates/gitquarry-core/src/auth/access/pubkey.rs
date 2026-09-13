@@ -88,7 +88,7 @@ pub async fn claim_pubkey(backend: &dyn Backend, cipher: &Cipher, fingerprint: &
 /// leaves a stale hint that the next [`resolve_by_fingerprint`]/
 /// [`claim_pubkey`] self-heals.
 pub async fn release_pubkey(backend: &dyn Backend, fingerprint: &str) {
-    PUBKEY_INDEX.release(backend, fingerprint).await;
+    let _ = PUBKEY_INDEX.release(backend, fingerprint).await;
 }
 
 /// Normalized SHA256 fingerprint of an openssh line (`ssh-ed25519 AAAA...
