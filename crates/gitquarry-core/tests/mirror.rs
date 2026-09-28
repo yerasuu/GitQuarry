@@ -23,9 +23,9 @@ async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
     use gitquarry_core::crypto::Cipher;
     use gitquarry_core::storage::Backend;
     use gitquarry_core::storage::entities::{RepoConfig, Visibility};
-    use gitquarry_core::storage::local::LocalBackend;
     use gitquarry_core::storage::remote::Manifest;
     use gitquarry_core::storage::settings;
+    use s3db::LocalBackend;
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
@@ -36,7 +36,7 @@ async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
             bucket: root.to_string_lossy().to_string(),
             engine: LocalEngine::Files,
         });
-        let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
+        let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
         AppContext {
             bucket: "test".to_string(),
             ssh_bind: "127.0.0.1:2222".to_string(),

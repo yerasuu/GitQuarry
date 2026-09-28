@@ -12,11 +12,11 @@ use gitquarry_core::storage::{self, Backend};
 use std::sync::Arc;
 
 fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn Backend> = Arc::new(gitquarry_core::storage::local::LocalBackend::new(&LocalParams {
+    let backend: Arc<dyn Backend> = Arc::new(s3db::LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
         engine: LocalEngine::Redb,
     }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
+    let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
     AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),

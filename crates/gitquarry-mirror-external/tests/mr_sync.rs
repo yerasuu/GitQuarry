@@ -1,14 +1,15 @@
 use anyhow::Result;
 use gitquarry_core::app::{AppContext, Locks, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::merge_requests::{self, MrComment, MrStatus};
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_forge_clients::{ForgeApi, MrPatch, NewRemoteMr, RemoteComment, RemoteMr, RemoteMrState};
 use gitquarry_mirror_external::access::{self, ExternalMirror, ExternalMirrorProvider, ExternalPrLink};
 use gitquarry_mirror_external::mr_sync::*;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

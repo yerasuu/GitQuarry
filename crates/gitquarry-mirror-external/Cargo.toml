@@ -21,10 +21,11 @@ tracing = "0.1.44"
 [features]
 # Un-gates otherwise-private items for this crate's own tests/*.rs — same
 # reasoning gitquarry-core's own `test-util` feature has.
-test-util = ["gitquarry-core/test-util"]
+test-util = []
 
 [dev-dependencies]
 gitquarry-mirror-external = { path = ".", features = ["test-util"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 async-trait = "0.1.91"
 tempfile = "3.27.0"
 

@@ -7,12 +7,13 @@
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::storage::local::LocalBackend;
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_domain::release::{NewAsset, add_asset, create};
 use gitquarry_i18n::Locale;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 fn test_resolved(ctx: &AppContext) -> ResolvedRepo {

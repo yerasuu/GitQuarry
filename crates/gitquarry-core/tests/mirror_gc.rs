@@ -60,9 +60,7 @@ fn dummy_ctx(
         exe_path: PathBuf::new(),
         backend: gitquarry_core::storage::build_backend(&cfg).expect("building the test backend"),
         locks: gitquarry_core::app::Locks::default(),
-        cipher: Arc::new(
-            gitquarry_core::crypto::Cipher::derive("test", &[0u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
-        ),
+        cipher: Arc::new(gitquarry_core::crypto::Cipher::derive("test", &[0u8; s3db_crypto::SALT_LEN]).unwrap()),
         mirror_max_age,
         mirror_max_size_bytes,
         mirror_large_repo_threshold_bytes,

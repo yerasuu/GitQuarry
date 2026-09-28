@@ -113,7 +113,7 @@ fn limited_count_reflects_only_keys_actually_over_their_cap() {
 /// `request_cache.rs` tests use one for.
 #[derive(Debug)]
 struct CountingBackend {
-    inner: gitquarry_core::storage::local::LocalBackend,
+    inner: s3db::LocalBackend,
     gets: AtomicUsize,
 }
 
@@ -150,7 +150,7 @@ impl Backend for CountingBackend {
 }
 
 fn test_ctx(root: &std::path::Path) -> (AppContext, Arc<CountingBackend>) {
-    let inner = gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
+    let inner = s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
         bucket: root.to_string_lossy().to_string(),
         engine: gitquarry_core::config::LocalEngine::Redb,
     });
@@ -158,7 +158,7 @@ fn test_ctx(root: &std::path::Path) -> (AppContext, Arc<CountingBackend>) {
         inner,
         gets: AtomicUsize::new(0),
     });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[4u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
+    let cipher = Arc::new(Cipher::derive("test passphrase", &[4u8; s3db_crypto::SALT_LEN]).unwrap());
     let ctx = AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),

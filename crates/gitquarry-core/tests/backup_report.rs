@@ -1,9 +1,10 @@
 use gitquarry_core::backup::inventory::Class;
 use gitquarry_core::backup::report::{self, BackupRun, LIST_LIMIT, MAX_SAMPLES, Outcome, Trigger};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 
 fn test_backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
     let backend = LocalBackend::new(&LocalParams {

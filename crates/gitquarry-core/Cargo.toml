@@ -79,8 +79,8 @@ tracing = "0.1.44"
 [features]
 # Un-gates anything normally #[cfg(test)] (which only applies to this
 # crate's own unit-test build, not the separate lib build that external
-# `tests/*.rs` integration tests link against) for gitquarry-webui's tests
-# and for this crate's own tests/, which now hold every unit test.
+# `tests/*.rs` integration tests link against) for this crate's own
+# tests/, which now hold every unit test.
 test-util = []
 
 [dev-dependencies]

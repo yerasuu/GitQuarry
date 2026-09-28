@@ -1,9 +1,10 @@
 use axum::http::HeaderMap;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::storage::local::LocalBackend;
+use gitquarry_core::crypto::Cipher;
 use gitquarry_webui::webui::repo::summary::*;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 
 fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
     let backend: std::sync::Arc<dyn gitquarry_core::storage::Backend> =

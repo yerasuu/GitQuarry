@@ -1,14 +1,15 @@
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::merge_request::*;
 use gitquarry_core::storage::Cas;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::merge_requests::{
     CommentAnchor, DiffSide, MergeRequestMeta, MergeStrategy, MrReview, MrStatus, ReviewVerdict,
 };
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 fn test_target(ctx: &AppContext) -> ResolvedRepo {

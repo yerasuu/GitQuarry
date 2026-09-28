@@ -2,9 +2,9 @@ use gitquarry_core::app::{AppContext, Locks};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_mirror_external::engine::*;
 use gitquarry_mirror_external::{access, domain};
+use s3db::LocalBackend;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         bucket: root.to_string_lossy().to_string(),
         engine: LocalEngine::Redb,
     });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
+    let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
     AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),

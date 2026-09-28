@@ -2,9 +2,10 @@ use gitquarry_core::backup::inventory::Class;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
 use gitquarry_core::backup::snapshot::{self, DEFAULT_CLASSES};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, CompressionStrategy, SALT_LEN};
+use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 fn backend(root: &std::path::Path) -> Arc<dyn Backend> {

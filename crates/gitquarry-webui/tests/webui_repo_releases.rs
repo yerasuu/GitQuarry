@@ -1,12 +1,13 @@
 use axum::http::HeaderMap;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::git;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::remote::{AssetMeta, Manifest, ReleaseMeta, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_webui::webui::repo::releases::*;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 fn test_resolved(root: &std::path::Path) -> ResolvedRepo {

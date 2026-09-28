@@ -60,14 +60,10 @@ tracing = "0.1.44"
 test-util = []
 
 [dev-dependencies]
-# `test-util` un-gates gitquarry-core's storage::local/crypto::SALT_LEN
-# test-fixture helpers for this crate's own tests — see that crate's
-# Cargo.toml for why plain `#[cfg(test)]` isn't enough across a crate
-# boundary.
-gitquarry-core = { path = "../gitquarry-core", features = ["test-util"] }
 # Self-dependency so `cargo test` enables this crate's own `test-util`
 # automatically for its tests/*.rs.
 gitquarry-webui = { path = ".", features = ["test-util"] }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]

@@ -70,14 +70,3 @@ pub async fn cas_retry_backoff(attempt: u32) {
     let jitter = Duration::from_millis(rand::random::<u64>() % 15);
     tokio::time::sleep(backoff + jitter).await;
 }
-
-/// Test-only shim: `s3db::LocalBackend` under its old path, so existing
-/// `#[cfg(test)]` helpers across the tree don't all need editing for a
-/// module that only moved crates, not shape. `feature = "test-util"` also
-/// enables it: `gitquarry-webui`'s own tests build the same kind of local
-/// test fixture, and `#[cfg(test)]` alone only applies to this crate's own
-/// test build, not a downstream crate's.
-#[cfg(any(test, feature = "test-util"))]
-pub mod local {
-    pub use s3db::LocalBackend;
-}

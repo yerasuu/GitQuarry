@@ -7,9 +7,10 @@
 //! unverified for no visible reason.
 
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::git::signing;
-use gitquarry_core::storage::local::LocalBackend;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 
 fn backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
     let backend = LocalBackend::new(&LocalParams {

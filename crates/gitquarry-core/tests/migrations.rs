@@ -1,11 +1,12 @@
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::{Group, Permission, Team, User};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::migrations;
 use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::uid::Uid;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

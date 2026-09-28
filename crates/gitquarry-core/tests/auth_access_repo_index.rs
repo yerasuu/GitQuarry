@@ -38,12 +38,12 @@ fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
     }
 }
 
-fn test_backend_and_cipher(root: &std::path::Path) -> (gitquarry_core::storage::local::LocalBackend, Cipher) {
-    let backend = gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
+fn test_backend_and_cipher(root: &std::path::Path) -> (s3db::LocalBackend, Cipher) {
+    let backend = s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
         bucket: root.to_string_lossy().to_string(),
         engine: gitquarry_core::config::LocalEngine::Redb,
     });
-    let cipher = Cipher::derive("test passphrase", &[9u8; gitquarry_core::crypto::SALT_LEN]).unwrap();
+    let cipher = Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap();
     (backend, cipher)
 }
 

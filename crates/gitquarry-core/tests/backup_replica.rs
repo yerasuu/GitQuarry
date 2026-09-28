@@ -3,7 +3,7 @@ use gitquarry_core::backup::replica;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
+use s3db::LocalBackend;
 use std::sync::Arc;
 
 const ENCRYPTION_KEY: &str = ".conf/encryption.json";

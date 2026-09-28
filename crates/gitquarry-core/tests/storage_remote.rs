@@ -1,8 +1,9 @@
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::storage::local::LocalBackend;
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::remote::*;
 use gitquarry_core::storage::{Backend, Cas};
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 /// A fresh `LocalBackend` rooted at `root` — redb allows only one open

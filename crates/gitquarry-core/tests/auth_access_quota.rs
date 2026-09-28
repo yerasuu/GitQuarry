@@ -4,12 +4,13 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access::{self, put_group};
 use gitquarry_core::auth::domain;
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::entities::{OwnerRef, RepoConfig};
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::settings::{add_owner_index, put_repo_config};
 use gitquarry_core::storage::uid::Uid;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 fn test_ctx(root: &std::path::Path) -> AppContext {

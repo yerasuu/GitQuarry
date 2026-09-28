@@ -189,14 +189,13 @@ fn render_user_offers_admin_totp_disable_only_when_enabled() {
 }
 
 fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
-    let backend: std::sync::Arc<dyn gitquarry_core::storage::Backend> = std::sync::Arc::new(
-        gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
+    let backend: std::sync::Arc<dyn gitquarry_core::storage::Backend> =
+        std::sync::Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
             bucket: root.to_string_lossy().to_string(),
             engine: gitquarry_core::config::LocalEngine::Files,
-        }),
-    );
+        }));
     let cipher = std::sync::Arc::new(
-        gitquarry_core::crypto::Cipher::derive("test passphrase", &[6u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
+        gitquarry_core::crypto::Cipher::derive("test passphrase", &[6u8; s3db_crypto::SALT_LEN]).unwrap(),
     );
     gitquarry_core::app::AppContext {
         bucket: "test".to_string(),

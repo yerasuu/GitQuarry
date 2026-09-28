@@ -2,11 +2,12 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::backup::report::{self, Outcome, Trigger};
 use gitquarry_core::backup::schedule::{self, DEFAULT_INTERVAL, MIN_INTERVAL};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::entities::ServerSettings;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::settings::put_settings;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 use std::time::Duration;
 

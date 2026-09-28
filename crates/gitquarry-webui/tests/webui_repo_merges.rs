@@ -2,17 +2,18 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
 use gitquarry_core::domain::repo;
 use gitquarry_core::storage::entities::{OwnerRef, Visibility};
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_i18n::Locale;
 use gitquarry_webui::webui::repo::merges::handlers::{parse_verdict, resolve_target};
 use gitquarry_webui::webui::repo::merges::*;
+use s3db::LocalBackend;
+use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 /// The query params a plain merge-detail view arrives with: none. The

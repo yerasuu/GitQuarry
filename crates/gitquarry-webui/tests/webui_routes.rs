@@ -21,15 +21,13 @@ use tower::ServiceExt;
 const ROUTES_SOURCE: &str = include_str!("../src/webui/mod.rs");
 
 fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(
-        gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
+    let backend: Arc<dyn gitquarry_core::storage::Backend> =
+        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
             bucket: root.to_string_lossy().to_string(),
             engine: gitquarry_core::config::LocalEngine::Redb,
-        }),
-    );
-    let cipher = Arc::new(
-        gitquarry_core::crypto::Cipher::derive("test passphrase", &[7u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
-    );
+        }));
+    let cipher =
+        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[7u8; s3db_crypto::SALT_LEN]).unwrap());
     AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),
