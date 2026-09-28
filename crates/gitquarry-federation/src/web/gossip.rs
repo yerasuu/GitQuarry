@@ -12,11 +12,19 @@
 
 use crate::gossip::{AnnounceRequest, AnnounceResponse, GossipCandidateWire};
 use crate::state::State_;
+use crate::validate::validate_instance_url;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+
+/// Caps one announce's `known_peers` fan-out — an unauthenticated caller
+/// controls this list's length, so without a bound it could make this
+/// instance issue an unbounded number of concurrent outbound probes
+/// (`verify_instance` calls) from a single request. Matches the outbound
+/// `gossip.sample(32)` size elsewhere in this module, doubled for slack.
+const MAX_ANNOUNCE_CANDIDATES: usize = 64;
 
 fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response {
     let bytes = serde_json::to_vec(body).unwrap_or_else(|_| b"{}".to_vec());
@@ -27,12 +35,18 @@ fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response {
 /// — a `None` verification (unreachable, or not a real gitquarry instance)
 /// means it's silently dropped, never stored as a hint to try again later
 /// (the announcer, or another peer, will just re-offer it on a future
-/// tick if it's real).
+/// tick if it's real). `validate_instance_url` first, same check
+/// `access::peers::add` applies to an admin-supplied peer URL — a gossiped
+/// candidate is a claim from an unauthenticated caller and must clear the
+/// same bar before this instance ever dials it.
 async fn verify_and_report(
     table: &crate::gossip::GossipTable,
     candidate: &GossipCandidateWire,
     reporter: Option<&str>,
 ) {
+    if validate_instance_url(&candidate.web_base_url).is_err() {
+        return;
+    }
     if crate::instance_client::verify_instance(&candidate.web_base_url)
         .await
         .is_ok()
@@ -47,9 +61,10 @@ async fn verify_and_report(
 }
 
 pub(crate) async fn handler_announce(State(state): State_, body: Bytes) -> Response {
-    let Ok(req) = serde_json::from_slice::<AnnounceRequest>(&body) else {
+    let Ok(mut req) = serde_json::from_slice::<AnnounceRequest>(&body) else {
         return (StatusCode::BAD_REQUEST, "invalid JSON body").into_response();
     };
+    req.known_peers.truncate(MAX_ANNOUNCE_CANDIDATES);
 
     verify_and_report(&state.gossip, &req.instance, None).await;
 

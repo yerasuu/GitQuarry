@@ -19,7 +19,7 @@ fn test_state(root: &std::path::Path) -> Arc<FederationState> {
     let bucket = root.to_string_lossy().to_string();
     let backend = LocalBackend::new(&LocalParams {
         bucket: bucket.clone(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     });
     let cipher = s3db_crypto::Cipher::derive("test passphrase", &[77u8; s3db_crypto::SALT_LEN]).unwrap();
     Arc::new(FederationState {
@@ -28,7 +28,7 @@ fn test_state(root: &std::path::Path) -> Arc<FederationState> {
         core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string()),
         backend_config: BackendConfig::Local(LocalParams {
             bucket,
-            engine: LocalEngine::Files,
+            engine: LocalEngine::Redb,
         }),
         gossip: Arc::new(GossipTable::default()),
         self_announce: None,
@@ -68,6 +68,51 @@ async fn handshake_confirms_only_once_this_side_already_requested() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["ok"], true);
+}
+
+#[tokio::test]
+async fn receive_handshake_rejects_a_different_secret_once_already_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path());
+    let peer = Peer {
+        name: "acme".to_string(),
+        web_base_url: "https://acme.example".to_string(),
+        git_base_url: "https://acme.example".to_string(),
+        ..Default::default()
+    };
+    access::put_peer(state.backend.as_ref(), &state.cipher, &peer, None)
+        .await
+        .unwrap();
+    sister::request(state.backend.as_ref(), &state.cipher, "acme")
+        .await
+        .unwrap();
+
+    let confirmed = sister::receive_handshake(state.backend.as_ref(), &state.cipher, "acme", "real-secret")
+        .await
+        .unwrap();
+    assert!(confirmed);
+
+    // An unauthenticated caller who knows "acme" was requested as a sister
+    // can't hijack the relationship by re-POSTing a different secret once
+    // it's already confirmed.
+    let hijacked = sister::receive_handshake(state.backend.as_ref(), &state.cipher, "acme", "attacker-secret")
+        .await
+        .unwrap();
+    assert!(!hijacked);
+    assert_eq!(
+        sister::credential_for(state.backend.as_ref(), &state.cipher, "acme")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("real-secret")
+    );
+
+    // Retrying with the *same* secret stays idempotent (a lost response
+    // shouldn't strand the initiator in a permanent "waiting" state).
+    let retried = sister::receive_handshake(state.backend.as_ref(), &state.cipher, "acme", "real-secret")
+        .await
+        .unwrap();
+    assert!(retried);
 }
 
 #[tokio::test]

@@ -83,6 +83,16 @@ pub async fn request(backend: &dyn Backend, cipher: &Cipher, name: &str) -> Resu
 /// *also* already has `sister_requested` set for `announcer_name` — a
 /// one-sided request is stored (via [`request`]) but never confirms
 /// anything by itself.
+///
+/// `instance_name` in the request body is an unauthenticated, self-chosen
+/// claim — this call can't verify the caller actually controls
+/// `announcer_name`'s registered `web_base_url` (that needs a dial-back
+/// verification this protocol doesn't do yet). To at least bound the
+/// damage a spoofed claim can do: once a secret is confirmed for
+/// `announcer_name`, a later call can only replay that exact secret
+/// (idempotent retry of a lost response), never overwrite it with a
+/// different one, and `sister_requested` is cleared on success so the
+/// one-shot request/confirm cycle can't be replayed again after the fact.
 pub async fn receive_handshake(
     backend: &dyn Backend,
     cipher: &Cipher,
@@ -93,10 +103,23 @@ pub async fn receive_handshake(
     let Some(mut peer) = peer else {
         return Ok(false);
     };
-    if peer.auto_linked || !peer.sister_requested {
+    if peer.auto_linked {
+        return Ok(false);
+    }
+    // Checked before the `sister_requested` gate below, deliberately:
+    // confirming clears `sister_requested` (a few lines down), so once a
+    // handshake is confirmed this is the *only* branch a later call can
+    // ever reach — putting it after that gate would make the idempotent-
+    // retry path this comment documents permanently unreachable.
+    if peer.sister_confirmed {
+        let current = access::get_peer_credential(backend, cipher, &instance_uid(), announcer_name).await?;
+        return Ok(current.is_some_and(|c| c.secret == secret));
+    }
+    if !peer.sister_requested {
         return Ok(false);
     }
     peer.sister_confirmed = true;
+    peer.sister_requested = false;
     peer.put(backend, cipher, etag.as_deref()).await?;
     access::set_peer_credential(
         backend,
