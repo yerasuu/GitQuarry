@@ -560,9 +560,12 @@ pub(crate) async fn handler_generate_notes_post(
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim().to_string();
-    let (notes, error) = match release::generate_notes(&ctx, &resolved, &tag, locale).await {
-        Ok(notes) => (notes, None),
+    let (notes, error) = match validate::validate_rev(&tag) {
         Err(e) => (form.notes.clone(), Some(e.to_string())),
+        Ok(()) => match release::generate_notes(&ctx, &resolved, &tag, locale).await {
+            Ok(notes) => (notes, None),
+            Err(e) => (form.notes.clone(), Some(e.to_string())),
+        },
     };
     let prefill = ReleaseFormPrefill {
         tag,
@@ -620,6 +623,7 @@ pub(crate) async fn handler_edit_post(
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     let cas = release::edit(
         &resolved,
         tag,
@@ -672,6 +676,7 @@ pub(crate) async fn handler_delete_post(
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     release::delete(&resolved, tag).await?;
 
     gitquarry_core::storage::audit::record(
@@ -806,6 +811,7 @@ pub(crate) async fn handler_upload_asset_post(
         ))
     })?;
     let tag = tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     let signature = non_empty(signature);
     let cas = release::add_asset(
         &ctx,
@@ -865,6 +871,7 @@ pub(crate) async fn handler_delete_asset_post(
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     let filename = validate::validate_asset_filename(&form.filename).map_err(AppError::bad_request)?;
     let cas = release::remove_asset(&resolved, tag, &filename, locale)
         .await
