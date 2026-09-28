@@ -118,6 +118,43 @@ async fn list_merge_requests_excludes_the_counter_and_sorts_newest_first() {
     assert_eq!(mrs.iter().map(|mr| mr.number).collect::<Vec<_>>(), vec![3, 2, 1]);
 }
 
+/// Comments and reviews live under `merges/<n>/`, inside the collection the
+/// MRs themselves are listed from.
+#[tokio::test]
+async fn an_mrs_comments_and_reviews_are_never_listed_as_mrs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let cipher = Arc::new(cipher);
+    let uid = Uid::from("team/proj".to_string());
+
+    let n = next_mr_number(backend.as_ref(), &cipher, &uid).await.unwrap();
+    put_merge_request(backend.as_ref(), &cipher, &uid, &sample(n), None)
+        .await
+        .unwrap();
+    let comment = MrComment {
+        author: "alice".to_string(),
+        body: "lgtm".to_string(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+        ..Default::default()
+    };
+    add_mr_comment(backend.as_ref(), &cipher, &uid, n, &comment)
+        .await
+        .unwrap();
+    let review = MrReview {
+        author: "bob".to_string(),
+        verdict: ReviewVerdict::Approved,
+        body: String::new(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+    };
+    add_mr_review(backend.as_ref(), &cipher, &uid, n, &review)
+        .await
+        .unwrap();
+
+    let mrs = list_merge_requests(&backend, &cipher, &uid).await.unwrap();
+    assert_eq!(mrs.iter().map(|mr| mr.number).collect::<Vec<_>>(), vec![n]);
+}
+
 #[tokio::test]
 async fn comments_list_empty_before_any_are_added() {
     let dir = tempfile::tempdir().unwrap();
