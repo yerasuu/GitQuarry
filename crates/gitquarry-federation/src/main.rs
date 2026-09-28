@@ -26,7 +26,7 @@ async fn run() -> Result<()> {
     let config_path = Config::resolve_path()?;
     let config = Config::load_from(&config_path).with_context(|| format!("loading {}", config_path.display()))?;
 
-    let backend = s3db::build_backend(&config.backend);
+    let backend = s3db::build_backend(&config.backend)?;
     let cipher = s3db::bootstrap::get_or_create_cipher(backend.as_ref(), &config.passphrase).await?;
 
     let self_announce = match (&config.own_web_base_url, &config.own_git_base_url) {

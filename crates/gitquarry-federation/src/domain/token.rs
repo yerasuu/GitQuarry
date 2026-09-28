@@ -79,8 +79,8 @@ pub async fn revoke(backend: &dyn Backend, cipher: &Cipher, owner: &str, uid: &s
     if token.owner != owner {
         return Ok(());
     }
-    AccessToken::delete(backend, cipher, uid).await;
-    token.release_token_hash(backend).await;
+    let _ = AccessToken::delete(backend, cipher, uid).await;
+    let _ = token.release_token_hash(backend).await;
     access::remove_owner_index(backend, cipher, owner, &token.uid).await;
     Ok(())
 }

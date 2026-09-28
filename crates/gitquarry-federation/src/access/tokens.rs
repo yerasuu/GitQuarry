@@ -79,7 +79,7 @@ pub(crate) async fn add_owner_index(backend: &dyn Backend, cipher: &Cipher, owne
 }
 
 pub(crate) async fn remove_owner_index(backend: &dyn Backend, cipher: &Cipher, owner: &str, token_uid: &Uid) {
-    owner_index(owner).delete(backend, cipher, token_uid.as_str()).await;
+    let _ = owner_index(owner).delete(backend, cipher, token_uid.as_str()).await;
 }
 
 /// Every [`AccessToken`] `owner` currently owns, via the owner index then a

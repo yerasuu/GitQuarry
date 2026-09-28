@@ -123,7 +123,7 @@ pub async fn list_peer_credentials(
 }
 
 pub async fn delete_peer_credential(backend: &dyn Backend, cipher: &Cipher, user_uid: &Uid, peer_name: &str) {
-    peer_tokens_collection(user_uid)
+    let _ = peer_tokens_collection(user_uid)
         .delete(backend, cipher, peer_name)
         .await;
 }

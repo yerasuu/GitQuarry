@@ -45,7 +45,7 @@ pub async fn put_peer(backend: &dyn Backend, cipher: &Cipher, peer: &Peer, expec
 
 /// Best-effort delete of a peer's own object.
 pub async fn delete_peer_object(backend: &dyn Backend, cipher: &Cipher, name: &str) {
-    Peer::delete(backend, cipher, name).await;
+    let _ = Peer::delete(backend, cipher, name).await;
 }
 
 /// Every `Peer`, via the collection's own key listing then a concurrent
