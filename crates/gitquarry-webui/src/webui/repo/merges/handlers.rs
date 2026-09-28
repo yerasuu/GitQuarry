@@ -524,7 +524,7 @@ pub(crate) async fn handler_comment_post(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct EditPrCommentForm {
+pub(crate) struct EditMrCommentForm {
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -541,7 +541,7 @@ pub(crate) async fn handler_comment_edit_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<EditPrCommentForm>,
+    Form(form): Form<EditMrCommentForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
@@ -582,7 +582,7 @@ pub(crate) async fn handler_comment_edit_post(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct DeletePrCommentForm {
+pub(crate) struct DeleteMrCommentForm {
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -598,7 +598,7 @@ pub(crate) async fn handler_comment_delete_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<DeletePrCommentForm>,
+    Form(form): Form<DeleteMrCommentForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,

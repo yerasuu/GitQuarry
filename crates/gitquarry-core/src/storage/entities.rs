@@ -371,6 +371,14 @@ pub struct RepoConfig {
     /// to leave with no existence check at all.
     #[serde(default)]
     pub forked_from: Option<Uid>,
+    /// Set instead of `forked_from` when the source repo lives on a linked
+    /// peer instance (federation layer 2, `docs/federation-concept.md`) —
+    /// there's no local `Uid` for a repo this bucket never created. Additive
+    /// field, `#[serde(default)]`: every `RepoConfig` written before this
+    /// existed just deserializes with `None` here, same as any other field
+    /// added over time on this struct.
+    #[serde(default)]
+    pub forked_from_peer: Option<PeerOrigin>,
     /// How many repos have this one as their `forked_from`. Maintained
     /// incrementally (best-effort CAS bump on the source repo each time
     /// `webui::fork` creates a new fork — see there) rather than computed by
@@ -424,4 +432,15 @@ pub struct RepoConfig {
 pub struct Label {
     pub name: String,
     pub color: String,
+}
+
+/// Where a peer-forked repo came from — the peer's `Peer::name` (not its
+/// `web_base_url`: the peer might get re-linked at a different URL later,
+/// the name is the stable label) plus the repo's full name on that peer at
+/// fork time. Display-only, same as a plain `forked_from` link: never
+/// re-resolved live, never a basis for any permission decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerOrigin {
+    pub peer: String,
+    pub repo: String,
 }

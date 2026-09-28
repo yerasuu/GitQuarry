@@ -18,7 +18,7 @@
 use super::{login, reauth};
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    field, layout, render_flash, require_csrf, require_login, settings_section,
+    federation_ui_active, field, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -39,7 +39,13 @@ pub(crate) async fn handler_keys_get(State(ctx): State_, headers: HeaderMap) -> 
     let csrf = csrf_field(&headers);
     let locale = effective_locale(&ctx, &headers).await;
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = account_settings_page("keys", render_keys_page(&me, &csrf, None, locale), locale).into_string();
+    let body = account_settings_page(
+        "keys",
+        render_keys_page(&me, &csrf, None, locale),
+        federation_ui_active(&ctx),
+        locale,
+    )
+    .into_string();
     Ok(axum::response::Html(layout(
         "keys",
         "",
@@ -121,6 +127,7 @@ pub(crate) async fn handler_keys_post(
                 &account_settings_page(
                     "keys",
                     render_keys_page(&me, &csrf, Some(Flash::Err(&$msg)), locale),
+                    federation_ui_active(&ctx),
                     locale,
                 )
                 .into_string(),
@@ -192,6 +199,7 @@ pub(crate) async fn handler_keys_post(
     let body = account_settings_page(
         "keys",
         render_keys_page(&me, &csrf, Some(Flash::Ok("saved.")), locale),
+        federation_ui_active(&ctx),
         locale,
     )
     .into_string();

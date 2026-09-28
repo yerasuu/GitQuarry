@@ -17,6 +17,7 @@ fn user(username: &str, is_admin: bool, repos: &[(&str, Permission)]) -> User {
         password_hash: None,
         is_admin,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),

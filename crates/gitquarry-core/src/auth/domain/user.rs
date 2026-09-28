@@ -92,6 +92,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         password_hash,
         session_epoch: 0,
         is_admin,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),
@@ -330,6 +331,19 @@ pub async fn set_storage_quota(
 pub async fn toggle_admin(ctx: &AppContext, username: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.is_admin = !user.is_admin;
+    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+}
+
+/// Same shape as [`toggle_admin`] — a separate, narrower delegation (peer
+/// link/unlink/ban/access-level management, `/_peers`) rather than full
+/// `is_admin` (`docs/federation-binary-split-concept.md` section 6).
+pub async fn toggle_federation_moderator(
+    ctx: &AppContext,
+    username: &str,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Cas> {
+    let (mut user, etag) = require_user(ctx, username, locale).await?;
+    user.is_federation_moderator = !user.is_federation_moderator;
     access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 

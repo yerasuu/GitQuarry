@@ -14,7 +14,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, TextSize, account_settings_page, csrf_field, effective_density, effective_locale,
-    effective_theme, layout, render_flash, require_csrf, require_login, settings_section,
+    effective_theme, federation_ui_active, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -32,7 +32,7 @@ pub(crate) async fn handler_appearance_get(State(ctx): State_, headers: HeaderMa
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_appearance_page(&user, &csrf_field(&headers), None, locale);
-    let body = account_settings_page("appearance", content, locale).into_string();
+    let body = account_settings_page("appearance", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "appearance",
         "",
@@ -149,7 +149,7 @@ pub(crate) async fn handler_appearance_post(
         return Ok(axum::response::Html(content.into_string()).into_response());
     }
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = account_settings_page("appearance", content, locale).into_string();
+    let body = account_settings_page("appearance", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "appearance",
         "",

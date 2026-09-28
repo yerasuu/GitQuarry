@@ -16,6 +16,7 @@ fn base_user() -> User {
         default_permission: None,
         password_hash: None,
         is_admin: false,
+        is_federation_moderator: false,
         session_epoch: 0,
         starred: Default::default(),
         watched: Default::default(),

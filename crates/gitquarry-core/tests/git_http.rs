@@ -1,6 +1,8 @@
 use gitquarry_core::git::http::*;
 
+use axum::body::Bytes;
 use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
@@ -122,7 +124,10 @@ fn basic_credentials_none_for_a_bearer_token() {
     assert!(basic_credentials(&headers).is_none());
 }
 
-fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
+fn test_ctx(
+    root: &std::path::Path,
+    federation: Option<gitquarry_core::app::FederationLink>,
+) -> gitquarry_core::app::AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(
         gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
             bucket: root.to_string_lossy().to_string(),
@@ -147,12 +152,199 @@ fn test_ctx(root: &std::path::Path) -> gitquarry_core::app::AppContext {
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        federation,
         allow_push_create: false,
         trust_forwarded_for: false,
         events: Default::default(),
         mirror_sync: None,
         visible_repo_uids_cache: Default::default(),
     }
+}
+
+fn bearer_username_header(username: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let encoded = BASE64.encode(format!("{username}:"));
+    headers.insert(header::AUTHORIZATION, format!("Basic {encoded}").parse().unwrap());
+    headers
+}
+
+/// Stands in for `gitquarry-federation`'s own
+/// `POST /_internal-out/tokens/resolve` (same pattern
+/// `webui::federation_proxy::tests::spawn_fake_federation` already
+/// uses) — `known_secret` resolves to `("alice", write)`, anything else
+/// (or a `repo_uid` other than `"repo-uid-x"`) reports unresolved.
+async fn spawn_fake_token_resolver(known_secret: &'static str, write: bool) -> String {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        secret: String,
+        repo_uid: String,
+    }
+    async fn handler(
+        axum::extract::State((known_secret, write)): axum::extract::State<(&'static str, bool)>,
+        body: Bytes,
+    ) -> Response {
+        let req: Req = serde_json::from_slice(&body).unwrap();
+        let ok = req.secret == known_secret && req.repo_uid == "repo-uid-x";
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::to_vec(&serde_json::json!({
+                "ok": ok,
+                "username": ok.then_some("alice"),
+                "write": ok.then_some(write),
+            }))
+            .unwrap(),
+        )
+            .into_response()
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new()
+        .route("/_internal-out/tokens/resolve", axum::routing::post(handler))
+        .with_state((known_secret, write));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn authorize_grants_a_token_scoped_repo_at_its_ceiling_and_denies_an_unknown_secret() {
+    let base_url = spawn_fake_token_resolver("good-secret", false).await;
+    let federation = gitquarry_core::app::FederationLink {
+        base_url,
+        internal_token: "unused".to_string(),
+        http: reqwest::Client::new(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path(), Some(federation));
+    gitquarry_core::auth::domain::user::create(
+        &ctx,
+        gitquarry_core::auth::domain::user::NewUser {
+            username: "alice",
+            email: None,
+            pubkey: None,
+            password_plain: None,
+            is_admin: false,
+            repos_field: "",
+            locale: gitquarry_i18n::Locale::En,
+        },
+    )
+    .await
+    .unwrap();
+    ctx.create_repo("alice/proj").await.unwrap().unwrap();
+    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
+
+    // Read-only token (write: false in the fake resolver): read allowed,
+    // push denied even though alice owns the repo outright.
+    let headers = bearer_username_header("good-secret");
+    match authorize(
+        &ctx,
+        &headers,
+        "alice/proj",
+        &repo_uid,
+        gitquarry_core::storage::entities::Visibility::Private,
+        gitquarry_core::auth::entities::Permission::Reporter,
+    )
+    .await
+    .unwrap()
+    {
+        Authz::Allowed(Some(username)) => assert_eq!(username, "alice"),
+        other => panic!("expected Allowed, got {other:?}"),
+    }
+    assert!(matches!(
+        authorize(
+            &ctx,
+            &headers,
+            "alice/proj",
+            &repo_uid,
+            gitquarry_core::storage::entities::Visibility::Private,
+            gitquarry_core::auth::entities::Permission::Developer
+        )
+        .await
+        .unwrap(),
+        Authz::Denied(Denial::Forbidden)
+    ));
+
+    // Wrong secret: the fake resolver reports unresolved, falls through
+    // to the password path, fails there too (no such user "bad-secret").
+    let bad_headers = bearer_username_header("bad-secret");
+    assert!(matches!(
+        authorize(
+            &ctx,
+            &bad_headers,
+            "alice/proj",
+            &repo_uid,
+            gitquarry_core::storage::entities::Visibility::Private,
+            gitquarry_core::auth::entities::Permission::Reporter
+        )
+        .await
+        .unwrap(),
+        Authz::Denied(Denial::Unauthorized)
+    ));
+}
+
+#[tokio::test]
+async fn authorize_allows_a_write_token_to_push() {
+    let base_url = spawn_fake_token_resolver("rw-secret", true).await;
+    let federation = gitquarry_core::app::FederationLink {
+        base_url,
+        internal_token: "unused".to_string(),
+        http: reqwest::Client::new(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path(), Some(federation));
+    gitquarry_core::auth::domain::user::create(
+        &ctx,
+        gitquarry_core::auth::domain::user::NewUser {
+            username: "alice",
+            email: None,
+            pubkey: None,
+            password_plain: None,
+            is_admin: false,
+            repos_field: "",
+            locale: gitquarry_i18n::Locale::En,
+        },
+    )
+    .await
+    .unwrap();
+    ctx.create_repo("alice/proj").await.unwrap().unwrap();
+    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
+    let headers = bearer_username_header("rw-secret");
+    assert!(matches!(
+        authorize(
+            &ctx,
+            &headers,
+            "alice/proj",
+            &repo_uid,
+            gitquarry_core::storage::entities::Visibility::Private,
+            gitquarry_core::auth::entities::Permission::Developer
+        )
+        .await
+        .unwrap(),
+        Authz::Allowed(Some(_))
+    ));
+}
+
+#[tokio::test]
+async fn authorize_falls_through_to_password_auth_without_federation_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path(), None);
+    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
+    let headers = bearer_username_header("whatever-secret");
+    assert!(matches!(
+        authorize(
+            &ctx,
+            &headers,
+            "alice/proj",
+            &repo_uid,
+            gitquarry_core::storage::entities::Visibility::Private,
+            gitquarry_core::auth::entities::Permission::Reporter
+        )
+        .await
+        .unwrap(),
+        Authz::Denied(Denial::Unauthorized)
+    ));
 }
 
 fn basic_auth_header(username: &str, password: &str) -> HeaderMap {
@@ -165,7 +357,7 @@ fn basic_auth_header(username: &str, password: &str) -> HeaderMap {
 #[tokio::test]
 async fn authorize_slows_a_username_down_after_too_many_wrong_passwords_over_http() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = test_ctx(dir.path(), None);
     gitquarry_core::auth::domain::user::create(
         &ctx,
         gitquarry_core::auth::domain::user::NewUser {
@@ -223,7 +415,7 @@ async fn authorize_slows_a_username_down_after_too_many_wrong_passwords_over_htt
 #[tokio::test]
 async fn authorize_clears_the_failure_counter_on_a_correct_password() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = test_ctx(dir.path(), None);
     gitquarry_core::auth::domain::user::create(
         &ctx,
         gitquarry_core::auth::domain::user::NewUser {
@@ -281,7 +473,7 @@ async fn authorize_clears_the_failure_counter_on_a_correct_password() {
 #[tokio::test]
 async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(test_ctx(dir.path(), None));
     let resolved = ctx.create_repo("acme/demo").await.unwrap().unwrap();
     let config = gitquarry_core::storage::entities::RepoConfig {
         uid: resolved.uid.clone(),
@@ -334,7 +526,7 @@ async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
 #[test]
 fn the_rate_limit_key_ignores_a_forwarded_header_by_default() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = test_ctx(dir.path(), None);
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
     // Trusting the header without a proxy that owns it would let any client
@@ -348,7 +540,7 @@ fn the_rate_limit_key_ignores_a_forwarded_header_by_default() {
 #[test]
 fn the_rate_limit_key_uses_the_first_forwarded_hop_when_trusted() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ctx = test_ctx(dir.path());
+    let mut ctx = test_ctx(dir.path(), None);
     ctx.trust_forwarded_for = true;
 
     let mut headers = axum::http::HeaderMap::new();

@@ -16,7 +16,7 @@
 use super::{login, reauth};
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    field, layout, non_empty, render_flash, require_csrf, require_login, settings_section,
+    federation_ui_active, field, layout, non_empty, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -36,7 +36,7 @@ pub(crate) async fn handler_security_get(State(ctx): State_, headers: HeaderMap)
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_security_page(&user, &csrf_field(&headers), None, None, None, locale);
-    let body = account_settings_page("security", content, locale).into_string();
+    let body = account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
         "",
@@ -115,7 +115,7 @@ pub(crate) async fn handler_security_post(
             return Ok(axum::response::Html(layout(
                 "security",
                 "",
-                &account_settings_page("security", content, locale).into_string(),
+                &account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string(),
                 &topnav,
                 effective_theme(&ctx, &headers).await,
                 effective_density(&ctx, &headers).await,
@@ -207,7 +207,7 @@ pub(crate) async fn handler_security_post(
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
         return Ok(axum::response::Html(content.into_string()).into_response());
     }
-    let body = account_settings_page("security", content, locale).into_string();
+    let body = account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
         "",

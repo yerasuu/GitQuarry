@@ -8,6 +8,11 @@
 //! view lives in that view's own file. This file is the two entry points:
 //! the repo index ([`handler_index`]) and the per-repo dispatcher
 //! ([`handler_repo`]) that picks a view by `?view=` and calls its `render_*`.
+//! [`crate::webui::remote_repo::handler_remote_repo`] — federation
+//! layer 2's read-only equivalent for a linked peer's repo — reuses
+//! `render_tree`/`render_blob`/`render_log`/`render_blame` from here (they
+//! only ever needed a bare-repo path) over a peer-synced mirror instead of
+//! an S3-backed one, hence those and [`components`] being `pub(crate)`.
 
 mod activity;
 pub(crate) mod blame;
@@ -341,6 +346,7 @@ pub(crate) async fn handler_index(
         })
         .collect();
 
+    let peer_sections = federated_index_sections(&ctx).await;
     // Per-card ssh clone hint (cards view only) — same host/port derivation
     // `summary::render_clone_urls` uses for a single repo's own clone table,
     // just inlined here instead of reused: that helper renders a whole
@@ -440,6 +446,29 @@ pub(crate) async fn handler_index(
                         }
                         @if let Some(last_push) = repo.last_push {
                             span class="muted" { (relative_time_ago(last_push, now_unix)) }
+                        }
+                    }
+                }
+            }
+            @for (peer_name, repos) in &peer_sections {
+                p class="repo-cards-ns" { (peer_name) " (remote)" }
+                @for repo in repos {
+                    div class="card card-pad repo-card" {
+                        div class="repo-card-title" {
+                            a href=(format!("/_remote/{}/{}", url_encode(peer_name), url_encode(&repo.name))) {
+                                (repo.name)
+                            }
+                            (maud::PreEscaped(super::topic_badges(&repo.topics)))
+                        }
+                        @if let Some(desc) = &repo.description {
+                            @if !desc.is_empty() {
+                                p class="repo-card-desc" { (desc) }
+                            }
+                        }
+                        @if repo.star_count > 0 {
+                            div class="repo-card-meta" {
+                                span { (repo.star_count) " \u{2605}" }
+                            }
                         }
                     }
                 }
@@ -636,6 +665,25 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         }
     }
     Ok(visible)
+}
+
+/// `(peer name, repos)` for every linked peer with at least one repo —
+/// federation layer 1's "index federado" (`docs/federation-concept.md`).
+/// `[]` if `[federation]` isn't configured — federation is an optional,
+/// separately deployed component (`docs/federation-binary-split-concept.md`),
+/// otherwise sourced live from `GET /_internal-out/peer-repos` on that
+/// process (section 8). Each repo links to `/_remote/<peer>/<repo>`
+/// (federation layer 2's local browse view over a peer-synced mirror), not
+/// out to the peer's own web UI. A peer with an empty repo list is skipped
+/// rather than rendering an empty section header.
+async fn federated_index_sections(ctx: &AppContext) -> Vec<(String, Vec<gitquarry_wire::RepoSummary>)> {
+    let Some(federation) = &ctx.federation else {
+        return Vec::new();
+    };
+    let mut sections = crate::webui::federation_client::peer_repos(federation).await;
+    sections.retain(|(_, repos)| !repos.is_empty());
+    sections.sort_by(|a, b| a.0.cmp(&b.0));
+    sections
 }
 
 /// Just the `(full_name, label)` pairs out of [`list_visible_repos`] — what

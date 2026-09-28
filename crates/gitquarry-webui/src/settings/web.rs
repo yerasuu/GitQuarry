@@ -11,8 +11,8 @@
 use crate::auth::web::login;
 use crate::webui::repo::relative_time_ago;
 use crate::webui::{
-    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    non_empty, render_flash, require_csrf, settings_section,
+    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, layout, non_empty, render_flash, require_csrf, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -66,6 +66,35 @@ pub(crate) async fn require_admin(ctx: &AppContext, headers: &HeaderMap, return_
                 AppError::forbidden(anyhow::anyhow!(
                     "{}",
                     gitquarry_i18n::shared::auth::account_is_not_admin(locale)
+                ))
+                .into_response(),
+            )
+        }
+        None => Some(login_redirect(return_to)),
+    }
+}
+
+/// Same shape as [`require_admin`], but also lets a non-admin
+/// `is_federation_moderator` user through — the gate `/_peers` uses
+/// (`docs/federation-binary-split-concept.md` section 6: managing linked
+/// peers is a narrower delegation than full `is_admin`).
+pub(crate) async fn require_admin_or_federation_moderator(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    return_to: &str,
+) -> Option<Response> {
+    let login_configured = login::login_enforced(ctx).await;
+    if !login_configured {
+        return None;
+    }
+    match login::current_user(ctx, headers).await {
+        Some(user) if user.is_admin || user.is_federation_moderator => None,
+        Some(_) => {
+            let locale = effective_locale(ctx, headers).await;
+            Some(
+                AppError::forbidden(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::auth::account_is_not_admin_or_moderator(locale)
                 ))
                 .into_response(),
             )
@@ -160,7 +189,7 @@ async fn render_page(
     let body = settings_page(active, content, locale);
     axum::response::Html(layout(
         &format!("settings-{active}"),
-        &admin_header("settings", locale),
+        &admin_header("settings", federation_ui_active(ctx), locale),
         &body.into_string(),
         &topnav,
         effective_theme(ctx, headers).await,

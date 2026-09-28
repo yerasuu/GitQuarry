@@ -478,6 +478,7 @@ async fn seed_admin_user(
         password_hash: Some(password_hash),
         session_epoch: 0,
         is_admin: true,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),

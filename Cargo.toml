@@ -8,6 +8,7 @@ members = [
     "crates/gitquarry-domain",
     "crates/gitquarry-webui",
     "crates/gitquarry-server",
+    "crates/gitquarry-federation",
     "crates/gitquarry-forge-clients",
     "crates/gitquarry-mirror-external",
 ]

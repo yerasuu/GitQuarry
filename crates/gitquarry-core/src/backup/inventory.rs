@@ -175,6 +175,13 @@ fn classify_conf(rest: &str) -> Class {
     if rest.starts_with("users/") || rest.starts_with("groups/") || rest.starts_with("pat/") {
         return Class::Entities;
     }
+    // `gitquarry-federation`'s own entities (`Peer`/`AccessToken`) and its
+    // hand-rolled `peer-tokens/<uid>` claim index — federation has no
+    // storage crate of its own, everything it persists lives under core's
+    // `.conf/` namespace, same as every other optional module.
+    if rest.starts_with("peers") || rest.starts_with("tokens") || rest.starts_with("peer-tokens/") {
+        return Class::Entities;
+    }
     if rest.starts_with("audit/") {
         return Class::Audit;
     }

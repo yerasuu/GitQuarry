@@ -33,3 +33,23 @@ fn tabs_bar_marks_the_active_tab_with_aria_current() {
     let summary_link = html.split("</a>").find(|s| s.contains(">summary")).unwrap();
     assert!(!summary_link.contains("aria-current"), "{summary_link}");
 }
+
+#[test]
+fn admin_tabs_drop_peers_without_federation() {
+    let with = admin_header("settings", true, gitquarry_i18n::Locale::En);
+    assert!(with.contains(r#"href="/_peers""#), "{with}");
+    let without = admin_header("settings", false, gitquarry_i18n::Locale::En);
+    assert!(!without.contains("/_peers"), "{without}");
+    // The rest of the bar is untouched -- only the federation entry goes.
+    assert!(without.contains(r#"href="/_users""#), "{without}");
+    assert!(without.contains(r#"href="/_audit""#), "{without}");
+}
+
+#[test]
+fn account_sidebar_drops_tokens_without_federation() {
+    let with = account_settings_page("profile", maud::html! {}, true, gitquarry_i18n::Locale::En);
+    assert!(with.into_string().contains(r#"href="/_account/tokens""#));
+    let without = account_settings_page("profile", maud::html! {}, false, gitquarry_i18n::Locale::En).into_string();
+    assert!(!without.contains("/_account/tokens"), "{without}");
+    assert!(without.contains(r#"href="/_account/pat""#), "{without}");
+}

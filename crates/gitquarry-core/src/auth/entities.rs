@@ -141,6 +141,13 @@ pub struct User {
     /// `repos`/group membership regardless of this flag.
     #[serde(default)]
     pub is_admin: bool,
+    /// Manage linked federation peers (`/_peers`: link/unlink/ban/
+    /// access-level) without full `is_admin` — a separate, narrower
+    /// delegation (`docs/federation-binary-split-concept.md` section 6).
+    /// `#[serde(default)]` so existing stored records deserialize as
+    /// `false`, same pattern `is_admin` itself would need if added today.
+    #[serde(default)]
+    pub is_federation_moderator: bool,
     /// Repo uids this user starred — purely a personal bookmark list, no
     /// bearing on `repos`/visibility/anything else. Doesn't need to stay in
     /// sync with reality: a starred repo that gets deleted just fails to
@@ -262,9 +269,12 @@ impl User {
     }
 }
 
-/// A long-lived, locally-scoped credential for git-smart-HTTP clone/push.
-/// `scopes` is never empty (explicit repos only, never all) and carries a
-/// full [`Permission`] ceiling
+/// A long-lived, locally-scoped credential for git-smart-HTTP clone/push —
+/// separate from federation's own fine-grained `AccessToken` (`.conf/tokens`,
+/// owned by `gitquarry-federation`, resolved via loopback): this one lives
+/// entirely in core, so it works with no `[federation]` config at all.
+/// `scopes` is never empty — same "explicit repos only, never all" rule
+/// federation's tokens follow — but carries a full [`Permission`] ceiling
 /// per repo instead of a single read/write bool, since core already has
 /// [`Permission`]'s 5 tiers and [`User::repos`] already uses this exact map
 /// shape. The ceiling never grants more than `owner_uid`'s real, current

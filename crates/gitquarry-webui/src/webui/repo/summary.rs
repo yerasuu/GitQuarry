@@ -158,6 +158,15 @@ pub(super) async fn render_about(
                     @if let Some((source_name, source_label)) = &forked_from {
                         p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_label) } }
                     }
+                    @if let Some(origin) = &config.forked_from_peer {
+                        p class="muted" {
+                            (t::forked_from_label(locale)) " "
+                            a href=(format!("/_remote/{}/{}", url_encode(&origin.peer), url_encode(&origin.repo))) {
+                                (origin.peer) "/" (origin.repo)
+                            }
+                            " (" (origin.peer) ")"
+                        }
+                    }
 
                     @if let Some(readme) = &readme {
                         (PreEscaped(readme))

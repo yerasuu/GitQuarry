@@ -69,6 +69,7 @@ fn dummy_ctx(
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        federation: None,
         allow_push_create: false,
         trust_forwarded_for: false,
         events: Default::default(),

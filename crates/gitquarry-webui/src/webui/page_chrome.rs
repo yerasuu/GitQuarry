@@ -167,9 +167,21 @@ fn title_bar(
 /// looked like a different, unfinished site: just a heading bolted onto the
 /// topnav with nothing marking where chrome ends and content starts. `active`
 /// is `"settings"` or `"users"`, same active-tab convention as [`header_bar`].
-pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> String {
+/// `federation`: [`federation_ui_active`]'s own result — the "peers" tab is
+/// dropped entirely when `[federation]` isn't configured, rather than shown
+/// as a tab that only ever leads to a 503.
+#[cfg(any(test, feature = "test-util"))]
+pub fn admin_header(active: &str, federation: bool, locale: gitquarry_i18n::Locale) -> String {
+    admin_header_impl(active, federation, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
+pub(crate) fn admin_header(active: &str, federation: bool, locale: gitquarry_i18n::Locale) -> String {
+    admin_header_impl(active, federation, locale)
+}
+
+fn admin_header_impl(active: &str, federation: bool, locale: gitquarry_i18n::Locale) -> String {
     use gitquarry_i18n::web::chrome;
-    let tabs: &[(&str, String, String)] = &[
+    let mut tabs: Vec<(&str, String, String)> = vec![
         (
             "settings",
             "/_settings/footer".to_string(),
@@ -177,8 +189,12 @@ pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> Stri
         ),
         ("users", "/_users".to_string(), chrome::users_tab(locale)),
         ("groups", "/_groups".to_string(), chrome::groups_tab(locale)),
-        ("audit", "/_audit".to_string(), chrome::audit_tab(locale)),
     ];
+    if federation {
+        tabs.push(("peers", "/_peers".to_string(), chrome::peers_tab(locale)));
+    }
+    tabs.push(("audit", "/_audit".to_string(), chrome::audit_tab(locale)));
+    let tabs = &tabs[..];
     maud::html! {
         (title_bar(active_tab_label(tabs, active), None, None, None, None, maud::html! {}))
         (tabs_bar(tabs, active, &maud::html! {}, &chrome::page_tabs_nav_label(locale), &chrome::page_tabs_toggle_label(locale)))
@@ -187,14 +203,19 @@ pub(crate) fn admin_header(active: &str, locale: gitquarry_i18n::Locale) -> Stri
 }
 
 /// Section ids/hrefs/labels for [`account_settings_page`]'s sidebar —
-/// `"profile"`/`"appearance"`/`"security"`/`"keys"`/`"favorites"`/`"pat"`,
-/// each a top-level `/_account/<id>` route (no username in the URL: unlike
-/// the public [`crate::auth::web::profile`] page, every one of these only
-/// ever operates on the logged-in session's own account, resolved
+/// `"profile"`/`"appearance"`/`"security"`/`"keys"`/`"favorites"`/`"pat"`/
+/// `"tokens"`, each a top-level `/_account/<id>` route (no username in the
+/// URL: unlike the public [`crate::auth::web::profile`] page, every one of
+/// these only ever operates on the logged-in session's own account, resolved
 /// server-side — there's nothing here a URL segment could usefully name).
-fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static str, String); 6] {
+/// `federation`: [`federation_ui_active`]'s own result — `"tokens"` is
+/// federation's fine-grained token page (proxied to `gitquarry-federation`,
+/// see `webui::federation_proxy`), so it's left out entirely on a deploy
+/// with no `[federation]` section instead of listed as a section that only
+/// ever answers 503.
+fn account_sections(federation: bool, locale: gitquarry_i18n::Locale) -> Vec<(&'static str, &'static str, String)> {
     use gitquarry_i18n::web::chrome;
-    [
+    let mut sections = vec![
         ("profile", "/_account/profile", chrome::account_profile_section(locale)),
         (
             "appearance",
@@ -205,7 +226,11 @@ fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static 
         ("keys", "/_account/keys", chrome::keys_tab(locale)),
         ("favorites", "/_account/favorites", chrome::favorites_tab(locale)),
         ("pat", "/_account/pat", chrome::pat_tab(locale)),
-    ]
+    ];
+    if federation {
+        sections.push(("tokens", "/_account/tokens", chrome::tokens_tab(locale)));
+    }
+    sections
 }
 
 /// GitHub-style settings panel: a left sidebar naming every section
@@ -219,13 +244,33 @@ fn account_sections(locale: gitquarry_i18n::Locale) -> [(&'static str, &'static 
 /// needs both sides in one unbroken markup tree, not a `header`/`body`
 /// string pair [`layout`] concatenates without knowing about the grid
 /// between them.
+#[cfg(any(test, feature = "test-util"))]
+pub fn account_settings_page(
+    active: &str,
+    content: maud::Markup,
+    federation: bool,
+    locale: gitquarry_i18n::Locale,
+) -> maud::Markup {
+    account_settings_page_impl(active, content, federation, locale)
+}
+#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn account_settings_page(
     active: &str,
     content: maud::Markup,
+    federation: bool,
+    locale: gitquarry_i18n::Locale,
+) -> maud::Markup {
+    account_settings_page_impl(active, content, federation, locale)
+}
+
+fn account_settings_page_impl(
+    active: &str,
+    content: maud::Markup,
+    federation: bool,
     locale: gitquarry_i18n::Locale,
 ) -> maud::Markup {
     use gitquarry_i18n::web::chrome;
-    let sections = account_sections(locale);
+    let sections = account_sections(federation, locale);
     // The page's own `h2` comes from the same tuple the sidebar entry does,
     // so the two can never drift apart and no page needs a second copy of
     // its own title as a separate message. Without it every account page
@@ -329,6 +374,17 @@ pub(crate) struct HeaderExtras<'a> {
     /// need it" opt-in as `below_header`.
     pub(crate) sub_tabs: &'a str,
     pub(crate) locale: gitquarry_i18n::Locale,
+}
+
+/// `true` only when `[federation]` is configured for this deploy
+/// (`ctx.federation` is `Some`). Federation is an optional, separately
+/// deployed binary: without it every `/_peers` and `/_account/tokens`
+/// request just answers 503 (`federation_proxy`'s own
+/// `federation_unavailable()`), so the chrome that links them
+/// ([`admin_header`]'s peers tab, [`account_sections`]'s tokens entry) is
+/// dropped instead of left pointing at a dead end.
+pub(crate) fn federation_ui_active(ctx: &gitquarry_core::app::AppContext) -> bool {
+    ctx.federation.is_some()
 }
 
 /// Title bar + tabs, cgit-style: repo name on top, tabs below (active tab

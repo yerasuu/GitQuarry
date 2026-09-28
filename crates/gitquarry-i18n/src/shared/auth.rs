@@ -218,6 +218,16 @@ msg!(
 );
 
 msg!(
+    /// `settings::web::require_admin_or_federation_moderator`: a logged-in
+    /// user who is neither a global admin nor `User::is_federation_moderator`
+    /// hit a federation-moderation-only page.
+    account_is_not_admin_or_moderator() {
+        Locale::Es => "tu usuario no es admin ni moderador de federacion",
+        Locale::En => "your account is neither an admin nor a federation moderator",
+    }
+);
+
+msg!(
     /// `auth::domain::user::set_own_email` refusing while OIDC is
     /// configured — the address is a login identity there, so only an admin
     /// assigns it.

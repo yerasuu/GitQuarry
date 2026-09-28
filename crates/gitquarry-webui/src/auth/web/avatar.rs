@@ -8,8 +8,8 @@
 
 use super::login;
 use crate::webui::{
-    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme, field,
-    layout, require_csrf, require_login, settings_section,
+    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, field, layout, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -33,7 +33,7 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
     let topnav = super::login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_profile_section(&user, &csrf_field(&headers), ctx.oidc.is_none(), None, locale);
-    let body = account_settings_page("profile", content, locale).into_string();
+    let body = account_settings_page("profile", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "profile",
         "",
@@ -234,6 +234,7 @@ pub(crate) async fn handler_emails_post(
                 &account_settings_page(
                     "profile",
                     render_profile_section(&me, &csrf, self_service, Some(crate::webui::Flash::Err(&$msg)), locale),
+                    federation_ui_active(&ctx),
                     locale,
                 )
                 .into_string(),
@@ -309,6 +310,7 @@ pub(crate) async fn handler_emails_post(
             Some(crate::webui::Flash::Ok("saved.")),
             locale,
         ),
+        federation_ui_active(&ctx),
         locale,
     )
     .into_string();

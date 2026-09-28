@@ -15,6 +15,7 @@
 pub mod audit;
 pub mod auth;
 pub mod chrome;
+pub mod remote_pulls;
 pub mod repo;
 pub mod repo_new;
 pub mod repo_settings;

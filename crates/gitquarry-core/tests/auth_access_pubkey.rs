@@ -29,6 +29,7 @@ fn user_matches_any_of_its_own_pubkeys_by_fingerprint() {
         password_hash: None,
         is_admin: false,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),

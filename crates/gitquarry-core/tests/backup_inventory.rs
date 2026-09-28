@@ -171,6 +171,7 @@ fn placeholder_samples() -> BTreeMap<&'static str, &'static str> {
         ("uid", "sampleuid"),
         ("repo_uid", "sampleuid"),
         ("owner_uid", "sampleuid"),
+        ("owner", "sampleowner"),
         ("parent_uid", "sampleuid"),
         ("user_uid", "sampleuid"),
         ("mirror_id", "samplemirror"),
