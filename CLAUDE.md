@@ -92,10 +92,13 @@ One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh,
 
 ## Tests
 
-- Unit tests live inline under the code as `#[cfg(test)] mod tests {}`
-  blocks, never in a separate `tests.rs` file unless the crate is very
-  large. Inline keeps the test close to the implementation. Only
-  integration tests (testing the public API) go in `tests/`.
+- Every test lives in the crate's `tests/` and exercises only the
+  public API — no inline `mod tests {}`, no sibling `tests.rs`. Never
+  widen visibility for a test (`#[cfg(any(test, feature = "test-util"))]
+  pub`, `test-util` features): security first, the tested surface is
+  the shipped one. A behaviour only reachable through a private item is
+  tested through the public path that reaches it (a route, a command),
+  or not at all.
 - Pragmatic tests: happy path, real cases that break in production,
   `#[should_panic]`, `#[ignore]` for integration. No theoretical
   tests covering variants nobody constructs.
