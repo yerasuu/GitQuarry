@@ -390,6 +390,11 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // Detached, not part of the `select!` below: a sweep failure logs and
     // retries next tick, it must never take ssh:///web down with it.
     tokio::spawn(gc::run_periodic_sweep(Arc::clone(&ctx)));
+    // The one-shot sweep above only catches a transaction crashed before
+    // *this* startup — one abandoned mid-run, hours into a long-lived
+    // process, would otherwise sit there until the next restart. Same
+    // detached, log-and-retry treatment as every sweep around it.
+    tokio::spawn(run_periodic_stale_transaction_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
     tokio::spawn(gitquarry_mirror_external::engine::run_periodic_sync(Arc::clone(&ctx)));
     // Same detached treatment, and it stays a no-op on every tick until an
@@ -410,6 +415,32 @@ pub async fn run(rest: &[String]) -> Result<()> {
         () = shutdown_signal() => {
             info!("shutdown signal received, closing");
             Ok(())
+        }
+    }
+}
+
+/// How often [`run_periodic_stale_transaction_sweep`] runs, and how old a
+/// transaction has to be before it's swept — same threshold the one-shot
+/// startup sweep already uses.
+const STALE_TRANSACTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Rolls back any `s3db::txn::run` transaction left `Preparing` for longer
+/// than [`STALE_TRANSACTION_SWEEP_INTERVAL`] — the periodic half of the
+/// same sweep `run` already does once, synchronously, before this instance
+/// accepts a connection. That one-shot call only catches a transaction a
+/// *previous* instance crashed mid-way; this one catches one crashed hours
+/// into this instance's own run, which would otherwise sit `Preparing`
+/// until the next restart. `tokio::time::interval`'s first tick fires
+/// immediately, so this also re-covers the moment right after startup —
+/// harmless, `recover_stale` is cheap when there's nothing to recover.
+async fn run_periodic_stale_transaction_sweep(ctx: Arc<AppContext>) {
+    let mut ticker = tokio::time::interval(STALE_TRANSACTION_SWEEP_INTERVAL);
+    loop {
+        ticker.tick().await;
+        match s3db::txn::recover_stale(ctx.backend.as_ref(), &ctx.cipher, STALE_TRANSACTION_SWEEP_INTERVAL).await {
+            Ok(0) => {}
+            Ok(n) => info!("recovered {n} stale transaction(s)"),
+            Err(e) => warn!("stale-transaction recovery sweep failed, continuing: {e:#}"),
         }
     }
 }
