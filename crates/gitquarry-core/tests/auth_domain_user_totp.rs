@@ -1,7 +1,6 @@
 //! `auth::domain::user`'s TOTP lifecycle: enroll/confirm/disable plus the
 //! recovery-code side of it (mint at confirm, one-time consume, regenerate).
 
-use gitquarry_auth_crypto::totp;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
@@ -207,7 +206,11 @@ async fn disable_totp_clears_secret_and_every_recovery_code() {
     assert!(u.totp_recovery_codes.is_empty());
 }
 
+/// RFC 4226/6238 code for the current step, derived here rather than through
+/// `gitquarry_auth_crypto::totp` so the domain layer is checked against the
+/// spec, not against the primitive it wraps.
 fn live_code(secret_b32: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
     let raw = data_encoding::BASE32_NOPAD
         .decode(secret_b32.trim_end_matches('=').as_bytes())
         .unwrap();
@@ -215,8 +218,18 @@ fn live_code(secret_b32: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        / totp::STEP_SECS;
-    format!("{:06}", totp::hotp(&raw, counter).unwrap())
+        / 30;
+    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(&raw).unwrap();
+    mac.update(&counter.to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+    let offset = (digest[19] & 0x0f) as usize;
+    let bin = u32::from_be_bytes([
+        digest[offset] & 0x7f,
+        digest[offset + 1],
+        digest[offset + 2],
+        digest[offset + 3],
+    ]);
+    format!("{:06}", bin % 1_000_000)
 }
 
 #[tokio::test]

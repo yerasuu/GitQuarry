@@ -15,14 +15,8 @@ use sha1::Sha1;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 160 bits — RFC 4226's recommended HOTP secret size.
-#[cfg(any(test, feature = "test-util"))]
-pub const SECRET_BYTES: usize = 20;
-#[cfg(not(any(test, feature = "test-util")))]
 const SECRET_BYTES: usize = 20;
 /// RFC 6238 default step.
-#[cfg(any(test, feature = "test-util"))]
-pub const STEP_SECS: u64 = 30;
-#[cfg(not(any(test, feature = "test-util")))]
 const STEP_SECS: u64 = 30;
 const DIGITS: u32 = 6;
 /// ±30s clock-drift tolerance: a code stays acceptable for at most three
@@ -53,19 +47,6 @@ pub fn generate_recovery_code() -> String {
     format!("{}-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12], &hex[12..16])
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn hotp(secret_raw: &[u8], counter: u64) -> Option<u32> {
-    let mut mac = Hmac::<Sha1>::new_from_slice(secret_raw).ok()?;
-    mac.update(&counter.to_be_bytes());
-    let digest = mac.finalize().into_bytes();
-    let offset = (digest[digest.len() - 1] & 0x0f) as usize;
-    let code = (u32::from(digest[offset] & 0x7f) << 24)
-        | (u32::from(digest[offset + 1]) << 16)
-        | (u32::from(digest[offset + 2]) << 8)
-        | u32::from(digest[offset + 3]);
-    Some(code % 10u32.pow(DIGITS))
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn hotp(secret_raw: &[u8], counter: u64) -> Option<u32> {
     let mut mac = Hmac::<Sha1>::new_from_slice(secret_raw).ok()?;
     mac.update(&counter.to_be_bytes());
@@ -84,7 +65,7 @@ fn hotp(secret_raw: &[u8], counter: u64) -> Option<u32> {
 /// input behaves like a wrong answer" doctrine as
 /// [`super::password::verify_password`].
 pub fn verify_code(secret_b32: &str, code: &str) -> bool {
-    verify_code_at(secret_b32, code, SystemTime::now())
+    matching_step(secret_b32, code).is_some()
 }
 
 /// Which 30s step `code` matched, if any — [`verify_code`] with the answer
@@ -96,16 +77,7 @@ pub fn matching_step(secret_b32: &str, code: &str) -> Option<u64> {
     matching_step_at(secret_b32, code, SystemTime::now())
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn matching_step_at(secret_b32: &str, code: &str, now: SystemTime) -> Option<u64> {
-    matching_step_impl(secret_b32, code, now)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn matching_step_at(secret_b32: &str, code: &str, now: SystemTime) -> Option<u64> {
-    matching_step_impl(secret_b32, code, now)
-}
-
-fn matching_step_impl(secret_b32: &str, code: &str, now: SystemTime) -> Option<u64> {
     if code.len() != DIGITS as usize || !code.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -117,15 +89,6 @@ fn matching_step_impl(secret_b32: &str, code: &str, now: SystemTime) -> Option<u
         let c = counter.checked_add_signed(skew)?;
         (hotp(&secret_raw, c)? == want).then_some(c)
     })
-}
-
-#[cfg(any(test, feature = "test-util"))]
-pub fn verify_code_at(secret_b32: &str, code: &str, now: SystemTime) -> bool {
-    matching_step_at(secret_b32, code, now).is_some()
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn verify_code_at(secret_b32: &str, code: &str, now: SystemTime) -> bool {
-    matching_step_at(secret_b32, code, now).is_some()
 }
 
 /// Minimal percent-encoding for an `otpauth://` URI's path/query — this

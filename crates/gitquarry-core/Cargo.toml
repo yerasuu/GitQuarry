@@ -87,13 +87,11 @@ test-util = []
 # Self-dependency so `cargo test` enables `test-util` automatically for
 # this crate's own tests/*.rs — see the [features] comment above.
 gitquarry-core = { path = ".", features = ["test-util"] }
-# tests/auth_domain_user_totp.rs needs `totp::STEP_SECS`/`totp::hotp`
-# (test-util-gated there too) to derive a code independently of the
-# production `verify_code` path it's testing against.
-gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto", features = ["test-util"] }
-# Only for tests/auth_domain_user_totp.rs's own TOTP-code derivation helper —
-# gitquarry-auth-crypto (a real dependency) owns this for production code.
+# tests/auth_domain_user_totp.rs derives TOTP codes on its own, independent
+# of gitquarry-auth-crypto (a real dependency that owns this in production).
 data-encoding = "2.11.1"
+hmac = "0.13.0"
+sha1 = "0.11.0"
 
 [lints.rust]
 unsafe_code = "forbid"
