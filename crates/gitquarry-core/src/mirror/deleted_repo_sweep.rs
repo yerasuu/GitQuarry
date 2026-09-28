@@ -34,16 +34,7 @@ pub async fn run_periodic_sweep(ctx: Arc<AppContext>) {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub async fn sweep_once(ctx: &AppContext) -> Result<()> {
-    sweep_once_impl(ctx).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn sweep_once(ctx: &AppContext) -> Result<()> {
-    sweep_once_impl(ctx).await
-}
-
-async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
     let backend = ctx.backend();
     for uid in storage::settings::list_deleted_repo_uids(backend.as_ref()).await? {
         let resolved = ResolvedRepo {

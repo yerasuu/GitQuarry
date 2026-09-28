@@ -70,13 +70,10 @@ pub struct FederationSection {
     pub federation_url: String,
 }
 
-// pub (and `buckets` pub too) isn't just for tests/config.rs: RawConfig is
-// also used unconditionally by `Config::load_from` below, so it can't be
-// cfg-gated to test builds only.
 #[derive(Debug, Deserialize)]
-pub struct RawConfig {
+struct RawConfig {
     #[serde(default)]
-    pub buckets: BTreeMap<String, BucketConfig>,
+    buckets: BTreeMap<String, BucketConfig>,
     #[serde(default)]
     federation: Option<FederationSection>,
     /// Which bucket this instance serves when no `--bucket` is passed. Only
@@ -177,12 +174,12 @@ impl Config {
         self.federation.as_ref()
     }
 
-    /// See [`RawConfig::allow_push_create`]'s doc comment.
+    /// See `RawConfig::allow_push_create`'s doc comment.
     pub fn allow_push_create(&self) -> bool {
         self.allow_push_create
     }
 
-    /// See [`RawConfig::trust_forwarded_for`]'s doc comment.
+    /// See `RawConfig::trust_forwarded_for`'s doc comment.
     pub fn trust_forwarded_for(&self) -> bool {
         self.trust_forwarded_for
     }

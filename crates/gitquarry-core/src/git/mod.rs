@@ -23,9 +23,6 @@
 pub mod browse;
 pub mod codeowners;
 pub mod http;
-#[cfg(any(test, feature = "test-util"))]
-pub mod lfs;
-#[cfg(not(any(test, feature = "test-util")))]
 mod lfs;
 pub mod signing;
 pub mod ssh;
@@ -76,16 +73,7 @@ async fn run(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<Vec<u8>> {
 /// the archive straight to the client would remove that too, but not while
 /// zip repacking needs the whole tar in hand — see
 /// [`crate::git::browse::archive_one`].
-#[cfg(any(test, feature = "test-util"))]
-pub async fn run_capped(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
-    run_capped_impl(git_dir, args, max_bytes).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) async fn run_capped(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
-    run_capped_impl(git_dir, args, max_bytes).await
-}
-
-async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
     let (out, truncated) = run_truncating(git_dir, args, max_bytes).await?;
     if truncated {
         bail!("git {} produced more than the {max_bytes}-byte limit", describe(args));

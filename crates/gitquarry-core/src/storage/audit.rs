@@ -27,9 +27,6 @@ const AUDIT_ROOT: &str = ".conf/audit";
 /// *destination* bucket, and hardcoding the string in a second place is how
 /// the two would eventually disagree.
 pub const AUDIT_ROOT_PUBLIC: &str = AUDIT_ROOT;
-#[cfg(any(test, feature = "test-util"))]
-pub const AUDIT_PREFIX: &str = ".conf/audit/";
-#[cfg(not(any(test, feature = "test-util")))]
 const AUDIT_PREFIX: &str = ".conf/audit/";
 
 /// The [`Collection`] holding one month's worth of audit entries — built
@@ -37,15 +34,7 @@ const AUDIT_PREFIX: &str = ".conf/audit/";
 /// runtime-scoped [`Collection::new_owned`] (e.g. a repo's permission
 /// collection): cheap (two small owned fields), and the month it should
 /// point at is only known at the call site.
-#[cfg(any(test, feature = "test-util"))]
-pub fn audit_collection(month: &str) -> Collection {
-    audit_collection_impl(month)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn audit_collection(month: &str) -> Collection {
-    audit_collection_impl(month)
-}
-fn audit_collection_impl(month: &str) -> Collection {
     Collection::new_owned(format!("{AUDIT_ROOT}/{month}"))
 }
 
@@ -74,48 +63,24 @@ pub struct AuditEntry {
 /// segment after [`AUDIT_PREFIX`], so a whole month's entries share one
 /// prefix and [`recent_keys`] can LIST just the last handful of months
 /// instead of the audit log's entire lifetime.
-#[cfg(any(test, feature = "test-util"))]
-pub fn month_bucket(secs: u64) -> String {
-    month_bucket_impl(secs)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn month_bucket(secs: u64) -> String {
-    month_bucket_impl(secs)
-}
-fn month_bucket_impl(secs: u64) -> String {
     let (y, mo, _d) = civil_from_days((secs / 86400) as i64);
     format!("{y:04}-{mo:02}")
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn entry_name(at_millis: u128) -> String {
-    entry_name_impl(at_millis)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn entry_name(at_millis: u128) -> String {
-    entry_name_impl(at_millis)
-}
 /// Name (not full key — [`audit_collection`] owns the `{AUDIT_ROOT}/{month}`
 /// prefix and `.json` suffix) for one entry within its month bucket.
 /// Zero-padded millis first: lexicographic order == chronological order,
 /// which is what makes "list, sort names, take the tail" work without
 /// reading every entry's body first.
-fn entry_name_impl(at_millis: u128) -> String {
+fn entry_name(at_millis: u128) -> String {
     format!("{at_millis:020}-{:08x}", rand::random::<u32>())
 }
 
 /// One step back from `(year, month)` — `month` is 1-12, wraps `year` on a
 /// January underflow. `day` rides along unused (civil_from_days always
 /// returns one) so callers don't need to destructure/rebuild the tuple.
-#[cfg(any(test, feature = "test-util"))]
-pub fn prev_month(ymd: (i64, u32, u32)) -> (i64, u32, u32) {
-    prev_month_impl(ymd)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn prev_month(ymd: (i64, u32, u32)) -> (i64, u32, u32) {
-    prev_month_impl(ymd)
-}
-fn prev_month_impl((y, mo, d): (i64, u32, u32)) -> (i64, u32, u32) {
+fn prev_month((y, mo, d): (i64, u32, u32)) -> (i64, u32, u32) {
     if mo <= 1 { (y - 1, 12, d) } else { (y, mo - 1, d) }
 }
 

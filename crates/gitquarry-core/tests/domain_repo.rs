@@ -1,4 +1,4 @@
-use gitquarry_core::app::ResolvedRepo;
+use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::repo::*;
@@ -186,24 +186,6 @@ async fn delete_branch_rejects_a_protected_branch_even_though_it_exists() {
 }
 
 #[test]
-fn normalize_topic_lowercases_and_strips_punctuation() {
-    assert_eq!(normalize_topic(" Rust! ").as_deref(), Some("rust"));
-    assert_eq!(normalize_topic("git-cli").as_deref(), Some("git-cli"));
-}
-
-#[test]
-fn normalize_topic_drops_tokens_that_become_empty() {
-    assert_eq!(normalize_topic("   "), None);
-    assert_eq!(normalize_topic("!!!"), None);
-}
-
-#[test]
-fn normalize_topic_caps_length() {
-    let long = "a".repeat(50);
-    assert_eq!(normalize_topic(&long).unwrap().len(), 32);
-}
-
-#[test]
 fn slugify_repo_name_replaces_unsafe_characters_and_preserves_case() {
     assert_eq!(slugify_repo_name("My Cool Repo!").as_deref(), Some("My-Cool-Repo"));
     assert_eq!(slugify_repo_name("  weird///na@me  ").as_deref(), Some("weird-na-me"));
@@ -232,37 +214,98 @@ fn slugify_repo_name_caps_length_and_retrims() {
 }
 
 #[test]
-fn parse_labels_csv_parses_name_color_pairs() {
-    let labels = parse_labels_csv("bug:#d73a4a, enhancement:#a2eeef").unwrap();
-    assert_eq!(labels.len(), 2);
-    assert_eq!(labels[0].name, "bug");
-    assert_eq!(labels[0].color, "#d73a4a");
-    assert_eq!(labels[1].name, "enhancement");
-}
-
-#[test]
-fn parse_labels_csv_rejects_a_malformed_color() {
-    assert!(parse_labels_csv("bug:red").is_err());
-    assert!(parse_labels_csv("bug:#zzzzzz").is_err());
-}
-
-#[test]
-fn parse_labels_csv_rejects_an_empty_name() {
-    assert!(parse_labels_csv(":#d73a4a").is_err());
-}
-
-#[test]
-fn parse_labels_csv_last_entry_wins_on_duplicate_name() {
-    let labels = parse_labels_csv("bug:#111111, bug:#222222").unwrap();
-    assert_eq!(labels.len(), 1);
-    assert_eq!(labels[0].color, "#222222");
-}
-
-#[test]
 fn parse_csv_field_splits_and_trims() {
     let branches = parse_csv_field("main, release/1.0 ,  ,develop");
     assert_eq!(branches.len(), 3);
     assert!(branches.contains("main"));
     assert!(branches.contains("release/1.0"));
     assert!(branches.contains("develop"));
+}
+
+fn test_ctx(root: &std::path::Path) -> AppContext {
+    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
+        bucket: root.to_string_lossy().to_string(),
+        engine: LocalEngine::Redb,
+    }));
+    let cipher = Arc::new(Cipher::derive("test passphrase", &[14u8; SALT_LEN]).unwrap());
+    AppContext {
+        bucket: "test".to_string(),
+        ssh_bind: "127.0.0.1:2222".to_string(),
+        mirrors_root: root.join("mirrors"),
+        config_path: root.join("gitquarry.toml"),
+        exe_path: root.join("gitquarry"),
+        backend,
+        locks: Default::default(),
+        cipher,
+        mirror_max_age: std::time::Duration::from_secs(60),
+        mirror_max_size_bytes: 0,
+        mirror_large_repo_threshold_bytes: u64::MAX,
+        oidc: None,
+        login_attempts: Default::default(),
+        git_rate_limiter: Default::default(),
+        federation: None,
+        allow_push_create: false,
+        trust_forwarded_for: false,
+        events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn set_topics_normalizes_each_entry_and_drops_the_ones_left_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
+    let long = "a".repeat(50);
+
+    let (cas, topics) = set_topics(&ctx, &repo, &format!(" Rust! ,git-cli,   ,!!!,{long}"))
+        .await
+        .unwrap();
+    assert_eq!(cas, Cas::Ok);
+    let expected: std::collections::BTreeSet<String> = ["rust", "git-cli", &"a".repeat(32)]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(topics, expected);
+    assert_eq!(repo.remote.get_repo_config().await.unwrap().0.topics, expected);
+}
+
+#[tokio::test]
+async fn set_labels_stores_name_color_pairs_last_duplicate_winning() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
+
+    let (_, labels) = set_labels(&ctx, &repo, "bug:#111111, enhancement:#a2eeef, bug:#d73a4a")
+        .await
+        .unwrap();
+    let stored: Vec<(String, String)> = repo
+        .remote
+        .get_repo_config()
+        .await
+        .unwrap()
+        .0
+        .labels
+        .into_iter()
+        .map(|l| (l.name, l.color))
+        .collect();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(
+        stored,
+        [("bug", "#d73a4a"), ("enhancement", "#a2eeef")].map(|(n, c)| (n.to_string(), c.to_string()))
+    );
+}
+
+#[tokio::test]
+async fn set_labels_rejects_a_malformed_entry_and_keeps_the_stored_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
+    set_labels(&ctx, &repo, "bug:#d73a4a").await.unwrap();
+
+    for bad in ["bug:red", "bug:#zzzzzz", ":#d73a4a", "no-color"] {
+        assert!(set_labels(&ctx, &repo, bad).await.is_err(), "{bad} was accepted");
+    }
+    assert_eq!(repo.remote.get_repo_config().await.unwrap().0.labels.len(), 1);
 }

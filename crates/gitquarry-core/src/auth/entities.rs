@@ -258,13 +258,7 @@ impl User {
     /// Fingerprints of this user's pubkeys. A pubkey string that fails to
     /// parse is skipped rather than erroring the whole user out — it just
     /// can't match anything, same as if it weren't there.
-    // pub, not pub(crate): also used directly by the integration tests in
-    // `tests/auth_access_pubkey.rs`, which link against this crate as an
-    // external consumer and can't see pub(crate) items. Genuine production
-    // callers (`access::pubkey::resolve_by_fingerprint`, `claim_pubkey`)
-    // need this unconditionally, so it isn't cfg-gated like a pure
-    // test-only accessor would be.
-    pub fn fingerprints(&self) -> impl Iterator<Item = String> + '_ {
+    pub(crate) fn fingerprints(&self) -> impl Iterator<Item = String> + '_ {
         self.pubkeys.iter().filter_map(|k| key_fingerprint(k).ok())
     }
 }

@@ -76,17 +76,7 @@ tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tracing = "0.1.44"
 
-[features]
-# Un-gates anything normally #[cfg(test)] (which only applies to this
-# crate's own unit-test build, not the separate lib build that external
-# `tests/*.rs` integration tests link against) for this crate's own
-# tests/, which now hold every unit test.
-test-util = []
-
 [dev-dependencies]
-# Self-dependency so `cargo test` enables `test-util` automatically for
-# this crate's own tests/*.rs — see the [features] comment above.
-gitquarry-core = { path = ".", features = ["test-util"] }
 # tests/auth_domain_user_totp.rs derives TOTP codes on its own, independent
 # of gitquarry-auth-crypto (a real dependency that owns this in production).
 data-encoding = "2.11.1"

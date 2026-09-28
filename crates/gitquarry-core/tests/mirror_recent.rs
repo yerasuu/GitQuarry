@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// `mirror::gc`'s marker file name, hardcoded because it's private; its mtime
+/// is what the eviction sweep reads as "last queried".
+const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
+
 fn test_backend(root: &Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
     let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
@@ -102,7 +106,7 @@ async fn prewarm_creates_a_mirror_the_local_dir_never_had() {
     let mirror = mirrors.path().join("cold-start-repo");
     assert!(mirror.join("HEAD").is_file(), "prewarm should have created the mirror");
     assert!(
-        mirror.join(gitquarry_core::mirror::gc::LAST_ACCESS_MARKER).is_file(),
+        mirror.join(LAST_ACCESS_MARKER).is_file(),
         "a mirror with no last-access marker is evicted by the very next sweep"
     );
 }
@@ -122,7 +126,7 @@ async fn prewarm_does_not_refresh_an_existing_mirrors_last_access() {
     let mirror = mirrors.path().join("already-warm-repo");
     std::fs::create_dir_all(&mirror).unwrap();
     std::fs::write(mirror.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
-    let marker = mirror.join(gitquarry_core::mirror::gc::LAST_ACCESS_MARKER);
+    let marker = mirror.join(LAST_ACCESS_MARKER);
     std::fs::write(&marker, b"").unwrap();
     let backdated = std::time::SystemTime::now() - Duration::from_secs(600);
     std::fs::OpenOptions::new()

@@ -1,10 +1,28 @@
-use gitquarry_core::mirror::*;
+use gitquarry_core::mirror::ensure_bare_repo;
 
-#[test]
-fn quotes_paths_with_spaces_and_quotes() {
-    assert_eq!(shell_quote("/usr/bin/x"), "'/usr/bin/x'");
-    assert_eq!(shell_quote("/a b/x"), "'/a b/x'");
-    assert_eq!(shell_quote("/a'b"), r"'/a'\''b'");
+// The hook script embeds the binary's absolute path; a space or a `'` in it
+// must neither split the command nor inject into it, so run the installed
+// hook for real against an executable whose path contains both.
+#[tokio::test]
+async fn pre_receive_hook_runs_an_exe_whose_path_has_spaces_and_quotes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let exe_dir = dir.path().join("a b'c");
+    std::fs::create_dir(&exe_dir).unwrap();
+    let exe = exe_dir.join("fake gitquarry");
+    let out = dir.path().join("called-with");
+    std::fs::write(&exe, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", out.display())).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bare = dir.path().join("repo.git");
+
+    ensure_bare_repo(&bare, &exe).await.unwrap();
+
+    let hook = bare.join("hooks/pre-receive");
+    assert_eq!(std::fs::metadata(&hook).unwrap().permissions().mode() & 0o777, 0o700);
+    let status = std::process::Command::new(&hook).status().unwrap();
+    assert!(status.success());
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "pre-receive-hook");
 }
 
 /// End-to-end: seeds a real repo on "instance B" (a minimal axum server

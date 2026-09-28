@@ -22,53 +22,21 @@ use tracing::warn;
 /// or "doesn't exist anymore" (deletion).
 const ZERO_SHA_LEN: [usize; 2] = [40, 64];
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn is_zero_sha(s: &str) -> bool {
-    ZERO_SHA_LEN.contains(&s.len()) && s.bytes().all(|b| b == b'0')
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn is_zero_sha(s: &str) -> bool {
     ZERO_SHA_LEN.contains(&s.len()) && s.bytes().all(|b| b == b'0')
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn zero_sha_like(sample: &str) -> String {
-    "0".repeat(if sample.len() == 64 { 64 } else { 40 })
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn zero_sha_like(sample: &str) -> String {
     "0".repeat(if sample.len() == 64 { 64 } else { 40 })
 }
 
 /// One line of the hook's stdin: `<old-sha> <new-sha> <refname>`.
-#[cfg(any(test, feature = "test-util"))]
-pub struct RefUpdate {
-    pub refname: String,
-    old: String,
-    pub new: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 struct RefUpdate {
     refname: String,
     old: String,
     new: String,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn parse_hook_input(input: &str) -> Vec<RefUpdate> {
-    input
-        .lines()
-        .filter_map(|line| {
-            let mut it = line.split_whitespace();
-            Some(RefUpdate {
-                old: it.next()?.to_string(),
-                new: it.next()?.to_string(),
-                refname: it.next()?.to_string(),
-            })
-        })
-        .collect()
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn parse_hook_input(input: &str) -> Vec<RefUpdate> {
     input
         .lines()
@@ -113,9 +81,8 @@ async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> 
 /// `auth::web::groups`/`webui::repo_settings` already use, never just plain
 /// `Permission::Developer` (which most group members have). Fetches only the
 /// actor's own record, plus (if the owner names a group) that one group's,
-/// never the rest of the bucket's users/groups. Split from
-/// [`can_push_protected_decision`] so the actual decision logic stays
-/// unit-testable without a live per-entity fetch.
+/// never the rest of the bucket's users/groups. The decision itself is
+/// [`can_push_protected_decision`], over the records fetched here.
 async fn can_push_protected(
     backend: &dyn Backend,
     cipher: &Cipher,
@@ -131,25 +98,6 @@ async fn can_push_protected(
     Ok(can_push_protected_decision(user.as_ref(), owner, owner_group.as_ref()))
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn can_push_protected_decision(
-    user: Option<&crate::auth::entities::User>,
-    owner: Option<&crate::storage::entities::OwnerRef>,
-    owner_group: Option<&crate::auth::entities::Group>,
-) -> bool {
-    use crate::storage::entities::OwnerRef;
-    if user.is_some_and(|u| u.is_admin) {
-        return true;
-    }
-    match owner {
-        Some(OwnerRef::User(owner_uid)) => user.is_some_and(|u| &u.uid == owner_uid),
-        Some(OwnerRef::Group(_)) => user.is_some_and(|u| {
-            owner_group.is_some_and(|g| g.role_of(&u.uid) >= Some(crate::auth::entities::Permission::Owner))
-        }),
-        None => false,
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn can_push_protected_decision(
     user: Option<&crate::auth::entities::User>,
     owner: Option<&crate::storage::entities::OwnerRef>,
@@ -168,22 +116,6 @@ fn can_push_protected_decision(
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn touched_refs<'a>(
-    updates: &'a [RefUpdate],
-    ref_prefix: &str,
-    protected: &std::collections::BTreeSet<String>,
-) -> Vec<&'a RefUpdate> {
-    updates
-        .iter()
-        .filter(|u| {
-            u.refname
-                .strip_prefix(ref_prefix)
-                .is_some_and(|short| protected.contains(short))
-        })
-        .collect()
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn touched_refs<'a>(
     updates: &'a [RefUpdate],
     ref_prefix: &str,
@@ -205,39 +137,6 @@ fn touched_refs<'a>(
 /// (`is_ancestor` check); tags never move at all once protected, so any
 /// change to an existing one is rejected outright, not just a non-ancestor
 /// one. Returns the first rejection reason, if any.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn check_protected(
-    git_dir: &Path,
-    touched: &[&RefUpdate],
-    allowed: bool,
-    allow_fast_forward: bool,
-    kind_label: &str,
-) -> Result<Option<String>> {
-    for update in touched {
-        let short = update.refname.rsplit('/').next().unwrap_or(&update.refname);
-        if !allowed {
-            return Ok(Some(format!(
-                "{kind_label} '{short}': only an owner may push directly."
-            )));
-        }
-        if is_zero_sha(&update.new) {
-            return Ok(Some(format!("{kind_label} '{short}': can't be deleted.")));
-        }
-        if is_zero_sha(&update.old) {
-            continue; // creation, not a move — nothing to protect against yet
-        }
-        let rejected = if allow_fast_forward {
-            !git::is_ancestor(git_dir, &update.old, &update.new).await?
-        } else {
-            update.new != update.old
-        };
-        if rejected {
-            return Ok(Some(format!("{kind_label} '{short}': can't be moved/force-pushed.")));
-        }
-    }
-    Ok(None)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn check_protected(
     git_dir: &Path,
     touched: &[&RefUpdate],

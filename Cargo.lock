@@ -1910,7 +1910,6 @@ dependencies = [
  "flate2",
  "futures",
  "gitquarry-auth-crypto",
- "gitquarry-core",
  "gitquarry-forge-clients",
  "gitquarry-gpg",
  "gitquarry-i18n",

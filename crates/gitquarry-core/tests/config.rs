@@ -1,5 +1,12 @@
 use gitquarry_core::config::*;
 
+fn load(toml: &str) -> anyhow::Result<Config> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gitquarry.toml");
+    std::fs::write(&path, toml).unwrap();
+    Config::load_from(&path)
+}
+
 #[test]
 fn parses_an_s3_bucket_with_driver_tag() {
     let toml = r#"
@@ -11,8 +18,8 @@ fn parses_an_s3_bucket_with_driver_tag() {
         secret_access_key = "secret"
         passphrase = "hunter2"
     "#;
-    let raw: RawConfig = toml::from_str(toml).unwrap();
-    let cfg = raw.buckets.get("main").unwrap();
+    let config = load(toml).unwrap();
+    let cfg = config.bucket("main").unwrap();
     assert_eq!(cfg.passphrase, "hunter2");
     let BackendConfig::S3(params) = &cfg.backend else {
         panic!("expected driver s3");
@@ -32,8 +39,8 @@ fn parses_an_r2_bucket_deriving_endpoint_from_account_id() {
         secret_access_key = "secret"
         passphrase = "hunter2"
     "#;
-    let raw: RawConfig = toml::from_str(toml).unwrap();
-    let cfg = raw.buckets.get("cache").unwrap();
+    let config = load(toml).unwrap();
+    let cfg = config.bucket("cache").unwrap();
     let BackendConfig::R2(params) = &cfg.backend else {
         panic!("expected driver r2");
     };
@@ -53,7 +60,7 @@ fn rejects_a_bucket_missing_the_driver_tag() {
         secret_access_key = "secret"
         passphrase = "hunter2"
     "#;
-    assert!(toml::from_str::<RawConfig>(toml).is_err());
+    assert!(load(toml).is_err());
 }
 
 /// Two buckets is the normal shape once one exists purely as a backup

@@ -45,30 +45,10 @@ mod email;
 mod groups;
 mod login_throttle;
 mod namespace;
-// pub only for test/test-util builds, same reasoning as `permissions`/
-// `pubkey` just below.
-#[cfg(any(test, feature = "test-util"))]
-pub mod quota;
-#[cfg(not(any(test, feature = "test-util")))]
-mod quota;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::auth::access::permissions::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod permissions;
-#[cfg(not(any(test, feature = "test-util")))]
-mod permissions;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::auth::access::pubkey::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod pubkey;
-#[cfg(not(any(test, feature = "test-util")))]
-mod pubkey;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::auth::access::pat::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod pat;
-#[cfg(not(any(test, feature = "test-util")))]
 mod pat;
+mod permissions;
+mod pubkey;
+mod quota;
 mod repo_index;
 mod users;
 

@@ -244,17 +244,11 @@ pub struct LoginAttempts {
     inner: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub const LOGIN_MAX_ATTEMPTS: usize = 5;
-#[cfg(not(any(test, feature = "test-util")))]
 const LOGIN_MAX_ATTEMPTS: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// Ceiling on [`LoginAttempts::penalty`]. Long enough that guessing is
 /// hopeless, short enough that a pile of stalled attempts can't be turned
 /// into a connection-exhaustion attack of its own.
-#[cfg(any(test, feature = "test-util"))]
-pub const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
-#[cfg(not(any(test, feature = "test-util")))]
 const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
 
 impl LoginAttempts {
@@ -280,9 +274,7 @@ impl LoginAttempts {
         Self::penalty_for(recent)
     }
 
-    /// [`penalty`](Self::penalty)'s arithmetic on its own, so the curve is
-    /// testable without a live tracker.
-    pub fn penalty_for(recent_failures: usize) -> Duration {
+    fn penalty_for(recent_failures: usize) -> Duration {
         let Some(over) = recent_failures.checked_sub(LOGIN_MAX_ATTEMPTS) else {
             return Duration::ZERO;
         };
@@ -350,13 +342,7 @@ pub struct GitRateLimiter {
     by_user: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
-#[cfg(not(any(test, feature = "test-util")))]
 const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
-#[cfg(any(test, feature = "test-util"))]
-pub const GIT_RATE_LIMIT_AUTHENTICATED_MAX: usize = 120;
-#[cfg(not(any(test, feature = "test-util")))]
 const GIT_RATE_LIMIT_AUTHENTICATED_MAX: usize = 120;
 const GIT_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 

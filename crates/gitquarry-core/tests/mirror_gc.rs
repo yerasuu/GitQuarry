@@ -29,7 +29,12 @@ fn rejects_bad_units_and_numbers() {
     assert!(parse_size("").is_err());
 }
 
-/// Builds an `AppContext` good enough for `sweep_once`: it only ever
+/// `mirror::gc`'s marker file name; hardcoded because it's private, and a
+/// wrong value here would fail every test below (an unmarked mirror reads as
+/// maximally stale), so the tests pin it too.
+const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
+
+/// Builds an `AppContext` good enough for the sweep: it only ever
 /// touches `mirrors_root`/`mirror_max_age`/`mirror_max_size_bytes`/
 /// `locks` on this path, never `backend`/`cipher`, so both are built
 /// from local, no-network config just to satisfy the type.
@@ -76,6 +81,21 @@ fn dummy_ctx(
     }
 }
 
+/// Runs the real periodic sweep, whose first tick fires immediately, until
+/// every path in `evicted` is gone, then stops it before the next tick (15
+/// minutes away), so once this returns exactly one sweep pass has run.
+async fn sweep_until_evicted(ctx: gitquarry_core::app::AppContext, evicted: &[PathBuf]) {
+    let sweep = tokio::spawn(run_periodic_sweep(Arc::new(ctx)));
+    let waited = tokio::time::timeout(Duration::from_secs(10), async {
+        while evicted.iter().any(|p| p.exists()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    sweep.abort();
+    waited.expect("the sweep never evicted the expected mirrors");
+}
+
 /// A fake bare-repo mirror: just enough for `list_mirrors` to recognize
 /// it (a `HEAD` file) and for the age/size logic to have something to
 /// work with (a marker backdated by `age_ago`, an optional padding file
@@ -100,9 +120,8 @@ async fn sweep_evicts_stale_mirror_but_keeps_fresh_one() {
     make_fake_mirror(root.path(), "team/fresh-repo", Duration::from_secs(1), 0);
 
     let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), u64::MAX, u64::MAX);
-    sweep_once(&ctx).await.unwrap();
+    sweep_until_evicted(ctx, &[root.path().join("old-repo")]).await;
 
-    assert!(!root.path().join("old-repo").exists(), "stale mirror should be evicted");
     assert!(
         root.path().join("team/fresh-repo").exists(),
         "recently-queried mirror should survive"
@@ -121,10 +140,8 @@ async fn sweep_evicts_lru_when_over_size_cap() {
     // Cap fits only the newest one (~100 bytes + HEAD); the other two
     // must go.
     let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), 150, u64::MAX);
-    sweep_once(&ctx).await.unwrap();
+    sweep_until_evicted(ctx, &[root.path().join("oldest"), root.path().join("middle")]).await;
 
-    assert!(!root.path().join("oldest").exists());
-    assert!(!root.path().join("middle").exists());
     assert!(root.path().join("newest").exists());
 }
 
@@ -136,15 +153,11 @@ async fn a_large_mirror_survives_age_eviction_but_not_size_pressure() {
     make_fake_mirror(root.path(), "small-old-repo", Duration::from_secs(2 * 3600), 10);
 
     let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), u64::MAX, 500);
-    sweep_once(&ctx).await.unwrap();
+    sweep_until_evicted(ctx, &[root.path().join("small-old-repo")]).await;
 
     assert!(
         root.path().join("big-old-repo").exists(),
         "a large mirror is exempt from age-based eviction"
-    );
-    assert!(
-        !root.path().join("small-old-repo").exists(),
-        "a small mirror still gets evicted by age as before"
     );
 }
 
@@ -156,12 +169,9 @@ async fn a_large_mirror_still_gets_evicted_under_size_pressure() {
     make_fake_mirror(root.path(), "big-repo", Duration::from_secs(10), 1000);
 
     let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), 100, 500);
-    sweep_once(&ctx).await.unwrap();
-
-    assert!(
-        !root.path().join("big-repo").exists(),
-        "the large-repo exemption only applies to age eviction, never to the size cap"
-    );
+    // The large-repo exemption only applies to age eviction, never to the
+    // size cap, so the sweep must still remove it.
+    sweep_until_evicted(ctx, &[root.path().join("big-repo")]).await;
 }
 
 #[tokio::test]

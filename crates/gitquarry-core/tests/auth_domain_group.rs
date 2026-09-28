@@ -189,10 +189,18 @@ async fn create_nests_a_subgroup_under_its_parent_path() {
 async fn create_refuses_a_path_an_existing_repo_already_holds() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
-    gitquarry_core::storage::settings::claim_repo_name(&backend, &cipher, "acme/team", &Uid::new(), None)
-        .await
-        .unwrap();
     let ctx = test_ctx(backend, cipher);
+    gitquarry_core::domain::repo::create(
+        &ctx,
+        "acme/team",
+        None,
+        None,
+        None,
+        gitquarry_core::storage::entities::Visibility::Public,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let creator = Uid::new();
     create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
         .await

@@ -6,11 +6,6 @@
 //! here so every existing `browse::xxx` call site keeps working unchanged.
 
 mod archive;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::git::browse::blame::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod blame;
-#[cfg(not(any(test, feature = "test-util")))]
 mod blame;
 mod blob;
 mod diff;

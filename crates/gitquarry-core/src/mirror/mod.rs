@@ -10,9 +10,6 @@
 
 pub mod deleted_repo_sweep;
 pub mod gc;
-#[cfg(any(test, feature = "test-util"))]
-pub mod hook;
-#[cfg(not(any(test, feature = "test-util")))]
 mod hook;
 pub mod policy;
 pub mod recent;
@@ -132,11 +129,6 @@ pub async fn ensure_bare_repo(bare_repo: &Path, exe_path: &Path) -> Result<()> {
 
 /// POSIX sh-style single-quoting, to put an arbitrary path into the hook
 /// script without a `'` or a space breaking (or injecting into) the command.
-#[cfg(any(test, feature = "test-util"))]
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }

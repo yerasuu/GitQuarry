@@ -1,6 +1,5 @@
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::OwnerRef;
 use gitquarry_core::storage::settings::*;
 use gitquarry_core::storage::uid::Uid;
@@ -16,48 +15,21 @@ fn test_backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
     (backend, cipher)
 }
 
+/// A claim that must land as a plain create: `still_live` panics, so any
+/// conflict path (a name that wasn't actually free) fails the test.
+async fn claim_fresh(backend: &LocalBackend, cipher: &Cipher, full_name: &str, uid: &Uid) -> bool {
+    claim_repo_name_self_healing(backend, cipher, full_name, uid, |_| async move {
+        panic!("{full_name} was expected to be free")
+    })
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn resolve_repo_name_is_none_before_any_claim() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     assert_eq!(resolve_repo_name(&backend, &cipher, "acme/proj").await.unwrap(), None);
-}
-
-#[tokio::test]
-async fn claim_then_resolve_roundtrips_the_uid() {
-    let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let uid = Uid::new();
-    assert_eq!(
-        claim_repo_name(&backend, &cipher, "acme/proj", &uid, None)
-            .await
-            .unwrap(),
-        Cas::Ok
-    );
-    assert_eq!(
-        resolve_repo_name(&backend, &cipher, "acme/proj").await.unwrap(),
-        Some(uid)
-    );
-}
-
-#[tokio::test]
-async fn claiming_an_already_claimed_name_conflicts() {
-    let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let first = Uid::new();
-    let second = Uid::new();
-    assert_eq!(
-        claim_repo_name(&backend, &cipher, "acme/proj", &first, None)
-            .await
-            .unwrap(),
-        Cas::Ok
-    );
-    assert_eq!(
-        claim_repo_name(&backend, &cipher, "acme/proj", &second, None)
-            .await
-            .unwrap(),
-        Cas::Conflict
-    );
 }
 
 #[tokio::test]
@@ -81,9 +53,7 @@ async fn self_healing_claim_refuses_a_genuinely_live_owner() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let first = Uid::new();
     let second = Uid::new();
-    claim_repo_name(&backend, &cipher, "acme/proj", &first, None)
-        .await
-        .unwrap();
+    assert!(claim_fresh(&backend, &cipher, "acme/proj", &first).await);
     let claimed = claim_repo_name_self_healing(&backend, &cipher, "acme/proj", &second, |_| async { Ok(true) })
         .await
         .unwrap();
@@ -100,9 +70,7 @@ async fn self_healing_claim_reclaims_a_stale_owner() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let stale = Uid::new();
     let fresh = Uid::new();
-    claim_repo_name(&backend, &cipher, "acme/proj", &stale, None)
-        .await
-        .unwrap();
+    assert!(claim_fresh(&backend, &cipher, "acme/proj", &stale).await);
     let claimed = claim_repo_name_self_healing(&backend, &cipher, "acme/proj", &fresh, |_| async { Ok(false) })
         .await
         .unwrap();
@@ -259,17 +227,13 @@ async fn mirrors_enabled_index_tracks_set_and_clear_independently_per_repo() {
 async fn release_then_claim_succeeds_under_a_fresh_etag() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let uid = Uid::new();
-    claim_repo_name(&backend, &cipher, "acme/proj", &uid, None)
-        .await
-        .unwrap();
+    assert!(claim_fresh(&backend, &cipher, "acme/proj", &Uid::new()).await);
     release_repo_name(&backend, "acme/proj").await;
     assert_eq!(resolve_repo_name(&backend, &cipher, "acme/proj").await.unwrap(), None);
     let new_uid = Uid::new();
+    assert!(claim_fresh(&backend, &cipher, "acme/proj", &new_uid).await);
     assert_eq!(
-        claim_repo_name(&backend, &cipher, "acme/proj", &new_uid, None)
-            .await
-            .unwrap(),
-        Cas::Ok
+        resolve_repo_name(&backend, &cipher, "acme/proj").await.unwrap(),
+        Some(new_uid)
     );
 }

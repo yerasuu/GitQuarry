@@ -1,133 +1,28 @@
-use gitquarry_core::git::http::*;
+//! Drives `git::http::middleware` over a real socket, because it extracts
+//! `ConnectInfo` (the anonymous rate limit keys on the peer address), which
+//! only `into_make_service_with_connect_info` provides.
+
+use gitquarry_core::app::{AppContext, FederationLink};
+use gitquarry_core::storage::entities::Visibility;
+use gitquarry_core::storage::uid::Uid;
 
 use axum::body::Bytes;
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-#[test]
-fn classify_strips_known_suffixes() {
-    assert_eq!(
-        classify("/team/proj/info/refs"),
-        Some(("team/proj", Kind::InfoRefs, None))
-    );
-    assert_eq!(
-        classify("/team/proj/git-upload-pack"),
-        Some(("team/proj", Kind::UploadPack, None))
-    );
-    assert_eq!(
-        classify("/team/proj/git-receive-pack"),
-        Some(("team/proj", Kind::ReceivePack, None))
-    );
-    assert_eq!(classify("/team/proj"), None);
-    assert_eq!(classify("/info/refs"), None); // no repo name at all
-}
+/// Mirrors `app::LOGIN_MAX_ATTEMPTS`.
+const LOGIN_MAX_ATTEMPTS: usize = 5;
+/// Mirrors `app::GIT_RATE_LIMIT_ANONYMOUS_MAX`.
+const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
 
-#[test]
-fn classify_recognizes_lfs_batch_and_object_endpoints() {
-    assert_eq!(
-        classify("/team/proj/info/lfs/objects/batch"),
-        Some(("team/proj", Kind::LfsBatch, None))
-    );
-    let oid = "a".repeat(64);
-    assert_eq!(
-        classify(&format!("/team/proj/info/lfs/objects/{oid}")),
-        Some(("team/proj", Kind::LfsObject, Some(oid.as_str())))
-    );
-    // Trailing segment with a `/` in it isn't a single oid.
-    assert_eq!(classify("/team/proj/info/lfs/objects/a/b"), None);
-    assert_eq!(classify("/team/proj/info/lfs/objects/"), None);
-}
+/// Whatever the middleware passes through lands here, so a test can tell
+/// "not a git/LFS endpoint" apart from any status the git handler returns.
+const PASSTHROUGH: StatusCode = StatusCode::IM_A_TEAPOT;
 
-#[test]
-fn classify_recognizes_lfs_locking_endpoints() {
-    assert_eq!(
-        classify("/team/proj/info/lfs/locks"),
-        Some(("team/proj", Kind::LfsLocks, None))
-    );
-    assert_eq!(
-        classify("/team/proj/info/lfs/locks/verify"),
-        Some(("team/proj", Kind::LfsLocksVerify, None))
-    );
-    assert_eq!(
-        classify("/team/proj/info/lfs/locks/42/unlock"),
-        Some(("team/proj", Kind::LfsLockUnlock, Some("42")))
-    );
-    // A further, unexpected path segment isn't a bare lock id.
-    assert_eq!(classify("/team/proj/info/lfs/locks/42/43/unlock"), None);
-}
-
-#[test]
-fn valid_method_gates_by_kind() {
-    assert!(Kind::InfoRefs.valid_method(&Method::GET));
-    assert!(!Kind::InfoRefs.valid_method(&Method::POST));
-    assert!(Kind::UploadPack.valid_method(&Method::POST));
-    assert!(!Kind::UploadPack.valid_method(&Method::GET));
-    assert!(Kind::LfsBatch.valid_method(&Method::POST));
-    assert!(!Kind::LfsBatch.valid_method(&Method::GET));
-    assert!(Kind::LfsObject.valid_method(&Method::GET));
-    assert!(Kind::LfsObject.valid_method(&Method::PUT));
-    assert!(!Kind::LfsObject.valid_method(&Method::POST));
-    assert!(Kind::LfsLocks.valid_method(&Method::GET));
-    assert!(Kind::LfsLocks.valid_method(&Method::POST));
-    assert!(!Kind::LfsLocks.valid_method(&Method::PUT));
-    assert!(Kind::LfsLocksVerify.valid_method(&Method::POST));
-    assert!(!Kind::LfsLocksVerify.valid_method(&Method::GET));
-    assert!(Kind::LfsLockUnlock.valid_method(&Method::POST));
-    assert!(!Kind::LfsLockUnlock.valid_method(&Method::GET));
-}
-
-#[test]
-fn query_param_finds_the_named_key() {
-    assert_eq!(
-        query_param("service=git-upload-pack", "service"),
-        Some("git-upload-pack")
-    );
-    assert_eq!(
-        query_param("a=1&service=git-receive-pack&b=2", "service"),
-        Some("git-receive-pack")
-    );
-    assert_eq!(query_param("a=1", "service"), None);
-    assert_eq!(query_param("", "service"), None);
-}
-
-#[test]
-fn pkt_line_frames_length_as_four_hex_digits() {
-    // "0006" itself is 4 bytes; pkt-line length includes its own header.
-    assert_eq!(pkt_line(b""), b"0004");
-    assert_eq!(pkt_line(b"ab"), b"0006ab");
-    let line = pkt_line(b"# service=git-upload-pack\n");
-    assert_eq!(&line[..4], b"001e");
-    assert_eq!(&line[4..], b"# service=git-upload-pack\n");
-}
-
-#[test]
-fn basic_credentials_decodes_user_and_pass() {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::AUTHORIZATION, "Basic YWxpY2U6aHVudGVyMg==".parse().unwrap());
-    let (user, pass) = basic_credentials(&headers).unwrap();
-    assert_eq!(user, "alice");
-    assert_eq!(pass, "hunter2");
-}
-
-#[test]
-fn basic_credentials_none_without_the_header() {
-    assert!(basic_credentials(&HeaderMap::new()).is_none());
-}
-
-#[test]
-fn basic_credentials_none_for_a_bearer_token() {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::AUTHORIZATION, "Bearer abc123".parse().unwrap());
-    assert!(basic_credentials(&headers).is_none());
-}
-
-fn test_ctx(
-    root: &std::path::Path,
-    federation: Option<gitquarry_core::app::FederationLink>,
-) -> gitquarry_core::app::AppContext {
+fn test_ctx(root: &std::path::Path, federation: Option<FederationLink>) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> =
         Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
             bucket: root.to_string_lossy().to_string(),
@@ -135,7 +30,7 @@ fn test_ctx(
         }));
     let cipher =
         Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
-    gitquarry_core::app::AppContext {
+    AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),
         mirrors_root: root.to_path_buf(),
@@ -144,7 +39,7 @@ fn test_ctx(
         backend,
         locks: Default::default(),
         cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
+        mirror_max_age: Duration::from_secs(60),
         mirror_max_size_bytes: 0,
         mirror_large_repo_threshold_bytes: u64::MAX,
         oidc: None,
@@ -159,30 +54,261 @@ fn test_ctx(
     }
 }
 
-fn bearer_username_header(username: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    let encoded = BASE64.encode(format!("{username}:"));
-    headers.insert(header::AUTHORIZATION, format!("Basic {encoded}").parse().unwrap());
-    headers
+async fn create_user(ctx: &AppContext, username: &str, password: Option<&str>) {
+    gitquarry_core::auth::domain::user::create(
+        ctx,
+        gitquarry_core::auth::domain::user::NewUser {
+            username,
+            email: None,
+            pubkey: None,
+            password_plain: password,
+            is_admin: false,
+            repos_field: "",
+            locale: gitquarry_i18n::Locale::En,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn create_repo(ctx: &AppContext, full_name: &str, visibility: Visibility) -> Uid {
+    let resolved = ctx.create_repo(full_name).await.unwrap().unwrap();
+    let backend = ctx.backend();
+    let (mut config, etag) =
+        gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), resolved.uid.as_str(), &ctx.cipher)
+            .await
+            .unwrap();
+    config.visibility = visibility;
+    gitquarry_core::storage::settings::put_repo_config(
+        backend.as_ref(),
+        resolved.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &ctx.cipher,
+    )
+    .await
+    .unwrap();
+    resolved.uid
+}
+
+/// Returns the base URL of a server that runs only the git middleware over
+/// a [`PASSTHROUGH`] fallback.
+async fn serve(ctx: Arc<AppContext>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new()
+        .fallback(|| async { PASSTHROUGH })
+        .layer(axum::middleware::from_fn_with_state(
+            ctx,
+            gitquarry_core::git::http::middleware,
+        ));
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+    format!("http://{addr}")
+}
+
+/// A client whose connections originate from `ip` (any `127.x.y.z` works on
+/// Linux loopback), so tests can play distinct anonymous peers.
+fn client_from(ip: &str) -> reqwest::Client {
+    reqwest::Client::builder()
+        .local_address(ip.parse::<IpAddr>().unwrap())
+        .build()
+        .unwrap()
+}
+
+fn upload_pack_refs(client: &reqwest::Client, base: &str, repo: &str) -> reqwest::RequestBuilder {
+    client.get(format!("{base}/{repo}/info/refs?service=git-upload-pack"))
+}
+
+#[tokio::test]
+async fn git_and_lfs_endpoints_are_intercepted_with_the_method_each_expects() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_repo(&ctx, "team/proj", Visibility::Private).await;
+    let base = serve(ctx).await;
+    let client = reqwest::Client::new();
+    let oid = "a".repeat(64);
+
+    // Anonymous against a private repo: an intercepted endpoint that
+    // resolved `team/proj` answers 401, a wrong method falls through.
+    for (path, right, wrong) in [
+        (
+            "info/refs?service=git-upload-pack".to_string(),
+            vec![Method::GET],
+            vec![Method::POST],
+        ),
+        ("git-upload-pack".to_string(), vec![Method::POST], vec![Method::GET]),
+        ("git-receive-pack".to_string(), vec![Method::POST], vec![Method::GET]),
+        (
+            "info/lfs/objects/batch".to_string(),
+            vec![Method::POST],
+            vec![Method::GET],
+        ),
+        (
+            format!("info/lfs/objects/{oid}"),
+            vec![Method::GET, Method::PUT],
+            vec![Method::POST],
+        ),
+        (
+            "info/lfs/locks".to_string(),
+            vec![Method::GET, Method::POST],
+            vec![Method::PUT],
+        ),
+        (
+            "info/lfs/locks/verify".to_string(),
+            vec![Method::POST],
+            vec![Method::GET],
+        ),
+        (
+            "info/lfs/locks/42/unlock".to_string(),
+            vec![Method::POST],
+            vec![Method::GET],
+        ),
+    ] {
+        let url = format!("{base}/team/proj/{path}");
+        for method in right {
+            let status = client.request(method.clone(), &url).send().await.unwrap().status();
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        }
+        for method in wrong {
+            let status = client.request(method.clone(), &url).send().await.unwrap().status();
+            assert_eq!(status, PASSTHROUGH, "{method} {path}");
+        }
+    }
+
+    // A recognized suffix on a repo that doesn't exist is still git's to
+    // answer, not the browsing UI's.
+    let status = upload_pack_refs(&client, &base, "nobody/here")
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    for path in [
+        "/team/proj",
+        "/info/refs",
+        "/team/proj/info/lfs/objects/a/b",
+        "/team/proj/info/lfs/objects/",
+        "/team/proj/info/lfs/locks/42/43/unlock",
+    ] {
+        let status = client.get(format!("{base}{path}")).send().await.unwrap().status();
+        let post_status = client.post(format!("{base}{path}")).send().await.unwrap().status();
+        assert_eq!(status, PASSTHROUGH, "GET {path}");
+        assert_eq!(post_status, PASSTHROUGH, "POST {path}");
+    }
+}
+
+#[tokio::test]
+async fn info_refs_advertises_the_service_named_anywhere_in_the_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let base = serve(ctx).await;
+    let client = reqwest::Client::new();
+
+    // The preamble is a pkt-line whose 4-hex-digit length counts its own
+    // header: 26 + 4 = 0x1e, 27 + 4 = 0x1f; then a flush-pkt.
+    for (query, service, preamble) in [
+        (
+            "service=git-upload-pack",
+            "git-upload-pack",
+            &b"001e# service=git-upload-pack\n0000"[..],
+        ),
+        (
+            "a=1&service=git-receive-pack&b=2",
+            "git-receive-pack",
+            &b"001f# service=git-receive-pack\n0000"[..],
+        ),
+    ] {
+        let resp = client
+            .get(format!("{base}/acme/demo/info/refs?{query}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{query}");
+        assert_eq!(
+            resp.headers()[header::CONTENT_TYPE],
+            format!("application/x-{service}-advertisement").as_str()
+        );
+        let body = resp.bytes().await.unwrap();
+        assert!(body.starts_with(preamble), "{query}: {body:?}");
+    }
+
+    for url in [
+        format!("{base}/acme/demo/info/refs?a=1"),
+        format!("{base}/acme/demo/info/refs"),
+        format!("{base}/acme/demo/info/refs?service=git-evil"),
+    ] {
+        let status = client.get(&url).send().await.unwrap().status();
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{url}");
+    }
+}
+
+#[tokio::test]
+async fn a_private_repo_asks_for_basic_credentials_when_none_are_usable() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_repo(&ctx, "acme/demo", Visibility::Private).await;
+    let base = serve(ctx).await;
+    let client = reqwest::Client::new();
+
+    // A Bearer token isn't Basic auth, so it counts as no credentials at all.
+    for req in [
+        upload_pack_refs(&client, &base, "acme/demo"),
+        upload_pack_refs(&client, &base, "acme/demo").bearer_auth("abc123"),
+        upload_pack_refs(&client, &base, "acme/demo").header(header::AUTHORIZATION, "Basic !!not-base64!!"),
+    ] {
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.headers()[header::WWW_AUTHENTICATE], "Basic realm=\"gitquarry\"");
+        assert_eq!(resp.text().await.unwrap(), "credentials required");
+    }
+}
+
+#[tokio::test]
+async fn basic_credentials_split_at_the_first_colon_so_a_password_may_contain_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_user(&ctx, "alice", Some("hunter:2")).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let base = serve(ctx).await;
+    let client = reqwest::Client::new();
+
+    let right = upload_pack_refs(&client, &base, "alice/proj")
+        .basic_auth("alice", Some("hunter:2"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(right, StatusCode::OK);
+    let wrong = upload_pack_refs(&client, &base, "alice/proj")
+        .basic_auth("alice", Some("hunter"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(wrong, StatusCode::UNAUTHORIZED);
 }
 
 /// Stands in for `gitquarry-federation`'s own
-/// `POST /_internal-out/tokens/resolve` (same pattern
-/// `webui::federation_proxy::tests::spawn_fake_federation` already
-/// uses) — `known_secret` resolves to `("alice", write)`, anything else
-/// (or a `repo_uid` other than `"repo-uid-x"`) reports unresolved.
-async fn spawn_fake_token_resolver(known_secret: &'static str, write: bool) -> String {
+/// `POST /_internal-out/tokens/resolve`: `known_secret` resolves to
+/// `("alice", write)` for `repo_uid` only, anything else reports unresolved.
+async fn spawn_fake_token_resolver(known_secret: &'static str, write: bool, repo_uid: Uid) -> String {
     #[derive(serde::Deserialize)]
     struct Req {
         secret: String,
         repo_uid: String,
     }
     async fn handler(
-        axum::extract::State((known_secret, write)): axum::extract::State<(&'static str, bool)>,
+        axum::extract::State((known_secret, write, repo_uid)): axum::extract::State<(&'static str, bool, Uid)>,
         body: Bytes,
     ) -> Response {
         let req: Req = serde_json::from_slice(&body).unwrap();
-        let ok = req.secret == known_secret && req.repo_uid == "repo-uid-x";
+        let ok = req.secret == known_secret && req.repo_uid == repo_uid.as_str();
         (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -199,359 +325,243 @@ async fn spawn_fake_token_resolver(known_secret: &'static str, write: bool) -> S
     let addr = listener.local_addr().unwrap();
     let app = axum::Router::new()
         .route("/_internal-out/tokens/resolve", axum::routing::post(handler))
-        .with_state((known_secret, write));
+        .with_state((known_secret, write, repo_uid));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
     format!("http://{addr}")
 }
 
-#[tokio::test]
-async fn authorize_grants_a_token_scoped_repo_at_its_ceiling_and_denies_an_unknown_secret() {
-    let base_url = spawn_fake_token_resolver("good-secret", false).await;
-    let federation = gitquarry_core::app::FederationLink {
-        base_url,
+/// A server where alice owns the private `alice/proj` and federation
+/// resolves `secret` as a token on it.
+async fn serve_with_federation_token(dir: &std::path::Path, secret: &'static str, write: bool) -> String {
+    // The resolver needs the repo's uid, which only exists once the repo
+    // does, so the context gets its federation link after the fact.
+    let mut ctx = test_ctx(dir, None);
+    create_user(&ctx, "alice", None).await;
+    let repo_uid = create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    ctx.federation = Some(FederationLink {
+        base_url: spawn_fake_token_resolver(secret, write, repo_uid).await,
         internal_token: "unused".to_string(),
         http: reqwest::Client::new(),
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), Some(federation));
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-    ctx.create_repo("alice/proj").await.unwrap().unwrap();
-    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
+    });
+    serve(Arc::new(ctx)).await
+}
 
-    // Read-only token (write: false in the fake resolver): read allowed,
-    // push denied even though alice owns the repo outright.
-    let headers = bearer_username_header("good-secret");
-    match authorize(
-        &ctx,
-        &headers,
-        "alice/proj",
-        &repo_uid,
-        gitquarry_core::storage::entities::Visibility::Private,
-        gitquarry_core::auth::entities::Permission::Reporter,
-    )
-    .await
-    .unwrap()
-    {
-        Authz::Allowed(Some(username)) => assert_eq!(username, "alice"),
-        other => panic!("expected Allowed, got {other:?}"),
-    }
-    assert!(matches!(
-        authorize(
-            &ctx,
-            &headers,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Developer
-        )
-        .await
-        .unwrap(),
-        Authz::Denied(Denial::Forbidden)
-    ));
-
-    // Wrong secret: the fake resolver reports unresolved, falls through
-    // to the password path, fails there too (no such user "bad-secret").
-    let bad_headers = bearer_username_header("bad-secret");
-    assert!(matches!(
-        authorize(
-            &ctx,
-            &bad_headers,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Reporter
-        )
-        .await
-        .unwrap(),
-        Authz::Denied(Denial::Unauthorized)
-    ));
+/// An empty receive-pack request (just a flush-pkt): no ref updates, so it
+/// succeeds for anyone allowed to push without changing the repo.
+fn empty_push(client: &reqwest::Client, base: &str, secret: &str) -> reqwest::RequestBuilder {
+    client
+        .post(format!("{base}/alice/proj/git-receive-pack"))
+        .basic_auth(secret, None::<&str>)
+        .body("0000")
 }
 
 #[tokio::test]
-async fn authorize_allows_a_write_token_to_push() {
-    let base_url = spawn_fake_token_resolver("rw-secret", true).await;
-    let federation = gitquarry_core::app::FederationLink {
-        base_url,
-        internal_token: "unused".to_string(),
-        http: reqwest::Client::new(),
-    };
+async fn a_read_only_federation_token_can_fetch_but_not_push_and_an_unknown_one_is_unauthorized() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), Some(federation));
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-    ctx.create_repo("alice/proj").await.unwrap().unwrap();
-    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
-    let headers = bearer_username_header("rw-secret");
-    assert!(matches!(
-        authorize(
-            &ctx,
-            &headers,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Developer
-        )
+    let base = serve_with_federation_token(dir.path(), "good-secret", false).await;
+    let client = reqwest::Client::new();
+
+    let fetch = upload_pack_refs(&client, &base, "alice/proj")
+        .basic_auth("good-secret", None::<&str>)
+        .send()
         .await
-        .unwrap(),
-        Authz::Allowed(Some(_))
-    ));
+        .unwrap()
+        .status();
+    assert_eq!(fetch, StatusCode::OK);
+
+    // Denied even though alice owns the repo outright: `write: false` caps
+    // the token at read-only.
+    let push = empty_push(&client, &base, "good-secret").send().await.unwrap();
+    assert_eq!(push.status(), StatusCode::FORBIDDEN);
+    assert_eq!(push.text().await.unwrap(), "no permission");
+
+    // Unresolved, so it falls through to the password path and fails there
+    // too (no such user "bad-secret").
+    let bad = upload_pack_refs(&client, &base, "alice/proj")
+        .basic_auth("bad-secret", None::<&str>)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(bad, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn authorize_falls_through_to_password_auth_without_federation_configured() {
+async fn a_write_federation_token_can_push() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), None);
-    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
-    let headers = bearer_username_header("whatever-secret");
-    assert!(matches!(
-        authorize(
-            &ctx,
-            &headers,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Reporter
-        )
+    let base = serve_with_federation_token(dir.path(), "rw-secret", true).await;
+    let status = empty_push(&reqwest::Client::new(), &base, "rw-secret")
+        .send()
         .await
-        .unwrap(),
-        Authz::Denied(Denial::Unauthorized)
-    ));
-}
-
-fn basic_auth_header(username: &str, password: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    let encoded = BASE64.encode(format!("{username}:{password}"));
-    headers.insert(header::AUTHORIZATION, format!("Basic {encoded}").parse().unwrap());
-    headers
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
-async fn authorize_slows_a_username_down_after_too_many_wrong_passwords_over_http() {
+async fn a_token_is_just_an_unknown_username_without_federation_configured() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), None);
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: Some("correct-password"),
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-    ctx.create_repo("alice/proj").await.unwrap().unwrap();
-    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
-    let wrong = basic_auth_header("alice", "wrong-password");
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_user(&ctx, "alice", None).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let base = serve(ctx).await;
+    let status = upload_pack_refs(&reqwest::Client::new(), &base, "alice/proj")
+        .basic_auth("whatever-secret", None::<&str>)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
 
-    for _ in 0..gitquarry_core::app::LOGIN_MAX_ATTEMPTS {
-        assert!(matches!(
-            authorize(
-                &ctx,
-                &wrong,
-                "alice/proj",
-                &repo_uid,
-                gitquarry_core::storage::entities::Visibility::Private,
-                gitquarry_core::auth::entities::Permission::Reporter
-            )
+#[tokio::test]
+async fn too_many_wrong_passwords_slow_a_username_down_without_locking_its_owner_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_user(&ctx, "alice", Some("correct-password")).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let base = serve(Arc::clone(&ctx)).await;
+    let client = reqwest::Client::new();
+
+    for _ in 0..LOGIN_MAX_ATTEMPTS {
+        let status = upload_pack_refs(&client, &base, "alice/proj")
+            .basic_auth("alice", Some("wrong-password"))
+            .send()
             .await
-            .unwrap(),
-            Authz::Denied(Denial::Unauthorized)
-        ));
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
-
-    // Past the cap the account is *slowed*, never locked: the person who
-    // actually knows the password still gets in, so the counter can't be
-    // turned into a denial of service against them.
     assert!(!ctx.login_attempts.penalty("alice").is_zero());
-    let right = basic_auth_header("alice", "correct-password");
-    assert!(matches!(
-        authorize(
-            &ctx,
-            &right,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Reporter
-        )
+
+    // Past the cap the account is slowed, never locked: the person who
+    // actually knows the password still gets in, so the counter can't be
+    // turned into a denial of service against them. The first penalty step
+    // is one second.
+    let started = Instant::now();
+    let status = upload_pack_refs(&client, &base, "alice/proj")
+        .basic_auth("alice", Some("correct-password"))
+        .send()
         .await
-        .unwrap(),
-        Authz::Allowed(_)
-    ));
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
+    assert!(started.elapsed() >= Duration::from_secs(1));
 }
 
 #[tokio::test]
-async fn authorize_clears_the_failure_counter_on_a_correct_password() {
+async fn a_correct_password_clears_the_failure_counter() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), None);
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: Some("correct-password"),
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-    ctx.create_repo("alice/proj").await.unwrap().unwrap();
-    let repo_uid = gitquarry_core::storage::uid::Uid::from("repo-uid-x".to_string());
-    let wrong = basic_auth_header("alice", "wrong-password");
-    let right = basic_auth_header("alice", "correct-password");
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    create_user(&ctx, "alice", Some("correct-password")).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let base = serve(Arc::clone(&ctx)).await;
+    let client = reqwest::Client::new();
+    let attempt = |password: &'static str| {
+        upload_pack_refs(&client, &base, "alice/proj")
+            .basic_auth("alice", Some(password))
+            .send()
+    };
 
-    for _ in 0..gitquarry_core::app::LOGIN_MAX_ATTEMPTS - 1 {
-        authorize(
-            &ctx,
-            &wrong,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Reporter,
-        )
-        .await
-        .unwrap();
+    for _ in 0..LOGIN_MAX_ATTEMPTS - 1 {
+        assert_eq!(
+            attempt("wrong-password").await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
-    // One attempt under the cap -- a correct password still gets through
-    // and resets the counter.
-    assert!(matches!(
-        authorize(
-            &ctx,
-            &right,
-            "alice/proj",
-            &repo_uid,
-            gitquarry_core::storage::entities::Visibility::Private,
-            gitquarry_core::auth::entities::Permission::Reporter
-        )
-        .await
-        .unwrap(),
-        Authz::Allowed(Some(_))
-    ));
+    assert_eq!(attempt("correct-password").await.unwrap().status(), StatusCode::OK);
+    // Had the counter survived, this would be failure number
+    // LOGIN_MAX_ATTEMPTS and start the penalty.
+    assert_eq!(
+        attempt("wrong-password").await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(ctx.login_attempts.penalty("alice").is_zero());
 }
 
-/// End-to-end over a real socket (same reason `into_make_service_with_connect_info`
-/// matters here at all: [`middleware`] extracts a real `ConnectInfo`, which
-/// a `tower::ServiceExt::oneshot` call never provides) — repeats an
-/// anonymous clone-refs request against a real `Public` repo past
-/// [`gitquarry_core::app::GIT_RATE_LIMIT_ANONYMOUS_MAX`] and confirms the
-/// server starts answering `429` instead of `200`.
+/// Sends `GIT_RATE_LIMIT_ANONYMOUS_MAX` anonymous fetches that must all be
+/// served, built by `request` from the attempt's index.
+async fn spend_anonymous_budget(request: impl Fn(usize) -> reqwest::RequestBuilder) {
+    for i in 0..GIT_RATE_LIMIT_ANONYMOUS_MAX {
+        assert_eq!(request(i).send().await.unwrap().status(), StatusCode::OK, "attempt {i}");
+    }
+}
+
+async fn serve_public_repo(dir: &std::path::Path, trust_forwarded_for: bool) -> String {
+    let mut ctx = test_ctx(dir, None);
+    ctx.trust_forwarded_for = trust_forwarded_for;
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    serve(Arc::new(ctx)).await
+}
+
 #[tokio::test]
 async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
-    let resolved = ctx.create_repo("acme/demo").await.unwrap().unwrap();
-    let config = gitquarry_core::storage::entities::RepoConfig {
-        uid: resolved.uid.clone(),
-        full_name: "acme/demo".to_string(),
-        visibility: gitquarry_core::storage::entities::Visibility::Public,
-        ..Default::default()
-    };
-    gitquarry_core::storage::settings::put_repo_config(
-        ctx.backend().as_ref(),
-        resolved.uid.as_str(),
-        &config,
-        None,
-        &ctx.cipher,
-    )
-    .await
-    .unwrap();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let app =
-        axum::Router::new()
-            .fallback(|| async { StatusCode::NOT_FOUND })
-            .layer(axum::middleware::from_fn_with_state(
-                ctx,
-                gitquarry_core::git::http::middleware,
-            ));
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-
+    let base = serve_public_repo(dir.path(), false).await;
     let client = reqwest::Client::new();
-    let url = format!("http://{addr}/acme/demo/info/refs?service=git-upload-pack");
-    let mut saw_429 = false;
-    for _ in 0..gitquarry_core::app::GIT_RATE_LIMIT_ANONYMOUS_MAX + 5 {
-        let status = client.get(&url).send().await.unwrap().status();
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            saw_429 = true;
-            break;
-        }
-        assert_eq!(status, StatusCode::OK);
-    }
-    assert!(saw_429, "never got rate limited within the cap + margin");
+    spend_anonymous_budget(|_| upload_pack_refs(&client, &base, "acme/demo")).await;
+    let resp = upload_pack_refs(&client, &base, "acme/demo").send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
-#[test]
-fn the_rate_limit_key_ignores_a_forwarded_header_by_default() {
+#[tokio::test]
+async fn the_rate_limit_ignores_a_forwarded_header_by_default() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), None);
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
+    let base = serve_public_repo(dir.path(), false).await;
+    let client = reqwest::Client::new();
     // Trusting the header without a proxy that owns it would let any client
     // pick its own bucket, i.e. opt out of the limit entirely.
-    assert_eq!(
-        gitquarry_core::git::http::client_key(&ctx, &headers, "127.0.0.1".parse().unwrap()),
-        "127.0.0.1"
-    );
+    let forwarded_as =
+        |i: usize| upload_pack_refs(&client, &base, "acme/demo").header("x-forwarded-for", format!("9.9.9.{i}"));
+    spend_anonymous_budget(forwarded_as).await;
+    let status = forwarded_as(GIT_RATE_LIMIT_ANONYMOUS_MAX)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
 }
 
-#[test]
-fn the_rate_limit_key_uses_the_first_forwarded_hop_when_trusted() {
+#[tokio::test]
+async fn a_trusted_forwarded_header_keys_the_rate_limit_on_its_first_hop() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ctx = test_ctx(dir.path(), None);
-    ctx.trust_forwarded_for = true;
+    let base = serve_public_repo(dir.path(), true).await;
+    let client = reqwest::Client::new();
+    let forwarded = |value: String| upload_pack_refs(&client, &base, "acme/demo").header("x-forwarded-for", value);
 
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert("x-forwarded-for", "9.9.9.9, 10.0.0.1".parse().unwrap());
-    assert_eq!(
-        gitquarry_core::git::http::client_key(&ctx, &headers, "127.0.0.1".parse().unwrap()),
-        "9.9.9.9"
-    );
+    // Only the proxy hops vary, so every request shares 9.9.9.9's bucket.
+    spend_anonymous_budget(|i| forwarded(format!("9.9.9.9, 10.0.0.{i}"))).await;
+    let exhausted = forwarded("9.9.9.9, 10.0.0.250".to_string())
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(exhausted, StatusCode::TOO_MANY_REQUESTS);
+    let other_client = forwarded("8.8.8.8".to_string()).send().await.unwrap().status();
+    assert_eq!(other_client, StatusCode::OK);
+}
 
-    // No header (a request that didn't come through the proxy) falls back
-    // to the socket rather than lumping everyone into one empty key.
-    assert_eq!(
-        gitquarry_core::git::http::client_key(&ctx, &axum::http::HeaderMap::new(), "127.0.0.1".parse().unwrap()),
-        "127.0.0.1"
-    );
+#[tokio::test]
+async fn without_the_forwarded_header_a_trusting_server_keys_the_rate_limit_on_the_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = serve_public_repo(dir.path(), true).await;
+    // A request that didn't come through the proxy falls back to its own
+    // peer address rather than lumping everyone into one empty key.
+    let first_peer = client_from("127.0.0.2");
+    spend_anonymous_budget(|_| upload_pack_refs(&first_peer, &base, "acme/demo")).await;
+    let exhausted = upload_pack_refs(&first_peer, &base, "acme/demo")
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(exhausted, StatusCode::TOO_MANY_REQUESTS);
+    let second_peer = client_from("127.0.0.3");
+    let status = upload_pack_refs(&second_peer, &base, "acme/demo")
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
 }

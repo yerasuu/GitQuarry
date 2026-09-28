@@ -37,10 +37,7 @@ pub struct RefInfo {
     pub signature_status: char,
 }
 
-// pub(crate) visibility isn't enough for the integration test in
-// tests/git_browse_refs.rs, and this is also used unconditionally by
-// list_refs_detailed below, so it can't be cfg-gated to test builds only.
-pub fn parse_ref_line(line: &str) -> Option<RefInfo> {
+fn parse_ref_line(line: &str) -> Option<RefInfo> {
     let mut parts = line.splitn(7, LOG_SEP);
     Some(RefInfo {
         name: parts.next()?.to_string(),

@@ -2,30 +2,6 @@
 // refs::*;` there, so the browsing module itself is the visible path.
 use gitquarry_core::git::browse::*;
 
-#[test]
-fn parses_ref_line_for_branch_and_annotated_tag() {
-    let branch = "refs/heads/main\x1fabc\x1flatest commit\x1f2026-01-02T10:00:00+00:00\x1fAlice";
-    let r = parse_ref_line(branch).unwrap();
-    assert_eq!(r.name, "refs/heads/main");
-    assert_eq!(r.subject, "latest commit");
-    assert_eq!(r.author_name, "Alice");
-
-    let tag = "refs/tags/v1.0\x1fdef\x1frelease notes\x1f2026-02-01T00:00:00+00:00\x1fBob";
-    let r = parse_ref_line(tag).unwrap();
-    assert_eq!(r.subject, "release notes");
-    assert_eq!(r.author_name, "Bob");
-}
-
-#[test]
-fn parses_ref_line_without_an_author_field() {
-    // Whatever git version is on PATH, `%(if)%(taggername)%(then)...%(end)`
-    // always resolves to *something* (empty string included) — this just
-    // guards the parser itself doesn't panic if the field is ever missing.
-    let branch = "refs/heads/main\x1fabc\x1flatest commit\x1f2026-01-02T10:00:00+00:00";
-    let r = parse_ref_line(branch).unwrap();
-    assert_eq!(r.author_name, "");
-}
-
 #[tokio::test]
 async fn list_refs_detailed_credits_the_tagger_not_the_committer_for_an_annotated_tag() {
     let dir = tempfile::tempdir().unwrap();

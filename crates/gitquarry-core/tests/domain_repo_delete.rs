@@ -143,7 +143,7 @@ async fn purge_on_a_live_repo_is_rejected() {
 #[tokio::test]
 async fn sweep_purges_only_repos_past_their_grace_window() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(test_ctx(dir.path()));
 
     let expired = repo::create(&ctx, "team/expired", None, None, None, Visibility::Public)
         .await
@@ -174,9 +174,19 @@ async fn sweep_purges_only_repos_past_their_grace_window() {
         .unwrap();
     repo::delete(&ctx, &fresh, "team/fresh").await.unwrap();
 
-    deleted_repo_sweep::sweep_once(&ctx).await.unwrap();
+    // The periodic sweep's first tick fires immediately and the next is six
+    // hours away, so polling until the expired repo is gone and then
+    // aborting observes exactly one pass.
+    let sweep = tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
+    let purged = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while ctx.resolve_repo("team/expired").await.unwrap().is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    sweep.abort();
+    purged.expect("the sweep never purged the expired repo");
 
-    assert!(ctx.resolve_repo("team/expired").await.unwrap().is_none());
     let still_there = ctx.resolve_repo("team/fresh").await.unwrap().unwrap();
     let (config, _etag) = still_there.remote.get_repo_config().await.unwrap();
     assert!(config.deleted_at.is_some());

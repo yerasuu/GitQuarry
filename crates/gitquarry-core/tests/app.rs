@@ -3,6 +3,13 @@ use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::Cas;
 use std::sync::Arc;
+
+/// `app::LOGIN_MAX_ATTEMPTS`: failures a username gets before any delay.
+const LOGIN_MAX_ATTEMPTS: usize = 5;
+/// `app::GIT_RATE_LIMIT_{ANONYMOUS,AUTHENTICATED}_MAX`: git requests per
+/// window for an IP, and for a signed-in username.
+const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
+const GIT_RATE_LIMIT_AUTHENTICATED_MAX: usize = 120;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
@@ -22,25 +29,15 @@ fn penalises_after_max_attempts_and_clear_resets_it() {
 }
 
 #[test]
-fn the_penalty_doubles_per_failure_and_stops_at_the_cap() {
-    assert!(LoginAttempts::penalty_for(0).is_zero());
-    assert!(LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS - 1).is_zero());
-    // The cap is where the delay starts, then doubles per further failure.
-    assert_eq!(
-        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS),
-        std::time::Duration::from_secs(1)
-    );
-    assert_eq!(
-        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS + 1),
-        std::time::Duration::from_secs(2)
-    );
-    assert_eq!(
-        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS + 2),
-        std::time::Duration::from_secs(4)
-    );
-    // However many attempts pile up, one request never stalls a worker for
-    // longer than the cap.
-    assert_eq!(LoginAttempts::penalty_for(500), LOGIN_MAX_PENALTY);
+fn the_penalty_doubles_per_failure_past_the_cap_and_stops_at_ten_seconds() {
+    let attempts = LoginAttempts::default();
+    let mut penalties = Vec::with_capacity(9);
+    for _ in 0..9 {
+        attempts.record_failure("alice");
+        penalties.push(attempts.penalty("alice").as_secs());
+    }
+    // Free up to the cap, 1s at it, then doubling until the 10s ceiling.
+    assert_eq!(penalties, [0, 0, 0, 0, 1, 2, 4, 8, 10]);
 }
 
 #[test]
