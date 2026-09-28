@@ -26,7 +26,7 @@ pub enum Dest {
     /// disaster sense rather than the oops sense.
     Bucket(String),
     /// `path:/abs/dir` — a plain directory, opened as `s3db`'s local
-    /// files driver. A mounted volume, a NAS, an attached disk.
+    /// (`redb`) driver. A mounted volume, a NAS, an attached disk.
     Path(PathBuf),
     /// `self` — this same bucket. Snapshot only: a replica writes each
     /// object back at its own key, which against the source itself is a
@@ -180,10 +180,24 @@ pub async fn resolve(dest: &Dest, source: &Source<'_>) -> Result<Resolved> {
             if !path.is_dir() {
                 bail!("{} isn't a directory (create it first)", path.display());
             }
+            // A destination reused across backup runs (this is a replica,
+            // not a one-shot dump) may already hold data from before s3db
+            // retired the `files` local engine -- `s3db.redb`'s absence
+            // from an otherwise non-empty directory is that exact case, so
+            // fail clearly instead of silently starting a second, empty
+            // store next to the old one.
+            if !path.join("s3db.redb").is_file() && std::fs::read_dir(path)?.next().is_some() {
+                bail!(
+                    "{} already holds backup data in the retired `files` format -- run \
+                     `s3db-local-migrate {}` to move it to `engine = \"redb\"` first",
+                    path.display(),
+                    path.display()
+                );
+            }
             let backend = crate::storage::build_backend(&crate::config::BucketConfig {
                 backend: crate::config::BackendConfig::Local(LocalParams {
                     bucket: path.to_string_lossy().to_string(),
-                    engine: LocalEngine::Files,
+                    engine: LocalEngine::Redb,
                 }),
                 // A directory destination has no config section, so there's
                 // no separate passphrase to honour: it holds the source's own
