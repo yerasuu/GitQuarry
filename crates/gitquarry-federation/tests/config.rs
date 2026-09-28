@@ -11,7 +11,7 @@ fn rejects_a_config_missing_the_passphrase() {
             passphrase = ""
         "#;
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(CONFIG_NAME);
+    let path = dir.path().join("gitquarry-federation.toml");
     std::fs::write(&path, toml).unwrap();
     let err = Config::load_from(&path).unwrap_err();
     assert!(err.to_string().contains("passphrase"));

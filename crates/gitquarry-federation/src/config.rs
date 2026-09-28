@@ -22,9 +22,6 @@ use s3db::BackendConfig;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[cfg(any(test, feature = "test-util"))]
-pub const CONFIG_NAME: &str = "gitquarry-federation.toml";
-#[cfg(not(any(test, feature = "test-util")))]
 const CONFIG_NAME: &str = "gitquarry-federation.toml";
 
 fn default_gossip_interval_secs() -> u64 {

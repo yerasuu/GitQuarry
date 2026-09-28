@@ -63,16 +63,7 @@ async fn count_bans_issued(state: &FederationState) -> u64 {
         .count() as u64
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub async fn handler_instance_get(state: State_) -> Response {
-    handler_instance_get_impl(state).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(crate) async fn handler_instance_get(state: State_) -> Response {
-    handler_instance_get_impl(state).await
-}
-
-async fn handler_instance_get_impl(State(state): State_) -> Response {
+pub(crate) async fn handler_instance_get(State(state): State_) -> Response {
     let body = InstanceInfo {
         name: bucket_label(&state.backend_config).to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -96,16 +87,7 @@ struct BannedPeer {
 /// both the reason and who banned it, so another instance's admin can
 /// judge for themselves whether to trust this one — the same transparency
 /// mechanism `total_bans_issued` on `/_api/instance` complements.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn handler_banned_peers_get(state: State_) -> Response {
-    handler_banned_peers_get_impl(state).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(crate) async fn handler_banned_peers_get(state: State_) -> Response {
-    handler_banned_peers_get_impl(state).await
-}
-
-async fn handler_banned_peers_get_impl(State(state): State_) -> Response {
+pub(crate) async fn handler_banned_peers_get(State(state): State_) -> Response {
     let peers = access::list_all_peers(state.backend.as_ref(), &state.cipher)
         .await
         .unwrap_or_default();

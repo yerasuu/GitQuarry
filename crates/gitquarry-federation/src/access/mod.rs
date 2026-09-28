@@ -7,9 +7,6 @@
 
 pub mod peer_tokens;
 mod peers;
-#[cfg(any(test, feature = "test-util"))]
-pub mod tokens;
-#[cfg(not(any(test, feature = "test-util")))]
 mod tokens;
 
 pub use peer_tokens::*;

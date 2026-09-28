@@ -33,10 +33,7 @@ fn client_ip(req: &Request) -> String {
 /// parser (this workspace has none), just enough to strip a scheme and a
 /// trailing `:port`/path for the plain string comparison
 /// [`peer_override_for_ip`] does against a caller's IP.
-// Already reachable unconditionally from `peer_override_for_ip` below, so
-// no test-only cfg gate is needed here — just widen to `pub` for the
-// integration test.
-pub fn url_host(url: &str) -> &str {
+fn url_host(url: &str) -> &str {
     let rest = url.split("://").nth(1).unwrap_or(url);
     rest.split(['/', ':']).next().unwrap_or(rest)
 }
@@ -59,9 +56,7 @@ async fn peer_override_for_ip(state: &FederationState, ip: &str) -> Option<u32> 
 /// itself — holding a `&Request` across the `await`s below would make the
 /// enclosing future non-`Send` (its body type isn't `Sync`), which
 /// `axum::middleware::from_fn`'s boxed future requires.
-// Already reachable unconditionally from `layer` below, so no test-only
-// cfg gate is needed here — just widen to `pub` for the integration test.
-pub async fn check(state: &FederationState, bearer: Option<String>, ip: String) -> bool {
+async fn check(state: &FederationState, bearer: Option<String>, ip: String) -> bool {
     if let Some(secret) = bearer
         && let Ok(Some((owner, _token))) =
             access::resolve_by_token(state.backend.as_ref(), &state.cipher, &secret).await

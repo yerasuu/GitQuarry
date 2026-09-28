@@ -1,10 +1,11 @@
-use gitquarry_federation::access::tokens::*;
+use gitquarry_federation::access::*;
 
 #[test]
 fn validate_token_label_rejects_empty_too_long_and_control_chars() {
     assert!(validate_token_label("peer A - browsing").is_ok());
     assert!(validate_token_label("").is_err());
-    assert!(validate_token_label(&"x".repeat(MAX_TOKEN_LABEL_LEN + 1)).is_err());
+    assert!(validate_token_label(&"x".repeat(128)).is_ok());
+    assert!(validate_token_label(&"x".repeat(129)).is_err());
     assert!(validate_token_label("bad\nlabel").is_err());
 }
 

@@ -26,10 +26,8 @@ use gitquarry_wire::Uid;
 use s3db::{Backend, Cipher, Collection};
 use serde::{Deserialize, Serialize};
 
-// pub: also used by the integration tests in `tests/access_peer_tokens.rs`,
-// which can't see crate-private items.
-pub const MAX_SECRET_LEN: usize = 512;
-pub const MAX_PEER_LABEL_LEN: usize = 128;
+const MAX_SECRET_LEN: usize = 512;
+const MAX_PEER_LABEL_LEN: usize = 128;
 
 /// One linked credential: the opaque secret B minted, plus a display-only
 /// label — no `expires_at`/`repos`/`write` here, since B is the only party

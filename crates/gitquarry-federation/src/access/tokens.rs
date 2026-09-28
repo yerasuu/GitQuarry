@@ -21,9 +21,6 @@ use gitquarry_wire::Uid;
 use s3db::{Backend, Cipher, Collection};
 use sha2::{Digest, Sha256};
 
-#[cfg(any(test, feature = "test-util"))]
-pub const MAX_TOKEN_LABEL_LEN: usize = 128;
-#[cfg(not(any(test, feature = "test-util")))]
 const MAX_TOKEN_LABEL_LEN: usize = 128;
 const INDEX_PREFIX: &str = ".conf/index";
 

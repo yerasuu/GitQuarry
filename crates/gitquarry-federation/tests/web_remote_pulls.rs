@@ -1,12 +1,15 @@
-use axum::extract::{Json, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use gitquarry_federation::access;
 use gitquarry_federation::entities::{Peer, PeerAccessLevel};
-use gitquarry_federation::web::remote_pulls::*;
+use gitquarry_federation::state::FederationState;
+use gitquarry_federation::web::router;
 use gitquarry_wire::Uid;
 use s3db::LocalBackend;
+use std::sync::Arc;
+use tower::ServiceExt;
 
-fn test_state(root: &std::path::Path) -> std::sync::Arc<gitquarry_federation::state::FederationState> {
+fn test_state(root: &std::path::Path) -> Arc<FederationState> {
     let backend = LocalBackend::new(&s3db::LocalParams {
         bucket: root.to_string_lossy().to_string(),
         engine: s3db::LocalEngine::Files,
@@ -34,24 +37,23 @@ fn test_state(root: &std::path::Path) -> std::sync::Arc<gitquarry_federation::st
     })
 }
 
-fn headers_with_uid(uid: &Uid) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert("x-gitquarry-user-uid", uid.to_string().parse().unwrap());
-    headers
+/// The comment form as core proxies it, with the session uid core forwards
+/// when there is one.
+async fn post_comment(state: &Arc<FederationState>, uid: Option<&Uid>) -> StatusCode {
+    let mut req = Request::post("/_remote_pulls/comment").header("content-type", "application/json");
+    if let Some(uid) = uid {
+        req = req.header("x-gitquarry-user-uid", uid.to_string());
+    }
+    let body = serde_json::json!({"peer": "acme", "repo": "acme/demo", "number": 1, "body": "hi"});
+    let req = req.body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap();
+    router(Arc::clone(state)).oneshot(req).await.unwrap().status()
 }
 
 #[tokio::test]
 async fn rejects_without_the_forwarded_uid_header() {
     let dir = tempfile::tempdir().unwrap();
     let state = test_state(dir.path());
-    let form = RemoteCommentForm {
-        peer: "acme".to_string(),
-        repo: "acme/demo".to_string(),
-        number: 1,
-        body: "hi".to_string(),
-    };
-    let resp = handler_comment_post(State(state), HeaderMap::new(), Json(form)).await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(post_comment(&state, None).await, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -75,14 +77,7 @@ async fn rejects_a_peer_thats_not_full_access_level() {
         .unwrap();
 
     let uid = Uid::new();
-    let form = RemoteCommentForm {
-        peer: "acme".to_string(),
-        repo: "acme/demo".to_string(),
-        number: 1,
-        body: "hi".to_string(),
-    };
-    let resp = handler_comment_post(State(state), headers_with_uid(&uid), Json(form)).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(post_comment(&state, Some(&uid)).await, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -106,12 +101,5 @@ async fn rejects_without_a_linked_credential() {
         .unwrap();
 
     let uid = Uid::new();
-    let form = RemoteCommentForm {
-        peer: "acme".to_string(),
-        repo: "acme/demo".to_string(),
-        number: 1,
-        body: "hi".to_string(),
-    };
-    let resp = handler_comment_post(State(state), headers_with_uid(&uid), Json(form)).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(post_comment(&state, Some(&uid)).await, StatusCode::FORBIDDEN);
 }

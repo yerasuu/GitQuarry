@@ -26,12 +26,6 @@ rand = "0.10.2"
 sha2 = "0.11.0"
 dirs = "6.0.0"
 
-[features]
-# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
-# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
-# across the crate boundary that external integration tests are.
-test-util = []
-
 [dev-dependencies]
 tempfile = "3.27.0"
 # Only for driving a full `Router` (middleware included) with `.oneshot()`
@@ -39,9 +33,6 @@ tempfile = "3.27.0"
 # directly, but `rate_limit_middleware`'s test needs the actual layered
 # `Service`, not a bare handler, to prove the middleware itself applies.
 tower = { version = "0.5", features = ["util"] }
-# Self-dependency so `cargo test` enables this crate's own `test-util`
-# automatically for its tests/*.rs.
-gitquarry-federation = { path = ".", features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -8,34 +8,16 @@
 //! framing, and core is the only legitimate caller of any route here,
 //! public-API-shaped or not.
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod api;
-#[cfg(not(any(test, feature = "test-util")))]
 mod api;
 mod api_pulls;
 mod gossip;
 mod internal_out;
-#[cfg(any(test, feature = "test-util"))]
-pub mod peers;
-#[cfg(not(any(test, feature = "test-util")))]
 mod peers;
-#[cfg(any(test, feature = "test-util"))]
-pub mod remote_pulls;
-#[cfg(not(any(test, feature = "test-util")))]
 mod remote_pulls;
 pub mod session;
-#[cfg(any(test, feature = "test-util"))]
-pub mod sister;
-#[cfg(not(any(test, feature = "test-util")))]
 mod sister;
-#[cfg(any(test, feature = "test-util"))]
-pub mod tokens;
-#[cfg(not(any(test, feature = "test-util")))]
 mod tokens;
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod rate_limit_middleware;
-#[cfg(not(any(test, feature = "test-util")))]
 mod rate_limit_middleware;
 
 use crate::state::FederationState;

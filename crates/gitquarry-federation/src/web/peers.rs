@@ -258,16 +258,7 @@ fn sister_control(csrf: &str, name: &str, peer: &Peer) -> String {
     )
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_page(peers: &[Peer], csrf: &str, message: Option<String>) -> String {
-    render_page_impl(peers, csrf, message)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_page(peers: &[Peer], csrf: &str, message: Option<String>) -> String {
-    render_page_impl(peers, csrf, message)
-}
-
-fn render_page_impl(peers: &[Peer], csrf: &str, message: Option<String>) -> String {
     let csrf = escape_html(csrf);
     let mut rows = String::new();
     if peers.is_empty() {

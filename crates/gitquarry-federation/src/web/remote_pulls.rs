@@ -36,17 +36,6 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 }
 
 #[derive(Deserialize)]
-#[cfg(any(test, feature = "test-util"))]
-pub struct RemoteCommentForm {
-    pub peer: String,
-    pub repo: String,
-    pub number: u64,
-    #[serde(default)]
-    pub body: String,
-}
-
-#[derive(Deserialize)]
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) struct RemoteCommentForm {
     peer: String,
     repo: String,
@@ -59,16 +48,7 @@ pub(crate) struct RemoteCommentForm {
 /// linked peer can grant) and requires the viewer to already have a
 /// [`crate::access::PeerCredential`] linked for this peer — same "no
 /// credential, no write" rule the single-binary predecessor enforced.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn handler_comment_post(state: State_, headers: HeaderMap, form: Json<RemoteCommentForm>) -> Response {
-    handler_comment_post_impl(state, headers, form).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(crate) async fn handler_comment_post(state: State_, headers: HeaderMap, form: Json<RemoteCommentForm>) -> Response {
-    handler_comment_post_impl(state, headers, form).await
-}
-
-async fn handler_comment_post_impl(
+pub(crate) async fn handler_comment_post(
     State(state): State_,
     headers: HeaderMap,
     Json(form): Json<RemoteCommentForm>,

@@ -39,16 +39,7 @@ struct HandshakeRequest {
 /// call it, but it only ever does anything if this side already has
 /// `sister_requested` set for `instance_name` (`sister::receive_handshake`'s
 /// own doc comment).
-#[cfg(any(test, feature = "test-util"))]
-pub async fn handler_handshake_post(State(state): State_, body: Bytes) -> Response {
-    handler_handshake_post_impl(State(state), body).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) async fn handler_handshake_post(State(state): State_, body: Bytes) -> Response {
-    handler_handshake_post_impl(State(state), body).await
-}
-
-async fn handler_handshake_post_impl(State(state): State_, body: Bytes) -> Response {
     let Ok(req) = serde_json::from_slice::<HandshakeRequest>(&body) else {
         return json_error(StatusCode::BAD_REQUEST, "invalid JSON body");
     };
@@ -61,16 +52,7 @@ async fn handler_handshake_post_impl(State(state): State_, body: Bytes) -> Respo
 /// `POST /_federation/sister/ban-event` — bearer-authenticated with the
 /// shared sister secret; the caller never states its own name, only
 /// proves it holds the secret (`sister::sister_by_secret`).
-#[cfg(any(test, feature = "test-util"))]
-pub async fn handler_ban_event_post(State(state): State_, headers: HeaderMap, body: Bytes) -> Response {
-    handler_ban_event_post_impl(State(state), headers, body).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) async fn handler_ban_event_post(State(state): State_, headers: HeaderMap, body: Bytes) -> Response {
-    handler_ban_event_post_impl(State(state), headers, body).await
-}
-
-async fn handler_ban_event_post_impl(State(state): State_, headers: HeaderMap, body: Bytes) -> Response {
     let Some(secret) = bearer_token(&headers) else {
         return json_error(StatusCode::UNAUTHORIZED, "missing bearer token");
     };
@@ -90,16 +72,7 @@ async fn handler_ban_event_post_impl(State(state): State_, headers: HeaderMap, b
 /// `GET /_federation/sister/bans` — full current ban list (not a delta),
 /// for the periodic reconciliation pull (`sister::reconcile_with_sister`).
 /// Same bearer authentication as the ban-event push.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn handler_bans_get(State(state): State_, headers: HeaderMap) -> Response {
-    handler_bans_get_impl(State(state), headers).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) async fn handler_bans_get(State(state): State_, headers: HeaderMap) -> Response {
-    handler_bans_get_impl(State(state), headers).await
-}
-
-async fn handler_bans_get_impl(State(state): State_, headers: HeaderMap) -> Response {
     let Some(secret) = bearer_token(&headers) else {
         return json_error(StatusCode::UNAUTHORIZED, "missing bearer token");
     };

@@ -1,19 +1,18 @@
-use gitquarry_federation::web::sister::*;
-
 use gitquarry_federation::core_client::CoreClient;
 use gitquarry_federation::entities::Peer;
 use gitquarry_federation::gossip::GossipTable;
 use gitquarry_federation::rate_limit::PeerRateLimiter;
 use gitquarry_federation::sister::SisterBanEntry;
 use gitquarry_federation::state::FederationState;
+use gitquarry_federation::web::router;
 use gitquarry_federation::{access, sister};
 use s3db::{BackendConfig, LocalBackend, LocalEngine, LocalParams};
 use std::sync::Arc;
 use std::time::Duration;
+use tower::ServiceExt;
 
-use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
 
 fn test_state(root: &std::path::Path) -> Arc<FederationState> {
     let bucket = root.to_string_lossy().to_string();
@@ -41,6 +40,43 @@ fn test_state(root: &std::path::Path) -> Arc<FederationState> {
     })
 }
 
+async fn send(state: &Arc<FederationState>, req: Request<Body>) -> (StatusCode, Vec<u8>) {
+    let resp = router(Arc::clone(state)).oneshot(req).await.unwrap();
+    let status = resp.status();
+    (
+        status,
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+}
+
+fn handshake(body: &[u8]) -> Request<Body> {
+    Request::post("/_federation/sister/handshake")
+        .body(Body::from(body.to_vec()))
+        .unwrap()
+}
+
+fn with_bearer(req: axum::http::request::Builder, secret: Option<&str>) -> axum::http::request::Builder {
+    match secret {
+        Some(secret) => req.header(header::AUTHORIZATION, format!("Bearer {secret}")),
+        None => req,
+    }
+}
+
+fn ban_event(secret: Option<&str>, body: Vec<u8>) -> Request<Body> {
+    with_bearer(Request::post("/_federation/sister/ban-event"), secret)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+fn bans(secret: Option<&str>) -> Request<Body> {
+    with_bearer(Request::get("/_federation/sister/bans"), secret)
+        .body(Body::empty())
+        .unwrap()
+}
+
 #[tokio::test]
 async fn handshake_confirms_only_once_this_side_already_requested() {
     let dir = tempfile::tempdir().unwrap();
@@ -56,16 +92,14 @@ async fn handshake_confirms_only_once_this_side_already_requested() {
         .unwrap();
 
     let body = serde_json::to_vec(&serde_json::json!({ "instance_name": "acme", "secret": "shh" })).unwrap();
-    let resp = handler_handshake_post(State(Arc::clone(&state)), Bytes::from(body.clone())).await;
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let (_, bytes) = send(&state, handshake(&body)).await;
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["ok"], false);
 
     sister::request(state.backend.as_ref(), &state.cipher, "acme")
         .await
         .unwrap();
-    let resp = handler_handshake_post(State(Arc::clone(&state)), Bytes::from(body)).await;
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let (_, bytes) = send(&state, handshake(&body)).await;
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["ok"], true);
 }
@@ -119,10 +153,12 @@ async fn receive_handshake_rejects_a_different_secret_once_already_confirmed() {
 async fn ban_event_and_bans_get_require_a_valid_sister_secret() {
     let dir = tempfile::tempdir().unwrap();
     let state = test_state(dir.path());
-    let resp = handler_ban_event_post(State(Arc::clone(&state)), HeaderMap::new(), Bytes::new()).await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let resp = handler_bans_get(State(state), HeaderMap::new()).await;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        send(&state, ban_event(None, Vec::new())).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(send(&state, bans(None)).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(send(&state, bans(Some("guessed"))).await.0, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -145,19 +181,18 @@ async fn ban_event_applies_and_bans_get_reflects_it() {
         .await
         .unwrap();
 
-    let mut headers = HeaderMap::new();
-    headers.insert(header::AUTHORIZATION, "Bearer shared-secret".parse().unwrap());
     let event = serde_json::to_vec(&serde_json::json!({
         "peer_name": "stranger", "git_base_url": "https://stranger.example",
         "action": "ban", "reason": "abuse", "banned_by": "bob", "banned_at": null
     }))
     .unwrap();
-    let resp = handler_ban_event_post(State(Arc::clone(&state)), headers.clone(), Bytes::from(event)).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        send(&state, ban_event(Some("shared-secret"), event)).await.0,
+        StatusCode::OK
+    );
 
-    let resp = handler_bans_get(State(state), headers).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let (status, bytes) = send(&state, bans(Some("shared-secret"))).await;
+    assert_eq!(status, StatusCode::OK);
     let list: Vec<SisterBanEntry> = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].peer_name, "stranger");
