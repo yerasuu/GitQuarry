@@ -19,7 +19,7 @@ use gitquarry_core::storage::uid::Uid;
 use gitquarry_core::storage::{Backend, Cas, REPOS_PREFIX};
 use s3db::Collection;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// How many CAS-conflict retries [`update_last_synced`] attempts before
 /// giving up — same bound `storage::merge_requests::next_mr_number` uses for
@@ -115,6 +115,12 @@ pub struct ExternalMirror {
     pub enabled: bool,
     #[serde(default)]
     pub label: String,
+    /// Glob patterns (`gitquarry_core::git::codeowners::segments_match`
+    /// syntax) restricting which branches this mirror syncs — tags are
+    /// never filtered. Empty means every branch, the same as before this
+    /// field existed.
+    #[serde(default)]
+    pub branch_patterns: BTreeSet<String>,
     /// ref name -> last sha this mirror successfully synced for it — the
     /// three-way comparison's memory. Never cleared on a diverged/error ref:
     /// see [`RefSyncStatus`] for why that's tracked separately.

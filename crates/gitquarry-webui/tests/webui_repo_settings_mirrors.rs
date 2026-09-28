@@ -49,6 +49,33 @@ fn lists_a_mirror_row_with_sync_and_delete_actions() {
 }
 
 #[test]
+fn edit_form_prefills_branch_patterns_as_comma_separated() {
+    let mirror = ExternalMirror {
+        branch_patterns: std::collections::BTreeSet::from(["main".to_string(), "release/*".to_string()]),
+        ..sample_mirror("m1")
+    };
+    let no_links = HashMap::new();
+    let html = render_mirrors_section(
+        "acme/demo",
+        &[(mirror, "etag1".to_string())],
+        &no_links,
+        "tok",
+        None,
+        gitquarry_i18n::Locale::En,
+    )
+    .into_string();
+    assert!(html.contains(r#"name="branch_patterns" value="main, release/*""#));
+}
+
+#[test]
+fn add_form_starts_with_an_empty_branch_patterns_field() {
+    let no_links = HashMap::new();
+    let html =
+        render_mirrors_section("acme/demo", &[], &no_links, "tok", None, gitquarry_i18n::Locale::En).into_string();
+    assert!(html.contains(r#"name="branch_patterns" value="""#));
+}
+
+#[test]
 fn edit_form_carries_the_mirrors_real_etag_as_its_cas_guard() {
     let mirror = (sample_mirror("m1"), "real-etag-123".to_string());
     let no_links = HashMap::new();

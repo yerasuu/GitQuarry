@@ -589,6 +589,11 @@ pub struct RepoConfForm {
     /// only if checked. Track B opt-in, see `ExternalMirror::sync_merge_requests`.
     #[serde(default)]
     sync_merge_requests: String,
+    /// Only read by `add_mirror`/`edit_mirror` — comma-separated, same
+    /// convention as the repo-settings protected-branches field. See
+    /// `ExternalMirror::branch_patterns`.
+    #[serde(default)]
+    branch_patterns: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every

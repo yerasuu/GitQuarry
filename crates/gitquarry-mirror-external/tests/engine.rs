@@ -498,6 +498,136 @@ async fn sync_mirror_once_pushes_a_changed_local_ref_to_the_external_target() {
     );
 }
 
+/// `branch_patterns` narrows which *branches* a mirror pushes — tags are
+/// never filtered, and an empty pattern set (every other test in this file)
+/// still means "every branch," unchanged.
+#[tokio::test]
+async fn sync_mirror_once_only_pushes_branches_matching_the_configured_pattern() {
+    use gitquarry_core::storage::remote::Manifest;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tokio::process::Command;
+
+    let root = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(root.path()));
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let target_path = target_dir.path().join("target.git");
+    std::fs::create_dir_all(&target_path).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "--bare"])
+            .current_dir(&target_path)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let source = ctx.create_repo("alice/pattern-source").await.unwrap().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    async fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
+        assert!(status.success(), "git {args:?} failed in {}", dir.display());
+    }
+    run_git(work.path(), &["init", "-q"]).await;
+    std::fs::write(work.path().join("README.md"), b"hello from source\n").unwrap();
+    run_git(work.path(), &["add", "-A"]).await;
+    run_git(
+        work.path(),
+        &[
+            "-c",
+            "user.email=test@test",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+    )
+    .await;
+    let sha_out = Command::new("git")
+        .current_dir(work.path())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .await
+        .unwrap();
+    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
+
+    let git_dir = work.path().join(".git");
+    let pack_dir = tempfile::tempdir().unwrap();
+    // One pack covers all three refs below -- they all point at the same
+    // commit, so nothing beyond it needs to be reachable.
+    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
+        .await
+        .unwrap()
+        .unwrap();
+    source
+        .remote
+        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
+        .await
+        .unwrap();
+    source
+        .remote
+        .put_manifest(
+            &Manifest {
+                refs: BTreeMap::from([
+                    ("refs/heads/main".to_string(), sha.clone()),
+                    ("refs/heads/release/1.0".to_string(), sha.clone()),
+                    ("refs/tags/v1".to_string(), sha.clone()),
+                ]),
+                head: Some("refs/heads/main".to_string()),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    {
+        ctx.open_mirror(&source).await.unwrap();
+    }
+
+    allow_mirror_host(&ctx, "example.invalid").await;
+    let mut mirror = domain::create(
+        &ctx,
+        &source.uid,
+        access::ExternalMirror {
+            remote_url: "https://example.invalid/acme/target.git".to_string(),
+            token: "s3cr3t-token".to_string(),
+            enabled: true,
+            label: "pattern test".to_string(),
+            branch_patterns: BTreeSet::from(["release/*".to_string()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    mirror.remote_url = target_path.to_string_lossy().to_string();
+
+    let report = sync_mirror_once(&ctx, &source, &mirror).await.unwrap();
+    assert_eq!(
+        report.pushed, 2,
+        "release/1.0 and the v1 tag, main excluded by the pattern"
+    );
+    assert_eq!(report.failure_summary(), None);
+
+    let target_refs = gitquarry_mirror_external::git_remote::list_refs_with_sha(&target_path)
+        .await
+        .unwrap();
+    assert_eq!(
+        target_refs.get("refs/heads/release/1.0"),
+        Some(&sha),
+        "matches the release/* pattern"
+    );
+    assert!(
+        !target_refs.contains_key("refs/heads/main"),
+        "main doesn't match release/* and stays excluded"
+    );
+    assert_eq!(
+        target_refs.get("refs/tags/v1"),
+        Some(&sha),
+        "tags are never filtered by branch_patterns"
+    );
+}
+
 /// Pull direction's counterpart to the push test above: the external
 /// target already has a ref the local repo has never seen, and
 /// `sync_mirror_once` has to bring it in — real `git fetch` +

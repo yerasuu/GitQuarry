@@ -100,6 +100,7 @@ pub(super) async fn save_mirror(
                 enabled: form.mirror_enabled == "1",
                 sync_merge_requests: form.sync_merge_requests == "1",
                 label: form.label.trim().to_string(),
+                branch_patterns: gitquarry_core::domain::repo::parse_csv_field(&form.branch_patterns),
                 ..Default::default()
             };
             let created = match domain::create(ctx, &resolved.uid, mirror).await {
@@ -141,6 +142,7 @@ pub(super) async fn save_mirror(
             mirror.enabled = form.mirror_enabled == "1";
             mirror.sync_merge_requests = form.sync_merge_requests == "1";
             mirror.label = form.label.trim().to_string();
+            mirror.branch_patterns = gitquarry_core::domain::repo::parse_csv_field(&form.branch_patterns);
             let cas = match domain::update(ctx, &resolved.uid, &mirror, &form.mirror_etag).await {
                 Ok(cas) => cas,
                 Err(e) => return Ok((FlashOutcome::Invalid(e.to_string()), None)),
@@ -257,8 +259,18 @@ fn render_mirror_form(
 ) -> Markup {
     use gitquarry_i18n::web::repo_settings as t;
     let action_url = repo_link(repo_name, "settings", "").to_string();
-    let (action, mirror_id, etag, remote_url, provider, direction, label, enabled, sync_merge_requests) = match existing
-    {
+    let (
+        action,
+        mirror_id,
+        etag,
+        remote_url,
+        provider,
+        direction,
+        label,
+        enabled,
+        sync_merge_requests,
+        branch_patterns,
+    ) = match existing {
         Some((m, etag)) => (
             "edit_mirror",
             m.id.as_str(),
@@ -269,6 +281,7 @@ fn render_mirror_form(
             m.label.as_str(),
             m.enabled,
             m.sync_merge_requests,
+            m.branch_patterns.iter().cloned().collect::<Vec<_>>().join(", "),
         ),
         None => (
             "add_mirror",
@@ -280,6 +293,7 @@ fn render_mirror_form(
             "",
             true,
             false,
+            String::new(),
         ),
     };
     html! {
@@ -321,6 +335,11 @@ fn render_mirror_form(
             label {
                 input type="checkbox" name="sync_merge_requests" value="1" checked[sync_merge_requests];
                 " " (t::mirror_field_label_sync_merge_requests(locale))
+            }
+            label {
+                (t::mirror_field_label_branch_patterns(locale)) " "
+                input name="branch_patterns" value=(branch_patterns) size="40"
+                    placeholder=(t::mirror_branch_patterns_placeholder(locale));
             }
             button type="submit" {
                 (if mirror_id.is_empty() { t::add_mirror_button(locale) } else { t::save_mirror_button(locale) })

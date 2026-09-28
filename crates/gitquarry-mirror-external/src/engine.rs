@@ -521,10 +521,24 @@ pub async fn sync_mirror_once(
         false => None,
     };
     let is_branch_or_tag = |name: &&String| name.starts_with("refs/heads/") || name.starts_with("refs/tags/");
+    // Tags are never filtered -- only `mirror.branch_patterns` narrows which
+    // *branches* are in scope; empty means every branch, unchanged from
+    // before this field existed.
+    let branch_in_scope = |branch: &str| {
+        mirror.branch_patterns.is_empty()
+            || mirror
+                .branch_patterns
+                .iter()
+                .any(|p| gitquarry_core::git::codeowners::segments_match(p, branch))
+    };
     let ref_names: BTreeSet<String> = local_refs
         .keys()
         .chain(remote_refs.keys())
         .filter(is_branch_or_tag)
+        .filter(|name| match name.strip_prefix("refs/heads/") {
+            Some(branch) => branch_in_scope(branch),
+            None => true,
+        })
         .cloned()
         .collect();
 
