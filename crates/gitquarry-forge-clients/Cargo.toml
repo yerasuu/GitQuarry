@@ -14,13 +14,9 @@ serde_json = "1.0.151"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 tracing = "0.1.44"
 
-[features]
-# Un-gates otherwise-private items for this crate's own tests/*.rs — same
-# reasoning gitquarry-core's own `test-util` feature has.
-test-util = []
-
 [dev-dependencies]
-gitquarry-forge-clients = { path = ".", features = ["test-util"] }
+axum = "0.8.9"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -1977,10 +1977,11 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "gitquarry-forge-clients",
+ "axum",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
