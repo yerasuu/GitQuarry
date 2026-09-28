@@ -48,6 +48,7 @@ async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
             cipher,
             mirror_max_age: Duration::from_secs(60),
             mirror_max_size_bytes: 0,
+            mirror_large_repo_threshold_bytes: u64::MAX,
             oidc: None,
             login_attempts: Default::default(),
             git_rate_limiter: Default::default(),
