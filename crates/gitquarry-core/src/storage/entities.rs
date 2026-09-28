@@ -33,6 +33,14 @@ pub struct ServerSettings {
     /// `crate::mirror::gc::parse_size` syntax (`"5G"`, `"512M"`, ...).
     #[serde(default)]
     pub mirrors_max_size: Option<String>,
+    /// `crate::mirror::gc::parse_size` syntax (`"1G"`, ...). A mirror at or
+    /// above this size is exempt from age-based eviction — re-deriving a
+    /// large mirror from the bucket is real decrypt-and-reconstruct work,
+    /// so going untouched for a while shouldn't throw it away for free. It
+    /// still fully participates in the size-based pass, so
+    /// `mirrors_max_size` is never bypassed.
+    #[serde(default)]
+    pub mirrors_large_repo_threshold: Option<String>,
     /// OIDC login for the web UI (admin pages + reading `private` repos as a
     /// matching [`crate::auth::entities::User`]). All four fields are required
     /// together — see [`gitquarry_auth_crypto::oidc::discover`] — or OIDC stays off and

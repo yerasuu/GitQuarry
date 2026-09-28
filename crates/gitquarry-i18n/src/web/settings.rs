@@ -36,6 +36,14 @@ msg!(settings_mirrors_max_size_placeholder() {
     Locale::Es => "5G (numero + B/K/M/G)",
     Locale::En => "5G (number + B/K/M/G)",
 });
+msg!(settings_mirrors_large_repo_threshold_label() {
+    Locale::Es => "mirrors-large-repo-threshold",
+    Locale::En => "mirrors-large-repo-threshold",
+});
+msg!(settings_mirrors_large_repo_threshold_placeholder() {
+    Locale::Es => "1G (numero + B/K/M/G) — exento de expulsion por edad",
+    Locale::En => "1G (number + B/K/M/G) — exempt from age-based eviction",
+});
 
 msg!(settings_external_mirrors_heading() {
     Locale::Es => "mirrors externos",

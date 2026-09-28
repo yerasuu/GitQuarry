@@ -37,6 +37,7 @@ fn test_ctx(
         cipher,
         mirror_max_age: max_age,
         mirror_max_size_bytes: u64::MAX,
+        mirror_large_repo_threshold_bytes: u64::MAX,
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),

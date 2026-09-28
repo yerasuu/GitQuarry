@@ -37,6 +37,7 @@ fn dummy_ctx(
     mirrors_root: PathBuf,
     mirror_max_age: Duration,
     mirror_max_size_bytes: u64,
+    mirror_large_repo_threshold_bytes: u64,
 ) -> gitquarry_core::app::AppContext {
     let cfg = gitquarry_core::config::BucketConfig {
         backend: gitquarry_core::config::BackendConfig::S3(gitquarry_core::config::S3Params {
@@ -64,6 +65,7 @@ fn dummy_ctx(
         ),
         mirror_max_age,
         mirror_max_size_bytes,
+        mirror_large_repo_threshold_bytes,
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
@@ -98,7 +100,7 @@ async fn sweep_evicts_stale_mirror_but_keeps_fresh_one() {
     make_fake_mirror(root.path(), "old-repo", Duration::from_secs(2 * 3600), 0);
     make_fake_mirror(root.path(), "team/fresh-repo", Duration::from_secs(1), 0);
 
-    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), u64::MAX);
+    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), u64::MAX, u64::MAX);
     sweep_once(&ctx).await.unwrap();
 
     assert!(!root.path().join("old-repo").exists(), "stale mirror should be evicted");
@@ -119,12 +121,48 @@ async fn sweep_evicts_lru_when_over_size_cap() {
 
     // Cap fits only the newest one (~100 bytes + HEAD); the other two
     // must go.
-    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), 150);
+    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), 150, u64::MAX);
     sweep_once(&ctx).await.unwrap();
 
     assert!(!root.path().join("oldest").exists());
     assert!(!root.path().join("middle").exists());
     assert!(root.path().join("newest").exists());
+}
+
+#[tokio::test]
+async fn a_large_mirror_survives_age_eviction_but_not_size_pressure() {
+    let root = tempfile::tempdir().unwrap();
+    // Well past max_age, and big enough to count as "large".
+    make_fake_mirror(root.path(), "big-old-repo", Duration::from_secs(2 * 3600), 1000);
+    make_fake_mirror(root.path(), "small-old-repo", Duration::from_secs(2 * 3600), 10);
+
+    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), u64::MAX, 500);
+    sweep_once(&ctx).await.unwrap();
+
+    assert!(
+        root.path().join("big-old-repo").exists(),
+        "a large mirror is exempt from age-based eviction"
+    );
+    assert!(
+        !root.path().join("small-old-repo").exists(),
+        "a small mirror still gets evicted by age as before"
+    );
+}
+
+#[tokio::test]
+async fn a_large_mirror_still_gets_evicted_under_size_pressure() {
+    let root = tempfile::tempdir().unwrap();
+    // Within max_age, so only the size cap can evict it -- but it's still
+    // above the large-repo threshold, which must not exempt it here.
+    make_fake_mirror(root.path(), "big-repo", Duration::from_secs(10), 1000);
+
+    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), 100, 500);
+    sweep_once(&ctx).await.unwrap();
+
+    assert!(
+        !root.path().join("big-repo").exists(),
+        "the large-repo exemption only applies to age eviction, never to the size cap"
+    );
 }
 
 #[tokio::test]

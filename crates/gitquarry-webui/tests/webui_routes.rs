@@ -41,6 +41,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         cipher,
         mirror_max_age: std::time::Duration::from_secs(60),
         mirror_max_size_bytes: 0,
+        mirror_large_repo_threshold_bytes: u64::MAX,
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),

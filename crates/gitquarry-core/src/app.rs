@@ -69,6 +69,12 @@ pub struct AppContext {
     /// runs, least-recently-queried survivors get evicted until back under
     /// this, if still over it.
     pub mirror_max_size_bytes: u64,
+    /// A mirror at or above this size is exempt from age-based eviction —
+    /// it still fully participates in the size-based pass, so
+    /// `mirror_max_size_bytes` is never bypassed. Always has a value (no
+    /// external wiring needed to be safe, unlike `oidc`/`mirror_sync`): it
+    /// only ever makes eviction more conservative.
+    pub mirror_large_repo_threshold_bytes: u64,
     /// `None` unless all four `oidc_*` settings are configured — see
     /// [`gitquarry_auth_crypto::oidc::discover`]. Web UI admin pages and
     /// reading `private` repos over the web both stay exactly as open as

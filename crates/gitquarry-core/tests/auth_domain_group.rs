@@ -26,6 +26,7 @@ fn test_ctx(backend: LocalBackend, cipher: Cipher) -> gitquarry_core::app::AppCo
         cipher: std::sync::Arc::new(cipher),
         mirror_max_age: std::time::Duration::from_secs(1),
         mirror_max_size_bytes: 0,
+        mirror_large_repo_threshold_bytes: u64::MAX,
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),

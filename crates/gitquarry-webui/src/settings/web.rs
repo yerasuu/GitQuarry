@@ -343,6 +343,8 @@ pub(crate) struct MirrorsCacheForm {
     #[serde(default)]
     mirrors_max_size: String,
     #[serde(default)]
+    mirrors_large_repo_threshold: String,
+    #[serde(default)]
     csrf: String,
 }
 
@@ -372,6 +374,11 @@ fn render_mirrors_cache_page(
                     div class="field" {
                         label { (t::settings_mirrors_max_size_label(locale)) }
                         input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
+                    }
+                    div class="field" {
+                        label { (t::settings_mirrors_large_repo_threshold_label(locale)) }
+                        input name="mirrors_large_repo_threshold" value=(field(&settings.mirrors_large_repo_threshold))
+                            placeholder=(t::settings_mirrors_large_repo_threshold_placeholder(locale));
                     }
                     p { button type="submit" { (t::settings_save_button(locale)) } }
                 }
@@ -406,6 +413,7 @@ pub(crate) async fn handler_settings_mirrors_cache_post(
     let (current, etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
     let mirrors_max_age = non_empty(form.mirrors_max_age);
     let mirrors_max_size = non_empty(form.mirrors_max_size);
+    let mirrors_large_repo_threshold = non_empty(form.mirrors_large_repo_threshold);
     let validation_error = mirrors_max_age
         .as_deref()
         .and_then(|age| gitquarry_core::mirror::gc::parse_age(age).err())
@@ -414,11 +422,17 @@ pub(crate) async fn handler_settings_mirrors_cache_post(
                 .as_deref()
                 .and_then(|size| gitquarry_core::mirror::gc::parse_size(size).err())
         })
+        .or_else(|| {
+            mirrors_large_repo_threshold
+                .as_deref()
+                .and_then(|size| gitquarry_core::mirror::gc::parse_size(size).err())
+        })
         .map(|e| e.to_string());
     let settings = ServerSettings {
         mirrors_dir: non_empty(form.mirrors_dir),
         mirrors_max_age,
         mirrors_max_size,
+        mirrors_large_repo_threshold,
         ..current
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);

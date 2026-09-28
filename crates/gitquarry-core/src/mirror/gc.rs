@@ -214,7 +214,13 @@ async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
     let mut kept = Vec::new();
     for m in mirrors {
         let age = now.duration_since(m.last_access).unwrap_or_default();
-        if age > ctx.mirror_max_age {
+        // A large mirror going untouched for a while doesn't mean it's
+        // free to throw away: re-deriving it from the bucket is real
+        // decrypt-and-reconstruct work, unlike a small one. It still fully
+        // participates in the size-based pass below, so disk pressure
+        // still reclaims it once that's actually needed.
+        let large = m.size_bytes >= ctx.mirror_large_repo_threshold_bytes;
+        if age > ctx.mirror_max_age && !large {
             evict(ctx, &m).await;
         } else {
             kept.push(m);

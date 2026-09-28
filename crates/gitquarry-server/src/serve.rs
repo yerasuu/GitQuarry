@@ -27,11 +27,15 @@ const DEFAULT_SSH_BIND: &str = "0.0.0.0:2222";
 const DEFAULT_MIRRORS_MAX_AGE: &str = "3d";
 /// Soft cap on the mirrors dir's total size; see `gitquarry_core::mirror::gc`.
 const DEFAULT_MIRRORS_MAX_SIZE: &str = "5G";
+/// A mirror at or above this size is exempt from age-based eviction; see
+/// `gitquarry_core::mirror::gc`.
+const DEFAULT_MIRRORS_LARGE_REPO_THRESHOLD: &str = "1G";
 
 const USAGE: &str = "\
 usage:
   gitquarry [--bucket NAME] [--web-bind 0.0.0.0:8080] [--ssh-bind 0.0.0.0:2222]
               [--mirrors-dir PATH] [--mirrors-max-age 3d] [--mirrors-max-size 5G]
+              [--mirrors-large-repo-threshold 1G]
 
 Starts, in the same process, the ssh:// server (push/clone/fetch with
 pubkey auth and per-repo permissions), git smart-HTTP over the same web
@@ -44,7 +48,9 @@ Local mirrors (`--mirrors-dir`) are a cache: a periodic sweep deletes the
 ones not queried within `--mirrors-max-age` (default 3d) and, if the
 directory is still above `--mirrors-max-size` (default 5G), the
 least-used ones until back under the limit. They get recreated from S3
-on the next query.
+on the next query. A mirror at or above `--mirrors-large-repo-threshold`
+(default 1G) is exempt from the age check -- it still counts toward
+`--mirrors-max-size`, so it's reclaimed once that's actually needed.
 
 'gitquarry fsck [--bucket NAME] [--apply]' looks for objects that gitquarry
 doesn't write inside a repo's prefix -- see that command with --help.
@@ -65,6 +71,7 @@ struct Args {
     mirrors_dir: Option<PathBuf>,
     mirrors_max_age: Option<String>,
     mirrors_max_size: Option<String>,
+    mirrors_large_repo_threshold: Option<String>,
     bucket: Option<String>,
 }
 
@@ -80,6 +87,9 @@ fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             "--mirrors-dir" => args.mirrors_dir = Some(PathBuf::from(value("--mirrors-dir")?)),
             "--mirrors-max-age" => args.mirrors_max_age = Some(value("--mirrors-max-age")?),
             "--mirrors-max-size" => args.mirrors_max_size = Some(value("--mirrors-max-size")?),
+            "--mirrors-large-repo-threshold" => {
+                args.mirrors_large_repo_threshold = Some(value("--mirrors-large-repo-threshold")?)
+            }
             "--bucket" => args.bucket = Some(value("--bucket")?),
             "--help" | "-h" => {
                 println!("{USAGE}");
@@ -256,6 +266,13 @@ pub async fn run(rest: &[String]) -> Result<()> {
             .unwrap_or_else(|| DEFAULT_MIRRORS_MAX_SIZE.to_string()),
     )
     .context("invalid --mirrors-max-size")?;
+    let mirror_large_repo_threshold_bytes = gc::parse_size(
+        &args
+            .mirrors_large_repo_threshold
+            .or(settings.mirrors_large_repo_threshold)
+            .unwrap_or_else(|| DEFAULT_MIRRORS_LARGE_REPO_THRESHOLD.to_string()),
+    )
+    .context("invalid --mirrors-large-repo-threshold")?;
     let exe_path = std::env::current_exe()
         .context("couldn't resolve the current binary's path")?
         .canonicalize()
@@ -319,6 +336,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         cipher,
         mirror_max_age,
         mirror_max_size_bytes,
+        mirror_large_repo_threshold_bytes,
         oidc,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
