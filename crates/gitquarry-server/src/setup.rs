@@ -126,70 +126,11 @@ async fn handler_get(State(state): State_) -> Html<String> {
 /// reused by whichever driver was picked; confusing to fill out since
 /// nothing on the page said which of the five sections a given value
 /// actually belonged to once submitted).
-// `pub`/field visibility only widened under `test`/`test-util` (see
-// gitquarry-core's `mirror::hook::RefUpdate` for the same dual-definition
-// pattern): `tests/setup.rs` constructs this struct via literal, touching
-// every field, but it must stay crate-private in a normal build.
-#[cfg(any(test, feature = "test-util"))]
 #[derive(Deserialize)]
-pub struct WizardForm {
+struct WizardForm {
     /// `[buckets.<name>]` section key / `--bucket` value — a separate,
     /// purely local concept from any driver's own physical storage-target
     /// identifier (see `S3Params::bucket`'s doc comment).
-    pub name: String,
-    pub driver: String,
-    #[serde(default)]
-    pub s3_bucket: String,
-    #[serde(default)]
-    pub s3_region: String,
-    #[serde(default)]
-    pub s3_endpoint_url: String,
-    #[serde(default)]
-    pub s3_access_key_id: String,
-    #[serde(default)]
-    pub s3_secret_access_key: String,
-    #[serde(default)]
-    pub s3_path_style: String,
-    #[serde(default)]
-    pub r2_bucket: String,
-    #[serde(default)]
-    pub r2_account_id: String,
-    #[serde(default)]
-    pub r2_access_key_id: String,
-    #[serde(default)]
-    pub r2_secret_access_key: String,
-    #[serde(default)]
-    pub azure_bucket: String,
-    #[serde(default)]
-    pub azure_account_name: String,
-    #[serde(default)]
-    pub azure_tenant_id: String,
-    #[serde(default)]
-    pub azure_client_id: String,
-    #[serde(default)]
-    pub azure_client_secret: String,
-    #[serde(default)]
-    pub gcs_bucket: String,
-    #[serde(default)]
-    pub gcs_service_account_json_path: String,
-    #[serde(default)]
-    pub local_bucket: String,
-    pub passphrase: String,
-    pub admin_username: String,
-    /// Optional, but the only chance to set one at creation: `User::email`
-    /// can be changed afterward only by an admin through `/_users`
-    /// (`auth::domain::user::set_email`), and this account *is* the first
-    /// admin. Left blank, every merge commit it stamps carries the
-    /// synthetic `<username>@users.noreply.gitquarry` address instead
-    /// (`domain::merge_request::merger_identity`).
-    #[serde(default)]
-    pub admin_email: String,
-    pub admin_password: String,
-    pub admin_password_confirm: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
-#[derive(Deserialize)]
-struct WizardForm {
     name: String,
     driver: String,
     #[serde(default)]
@@ -345,16 +286,7 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
 /// `existing` is the prefilled run's already-on-disk backend config, if
 /// any (see [`Prefill`]) — only consulted by the `"local"` arm, to decide
 /// [`LocalParams::engine`] (see there for why).
-#[cfg(any(test, feature = "test-util"))]
-pub fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
-    build_backend_config_impl(form, existing)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
-    build_backend_config_impl(form, existing)
-}
-
-fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
     match form.driver.as_str() {
         "s3" => {
             let bucket = form.s3_bucket.trim().to_string();
@@ -512,34 +444,6 @@ async fn seed_admin_user(
 /// pre-filled: seeding one is the entire reason this run of the wizard
 /// exists). [`Self::blank`] for the no-config-at-all path; [`Self::from`] for
 /// the existing-but-fresh-bucket one.
-// `pub`/field visibility only widened under `test`/`test-util` — see
-// `WizardForm`'s dual-definition note above; `tests/setup.rs` reads a
-// subset of these fields off the value `FieldValues::from` returns.
-#[cfg(any(test, feature = "test-util"))]
-pub struct FieldValues {
-    pub name: String,
-    pub driver: &'static str,
-    pub s3_bucket: String,
-    pub s3_region: String,
-    s3_endpoint_url: String,
-    pub s3_access_key_id: String,
-    pub s3_secret_access_key: String,
-    pub s3_path_style: bool,
-    r2_bucket: String,
-    pub r2_account_id: String,
-    r2_access_key_id: String,
-    r2_secret_access_key: String,
-    azure_bucket: String,
-    azure_account_name: String,
-    pub azure_tenant_id: String,
-    azure_client_id: String,
-    azure_client_secret: String,
-    gcs_bucket: String,
-    gcs_service_account_json_path: String,
-    local_bucket: String,
-    pub passphrase: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 struct FieldValues {
     name: String,
     driver: &'static str,
@@ -636,16 +540,7 @@ impl From<&Prefill> for FieldValues {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_form(error: Option<&str>, prefill: Option<&Prefill>) -> String {
-    render_form_impl(error, prefill)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_form(error: Option<&str>, prefill: Option<&Prefill>) -> String {
-    render_form_impl(error, prefill)
-}
-
-fn render_form_impl(error: Option<&str>, prefill: Option<&Prefill>) -> String {
     let flash = error
         .map(|e| format!("<p class=\"flash flash-err\">{}</p>", esc(e)))
         .unwrap_or_default();

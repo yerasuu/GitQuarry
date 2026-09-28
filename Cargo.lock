@@ -1866,7 +1866,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "gitquarry",
  "gitquarry-auth-crypto",
  "gitquarry-core",
  "gitquarry-domain",

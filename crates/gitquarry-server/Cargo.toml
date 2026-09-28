@@ -47,16 +47,7 @@ anyhow = "1.0.104"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
-[features]
-# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
-# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
-# across the crate boundary that external integration tests are.
-test-util = []
-
 [dev-dependencies]
-# Self-dependency so `cargo test` enables this crate's own `test-util`
-# automatically for its tests/*.rs.
-gitquarry = { path = ".", features = ["test-util"] }
 tempfile = "3.27.0"
 
 [lints.rust]
