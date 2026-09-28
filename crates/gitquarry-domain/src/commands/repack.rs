@@ -26,16 +26,20 @@ use tracing::info;
 
 const USAGE: &str = "\
 usage:
-  gitquarry repack <repo> [--bucket NAME] [--apply]
+  gitquarry repack <repo> [--bucket NAME] [--max-pack-size BYTES] [--apply]
 
-Consolidates a repo's accumulated packs (one per push) into a single new
-one. Without --apply it only reports how many packs there are and how
-much they weigh, without touching anything.
+Consolidates a repo's accumulated packs (one per push) into as few new
+ones as fit under the pack-size cap. Without --apply it only reports how
+many packs there are and how much they weigh, without touching anything.
 
-Downloads every pack to a temporary local mirror, runs 'git repack -a
--d' there, uploads the new pack(s), confirms they landed, and only then
-deletes the old ones. Doesn't touch refs.json -- the served content
-doesn't change, only how it's packed underneath.
+Downloads every pack to a temporary local mirror, runs 'git repack -a -d
+--max-pack-size=<bytes>' there, uploads the new pack(s), confirms they
+landed, and only then deletes the old ones. Doesn't touch refs.json --
+the served content doesn't change, only how it's packed underneath.
+
+--max-pack-size BYTES defaults to 1 GiB: large enough that a typical repo
+still repacks into one pack, small enough that a huge repo's history
+never collapses into one unbounded file.
 
 Don't run this against a repo with pushes in progress from another
 process: a push that lands during the repack isn't lost (its new pack
@@ -46,10 +50,18 @@ pub async fn run(rest: &[String]) -> Result<()> {
     let mut bucket_arg: Option<String> = None;
     let mut apply = false;
     let mut repo_arg: Option<String> = None;
+    let mut max_pack_size_bytes = git::DEFAULT_MAX_PACK_SIZE_BYTES;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--bucket" => bucket_arg = Some(it.next().cloned().context("--bucket needs a value")?),
+            "--max-pack-size" => {
+                let raw = it.next().context("--max-pack-size needs a value, in bytes")?;
+                max_pack_size_bytes = raw
+                    .parse()
+                    .with_context(|| format!("--max-pack-size: {raw:?} is not a byte count"))?;
+                anyhow::ensure!(max_pack_size_bytes > 0, "--max-pack-size must be greater than 0");
+            }
             "--apply" => apply = true,
             "--help" | "-h" => {
                 println!("{USAGE}");
@@ -106,7 +118,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     git::init_bare(mirror_path).await?;
     gitquarry_core::mirror::sync_bare_repo_from_s3(&remote, mirror_path).await?;
     info!("gitquarry: running git repack...");
-    git::repack(mirror_path).await?;
+    git::repack(mirror_path, max_pack_size_bytes).await?;
 
     let new_packs = git::local_pack_names(mirror_path).await?;
     let dest_dir = git::objects_pack_dir(mirror_path);

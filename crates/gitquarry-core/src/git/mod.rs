@@ -851,17 +851,29 @@ pub async fn set_head(git_dir: &Path, target_ref: &str) -> Result<()> {
     Ok(())
 }
 
-/// `git repack -a -d`: repacks every object reachable from any ref into one
-/// new pack and deletes the now-redundant old ones from the local
+/// Default cap on a single pack `repack` produces, unless the caller asks
+/// for a different one — 1 GiB. A repo whose whole history is smaller than
+/// this repacks into one pack same as always; the cap only bites once a
+/// repo actually has enough history to matter, which is exactly the case
+/// where a single unbounded pack becomes a problem (every download, every
+/// future repack, and any future lazy-fetch scheme all size themselves off
+/// the pack's own size, not the repo's).
+pub const DEFAULT_MAX_PACK_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// `git repack -a -d --max-pack-size=<max_pack_size_bytes>`: repacks every
+/// object reachable from any ref into as few new packs as fit under that
+/// cap, and deletes the now-redundant old ones from the local
 /// `objects/pack/` dir — used by `crate::repack` to consolidate a repo's
 /// accumulated small packs (one per push, see the "no repack remoto"
-/// limitation in the README) into fewer, larger ones before re-uploading.
+/// limitation in the README) into fewer ones before re-uploading, without
+/// ever collapsing a large repo's whole history into one unbounded pack.
 /// Only ever run against a throwaway mirror that's just been freshly synced
 /// from S3 (every object the repo actually has, nothing more): running it
 /// against a mirror with in-flight local changes would be pointless (there
 /// aren't any) and against one that's stale would produce a pack missing
 /// objects the bucket already has.
-pub async fn repack(git_dir: &Path) -> Result<()> {
+pub async fn repack(git_dir: &Path, max_pack_size_bytes: u64) -> Result<()> {
+    let max_pack_size_arg = format!("--max-pack-size={max_pack_size_bytes}");
     run(
         Some(git_dir),
         &[
@@ -869,6 +881,7 @@ pub async fn repack(git_dir: &Path) -> Result<()> {
             OsStr::new("-a"),
             OsStr::new("-d"),
             OsStr::new("--quiet"),
+            OsStr::new(&max_pack_size_arg),
         ],
     )
     .await?;
