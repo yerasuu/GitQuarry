@@ -16,21 +16,6 @@ use gitquarry_i18n::web::repo::merges as t;
 use maud::{Markup, PreEscaped, html};
 use std::collections::HashSet;
 
-#[cfg(any(test, feature = "test-util"))]
-pub enum Row<'a> {
-    /// `diff --git`, `index`, mode, `---`/`+++` headers — nothing to anchor.
-    Meta(&'a str),
-    Hunk(&'a str),
-    /// A content line, with whichever side's line numbers it occupies.
-    Line {
-        old: Option<u32>,
-        new: Option<u32>,
-        class: &'static str,
-        text: &'a str,
-        anchor: CommentAnchor,
-    },
-}
-#[cfg(not(any(test, feature = "test-util")))]
 enum Row<'a> {
     /// `diff --git`, `index`, mode, `---`/`+++` headers — nothing to anchor.
     Meta(&'a str),
@@ -49,12 +34,6 @@ enum Row<'a> {
 /// comments it actually placed. Anything not placed (an anchor whose line
 /// no longer appears in the current diff, or a plain thread comment) is the
 /// caller's to render in the flat thread instead.
-#[cfg(any(test, feature = "test-util"))]
-pub struct Annotated {
-    pub markup: Markup,
-    pub placed: HashSet<usize>,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) struct Annotated {
     pub(super) markup: Markup,
     pub(super) placed: HashSet<usize>,
@@ -64,11 +43,6 @@ pub(super) struct Annotated {
 /// `/dev/null` (a pure add or delete has one of the two). Delegates to
 /// `super::super::diff::header_path` — the same parsing `color_diff`/
 /// `side_by_side_diff` need, kept in one place.
-#[cfg(any(test, feature = "test-util"))]
-pub fn header_path(line: &str) -> Option<&str> {
-    super::super::diff::header_path(line)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn header_path(line: &str) -> Option<&str> {
     super::super::diff::header_path(line)
 }
@@ -76,16 +50,6 @@ fn header_path(line: &str) -> Option<&str> {
 /// The `-old_start` / `+new_start` of an `@@ -1,2 +3,4 @@` header. `None`
 /// if the header is malformed — the caller then leaves the counters alone
 /// rather than numbering the following lines wrongly.
-#[cfg(any(test, feature = "test-util"))]
-pub fn hunk_starts(line: &str) -> Option<(u32, u32)> {
-    let body = line.strip_prefix("@@ ")?.split(" @@").next()?;
-    let mut parts = body.split(' ');
-    let old = parts.next()?.strip_prefix('-')?;
-    let new = parts.next()?.strip_prefix('+')?;
-    let start = |spec: &str| spec.split(',').next()?.parse::<u32>().ok();
-    Some((start(old)?, start(new)?))
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn hunk_starts(line: &str) -> Option<(u32, u32)> {
     let body = line.strip_prefix("@@ ")?.split(" @@").next()?;
     let mut parts = body.split(' ');
@@ -95,16 +59,7 @@ fn hunk_starts(line: &str) -> Option<(u32, u32)> {
     Some((start(old)?, start(new)?))
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn parse(diff: &str) -> Vec<Row<'_>> {
-    parse_impl(diff)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn parse(diff: &str) -> Vec<Row<'_>> {
-    parse_impl(diff)
-}
-
-fn parse_impl(diff: &str) -> Vec<Row<'_>> {
     let mut rows = Vec::new();
     let mut path = "";
     let (mut old_line, mut new_line) = (0u32, 0u32);
@@ -180,24 +135,6 @@ fn side_param(side: DiffSide) -> &'static str {
 /// Parses the `anchor_path`/`anchor_side`/`anchor_line` query params the
 /// per-line link sets. `None` unless all three are present and usable —
 /// a half-filled set just renders the diff with no form expanded.
-#[cfg(any(test, feature = "test-util"))]
-pub fn active_anchor(params: &std::collections::HashMap<String, String>) -> Option<CommentAnchor> {
-    let path = params.get("anchor_path")?;
-    let line = params.get("anchor_line")?.parse::<u32>().ok()?;
-    if path.is_empty() || line == 0 {
-        return None;
-    }
-    let side = match params.get("anchor_side").map(String::as_str) {
-        Some("old") => DiffSide::Old,
-        _ => DiffSide::New,
-    };
-    Some(CommentAnchor {
-        path: path.clone(),
-        side,
-        line,
-    })
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn active_anchor(params: &std::collections::HashMap<String, String>) -> Option<CommentAnchor> {
     let path = params.get("anchor_path")?;
     let line = params.get("anchor_line")?.parse::<u32>().ok()?;
@@ -293,34 +230,6 @@ fn form_row(
 /// Everything [`render`] needs beyond the diff and the thread itself.
 /// Bundled so it doesn't cross clippy's `too_many_arguments` — same shape
 /// `domain::release::NewAsset` uses for the same reason.
-#[cfg(any(test, feature = "test-util"))]
-pub struct View<'a> {
-    /// Each comment's body already rendered to HTML, indexed the same way
-    /// as `render`'s `comments` argument. Rendering one resolves `#123`
-    /// mentions against storage and so is async, which this render path
-    /// isn't; an index with no entry falls back to an empty body rather
-    /// than panicking on a caller that got the lengths wrong.
-    pub comment_bodies: &'a [String],
-    pub repo_name: &'a str,
-    pub repo_uid: &'a gitquarry_core::storage::uid::Uid,
-    pub number: u64,
-    /// Whether to offer the per-line "comment here" link at all.
-    pub can_comment: bool,
-    /// The one line whose comment form is expanded, if any.
-    pub active: Option<&'a CommentAnchor>,
-    /// The logged-in username, if any — gates each placed comment's own
-    /// edit controls to its author, and (together with [`Self::can_moderate`])
-    /// its delete control (see
-    /// `super::super::components::comment_edit_delete_controls`).
-    pub viewer: Option<&'a str>,
-    /// Whether the viewer is `Developer`+ on this repo — lets them delete
-    /// (never edit) someone else's comment, same override
-    /// `domain::merge_request::delete_comment`'s `is_moderator` param grants.
-    pub can_moderate: bool,
-    pub headers: &'a HeaderMap,
-    pub locale: Locale,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) struct View<'a> {
     /// Each comment's body already rendered to HTML, indexed the same way
     /// as `render`'s `comments` argument. Rendering one resolves `#123`
@@ -348,23 +257,8 @@ pub(super) struct View<'a> {
     pub(super) locale: Locale,
 }
 
-/// `comments` is the MR's whole thread (each paired with its storage key,
-/// see `domain::merge_request::list_comments`'s own doc comment), in order;
-/// only the anchored ones land in the diff, and each is matched to at most
-/// one line (the first occurrence of that path+side+line — a diff can
-/// repeat a path only across separate `diff --git` sections, which don't
-/// share line numbers).
-#[cfg(any(test, feature = "test-util"))]
-pub fn render(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
-    render_impl(diff, comments, view)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn render(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
-    render_impl(diff, comments, view)
-}
-
 /// Bumps `counter` and hands the new value back — used from inside
-/// `render_impl`'s `html!` via `@let`, which needs a genuine expression on
+/// `render`'s `html!` via `@let`, which needs a genuine expression on
 /// its right-hand side (a bare `*counter += 1;` statement isn't valid
 /// there, and discarding a plain `()`-valued assignment through `@let _ =`
 /// trips clippy's unit-binding lint).
@@ -388,7 +282,13 @@ fn line_css_class(class: &str) -> &'static str {
     }
 }
 
-fn render_impl(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
+/// `comments` is the MR's whole thread (each paired with its storage key,
+/// see `domain::merge_request::list_comments`'s own doc comment), in order;
+/// only the anchored ones land in the diff, and each is matched to at most
+/// one line (the first occurrence of that path+side+line — a diff can
+/// repeat a path only across separate `diff --git` sections, which don't
+/// share line numbers).
+pub(super) fn render(diff: &str, comments: &[(String, MrComment)], view: &View<'_>) -> Annotated {
     let rows = parse(diff);
     let mut placed = HashSet::new();
     // Bumped on each `Row::Hunk` so every `Row::Line` up to the next one can

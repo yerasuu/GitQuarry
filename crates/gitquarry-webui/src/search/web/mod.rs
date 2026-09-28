@@ -27,13 +27,7 @@
 //! process (`docs/federation-binary-split-concept.md` section 8) — no repo
 //! candidate list involved at all either way.
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod commits;
-#[cfg(not(any(test, feature = "test-util")))]
 mod commits;
-#[cfg(any(test, feature = "test-util"))]
-pub mod filenames;
-#[cfg(not(any(test, feature = "test-util")))]
 mod filenames;
 
 use crate::auth::web::login;
@@ -116,27 +110,6 @@ pub(crate) async fn handler_search_get(
     .into_response())
 }
 
-/// Repo's local mirror path and current head rev, or `None` if the repo no
-/// longer resolves, its mirror can't be synced, or it has no commits yet —
-/// any of these just means "no hits from this repo", not a search failure.
-///
-/// A `repo` starting with `_remote/` (from [`list_synced_peer_repos`]) is a
-/// peer's already-synced mirror: read directly off disk under the same
-/// per-repo lock [`gitquarry_core::app::AppContext::open_remote_mirror`] itself takes
-/// (so a concurrent live browse mid-fetch can't be read half-written), but
-/// deliberately never through `open_remote_mirror` — that would sync
-/// (`git fetch`) on every search, which is exactly the "a text query must
-/// never turn into a fetch against some peer" rule
-/// `docs/federation-concept.md` capa 3 calls out.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn mirror_and_head(ctx: &AppContext, repo: &str) -> Option<(std::path::PathBuf, String)> {
-    mirror_and_head_impl(ctx, repo).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
-async fn mirror_and_head(ctx: &AppContext, repo: &str) -> Option<(std::path::PathBuf, String)> {
-    mirror_and_head_impl(ctx, repo).await
-}
-
 /// `Some(uid)` if `repo` names a local repo this bucket tracks (never true
 /// for a `"_remote/..."` peer mirror, which has no `RepoConfig`/uid of its
 /// own) — what [`filenames::search_all`]/[`commits::search_all`] key
@@ -149,7 +122,19 @@ async fn repo_uid_if_local(ctx: &AppContext, repo: &str) -> Option<gitquarry_cor
     ctx.resolve_repo(repo).await.ok()?.map(|r| r.uid)
 }
 
-async fn mirror_and_head_impl(ctx: &AppContext, repo: &str) -> Option<(std::path::PathBuf, String)> {
+/// Repo's local mirror path and current head rev, or `None` if the repo no
+/// longer resolves, its mirror can't be synced, or it has no commits yet —
+/// any of these just means "no hits from this repo", not a search failure.
+///
+/// A `repo` starting with `_remote/` (from [`list_synced_peer_repos`]) is a
+/// peer's already-synced mirror: read directly off disk under the same
+/// per-repo lock [`gitquarry_core::app::AppContext::open_remote_mirror`] itself takes
+/// (so a concurrent live browse mid-fetch can't be read half-written), but
+/// deliberately never through `open_remote_mirror` — that would sync
+/// (`git fetch`) on every search, which is exactly the "a text query must
+/// never turn into a fetch against some peer" rule
+/// `docs/federation-concept.md` capa 3 calls out.
+async fn mirror_and_head(ctx: &AppContext, repo: &str) -> Option<(std::path::PathBuf, String)> {
     if repo.starts_with("_remote/") {
         let _guard = ctx.locks.lock(repo).await;
         let path = ctx.mirrors_root.join(repo);
@@ -171,16 +156,7 @@ async fn mirror_and_head_impl(ctx: &AppContext, repo: &str) -> Option<(std::path
 /// with `gc` (that one also needs size/mtime for eviction, this only needs
 /// the relative path). Returns `"_remote/<peer>/<repo...>"` strings, ready
 /// to hand straight to [`mirror_and_head`].
-#[cfg(any(test, feature = "test-util"))]
-pub async fn list_synced_peer_repos(ctx: &AppContext) -> Vec<String> {
-    list_synced_peer_repos_impl(ctx).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn list_synced_peer_repos(ctx: &AppContext) -> Vec<String> {
-    list_synced_peer_repos_impl(ctx).await
-}
-
-async fn list_synced_peer_repos_impl(ctx: &AppContext) -> Vec<String> {
     let root = ctx.mirrors_root.join("_remote");
     let mut out = Vec::new();
     let mut stack = vec![root];
@@ -203,13 +179,6 @@ async fn list_synced_peer_repos_impl(ctx: &AppContext) -> Vec<String> {
     out
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub struct PeerMetadataHit {
-    pub peer: String,
-    pub name: String,
-    pub description: Option<String>,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) struct PeerMetadataHit {
     peer: String,
     name: String,
@@ -257,35 +226,13 @@ async fn search_peer_metadata(ctx: &AppContext, q: &str) -> Vec<PeerMetadataHit>
 /// search hit's repo name is shown as text rather than built into an `href`
 /// (`url_encode` already leaves `/` alone, so the raw `_remote/...` string
 /// is a perfectly correct link target as-is, just an ugly label).
-#[cfg(any(test, feature = "test-util"))]
-pub fn display_repo(repo: &str) -> String {
-    display_repo_impl(repo)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn display_repo(repo: &str) -> String {
-    display_repo_impl(repo)
-}
-
-fn display_repo_impl(repo: &str) -> String {
     match repo.strip_prefix("_remote/") {
         Some(rest) => format!("{rest} (remote)"),
         None => repo.to_string(),
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub struct SearchResults {
-    pub file_hits: Vec<filenames::FilenameHit>,
-    pub files_truncated: bool,
-    pub commit_hits: Vec<commits::CommitHit>,
-    pub commits_truncated: bool,
-    pub peer_metadata_hits: Vec<PeerMetadataHit>,
-    /// `full_name` -> the label its rows render (absent means "render the
-    /// name as-is"). Built once per request instead of per hit: one repo
-    /// answers many hits.
-    pub labels: HashMap<String, String>,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 struct SearchResults {
     file_hits: Vec<filenames::FilenameHit>,
     files_truncated: bool,
@@ -295,15 +242,6 @@ struct SearchResults {
     labels: HashMap<String, String>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_search_page(q: &str, results: Option<SearchResults>, locale: gitquarry_i18n::Locale) -> Markup {
-    render_search_page_impl(q, results, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn render_search_page(q: &str, results: Option<SearchResults>, locale: gitquarry_i18n::Locale) -> Markup {
-    render_search_page_impl(q, results, locale)
-}
-
 /// A hit's row label out of [`SearchResults::labels`] — the raw name for a
 /// repo missing from it (no `display_name`, or one added between the scan
 /// and this render).
@@ -311,7 +249,7 @@ fn repo_label<'a>(labels: &'a HashMap<String, String>, name: &'a str) -> &'a str
     labels.get(name).map(String::as_str).unwrap_or(name)
 }
 
-fn render_search_page_impl(q: &str, results: Option<SearchResults>, locale: gitquarry_i18n::Locale) -> Markup {
+fn render_search_page(q: &str, results: Option<SearchResults>, locale: gitquarry_i18n::Locale) -> Markup {
     use gitquarry_i18n::web::search as t;
     html! {
         p class="muted" { (t::search_intro(locale)) }

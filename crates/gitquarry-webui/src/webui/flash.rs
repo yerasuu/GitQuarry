@@ -12,12 +12,6 @@
 
 /// Tagged so it renders as unambiguously ok/bad instead of every page
 /// inventing its own "is this good or bad news" styling.
-#[cfg(any(test, feature = "test-util"))]
-pub enum Flash<'a> {
-    Ok(&'a str),
-    Err(&'a str),
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) enum Flash<'a> {
     Ok(&'a str),
     Err(&'a str),

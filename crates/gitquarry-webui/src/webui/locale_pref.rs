@@ -6,8 +6,8 @@ use axum::http::HeaderMap;
 pub(crate) const LOCALE_COOKIE: &str = "locale";
 
 /// `None` means "no explicit session override yet" — same convention as
-/// [`super::theme_pref::cookie_theme`]. `pub(super)`, not private:
-/// [`super::csrf::require_csrf`] also falls back to this for its own error
+/// [`super::theme_pref::cookie_theme`]. [`super::csrf::require_csrf`] also
+/// falls back to this for its own error
 /// message's locale, without an `AppContext` in hand to call
 /// [`effective_locale`] properly.
 pub fn cookie_locale(headers: &HeaderMap) -> Option<gitquarry_i18n::Locale> {

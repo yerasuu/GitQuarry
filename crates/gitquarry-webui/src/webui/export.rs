@@ -103,12 +103,7 @@ pub fn raw_disposition(path: &str, content_type: &str) -> Option<String> {
     })
 }
 
-/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
-/// under `test-util`; `AppError` goes `pub(crate)` outside that config,
-/// which is what makes plain `cargo check` flag this as exposing a
-/// private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn plain(
+pub(crate) async fn plain(
     bare_repo: &Path,
     rev: &str,
     path: &str,
@@ -127,10 +122,7 @@ pub async fn plain(
     Ok(respond(content_type, bytes, disposition.as_deref()))
 }
 
-/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
-/// under `test-util`; see [`plain`]'s doc comment for why.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn patch(bare_repo: &Path, sha: &str) -> Result<Response, AppError> {
+pub(crate) async fn patch(bare_repo: &Path, sha: &str) -> Result<Response, AppError> {
     let text = git::browse::format_patch(bare_repo, sha).await?;
     let filename = format!("{}.patch", validate::short_sha(sha));
     Ok(respond(
@@ -145,10 +137,7 @@ pub(crate) async fn rawdiff(bare_repo: &Path, sha: &str) -> Result<Response, App
     Ok(respond("text/plain; charset=utf-8", diff.into_bytes(), None))
 }
 
-/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
-/// under `test-util`; see [`plain`]'s doc comment for why.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn snapshot(
+pub(crate) async fn snapshot(
     bare_repo: &Path,
     repo_name: &str,
     rev: &str,
@@ -176,10 +165,7 @@ pub async fn snapshot(
 
 const ATOM_ENTRY_LIMIT: usize = 20;
 
-/// `pub` (unlike sibling [`rawdiff`]) only for cross-crate `tests/*.rs`
-/// under `test-util`; see [`plain`]'s doc comment for why.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn atom(
+pub(crate) async fn atom(
     bare_repo: &Path,
     repo_name: &str,
     display_name: Option<&str>,

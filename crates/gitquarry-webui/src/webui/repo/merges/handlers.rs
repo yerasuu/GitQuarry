@@ -66,28 +66,7 @@ async fn resolve_repo_by_name(
 /// resolves to *something else entirely*. Treated the same as the repo
 /// simply not existing any more from that page's point of view, rather than
 /// silently acting on whatever now holds the name.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn resolve_target(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-    repo: &str,
-    expected_uid: &str,
-    locale: Locale,
-) -> Result<(ResolvedRepo, String), AppError> {
-    resolve_target_impl(ctx, headers, repo, expected_uid, locale).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn resolve_target(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-    repo: &str,
-    expected_uid: &str,
-    locale: Locale,
-) -> Result<(ResolvedRepo, String), AppError> {
-    resolve_target_impl(ctx, headers, repo, expected_uid, locale).await
-}
-
-async fn resolve_target_impl(
     ctx: &AppContext,
     headers: &HeaderMap,
     repo: &str,
@@ -652,16 +631,7 @@ pub(crate) struct ReviewForm {
 /// POST) falls back to the neutral verdict rather than 400ing: the worst
 /// case is a review that says less than intended, never one that approves
 /// something it shouldn't.
-#[cfg(any(test, feature = "test-util"))]
-pub fn parse_verdict(raw: &str) -> ReviewVerdict {
-    parse_verdict_impl(raw)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn parse_verdict(raw: &str) -> ReviewVerdict {
-    parse_verdict_impl(raw)
-}
-
-fn parse_verdict_impl(raw: &str) -> ReviewVerdict {
     match raw {
         "approved" => ReviewVerdict::Approved,
         "changes_requested" => ReviewVerdict::ChangesRequested,

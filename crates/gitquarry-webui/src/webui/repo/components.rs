@@ -292,13 +292,6 @@ fn signature_indicator(signature_status: char, verified_by: Option<&str>, instan
 /// reasoning `page_chrome.rs`'s language bar documents for its own per-
 /// language hue). Shared by issue and MR label rendering — `RepoConfig.labels`
 /// is one core-owned vocabulary, not owned by either view.
-#[cfg(any(test, feature = "test-util"))]
-pub fn label_pill(name: &str, color: &str) -> Markup {
-    html! {
-        span class="decoration" style={"border-color:" (color) ";color:" (color)} { (name) }
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn label_pill(name: &str, color: &str) -> Markup {
     html! {
         span class="decoration" style={"border-color:" (color) ";color:" (color)} { (name) }
@@ -430,17 +423,6 @@ pub(crate) fn commit_table_with_stats(
 
 /// Renders `git log`'s `%D` decoration (`"HEAD -> main, tag: v1.0, origin/main"`)
 /// as small badges next to the commit subject.
-#[cfg(any(test, feature = "test-util"))]
-pub fn decoration_badges(decoration: &str) -> Markup {
-    html! {
-        @if !decoration.is_empty() {
-            @for d in decoration.split(", ") {
-                " " span class="badge accent" { (d) }
-            }
-        }
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn decoration_badges(decoration: &str) -> Markup {
     html! {
         @if !decoration.is_empty() {
@@ -459,16 +441,7 @@ fn decoration_badges(decoration: &str) -> Markup {
 /// wrapped in `<code class="language-*">` (`super::diff::code_fragment`) so
 /// `highlight.js` (client-side, vendored) tokenizes it; the background tint
 /// keeps its `.hljs-*` colors visible on top instead of a solid block.
-#[cfg(any(test, feature = "test-util"))]
-pub fn color_diff(diff: &str) -> String {
-    color_diff_impl(diff)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn color_diff(diff: &str) -> String {
-    color_diff_impl(diff)
-}
-
-fn color_diff_impl(diff: &str) -> String {
     let mut out = String::with_capacity(diff.len());
     for row in super::diff::parse(diff) {
         match row {
@@ -531,16 +504,7 @@ enum SplitRow {
 /// line-to-line correspondence within a hunk), not a real similarity match,
 /// so an unrelated removal and addition can end up side by side on the same
 /// row.
-#[cfg(any(test, feature = "test-util"))]
-pub fn side_by_side_diff(diff: &str) -> Markup {
-    side_by_side_diff_impl(diff)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn side_by_side_diff(diff: &str) -> Markup {
-    side_by_side_diff_impl(diff)
-}
-
-fn side_by_side_diff_impl(diff: &str) -> Markup {
     let mut rows: Vec<SplitRow> = Vec::new();
     let mut dels: Vec<(u32, String)> = Vec::new();
     let mut adds: Vec<(u32, String)> = Vec::new();

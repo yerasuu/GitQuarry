@@ -55,27 +55,7 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
 /// `email_self_service` is [`gitquarry_core::app::AppContext::oidc`] being
 /// unset — see `domain::user::set_own_email` for why the primary address is
 /// admin-managed wherever OIDC can resolve a login by it.
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_profile_section(
-    user: &User,
-    csrf: &str,
-    email_self_service: bool,
-    message: Option<crate::webui::Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_profile_section_impl(user, csrf, email_self_service, message, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_profile_section(
-    user: &User,
-    csrf: &str,
-    email_self_service: bool,
-    message: Option<crate::webui::Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_profile_section_impl(user, csrf, email_self_service, message, locale)
-}
-fn render_profile_section_impl(
     user: &User,
     csrf: &str,
     email_self_service: bool,

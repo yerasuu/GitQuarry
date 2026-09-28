@@ -11,31 +11,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-#[cfg(any(test, feature = "test-util"))]
-pub struct FilenameHit {
-    pub repo: String,
-    pub rev: String,
-    pub path: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) struct FilenameHit {
     pub repo: String,
     pub rev: String,
     pub path: String,
-}
-
-/// Every filename match for `query` across `repo_names`, sorted by repo
-/// name for a deterministic page, capped at [`super::MAX_RESULTS`] total —
-/// the `bool` is whether the cap actually cut something off. A repo with no
-/// mirror yet, no commits, or a transient fetch error just contributes no
-/// hits, same as [`super::commits::search_all`].
-#[cfg(any(test, feature = "test-util"))]
-pub async fn search_all(ctx: &Arc<AppContext>, repo_names: &[String], query: &str) -> (Vec<FilenameHit>, bool) {
-    search_all_impl(ctx, repo_names, query).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(super) async fn search_all(ctx: &Arc<AppContext>, repo_names: &[String], query: &str) -> (Vec<FilenameHit>, bool) {
-    search_all_impl(ctx, repo_names, query).await
 }
 
 /// `(rev, paths)` hits keyed by repo name, as [`search_all`] accumulates
@@ -55,7 +34,12 @@ fn collect(result: ScanResult, by_repo: &mut HitsByRepo) {
     }
 }
 
-async fn search_all_impl(ctx: &Arc<AppContext>, repo_names: &[String], query: &str) -> (Vec<FilenameHit>, bool) {
+/// Every filename match for `query` across `repo_names`, sorted by repo
+/// name for a deterministic page, capped at [`super::MAX_RESULTS`] total —
+/// the `bool` is whether the cap actually cut something off. A repo with no
+/// mirror yet, no commits, or a transient fetch error just contributes no
+/// hits, same as [`super::commits::search_all`].
+pub(super) async fn search_all(ctx: &Arc<AppContext>, repo_names: &[String], query: &str) -> (Vec<FilenameHit>, bool) {
     let mut set = JoinSet::new();
     let mut by_repo: HitsByRepo = BTreeMap::new();
     for repo in repo_names {

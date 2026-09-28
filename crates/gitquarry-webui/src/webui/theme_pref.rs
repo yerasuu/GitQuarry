@@ -149,8 +149,8 @@ pub(crate) async fn sync_account_pref(
 /// each its own `value`), not two separate forms: the async path replaces
 /// whichever form was submitted with this same fragment, so both buttons'
 /// active state has to live in that one replaced element, not a sibling
-/// left untouched. `pub(super)`, not private: [`super::page_chrome::layout`]
-/// renders this directly in the topbar.
+/// left untouched. [`super::page_chrome::layout`] renders this directly in
+/// the topbar.
 pub fn render_theme_toggle(theme: &str) -> maud::Markup {
     maud::html! {
         // `data-html-attr="data-theme"`: `style/app.js`'s submit handler

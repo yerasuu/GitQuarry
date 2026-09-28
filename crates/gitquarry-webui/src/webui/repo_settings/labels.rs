@@ -38,10 +38,7 @@ pub(super) async fn save_labels(
     })
 }
 
-// `pub(super)` widened to `pub`: also called directly by the moved
-// integration test in `tests/webui_repo_settings_labels.rs`, which can only
-// see items that are genuinely public from outside the crate.
-pub fn render_labels_form(
+pub(super) fn render_labels_form(
     repo_name: &str,
     config: &RepoConfig,
     csrf: &str,

@@ -1,49 +1,182 @@
-//! `auth::web::keys`' rendered page — SSH and GPG keys, split out of
+//! `/_account/keys`: the logged-in account's SSH and GPG keys, split out of
 //! `security` along with the section itself.
 
-use gitquarry_webui::auth::web::keys::*;
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::{Request, StatusCode, header};
+use axum::response::Response;
+use gitquarry_core::app::AppContext;
+use gitquarry_core::auth::domain;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tower::ServiceExt;
 
-use gitquarry_core::auth::entities::User;
+const PASSWORD: &str = "correct horse battery staple";
 
-fn base_user() -> User {
-    User {
-        uid: Default::default(),
-        username: "alice".to_string(),
-        email: None,
-        pubkeys: vec![],
-        gpg_keys: vec![],
-        repos: Default::default(),
-        default_permission: None,
-        password_hash: None,
-        is_admin: false,
-        is_federation_moderator: false,
-        session_epoch: 0,
-        starred: Default::default(),
-        watched: Default::default(),
-        text_size_default: String::new(),
-        theme_default: String::new(),
-        density_default: String::new(),
-        favorites_public: false,
-        totp_secret: None,
-        totp_enabled: false,
-        totp_recovery_codes: Default::default(),
-        totp_last_step: 0,
-        locale_default: String::new(),
-        storage_quota_bytes: None,
-        avatar_content_type: None,
-        secondary_emails: Default::default(),
+fn test_ctx(root: &std::path::Path) -> AppContext {
+    let backend: Arc<dyn gitquarry_core::storage::Backend> =
+        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
+            bucket: root.to_string_lossy().to_string(),
+            engine: gitquarry_core::config::LocalEngine::Redb,
+        }));
+    let cipher = Arc::new(
+        gitquarry_core::crypto::Cipher::derive("test passphrase", &[SALT_BYTE; s3db_crypto::SALT_LEN]).unwrap(),
+    );
+    AppContext {
+        bucket: "test".to_string(),
+        ssh_bind: "127.0.0.1:2222".to_string(),
+        mirrors_root: root.to_path_buf(),
+        config_path: root.join("gitquarry.toml"),
+        exe_path: root.join("gitquarry"),
+        backend,
+        locks: Default::default(),
+        cipher,
+        mirror_max_age: std::time::Duration::from_secs(60),
+        mirror_max_size_bytes: 0,
+        mirror_large_repo_threshold_bytes: u64::MAX,
+        oidc: None,
+        login_attempts: Default::default(),
+        git_rate_limiter: Default::default(),
+        federation: None,
+        allow_push_create: false,
+        trust_forwarded_for: false,
+        events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
     }
 }
 
+async fn create_user(ctx: &AppContext, username: &str, is_admin: bool) {
+    domain::user::create(
+        ctx,
+        domain::user::NewUser {
+            username,
+            email: None,
+            pubkey: None,
+            password_plain: Some(PASSWORD),
+            is_admin,
+            repos_field: "",
+            locale: gitquarry_i18n::Locale::En,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn send(app: &axum::Router, mut request: Request<Body>) -> Response {
+    // `run_server` serves with `into_make_service_with_connect_info`; a bare
+    // `oneshot` doesn't add it, and its absence 500s before routing.
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
+    app.clone().oneshot(request).await.unwrap()
+}
+
+fn get(uri: &str, cookie: &str) -> Request<Body> {
+    Request::get(uri)
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn post_form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
+    let body = form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields)
+        .finish();
+    Request::post(uri)
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// [`post_form`] as `style/app.js` sends a `data-async` submit, which gets
+/// back just the fragment its target names.
+fn post_async(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
+    let mut request = post_form(uri, cookie, fields);
+    request.headers_mut().insert("x-gq-async", "1".parse().unwrap());
+    request
+}
+
+async fn text(response: Response) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+/// `name=value` out of the response's `Set-Cookie`, the shape a browser
+/// sends back in `Cookie`.
+fn cookie_pair(response: &Response, name: &str) -> String {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with(&format!("{name}=")))
+        .and_then(|v| v.split(';').next())
+        .unwrap_or_else(|| panic!("no Set-Cookie for {name}"))
+        .to_string()
+}
+
+fn csrf_in(html: &str) -> String {
+    let marker = r#"name="csrf" value=""#;
+    let start = html.find(marker).unwrap_or_else(|| panic!("no csrf field in {html}")) + marker.len();
+    html[start..start + html[start..].find('"').unwrap()].to_string()
+}
+
+/// A real password login, returning the session cookie.
+async fn log_in(app: &axum::Router, username: &str) -> String {
+    let response = send(app, get("/_login", "")).await;
+    let anchor = cookie_pair(&response, "login-csrf");
+    let csrf = csrf_in(&text(response).await);
+    let fields = [("csrf", csrf.as_str()), ("username", username), ("password", PASSWORD)];
+    let response = send(app, post_form("/_login", &anchor, &fields)).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    cookie_pair(&response, "web-session")
+}
+
+/// The page at `uri` for `cookie`'s session, plus the CSRF token its forms
+/// carry — read out of the markup the way a browser submits it.
+async fn page(app: &axum::Router, uri: &str, cookie: &str) -> (String, String) {
+    let response = send(app, get(uri, cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK, "GET {uri}");
+    let html = text(response).await;
+    let csrf = csrf_in(&html);
+    (html, csrf)
+}
+
+fn location(response: &Response) -> &str {
+    response.headers()[header::LOCATION].to_str().unwrap()
+}
+
+const SALT_BYTE: u8 = 13;
+const PUBKEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK787z0ABFAXS4w2j6x8H+c/+hhOEFYZwauXxV9nstMy alice@laptop";
+
+async fn app_with_alice(root: &std::path::Path) -> (Arc<AppContext>, axum::Router, String) {
+    let ctx = test_ctx(root);
+    create_user(&ctx, "alice", false).await;
+    let ctx = Arc::new(ctx);
+    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+    let session = log_in(&app, "alice").await;
+    (ctx, app, session)
+}
+
+async fn stored_pubkeys(ctx: &AppContext) -> Vec<String> {
+    let (user, _etag) = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap();
+    user.unwrap().pubkeys
+}
+
 /// Regression: `add_pubkey`/`add_gpg_key` each target their own table's
-/// `id`, same as the `remove_*` forms `render_ssh_keys_table`/
-/// `render_gpg_keys_table` already emit — see `handler_keys_post`'s own
-/// doc comment on why (a page-level fragment swapped into a table-only
-/// target would corrupt the DOM). Losing either attribute quietly brings
-/// back the browser's "confirm resubmission" dialog on F5.
-#[test]
-fn add_forms_target_their_own_table() {
-    let html = render_keys_page(&base_user(), "tok", None, gitquarry_i18n::Locale::En).into_string();
+/// `id`, same as the `remove_*` forms — a page-level fragment swapped into
+/// a table-only target would corrupt the DOM. Losing either attribute
+/// quietly brings back the browser's "confirm resubmission" dialog on F5.
+#[tokio::test]
+async fn add_forms_target_their_own_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, session) = app_with_alice(dir.path()).await;
+
+    let (html, _csrf) = page(&app, "/_account/keys", &session).await;
     assert!(
         html.contains(r##"data-async data-async-target="#ssh-keys-table""##),
         "{html}"
@@ -54,25 +187,94 @@ fn add_forms_target_their_own_table() {
     );
 }
 
-#[test]
-fn gpg_keys_section_shows_hint_when_empty() {
-    let html = render_keys_page(&base_user(), "tok", None, gitquarry_i18n::Locale::En).into_string();
+#[tokio::test]
+async fn gpg_keys_section_shows_hint_when_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, session) = app_with_alice(dir.path()).await;
+
+    let (html, _csrf) = page(&app, "/_account/keys", &session).await;
     assert!(html.contains("no keys yet"), "{html}");
     assert!(html.contains(r#"value="add_gpg_key""#));
 }
 
-#[test]
-fn gpg_keys_section_lists_each_stored_key_by_fingerprint() {
-    let mut user = base_user();
+#[tokio::test]
+async fn gpg_keys_section_lists_each_stored_key_by_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, app, session) = app_with_alice(dir.path()).await;
+    let (user, etag) = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
+        .await
+        .unwrap();
+    let mut user = user.unwrap();
     user.gpg_keys = vec![gitquarry_core::auth::entities::GpgKeyEntry {
         armored: "totally-fake-armored-key-body-xyz".to_string(),
         fingerprint: "ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234".to_string(),
     }];
-    let html = render_keys_page(&user, "tok", None, gitquarry_i18n::Locale::En).into_string();
+    gitquarry_core::auth::access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref())
+        .await
+        .unwrap();
+
+    let (html, _csrf) = page(&app, "/_account/keys", &session).await;
     assert!(html.contains("ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234"), "{html}");
     assert!(html.contains(r#"value="remove_gpg_key""#));
     // The raw armored block itself never gets re-rendered — only the
-    // already-computed fingerprint, same as `render_ssh_keys_table` never
-    // echoes the raw pubkey line back either.
+    // already-computed fingerprint, same as the SSH table never echoes the
+    // raw pubkey line back either.
     assert!(!html.contains("totally-fake-armored-key-body-xyz"), "{html}");
+}
+
+/// A stolen session cookie alone must not be able to plant an SSH key that
+/// then pushes on its own: `add_pubkey` re-proves the account password.
+#[tokio::test]
+async fn adding_an_ssh_key_needs_the_account_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, app, session) = app_with_alice(dir.path()).await;
+    let (html, csrf) = page(&app, "/_account/keys", &session).await;
+    assert!(html.contains(r#"name="reauth""#), "{html}");
+
+    for reauth in ["", "not my password"] {
+        let fields = [
+            ("csrf", csrf.as_str()),
+            ("keys_action", "add_pubkey"),
+            ("pubkey", PUBKEY),
+            ("reauth", reauth),
+        ];
+        let response = send(&app, post_form("/_account/keys", &session, &fields)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(text(response).await.contains("wrong password or code"));
+    }
+    assert!(stored_pubkeys(&ctx).await.is_empty());
+
+    let fields = [
+        ("csrf", csrf.as_str()),
+        ("keys_action", "add_pubkey"),
+        ("pubkey", PUBKEY),
+        ("reauth", PASSWORD),
+    ];
+    let response = send(&app, post_async("/_account/keys", &session, &fields)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let fragment = text(response).await;
+    assert!(fragment.starts_with(r#"<div id="ssh-keys-table">"#), "{fragment}");
+    let fingerprint = gitquarry_core::auth::access::key_fingerprint(PUBKEY).unwrap();
+    assert!(fragment.contains(&fingerprint), "{fragment}");
+    assert_eq!(stored_pubkeys(&ctx).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_keys_post_without_the_session_csrf_token_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, app, session) = app_with_alice(dir.path()).await;
+
+    let fields = [
+        ("csrf", "forged"),
+        ("keys_action", "add_pubkey"),
+        ("pubkey", PUBKEY),
+        ("reauth", PASSWORD),
+    ];
+    let response = send(&app, post_form("/_account/keys", &session, &fields)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(stored_pubkeys(&ctx).await.is_empty());
+
+    let response = send(&app, post_form("/_account/keys", "", &fields)).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/_login?return_to=/_account/keys");
 }

@@ -97,8 +97,7 @@ pub struct UsersForm {
     /// got the `<input>` element instead of the URL, 404-ing. Every form on
     /// this page shares this one struct/field, so the rename applies even
     /// to the few plain ones too. Rust field name unchanged -- this only
-    /// affects the wire (`Form<UsersForm>`) deserialization, not the
-    /// struct-literal construction the test suite already uses.
+    /// affects the wire (`Form<UsersForm>`) deserialization.
     #[serde(rename = "user_action")]
     pub action: String,
     #[serde(default)]
@@ -273,11 +272,7 @@ pub(crate) async fn handler_users_post(
 /// exceptional errors (backend/storage via bare `?`) — this whole route is
 /// already admin-gated by the caller, so there's no separate authorization
 /// class to keep apart here the way `groups::apply_groups_action` does.
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `AppError` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn apply_users_action(
+pub(crate) async fn apply_users_action(
     ctx: &gitquarry_core::app::AppContext,
     form: &UsersForm,
     locale: gitquarry_i18n::Locale,
@@ -376,11 +371,7 @@ pub async fn apply_users_action(
     })
 }
 
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub fn render_users_page(
+pub(crate) fn render_users_page(
     users: &[User],
     repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,

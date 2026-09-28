@@ -460,11 +460,7 @@ async fn apply_group_action(
 /// positional param.
 pub struct PageChrome<'a> {
     pub csrf: &'a str,
-    // `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash`
-    // goes `pub(crate)` outside that config, which is what makes plain
-    // `cargo check` flag this field as exposing a private type.
-    #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-    pub message: Option<Flash<'a>>,
+    pub(crate) message: Option<Flash<'a>>,
     pub locale: gitquarry_i18n::Locale,
 }
 
@@ -535,11 +531,7 @@ pub fn render_groups_page(
 /// whose name is a `/`-boundary prefix of it. `groups` is what
 /// [`visible_groups`] returned, which already contains every ancestor the
 /// viewer belongs to.
-///
-/// `pub` (not `pub(crate)`) so `tests/auth_web_groups.rs`, which links this
-/// crate as an external consumer, can exercise the chain rule directly —
-/// same reasoning as the `render_*` helpers around it.
-pub fn manageable_group_names<'a>(groups: &'a [Group], viewer: &Uid, is_admin: bool) -> Vec<&'a str> {
+pub(crate) fn manageable_group_names<'a>(groups: &'a [Group], viewer: &Uid, is_admin: bool) -> Vec<&'a str> {
     let owned: Vec<&str> = groups
         .iter()
         .filter(|g| g.role_of(viewer) >= Some(Permission::Owner))

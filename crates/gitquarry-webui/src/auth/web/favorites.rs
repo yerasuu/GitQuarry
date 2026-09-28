@@ -421,11 +421,7 @@ pub(crate) async fn handler_account_favorites_post(
 /// this page's `toggle_star` action but is a different, narrower `data-async`
 /// consumer of its own (see `handler_account_favorites_post`'s own doc
 /// comment on how the two are told apart).
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub fn render_favorites_page(
+pub(crate) fn render_favorites_page(
     user: &User,
     csrf: &str,
     message: Option<Flash>,

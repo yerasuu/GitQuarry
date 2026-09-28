@@ -7,14 +7,6 @@ use tracing::error;
 /// A handler error, with its matching status. Defaults to 500; anything
 /// coming from validating client input is marked 400 and anything missing
 /// 404, so client mistakes don't get reported as server failures.
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Debug)]
-pub struct AppError {
-    status: StatusCode,
-    error: anyhow::Error,
-    redirect: Option<Redirected>,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug)]
 pub(crate) struct AppError {
     status: StatusCode,
@@ -61,15 +53,6 @@ impl AppError {
         }
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn not_found(error: anyhow::Error) -> Self {
-        AppError {
-            status: StatusCode::NOT_FOUND,
-            error,
-            redirect: None,
-        }
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
     pub(crate) fn not_found(error: anyhow::Error) -> Self {
         AppError {
             status: StatusCode::NOT_FOUND,
@@ -91,15 +74,6 @@ impl AppError {
     /// error must stay plain text too instead of falling back to the
     /// normal HTML error page — otherwise a client parsing raw bytes gets
     /// blindsided by markup on the one path where it can't happen.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn into_plain_response(self) -> Response {
-        if self.status.is_server_error() {
-            error!(error = %self.error, "UI web request failed");
-        }
-        let msg = self.client_message(gitquarry_i18n::Locale::DEFAULT);
-        (self.status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], msg).into_response()
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
     pub(crate) fn into_plain_response(self) -> Response {
         if self.status.is_server_error() {
             error!(error = %self.error, "UI web request failed");
@@ -157,8 +131,8 @@ impl IntoResponse for AppError {
         // first-ever visit would. Locale doesn't have that problem:
         // `super::locale_pref::CURRENT_LOCALE` was already resolved (cookie,
         // then account default) by `webui::request_cache_middleware` before
-        // this handler ever ran — `try_with` rather than `with` since a test
-        // or background path constructing an `AppError` outside that
+        // this handler ever ran — `try_with` rather than `with` since a
+        // background path constructing an `AppError` outside that
         // middleware's scope has nothing to read, and falls back to
         // `Locale::DEFAULT` same as before.
         let locale = super::locale_pref::CURRENT_LOCALE

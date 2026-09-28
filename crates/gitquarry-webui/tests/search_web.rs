@@ -1,90 +1,36 @@
-use gitquarry_core::app::AppContext;
-use gitquarry_webui::search::web::*;
+//! `/_search` end to end: what it scans (the stored index, else live git, and
+//! peer mirrors already on disk), what it shows, and what it never does —
+//! reach out to a peer on its own, or list a repo the viewer can't see.
 
-#[test]
-fn render_search_page_echoes_the_query_without_results() {
-    let html = render_search_page("hello", None, gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains(r#"input name="q" value="hello""#));
-    assert!(!html.contains("<h4>"));
-}
+use axum::body::{Body, Bytes};
+use axum::extract::ConnectInfo;
+use axum::http::{Request, StatusCode};
+use gitquarry_core::app::{AppContext, FederationLink, ResolvedRepo};
+use gitquarry_core::storage::Cas;
+use gitquarry_core::storage::entities::{RepoConfig, Visibility};
+use gitquarry_core::storage::search_index::{IndexedCommit, SearchIndex, put_search_index};
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::process::Command;
+use tower::ServiceExt;
 
-#[test]
-fn render_search_page_shows_hits_and_truncation_notice() {
-    let results = SearchResults {
-        file_hits: vec![filenames::FilenameHit {
-            repo: "acme/web".to_string(),
-            rev: "main".to_string(),
-            path: "src/main.rs".to_string(),
-        }],
-        files_truncated: true,
-        commit_hits: vec![commits::CommitHit {
-            repo: "acme/web".to_string(),
-            sha: "abc123".to_string(),
-            subject: "fix bug".to_string(),
-        }],
-        commits_truncated: false,
-        peer_metadata_hits: vec![PeerMetadataHit {
-            peer: "instance-b".to_string(),
-            name: "acme/other".to_string(),
-            description: Some("a peer's repo".to_string()),
-        }],
-        labels: Default::default(),
-    };
-    let html = render_search_page("main", Some(results), gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("src/main.rs"));
-    assert!(html.contains("fix bug"));
-    assert!(html.contains("showing the first 100 matches"));
-    assert!(html.contains(r#"href="/_remote/instance-b/acme/other""#));
-}
-
-#[test]
-fn display_repo_labels_a_peer_mirror_as_remote() {
-    assert_eq!(display_repo("acme/web"), "acme/web");
-    assert_eq!(
-        display_repo("_remote/instance-b/acme/demo"),
-        "instance-b/acme/demo (remote)"
-    );
-}
-
-#[test]
-fn render_search_page_labels_hits_with_the_repo_display_name() {
-    let results = SearchResults {
-        file_hits: vec![filenames::FilenameHit {
-            repo: "acme/my-proj".to_string(),
-            rev: "main".to_string(),
-            path: "src/main.rs".to_string(),
-        }],
-        files_truncated: false,
-        commit_hits: Vec::new(),
-        commits_truncated: false,
-        peer_metadata_hits: Vec::new(),
-        labels: std::collections::HashMap::from([("acme/my-proj".to_string(), "acme/My Proj!".to_string())]),
-    };
-    let html = render_search_page("main", Some(results), gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains(r#"href="/acme/my-proj""#), "{html}");
-    assert!(html.contains("acme/My Proj!"), "{html}");
-}
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    use gitquarry_core::app::Locks;
-    use gitquarry_core::config::{LocalEngine, LocalParams};
-    use gitquarry_core::crypto::Cipher;
-    use gitquarry_core::storage::Backend;
-    use s3db::LocalBackend;
-    use std::sync::Arc;
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[19u8; s3db_crypto::SALT_LEN]).unwrap());
+fn test_ctx(root: &Path, federation: Option<FederationLink>) -> AppContext {
+    let backend: Arc<dyn gitquarry_core::storage::Backend> =
+        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
+            bucket: root.to_string_lossy().to_string(),
+            engine: gitquarry_core::config::LocalEngine::Redb,
+        }));
+    let cipher =
+        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[19u8; s3db_crypto::SALT_LEN]).unwrap());
     AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),
         mirrors_root: root.to_path_buf(),
         config_path: root.join("gitquarry.toml"),
         exe_path: root.join("gitquarry"),
-        backend: Arc::new(backend) as Arc<dyn Backend>,
-        locks: Locks::default(),
+        backend,
+        locks: Default::default(),
         cipher,
         mirror_max_age: std::time::Duration::from_secs(60),
         mirror_max_size_bytes: 0,
@@ -92,7 +38,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
-        federation: None,
+        federation,
         allow_push_create: false,
         trust_forwarded_for: false,
         events: Default::default(),
@@ -101,58 +47,35 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
     }
 }
 
-/// Proves the fast path really reads the stored index rather than falling
-/// back to live `git` — the repo below has no local mirror/working tree
-/// on disk at all (`create_repo` only claims the name+uid and writes an
-/// empty manifest), so a live `git ls-tree`/`git log` against it would
-/// fail; the only way this can find a hit is by reading
-/// `storage::search_index::SearchIndex` directly.
-#[tokio::test]
-async fn filename_search_reads_the_stored_index_instead_of_live_git() {
-    use gitquarry_core::storage::search_index::{IndexedCommit, SearchIndex, put_search_index};
-    use std::sync::Arc;
-
-    let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
-    let resolved = ctx.create_repo("acme/demo").await.unwrap().unwrap();
-    let index = SearchIndex {
-        last_indexed_sha: Some("planted-sha".to_string()),
-        files: vec!["planted.txt".to_string()],
-        commits: vec![IndexedCommit {
-            sha: "planted-sha".to_string(),
-            subject: "planted subject".to_string(),
-        }],
-    };
-    put_search_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, &index, None)
+/// The rendered `/_search` page for `query` (already URL-encoded).
+async fn search(ctx: &Arc<AppContext>, query: &str) -> String {
+    let mut request = Request::builder()
+        .uri(format!("/_search{query}"))
+        .body(Body::empty())
+        .unwrap();
+    // `run_server` serves with `into_make_service_with_connect_info`; a bare
+    // `oneshot` doesn't, and the git-smart-HTTP layer 500s without it.
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
+    let response = gitquarry_webui::webui::router(Arc::clone(ctx))
+        .oneshot(request)
         .await
         .unwrap();
-
-    let (file_hits, _truncated) = filenames::search_all(&ctx, &["acme/demo".to_string()], "planted").await;
-    assert_eq!(file_hits.len(), 1);
-    assert_eq!(file_hits[0].path, "planted.txt");
-    assert_eq!(file_hits[0].rev, "planted-sha");
-
-    let (commit_hits, _truncated) = commits::search_all(&ctx, &["acme/demo".to_string()], "planted").await;
-    assert_eq!(commit_hits.len(), 1);
-    assert_eq!(commit_hits[0].subject, "planted subject");
+    assert_eq!(response.status(), StatusCode::OK, "GET /_search{query}");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8_lossy(&body).into_owned()
 }
 
-/// A repo that resolves locally but has never been indexed (no
-/// `SearchIndex` stored yet) falls back to the live path instead of
-/// silently contributing zero hits forever.
-#[tokio::test]
-async fn filename_search_falls_back_to_live_git_without_a_stored_index() {
-    use gitquarry_core::storage::entities::{RepoConfig, Visibility};
-    use std::sync::Arc;
-    use tokio::process::Command;
-
-    let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
-    let resolved = ctx.create_repo("acme/demo").await.unwrap().unwrap();
+/// A repo with `visibility`, listed in the visible index the way the
+/// settings page leaves a public one.
+async fn repo(ctx: &AppContext, name: &str, visibility: Visibility, display_name: Option<&str>) -> ResolvedRepo {
+    let resolved = ctx.create_repo(name).await.unwrap().unwrap();
     let config = RepoConfig {
         uid: resolved.uid.clone(),
-        full_name: "acme/demo".to_string(),
-        visibility: Visibility::Public,
+        full_name: name.to_string(),
+        visibility,
+        display_name: display_name.map(str::to_string),
         ..Default::default()
     };
     gitquarry_core::storage::settings::put_repo_config(
@@ -164,118 +87,44 @@ async fn filename_search_falls_back_to_live_git_without_a_stored_index() {
     )
     .await
     .unwrap();
-
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
-    }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("live.txt"), b"live content\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
-    run_git(
-        work.path(),
-        &[
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-q",
-            "-m",
-            "add live file",
-        ],
+    gitquarry_core::storage::settings::set_visible_index(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        &resolved.uid,
+        visibility != Visibility::Private,
     )
     .await;
-    let sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-    let git_dir = work.path().join(".git");
-    let pack_dir = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
-        .await
-        .unwrap()
-        .unwrap();
     resolved
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    resolved
-        .remote
-        .put_manifest(
-            &gitquarry_core::storage::remote::Manifest {
-                refs: std::collections::BTreeMap::from([("refs/heads/main".to_string(), sha)]),
-                head: Some("refs/heads/main".to_string()),
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-    let (file_hits, _truncated) = filenames::search_all(&ctx, &["acme/demo".to_string()], "live").await;
-    assert_eq!(file_hits.len(), 1);
-    assert_eq!(file_hits[0].path, "live.txt");
 }
 
-/// The core federation-layer-3 invariant: a repo candidate list built
-/// from disk never causes a search to reach out to a peer over the
-/// network. No server is even running in this test — if `mirror_and_head`
-/// tried to sync, it would hang or error against a closed port instead
-/// of returning cleanly.
-#[tokio::test]
-async fn mirror_and_head_never_syncs_a_peer_repo_that_isnt_already_mirrored() {
-    let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    assert!(mirror_and_head(&ctx, "_remote/instance-b/acme/demo").await.is_none());
-    assert!(list_synced_peer_repos(&ctx).await.is_empty());
-}
-
-/// End-to-end, real socket: a peer repo shows up in filename/commit
-/// content search once its mirror has been synced (`peer_repo_metadata`
-/// itself is federation-backed now — see [`search_peer_metadata`]'s own
-/// doc comment — and covered at that boundary, not here).
-#[tokio::test]
-async fn peer_repo_shows_up_in_content_search_once_its_mirror_is_synced() {
-    use gitquarry_core::storage::entities::Visibility;
-    use std::sync::Arc;
-    use tokio::process::Command;
-
-    let dir_b = tempfile::tempdir().unwrap();
-    let ctx_b = Arc::new(test_ctx(dir_b.path()));
-    let resolved = ctx_b.create_repo("acme/demo").await.unwrap().unwrap();
-    let config = gitquarry_core::storage::entities::RepoConfig {
-        uid: resolved.uid.clone(),
-        full_name: "acme/demo".to_string(),
-        visibility: Visibility::Public,
-        ..Default::default()
+async fn plant_index(ctx: &AppContext, resolved: &ResolvedRepo, files: Vec<String>, commits: Vec<IndexedCommit>) {
+    let index = SearchIndex {
+        last_indexed_sha: Some("planted-sha".to_string()),
+        files,
+        commits,
     };
-    gitquarry_core::storage::settings::put_repo_config(
-        ctx_b.backend().as_ref(),
-        resolved.uid.as_str(),
-        &config,
-        None,
-        &ctx_b.cipher,
-    )
-    .await
-    .unwrap();
-    gitquarry_core::storage::settings::set_visible_index(ctx_b.backend().as_ref(), &ctx_b.cipher, &resolved.uid, true)
-        .await;
+    put_search_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, &index, None)
+        .await
+        .unwrap();
+}
 
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
+async fn run_git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git").current_dir(dir).args(args).output().await.unwrap();
+    assert!(output.status.success(), "git {args:?} failed in {}", dir.display());
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// Commits `file` in the working repo at `work` and pushes it to `resolved`
+/// the way `receive-pack` would: a pack of what the bucket lacks, then the
+/// manifest pointing `main` at it.
+async fn push_file(work: &Path, resolved: &ResolvedRepo, file: &str, message: &str) -> String {
+    if !work.join(".git").exists() {
+        run_git(work, &["init", "-q"]).await;
     }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("needle.txt"), b"unique marker line\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
+    std::fs::write(work.join(file), format!("{file} content\n")).unwrap();
+    run_git(work, &["add", "-A"]).await;
     run_git(
-        work.path(),
+        work,
         &[
             "-c",
             "user.email=test@test",
@@ -284,20 +133,15 @@ async fn peer_repo_shows_up_in_content_search_once_its_mirror_is_synced() {
             "commit",
             "-q",
             "-m",
-            "add needle",
+            message,
         ],
     )
     .await;
-    let sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-    let git_dir = work.path().join(".git");
+    let sha = run_git(work, &["rev-parse", "HEAD"]).await;
+    let (manifest, etag) = resolved.remote.get_manifest().await.unwrap();
+    let haves: Vec<String> = manifest.refs.values().cloned().collect();
     let pack_dir = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
+    let pack = gitquarry_core::git::pack_objects_for_push(&work.join(".git"), &sha, &haves, pack_dir.path())
         .await
         .unwrap()
         .unwrap();
@@ -306,51 +150,211 @@ async fn peer_repo_shows_up_in_content_search_once_its_mirror_is_synced() {
         .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
         .await
         .unwrap();
-    resolved
+    let cas = resolved
         .remote
         .put_manifest(
             &gitquarry_core::storage::remote::Manifest {
-                refs: std::collections::BTreeMap::from([("refs/heads/main".to_string(), sha)]),
+                refs: std::collections::BTreeMap::from([("refs/heads/main".to_string(), sha.clone())]),
                 head: Some("refs/heads/main".to_string()),
             },
-            None,
+            etag.as_deref(),
         )
         .await
         .unwrap();
+    assert!(cas == Cas::Ok, "manifest update lost its CAS");
+    sha
+}
 
-    let bind_addr = "127.0.0.1:18457";
-    tokio::spawn(gitquarry_webui::webui::run_server(bind_addr, Arc::clone(&ctx_b)));
-    let probe = reqwest::Client::new();
-    for _ in 0..100 {
-        if probe
-            .get(format!("http://{bind_addr}/_api/instance"))
-            .send()
-            .await
-            .is_ok()
+#[tokio::test]
+async fn an_empty_query_renders_the_form_without_result_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let html = search(&ctx, "").await;
+    assert!(html.contains(r#"input name="q" value="""#), "{html}");
+    assert!(!html.contains("<h4>"), "{html}");
+}
+
+#[tokio::test]
+async fn the_query_is_echoed_back_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let html = search(&ctx, "?q=%22%3E%3Cscript%3Ehello").await;
+    assert!(!html.contains("<script>hello"), "query rendered as markup");
+    assert!(
+        html.contains(r#"input name="q" value="&quot;&gt;&lt;script&gt;hello""#),
+        "{html}"
+    );
+    assert!(html.contains("<h4>"), "a non-empty query renders its result sections");
+}
+
+/// The repo below has no commits at all (`create_repo` only claims the
+/// name), so a live `git ls-tree`/`git log` against it finds nothing: the
+/// only way these hits can appear is by reading the stored `SearchIndex`.
+#[tokio::test]
+async fn hits_come_from_the_stored_index_instead_of_live_git() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let resolved = repo(&ctx, "acme/my-proj", Visibility::Public, Some("My Proj!")).await;
+    plant_index(
+        &ctx,
+        &resolved,
+        vec!["planted.txt".to_string()],
+        vec![IndexedCommit {
+            sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subject: "planted subject".to_string(),
+        }],
+    )
+    .await;
+
+    let html = search(&ctx, "?q=planted").await;
+    assert!(html.contains(">planted.txt<"), "{html}");
+    assert!(
+        html.contains("planted-sha"),
+        "the blob link should pin the indexed rev: {html}"
+    );
+    assert!(html.contains(">planted subject<"), "{html}");
+    assert!(html.contains("0123456789abcdef0123456789abcdef01234567"), "{html}");
+    // Rows are labelled with the repo's display name, linked by the path the
+    // listing's slug backfill gives it.
+    assert!(html.contains(r#"href="/acme/My-Proj""#), "{html}");
+    assert!(html.contains("acme/My Proj!"), "{html}");
+    assert!(!html.contains("showing the first 100 matches"), "{html}");
+}
+
+#[tokio::test]
+async fn more_than_a_hundred_hits_are_cut_with_a_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let resolved = repo(&ctx, "acme/big", Visibility::Public, None).await;
+    // `search::web::MAX_RESULTS`.
+    plant_index(
+        &ctx,
+        &resolved,
+        (0..101).map(|i| format!("hit-{i:03}.txt")).collect(),
+        Vec::new(),
+    )
+    .await;
+    let html = search(&ctx, "?q=hit-").await;
+    assert!(html.contains("showing the first 100 matches"), "{html}");
+    assert_eq!(html.matches(r#".txt</a>"#).count(), 100, "{html}");
+}
+
+/// Search reaches exactly what the index shows: a private repo is still
+/// reachable by URL for someone with a grant, but never listed here.
+#[tokio::test]
+async fn a_private_repo_is_never_searched() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let resolved = repo(&ctx, "acme/secret", Visibility::Private, None).await;
+    plant_index(&ctx, &resolved, vec!["planted.txt".to_string()], Vec::new()).await;
+    let html = search(&ctx, "?q=planted").await;
+    assert!(!html.contains("planted.txt"), "{html}");
+    assert!(!html.contains("acme/secret"), "{html}");
+}
+
+/// A repo that resolves locally but has never been indexed falls back to
+/// the live path instead of silently contributing zero hits forever.
+#[tokio::test]
+async fn a_repo_without_a_stored_index_falls_back_to_live_git() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let resolved = repo(&ctx, "acme/demo", Visibility::Public, None).await;
+    let work = tempfile::tempdir().unwrap();
+    push_file(work.path(), &resolved, "live.txt", "add live file").await;
+
+    let html = search(&ctx, "?q=live").await;
+    assert!(html.contains(">live.txt<"), "{html}");
+    assert!(html.contains(">add live file<"), "{html}");
+}
+
+async fn spawn_fake_peer_repos(reply: serde_json::Value) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = Bytes::from(serde_json::to_vec(&reply).unwrap());
+    let app = axum::Router::new().route(
+        "/_internal-out/peer-repos",
+        axum::routing::get(move || async move { ([("content-type", "application/json")], body) }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn peer_metadata_hits_link_to_the_remote_browse_view() {
+    let base_url = spawn_fake_peer_repos(serde_json::json!([
         {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+            "peer_name": "instance-b",
+            "repos": [
+                { "name": "acme/other", "description": "a mirrored peer repo" },
+                { "name": "acme/unrelated", "description": "nothing to see" },
+            ],
+        },
+    ]))
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(
+        dir.path(),
+        Some(FederationLink {
+            base_url,
+            internal_token: "tok".to_string(),
+            http: reqwest::Client::new(),
+        }),
+    ));
+    let html = search(&ctx, "?q=mirrored").await;
+    assert!(html.contains(r#"href="/_remote/instance-b/acme/other""#), "{html}");
+    assert!(html.contains("a mirrored peer repo"), "{html}");
+    assert!(!html.contains("acme/unrelated"), "{html}");
+}
+
+/// Real socket end to end: a linked peer's repo is searchable once someone
+/// has opened (and so mirrored) it, labelled as remote — and a search never
+/// fetches from that peer by itself: what it finds is what's already on
+/// disk, until something else syncs the mirror again.
+#[tokio::test]
+async fn a_peer_repo_is_searched_from_its_mirror_and_never_synced_by_search() {
+    let dir_b = tempfile::tempdir().unwrap();
+    let ctx_b = Arc::new(test_ctx(dir_b.path(), None));
+    let resolved = repo(&ctx_b, "acme/demo", Visibility::Public, None).await;
+    let work = tempfile::tempdir().unwrap();
+    push_file(work.path(), &resolved, "needle.txt", "add needle").await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let peer_url = format!("http://{}", listener.local_addr().unwrap());
+    let app_b = gitquarry_webui::webui::router(Arc::clone(&ctx_b));
+    tokio::spawn(async move {
+        axum::serve(listener, app_b.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap()
+    });
 
     let dir_a = tempfile::tempdir().unwrap();
-    let ctx_a = Arc::new(test_ctx(dir_a.path()));
+    let ctx_a = Arc::new(test_ctx(dir_a.path(), None));
 
-    assert!(list_synced_peer_repos(&ctx_a).await.is_empty());
+    // Not opened yet, so not a candidate — and searching doesn't make it one.
+    let html = search(&ctx_a, "?q=needle").await;
+    assert!(!html.contains("needle.txt"), "{html}");
 
     ctx_a
-        .open_remote_mirror_at("instance-b", &format!("http://{bind_addr}"), "acme/demo")
+        .open_remote_mirror_at("instance-b", &peer_url, "acme/demo")
         .await
         .unwrap();
+    let html = search(&ctx_a, "?q=needle").await;
+    assert!(html.contains(">needle.txt<"), "{html}");
+    assert!(html.contains(">add needle<"), "{html}");
+    assert!(html.contains(r#"href="/_remote/instance-b/acme/demo""#), "{html}");
+    assert!(html.contains("instance-b/acme/demo (remote)"), "{html}");
 
-    let synced = list_synced_peer_repos(&ctx_a).await;
-    assert_eq!(synced, vec!["_remote/instance-b/acme/demo".to_string()]);
+    push_file(work.path(), &resolved, "fresh.txt", "add fresh").await;
+    let html = search(&ctx_a, "?q=fresh").await;
+    assert!(!html.contains("fresh.txt"), "search fetched from the peer: {html}");
 
-    let (file_hits, _truncated) = filenames::search_all(&ctx_a, &synced, "needle").await;
-    assert_eq!(file_hits.len(), 1);
-    assert_eq!(file_hits[0].repo, "_remote/instance-b/acme/demo");
-    assert_eq!(file_hits[0].path, "needle.txt");
-
-    let (commit_hits, _truncated) = commits::search_all(&ctx_a, &synced, "needle").await;
-    assert_eq!(commit_hits.len(), 1);
+    ctx_a
+        .open_remote_mirror_at("instance-b", &peer_url, "acme/demo")
+        .await
+        .unwrap();
+    let html = search(&ctx_a, "?q=fresh").await;
+    assert!(
+        html.contains(">fresh.txt<"),
+        "the resynced mirror should now match: {html}"
+    );
 }

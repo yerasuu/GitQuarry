@@ -58,10 +58,10 @@ const LOGIN_CSRF_TTL_SECS: i64 = 600;
 /// round trip.
 const PENDING_TOTP_TTL_SECS: i64 = 300;
 
-/// Re-exported so this module's own call sites (and its tests) keep naming
-/// it locally — the value itself is shared with git-smart-HTTP's Basic auth,
-/// see [`password::DUMMY_HASH`].
-pub use gitquarry_auth_crypto::password::DUMMY_HASH;
+/// Re-exported so this module's own call sites keep naming it locally — the
+/// value itself is shared with git-smart-HTTP's Basic auth, see
+/// [`password::DUMMY_HASH`].
+use gitquarry_auth_crypto::password::DUMMY_HASH;
 
 /// What survives the redirect to the IdP and back: the CSRF/nonce/PKCE
 /// values `openidconnect` generated for this attempt, plus where to send
@@ -72,17 +72,6 @@ pub use gitquarry_auth_crypto::password::DUMMY_HASH;
 /// sealed blob past that point would otherwise get an indefinitely
 /// replayable flow, since nothing server-side was checking. Same reason
 /// [`SessionCookie`] carries its own `exp` rather than trusting `Max-Age`.
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Serialize, Deserialize)]
-pub struct FlowCookie {
-    pub csrf: String,
-    pub nonce: String,
-    pub pkce_verifier: String,
-    pub return_to: String,
-    #[serde(default)]
-    pub exp: u64,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Serialize, Deserialize)]
 struct FlowCookie {
     csrf: String,
@@ -95,32 +84,12 @@ struct FlowCookie {
 
 /// Who a session cookie names, before it's resolved against `access.json`
 /// (re-read on every request — see [`current_user`], not cached here).
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Serialize, Deserialize)]
-pub enum SessionSubject {
-    Email(String),
-    Username(String),
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Serialize, Deserialize)]
 enum SessionSubject {
     Email(String),
     Username(String),
 }
 
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Serialize, Deserialize)]
-pub struct SessionCookie {
-    pub subject: SessionSubject,
-    pub exp: u64,
-    /// The subject's `User::session_epoch` when this cookie was issued —
-    /// see that field for why. `#[serde(default)]` so a cookie sealed
-    /// before this field existed reads as `0` and keeps working against a
-    /// stored record that is also still `0`.
-    #[serde(default)]
-    pub epoch: u64,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Serialize, Deserialize)]
 struct SessionCookie {
     subject: SessionSubject,
@@ -138,17 +107,6 @@ struct SessionCookie {
 /// proof of *that*, never trusted as proof the code will also match — see
 /// [`handler_login_totp_post`], which re-fetches the user fresh) plus where
 /// to send the browser once the code verifies too.
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Serialize, Deserialize)]
-pub struct PendingTotpCookie {
-    pub username: String,
-    pub return_to: String,
-    /// The real deadline on the "password already matched" claim — see
-    /// [`FlowCookie::exp`] for why `Max-Age` alone isn't one.
-    #[serde(default)]
-    pub exp: u64,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Serialize, Deserialize)]
 struct PendingTotpCookie {
     username: String,
@@ -162,11 +120,6 @@ struct PendingTotpCookie {
 /// Rejects anything that isn't an in-app path, so a crafted `?return_to=`
 /// can't turn our own `/_login` into an open redirect to an attacker's site.
 /// See [`is_local_redirect`] for what counts as safe.
-#[cfg(any(test, feature = "test-util"))]
-pub fn safe_return_to(s: &str) -> &str {
-    if is_local_redirect(s) { s } else { "/" }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn safe_return_to(s: &str) -> &str {
     if is_local_redirect(s) { s } else { "/" }
 }
@@ -905,7 +858,7 @@ pub(crate) async fn current_user(ctx: &AppContext, headers: &HeaderMap) -> Optio
     }
     let user = current_user_uncached(ctx, headers).await;
     // `try_with` rather than `with`: outside a request (a background sweep,
-    // a test calling this directly with no scope set up) there's simply
+    // with no scope set up) there's simply
     // nothing to memoize into, which is fine — it only ever saves a repeat
     // call within a request that scoped it.
     let _ = CURRENT_USER_MEMO.try_with(|cell| *cell.borrow_mut() = Some(user.clone()));

@@ -26,17 +26,6 @@ use sha2::{Digest, Sha256};
 /// Empty string with no session: only logged-in-required actions get this
 /// (see [`require_csrf`]) — there's nothing meaningful to protect on an
 /// anonymous POST like the text-size toggle.
-#[cfg(any(test, feature = "test-util"))]
-pub fn csrf_field(headers: &HeaderMap) -> String {
-    match get_cookie(headers, crate::auth::web::login::SESSION_COOKIE) {
-        Some(session) => {
-            let token = csrf_token(&session);
-            maud::html! { input type="hidden" name="csrf" value=(token); }.into_string()
-        }
-        None => String::new(),
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn csrf_field(headers: &HeaderMap) -> String {
     match get_cookie(headers, crate::auth::web::login::SESSION_COOKIE) {
         Some(session) => {
@@ -53,16 +42,7 @@ pub(crate) fn csrf_field(headers: &HeaderMap) -> String {
 /// in every form doesn't publish the session). No keying: this isn't
 /// authenticating a message, it's proving the submitter could read a cookie
 /// they can't read cross-origin.
-#[cfg(any(test, feature = "test-util"))]
-pub fn csrf_token(cookie_value: &str) -> String {
-    csrf_token_impl(cookie_value)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn csrf_token(cookie_value: &str) -> String {
-    csrf_token_impl(cookie_value)
-}
-
-fn csrf_token_impl(cookie_value: &str) -> String {
     let digest = Sha256::digest(cookie_value.as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -75,16 +55,7 @@ fn csrf_token_impl(cookie_value: &str) -> String {
 /// derive a token from, so it carries its own short-lived one
 /// (`crate::auth::web::login::LOGIN_CSRF_COOKIE`). Same double-submit shape
 /// either way, just told which cookie is the anchor.
-#[cfg(any(test, feature = "test-util"))]
-pub fn require_csrf_for(headers: &HeaderMap, cookie_name: &str, submitted: &str) -> Result<(), AppError> {
-    require_csrf_for_impl(headers, cookie_name, submitted)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn require_csrf_for(headers: &HeaderMap, cookie_name: &str, submitted: &str) -> Result<(), AppError> {
-    require_csrf_for_impl(headers, cookie_name, submitted)
-}
-
-fn require_csrf_for_impl(headers: &HeaderMap, cookie_name: &str, submitted: &str) -> Result<(), AppError> {
     let expected = get_cookie(headers, cookie_name)
         .map(|value| csrf_token(&value))
         .unwrap_or_default();
@@ -118,25 +89,6 @@ fn ct_eq(a: &str, b: &str) -> bool {
 /// [`super::guards::require_login`] (there's no session to compare against
 /// otherwise) on every handler that mutates something on behalf of a
 /// logged-in user.
-#[cfg(any(test, feature = "test-util"))]
-pub fn require_csrf(headers: &HeaderMap, submitted: &str) -> Result<(), AppError> {
-    let expected = get_cookie(headers, crate::auth::web::login::SESSION_COOKIE)
-        .map(|session| csrf_token(&session))
-        .unwrap_or_default();
-    if expected.is_empty() || !ct_eq(submitted, &expected) {
-        // Sync-only fallback (no `ctx`, so no `effective_locale`'s
-        // account-default lookup here): the explicit cookie override, else
-        // the built-in default — same as every other locale resolution's
-        // first tier, just missing the account-preference middle tier.
-        let locale = super::locale_pref::cookie_locale(headers).unwrap_or(gitquarry_i18n::Locale::DEFAULT);
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::invalid_csrf(locale)
-        )));
-    }
-    Ok(())
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn require_csrf(headers: &HeaderMap, submitted: &str) -> Result<(), AppError> {
     let expected = get_cookie(headers, crate::auth::web::login::SESSION_COOKIE)
         .map(|session| csrf_token(&session))

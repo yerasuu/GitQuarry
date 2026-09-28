@@ -276,16 +276,7 @@ fn render_gpg_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_keys_page(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
-    render_keys_page_impl(user, csrf, message, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_keys_page(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
-    render_keys_page_impl(user, csrf, message, locale)
-}
-
-fn render_keys_page_impl(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
     use gitquarry_i18n::web::auth::security as t;
     // Only asked for where there is something to re-prove: an account with
     // neither a password nor a TOTP secret has no second factor, and

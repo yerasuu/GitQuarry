@@ -68,7 +68,6 @@ pub struct ReleaseFormPrefill {
 /// unassisted text field asks the operator to remember exact tag spelling.
 /// And a tag that already has a release is not a candidate: offering it
 /// would only lead to the "this tag already has a release" rejection.
-#[cfg_attr(not(any(test, feature = "test-util")), doc(hidden))]
 pub fn taggable_tags<'a>(refs: impl Iterator<Item = &'a String>, released: &[String]) -> Vec<String> {
     let mut names: Vec<String> = refs
         .filter_map(|r| r.strip_prefix("refs/tags/"))

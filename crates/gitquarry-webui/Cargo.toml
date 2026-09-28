@@ -53,16 +53,7 @@ sha2 = "0.11.0"
 tempfile = "3.27.0"
 tracing = "0.1.44"
 
-[features]
-# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
-# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
-# across the crate boundary that external integration tests are.
-test-util = []
-
 [dev-dependencies]
-# Self-dependency so `cargo test` enables this crate's own `test-util`
-# automatically for its tests/*.rs.
-gitquarry-webui = { path = ".", features = ["test-util"] }
 s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 tower = { version = "0.5", features = ["util"] }
 

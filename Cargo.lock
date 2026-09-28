@@ -2032,7 +2032,6 @@ dependencies = [
  "gitquarry-domain",
  "gitquarry-i18n",
  "gitquarry-mirror-external",
- "gitquarry-webui",
  "gitquarry-wire",
  "lru",
  "maud",

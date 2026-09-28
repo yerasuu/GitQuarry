@@ -1,18 +1,26 @@
-use axum::http::HeaderMap;
-use gitquarry_core::app::AppContext;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_webui::webui::repo::summary::*;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
+//! A repo's landing pages: the clone URLs, the language bar and the
+//! license the sidebar names, all read off real pushed content.
 
-fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
-    let backend: std::sync::Arc<dyn gitquarry_core::storage::Backend> =
-        std::sync::Arc::new(LocalBackend::new(&LocalParams {
+use axum::Router;
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::{Request, StatusCode, header};
+use gitquarry_core::app::AppContext;
+use gitquarry_core::storage::entities::Visibility;
+use gitquarry_core::storage::remote::Manifest;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+fn test_ctx(root: &Path, ssh_bind: &str) -> AppContext {
+    let backend: Arc<dyn gitquarry_core::storage::Backend> =
+        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
             bucket: root.to_string_lossy().to_string(),
-            engine: LocalEngine::Redb,
+            engine: gitquarry_core::config::LocalEngine::Redb,
         }));
-    let cipher = std::sync::Arc::new(Cipher::derive("test passphrase", &[5u8; SALT_LEN]).unwrap());
+    let cipher =
+        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
     AppContext {
         bucket: "test".to_string(),
         ssh_bind: ssh_bind.to_string(),
@@ -22,7 +30,7 @@ fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
         backend,
         locks: Default::default(),
         cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
+        mirror_max_age: std::time::Duration::from_secs(60),
         mirror_max_size_bytes: 0,
         mirror_large_repo_threshold_bytes: u64::MAX,
         oidc: None,
@@ -37,87 +45,244 @@ fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
     }
 }
 
-#[tokio::test]
-async fn clone_urls_always_show_both_http_and_ssh() {
-    let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), "0.0.0.0:9999");
-    let html = render_clone_urls(&ctx, "acme/web", &HeaderMap::new())
+async fn git(dir: &Path, args: &[&str]) -> String {
+    // Signing is forced off so a developer's global `commit.gpgsign` can't
+    // turn every commit here into a pinentry prompt.
+    let out = tokio::process::Command::new("git")
+        .current_dir(dir)
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Test Author")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test Author")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_AUTHOR_DATE", "2024-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2024-01-01T00:00:00Z")
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// What a `git push` of every ref in `work` leaves in the bucket: its
+/// objects as one uploaded pack, its refs in the manifest.
+async fn push_all(ctx: &AppContext, name: &str, work: &Path) {
+    let resolved = ctx.resolve_repo(name).await.unwrap().unwrap();
+    let packs = tempfile::tempdir().unwrap();
+    let pack = gitquarry_core::git::pack_all_objects(&work.join(".git"), packs.path())
         .await
         .unwrap()
-        .into_string();
-    assert!(html.contains("http://"));
-    assert!(html.contains("ssh://"));
-    assert!(html.contains(":9999/acme/web"));
+        .unwrap();
+    resolved
+        .remote
+        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
+        .await
+        .unwrap();
+    let refs = git(work, &["for-each-ref", "--format=%(refname) %(objectname)"])
+        .await
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(name, sha)| (name.to_string(), sha.to_string()))
+        .collect();
+    let (_, etag) = resolved.remote.get_manifest().await.unwrap();
+    resolved
+        .remote
+        .put_manifest(
+            &Manifest {
+                refs,
+                head: Some("refs/heads/main".to_string()),
+            },
+            etag.as_deref(),
+        )
+        .await
+        .unwrap();
+}
+
+async fn get(app: &Router, uri: &str) -> (StatusCode, String) {
+    let mut request = Request::builder()
+        .uri(uri)
+        .header(header::HOST, "git.example.com:8080")
+        .body(Body::empty())
+        .unwrap();
+    // `run_server` serves with `into_make_service_with_connect_info`; a bare
+    // `oneshot` doesn't, and the git-smart-HTTP layer 500s without it.
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// `name`, public, holding one commit of `files` on `main` — `None` leaves
+/// it empty, never pushed to.
+async fn repo_with(ctx: &AppContext, name: &str, files: Option<&[(&str, &str)]>) {
+    gitquarry_core::domain::repo::create(ctx, name, None, None, None, Visibility::Public)
+        .await
+        .unwrap()
+        .unwrap();
+    let Some(files) = files else { return };
+    let work = tempfile::tempdir().unwrap();
+    let w = work.path();
+    git(w, &["init", "--quiet", "--initial-branch=main"]).await;
+    for (path, content) in files {
+        std::fs::write(w.join(path), content).unwrap();
+    }
+    git(w, &["add", "."]).await;
+    git(w, &["commit", "--quiet", "-m", "init"]).await;
+    push_all(ctx, name, w).await;
+}
+
+async fn page(app: &Router, uri: &str) -> String {
+    let (status, body) = get(app, uri).await;
+    assert_eq!(status, StatusCode::OK, "GET {uri}: {body}");
+    body
 }
 
 #[tokio::test]
-async fn clone_urls_show_ssh_even_without_a_saved_remote_setting() {
-    // No `.conf/global.json` written at all in this fresh backend --
-    // the ssh:// row must still render, from `ctx.ssh_bind`, not from a
-    // remote setting most deployments never save.
+async fn an_empty_repo_shows_both_clone_urls_without_a_saved_remote_setting() {
+    // No `.conf/global.json` written at all in this fresh bucket: the ssh://
+    // row must still render, from `ctx.ssh_bind`, not from a remote setting
+    // most deployments never save.
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path(), "127.0.0.1:2222");
-    let html = render_clone_urls(&ctx, "acme/web", &HeaderMap::new())
-        .await
-        .unwrap()
-        .into_string();
-    assert!(html.contains("ssh://"));
-    assert!(html.contains(":2222/acme/web"));
+    let ctx = Arc::new(test_ctx(dir.path(), "0.0.0.0:9999"));
+    repo_with(&ctx, "acme/web", None).await;
+    let html = page(&gitquarry_webui::webui::router(ctx), "/acme/web").await;
+    assert!(html.contains("http://git.example.com:8080/acme/web"), "{html}");
+    assert!(html.contains("ssh://git.example.com:9999/acme/web"), "{html}");
 }
 
-#[test]
-fn language_class_is_deterministic_and_varies_by_name() {
-    assert_eq!(language_class("Rust"), language_class("Rust"));
-    assert_ne!(language_class("Rust"), language_class("Python"));
-    // A name Linguist doesn't know still lands on a class that exists.
-    assert_eq!(language_class("Brainfuck"), language_class("Brainfuck"));
-    assert!(language_class("Brainfuck").starts_with("lang-c-h"));
+#[tokio::test]
+async fn the_summary_tab_shows_both_clone_urls() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), "127.0.0.1:2222"));
+    repo_with(&ctx, "acme/web", Some(&[("notes.txt", "hi\n")])).await;
+    let html = page(&gitquarry_webui::webui::router(ctx), "/acme/web?view=summary").await;
+    assert!(html.contains("http://git.example.com:8080/acme/web"), "{html}");
+    assert!(html.contains("ssh://git.example.com:2222/acme/web"), "{html}");
 }
 
-#[test]
-fn language_bar_empty_without_any_language() {
-    let html = render_language_bar(&[], gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("no languages detected"));
-    assert!(!html.contains("lang-bar"));
-}
-
-#[test]
-fn license_kind_detects_mit() {
-    let text = "MIT License\n\nPermission is hereby granted, free of charge, to any person...";
-    assert_eq!(license_kind_from_text(text), Some("MIT"));
-}
-
-#[test]
-fn license_kind_detects_apache_2() {
-    let text = "                                 Apache License\n                           Version 2.0, January 2004";
-    assert_eq!(license_kind_from_text(text), Some("Apache-2.0"));
-}
-
-#[test]
-fn license_kind_detects_gpl_3_over_generic_gnu() {
-    let text = "GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007";
-    assert_eq!(license_kind_from_text(text), Some("GPL-3.0"));
-}
-
-#[test]
-fn license_kind_distinguishes_bsd_2_and_3_clause() {
-    let bsd2 = "Redistribution and use in source and binary forms, with or without modification, are permitted";
-    let bsd3 = "Redistribution and use in source and binary forms... neither the name of the copyright holder... may be used to endorse or promote products";
-    assert_eq!(license_kind_from_text(bsd2), Some("BSD-2-Clause"));
-    assert_eq!(license_kind_from_text(bsd3), Some("BSD-3-Clause"));
-}
-
-#[test]
-fn license_kind_none_for_unrecognized_text() {
-    assert_eq!(license_kind_from_text("just some random file content"), None);
-}
-
-#[test]
-fn language_bar_shows_each_language_with_its_percentage() {
-    let languages = vec![("Rust".to_string(), 75u64), ("CSS".to_string(), 25u64)];
-    let html = render_language_bar(&languages, gitquarry_i18n::Locale::En).into_string();
-    // The share is a class now, not a style attribute -- see webui_csp.rs.
+#[tokio::test]
+async fn language_bar_shows_each_language_with_its_percentage() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), "127.0.0.1:2222"));
+    repo_with(
+        &ctx,
+        "acme/web",
+        Some(&[("main.rs", &"r".repeat(75)), ("style.css", &"c".repeat(25))]),
+    )
+    .await;
+    let html = page(&gitquarry_webui::webui::router(ctx), "/acme/web").await;
+    // The share is a class, not a style attribute -- see webui_csp.rs.
     assert!(html.contains(r#"class="w-75 lang-c-rust""#), "{html}");
     assert!(html.contains("Rust 75.0%"), "{html}");
     assert!(html.contains("CSS 25.0%"), "{html}");
+}
+
+#[tokio::test]
+async fn language_bar_empty_without_any_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), "127.0.0.1:2222"));
+    repo_with(
+        &ctx,
+        "acme/web",
+        Some(&[("notes.txt", "no extension a language maps to\n")]),
+    )
+    .await;
+    let html = page(&gitquarry_webui::webui::router(ctx), "/acme/web").await;
+    assert!(html.contains("(no languages detected)"), "{html}");
+    // `lang-bar` alone also appears in the inlined stylesheet.
+    assert!(!html.contains(r#"class="lang-bar""#), "{html}");
+}
+
+#[tokio::test]
+async fn a_language_linguist_does_not_know_still_gets_a_stable_palette_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), "127.0.0.1:2222"));
+    for (name, language) in [
+        ("acme/one", "Brainfuck"),
+        ("acme/two", "Brainfuck"),
+        ("acme/three", "Rust"),
+    ] {
+        let resolved = gitquarry_core::domain::repo::create(&ctx, name, None, None, None, Visibility::Public)
+            .await
+            .unwrap()
+            .unwrap();
+        let backend = ctx.backend();
+        let uid = resolved.uid.as_str();
+        let (mut config, etag) = gitquarry_core::storage::settings::get_repo_config(backend.as_ref(), uid, &ctx.cipher)
+            .await
+            .unwrap();
+        config.primary_language = Some(language.to_string());
+        gitquarry_core::storage::settings::put_repo_config(
+            backend.as_ref(),
+            uid,
+            &config,
+            etag.as_deref(),
+            &ctx.cipher,
+        )
+        .await
+        .unwrap();
+    }
+    let html = page(&gitquarry_webui::webui::router(ctx), "/").await;
+
+    let swatches: Vec<&str> = html
+        .split(r#"class="lang-swatch "#)
+        .skip(1)
+        .map(|rest| &rest[..rest.find('"').unwrap()])
+        .collect();
+    assert!(swatches.contains(&"lang-c-rust"), "{swatches:?}");
+    let fallback: Vec<&str> = swatches.iter().copied().filter(|c| *c != "lang-c-rust").collect();
+    // Two repos, each rendered as a card and a compact row: one class for
+    // all four, and one of the palette hues `style/utilities.css` defines.
+    assert_eq!(fallback.len(), 4, "{swatches:?}");
+    assert!(fallback.iter().all(|c| *c == fallback[0]), "{swatches:?}");
+    assert!(fallback[0].starts_with("lang-c-h"), "{swatches:?}");
+}
+
+#[tokio::test]
+async fn the_sidebar_names_the_license_the_root_file_holds() {
+    let bsd3 = "Redistribution and use in source and binary forms... neither the name of the copyright holder... \
+                may be used to endorse or promote products";
+    let cases = [
+        (
+            "MIT License\n\nPermission is hereby granted, free of charge, to any person...",
+            "MIT",
+        ),
+        (
+            "                                 Apache License\n                           Version 2.0, January 2004",
+            "Apache-2.0",
+        ),
+        // Checked ahead of the generic "GNU" family, so the version wins.
+        (
+            "GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007",
+            "GPL-3.0",
+        ),
+        (
+            "Redistribution and use in source and binary forms, with or without modification, are permitted",
+            "BSD-2-Clause",
+        ),
+        (bsd3, "BSD-3-Clause"),
+        // Unrecognized text gets the generic label, never a wrong guess.
+        ("just some random file content", "license"),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(test_ctx(dir.path(), "127.0.0.1:2222"));
+    for (i, (text, _)) in cases.iter().enumerate() {
+        repo_with(&ctx, &format!("acme/l{i}"), Some(&[("LICENSE", text)])).await;
+    }
+    let app = gitquarry_webui::webui::router(ctx);
+    for (i, (_, kind)) in cases.iter().enumerate() {
+        let html = page(&app, &format!("/acme/l{i}")).await;
+        let link = format!(r#"href="/acme/l{i}/blob/main/LICENSE">{kind}</a>"#);
+        assert!(html.contains(&link), "expected {link}: {html}");
+    }
 }

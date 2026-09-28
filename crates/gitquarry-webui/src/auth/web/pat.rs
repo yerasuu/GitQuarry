@@ -213,29 +213,7 @@ async fn create_token(ctx: &gitquarry_core::app::AppContext, me: &User, form: &P
 /// one-time secret banner above it — either way the whole thing has to
 /// refresh, not just the form that submitted, same reasoning
 /// `render_appearance_page`'s own doc comment gives.
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_pat_page(
-    tokens: &[PersonalAccessToken],
-    repo_names: &HashMap<Uid, String>,
-    csrf: &str,
-    message: Option<Flash>,
-    pending_secret: Option<&str>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_pat_page(
-    tokens: &[PersonalAccessToken],
-    repo_names: &HashMap<Uid, String>,
-    csrf: &str,
-    message: Option<Flash>,
-    pending_secret: Option<&str>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
-}
-fn render_pat_page_impl(
     tokens: &[PersonalAccessToken],
     repo_names: &HashMap<Uid, String>,
     csrf: &str,

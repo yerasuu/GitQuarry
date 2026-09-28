@@ -1,12 +1,17 @@
-use axum::extract::{Form, State};
-use axum::http::HeaderMap;
-use axum::http::StatusCode;
-use gitquarry_core::app::AppContext;
-use gitquarry_webui::webui::density_pref::*;
-use std::sync::Arc;
+//! The topbar's dense/airy toggle and `/_prefs/density`, driven through
+//! `webui::router` the way a browser reaches them.
 
-/// Same shape as `webui_repo.rs`'s own `test_ctx`, duplicated for the same
-/// reason (sibling test modules, no natural common parent).
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::{Request, StatusCode, header};
+use axum::response::Response;
+use gitquarry_core::app::AppContext;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+/// Same shape as `webui_routes.rs`'s own `test_ctx`, duplicated because
+/// every file under `tests/` is its own crate.
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> =
         Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
@@ -39,69 +44,111 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
     }
 }
 
-#[test]
-fn cookie_density_reads_explicit_overrides_only() {
-    let mut dense = HeaderMap::new();
-    dense.insert(axum::http::header::COOKIE, "density=dense".parse().unwrap());
-    assert_eq!(cookie_density(&dense), Some("dense"));
+/// A router over a fresh bucket holding one empty `acme/proj`: its about
+/// tab is a real page rendered through `layout`'s topbar.
+async fn app_with_repo(root: &std::path::Path) -> axum::Router {
+    let ctx = test_ctx(root);
+    ctx.create_repo("acme/proj").await.unwrap().unwrap();
+    gitquarry_webui::webui::router(Arc::new(ctx))
+}
 
-    let mut airy = HeaderMap::new();
-    airy.insert(axum::http::header::COOKIE, "density=airy".parse().unwrap());
-    assert_eq!(cookie_density(&airy), Some("airy"));
+async fn send(app: &axum::Router, mut request: Request<Body>) -> Response {
+    // `run_server` serves with `into_make_service_with_connect_info`; a bare
+    // `oneshot` doesn't add it, and its absence 500s before routing.
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
+    app.clone().oneshot(request).await.unwrap()
+}
 
-    // No cookie, or a garbage value: `None`, same as an absent
-    // `theme`/`text-size` cookie — callers fall back to the account default.
-    assert_eq!(cookie_density(&HeaderMap::new()), None);
-    let mut garbage = HeaderMap::new();
-    garbage.insert(axum::http::header::COOKIE, "density=roomy".parse().unwrap());
-    assert_eq!(cookie_density(&garbage), None);
+async fn about_page(app: &axum::Router, cookie: Option<&str>) -> String {
+    let mut request = Request::get("/acme/proj?view=about");
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    let response = send(app, request.body(Body::empty()).unwrap()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
+async fn toggle(app: &axum::Router, referer: &str) -> Response {
+    let request = Request::post("/_prefs/density")
+        .header(header::HOST, "gitquarry.example")
+        .header(header::REFERER, referer)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("density=airy"))
+        .unwrap();
+    send(app, request).await
 }
 
 #[tokio::test]
-async fn toggle_density_sets_the_explicit_pick_and_redirects_to_referer() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::HOST, "gitquarry.example".parse().unwrap());
-    headers.insert(
-        axum::http::header::REFERER,
-        "https://gitquarry.example/acme/proj".parse().unwrap(),
-    );
+async fn html_data_density_follows_the_explicit_cookie_only() {
     let dir = tempfile::tempdir().unwrap();
-    let resp = handler_toggle_density(
-        State(Arc::new(test_ctx(dir.path()))),
-        headers,
-        Form(DensityForm {
-            density: "airy".to_string(),
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let location = resp.headers().get(axum::http::header::LOCATION).unwrap();
-    assert_eq!(location, "/acme/proj");
-    let set_cookie = resp
-        .headers()
-        .get(axum::http::header::SET_COOKIE)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(set_cookie.contains("density=airy"));
+    let app = app_with_repo(dir.path()).await;
+
+    assert!(
+        about_page(&app, Some("density=dense"))
+            .await
+            .contains(r#"data-density="dense""#)
+    );
+    assert!(
+        about_page(&app, Some("density=airy"))
+            .await
+            .contains(r#"data-density="airy""#)
+    );
+    // No cookie, or a garbage value: no attribute, so the `:root` default
+    // applies.
+    assert!(!about_page(&app, None).await.contains(r#"data-density=""#));
+    assert!(
+        !about_page(&app, Some("density=roomy"))
+            .await
+            .contains(r#"data-density=""#)
+    );
 }
 
-#[test]
-fn density_toggle_marks_the_current_pick_active() {
-    let html = render_density_toggle("airy").into_string();
+#[tokio::test]
+async fn toggle_marks_the_current_pick_active() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    let html = about_page(&app, Some("density=airy")).await;
     assert_eq!(html.matches("density-btn active").count(), 1);
-    let airy_button = html.split("value=\"airy\"").nth(1).unwrap();
-    assert!(airy_button.starts_with(" class=\"density-btn active\""));
+    assert!(html.contains(r#"value="airy" class="density-btn active""#));
 }
 
-#[test]
-fn empty_density_reads_as_dense_not_as_no_pick() {
-    // Unlike theme (whose empty state highlights neither button — a real
-    // "follow the OS" state exists), density has no OS-level signal: `""`
-    // is the actual rendered state (the `:root` default), so the dense
-    // button should be the one visually active, not neither.
-    let html = render_density_toggle("").into_string();
+#[tokio::test]
+async fn no_pick_reads_as_dense_not_as_neither() {
+    // Unlike theme, density has no OS-level signal: no pick is the `:root`
+    // default, which is dense, so the dense button is the one that should
+    // look active.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    let html = about_page(&app, None).await;
     assert_eq!(html.matches("density-btn active").count(), 1);
-    let dense_button = html.split("value=\"dense\"").nth(1).unwrap();
-    assert!(dense_button.starts_with(" class=\"density-btn active\""));
+    assert!(html.contains(r#"value="dense" class="density-btn active""#));
+}
+
+#[tokio::test]
+async fn toggle_sets_the_explicit_pick_and_redirects_to_a_same_host_referer() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    let response = toggle(&app, "https://gitquarry.example/acme/proj").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/acme/proj");
+    let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(set_cookie.starts_with("density=airy;"), "{set_cookie}");
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+}
+
+#[tokio::test]
+async fn toggle_never_follows_a_foreign_referer() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    let response = toggle(&app, "https://evil.example/acme/proj").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/");
 }

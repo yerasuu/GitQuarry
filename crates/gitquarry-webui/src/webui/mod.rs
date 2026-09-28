@@ -125,68 +125,23 @@ pub mod repos;
 pub mod watch;
 
 mod actions;
-#[cfg(any(test, feature = "test-util"))]
-pub mod compound_path;
-#[cfg(not(any(test, feature = "test-util")))]
 mod compound_path;
-#[cfg(any(test, feature = "test-util"))]
-pub mod cookies;
-#[cfg(not(any(test, feature = "test-util")))]
 mod cookies;
-#[cfg(any(test, feature = "test-util"))]
-pub mod csrf;
-#[cfg(not(any(test, feature = "test-util")))]
 mod csrf;
-#[cfg(any(test, feature = "test-util"))]
-pub mod density_pref;
-#[cfg(not(any(test, feature = "test-util")))]
 mod density_pref;
-#[cfg(any(test, feature = "test-util"))]
-pub mod diff_view;
-#[cfg(not(any(test, feature = "test-util")))]
 mod diff_view;
-#[cfg(any(test, feature = "test-util"))]
-pub mod error;
-#[cfg(not(any(test, feature = "test-util")))]
 mod error;
 pub mod escaping;
 pub(crate) mod federation_client;
-#[cfg(any(test, feature = "test-util"))]
-pub mod federation_proxy;
-#[cfg(not(any(test, feature = "test-util")))]
 mod federation_proxy;
-#[cfg(any(test, feature = "test-util"))]
-pub mod flash;
-#[cfg(not(any(test, feature = "test-util")))]
 mod flash;
-#[cfg(any(test, feature = "test-util"))]
-pub mod guards;
-#[cfg(not(any(test, feature = "test-util")))]
 mod guards;
-#[cfg(any(test, feature = "test-util"))]
-pub mod locale_pref;
-#[cfg(not(any(test, feature = "test-util")))]
 mod locale_pref;
-#[cfg(any(test, feature = "test-util"))]
-pub mod page_chrome;
-#[cfg(not(any(test, feature = "test-util")))]
 mod page_chrome;
 pub(crate) mod raw;
-#[cfg(any(test, feature = "test-util"))]
-pub mod raw_link;
-#[cfg(not(any(test, feature = "test-util")))]
 mod raw_link;
-#[cfg(any(test, feature = "test-util"))]
-pub mod repo_link;
-#[cfg(not(any(test, feature = "test-util")))]
 mod repo_link;
-#[cfg(any(test, feature = "test-util"))]
-pub mod text_size;
-#[cfg(not(any(test, feature = "test-util")))]
 mod text_size;
-#[cfg(any(test, feature = "test-util"))]
-pub mod theme_pref;
-#[cfg(not(any(test, feature = "test-util")))]
 mod theme_pref;
 
 pub(crate) use actions::{render_repo_action_buttons, star_button_html, watch_button_html};
@@ -847,13 +802,6 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// nonce either way, since CSP nonces cover `<style>` elements and never
 /// style attributes, so the class file is what keeps it tight —
 /// `tests/webui_csp.rs` fails if a view goes back to an attribute.
-/// The policy [`security_headers`] puts on every response. A constant so
-/// `tests/webui_csp.rs` can hold it next to the markup the views emit.
-#[cfg(any(test, feature = "test-util"))]
-pub const CONTENT_SECURITY_POLICY: &str = CSP;
-#[cfg(not(any(test, feature = "test-util")))]
-const CONTENT_SECURITY_POLICY: &str = CSP;
-
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
      img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
@@ -915,7 +863,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
             // images baked into that pinned, hand-vetted stylesheet, not
             // anything request- or user-influenced — same trust level as the
             // CSS file itself, which `style-src 'self'` already accepts.
-            CONTENT_SECURITY_POLICY,
+            CSP,
         ),
     );
     resp

@@ -18,73 +18,31 @@ mod activity;
 pub(crate) mod blame;
 pub(crate) mod blob;
 pub(crate) mod branches;
-#[cfg(any(test, feature = "test-util"))]
-pub mod commit;
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod commit;
 mod compare;
-#[cfg(any(test, feature = "test-util"))]
-pub mod components;
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod components;
 mod diff;
 pub(crate) mod log;
-#[cfg(any(test, feature = "test-util"))]
-pub mod merges;
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod merges;
-#[cfg(any(test, feature = "test-util"))]
-pub mod refs;
-#[cfg(not(any(test, feature = "test-util")))]
 mod refs;
-#[cfg(any(test, feature = "test-util"))]
-pub mod releases;
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) mod releases;
-#[cfg(any(test, feature = "test-util"))]
-pub mod stats;
-#[cfg(not(any(test, feature = "test-util")))]
 mod stats;
-#[cfg(any(test, feature = "test-util"))]
-pub mod summary;
-#[cfg(not(any(test, feature = "test-util")))]
 mod summary;
 pub(crate) use summary::community_stats_html;
 pub(crate) mod tags;
 pub(crate) mod tree;
 
 use activity::render_activity;
-#[cfg(any(test, feature = "test-util"))]
-pub use blame::render_blame;
-#[cfg(not(any(test, feature = "test-util")))]
 use blame::render_blame;
-#[cfg(any(test, feature = "test-util"))]
-pub use blob::render_blob;
-#[cfg(not(any(test, feature = "test-util")))]
 use blob::render_blob;
-#[cfg(any(test, feature = "test-util"))]
-pub use commit::render_commit;
-#[cfg(not(any(test, feature = "test-util")))]
 use commit::render_commit;
 use compare::render_compare;
-#[cfg(any(test, feature = "test-util"))]
-pub use log::render_log;
-#[cfg(not(any(test, feature = "test-util")))]
 use log::render_log;
 use merges::{NewMergeFormValues, render_merge_detail, render_merges_list, render_new_merge_form};
-#[cfg(any(test, feature = "test-util"))]
-pub use refs::render_refs;
-#[cfg(not(any(test, feature = "test-util")))]
 use refs::render_refs;
 use releases::{render_release_detail, render_releases_list};
-#[cfg(any(test, feature = "test-util"))]
-pub use stats::render_stats;
-#[cfg(not(any(test, feature = "test-util")))]
 use stats::render_stats;
 use summary::{render_about, render_clone_urls, render_language_bar, render_summary};
-#[cfg(any(test, feature = "test-util"))]
-pub use tree::render_tree;
-#[cfg(not(any(test, feature = "test-util")))]
 use tree::render_tree;
 
 use super::{
@@ -154,15 +112,7 @@ struct IndexRepo {
 /// has no `locale` in scope — see its own doc comment): threading one
 /// through just for this string would be the only i18n on an otherwise-
 /// English page.
-#[cfg(any(test, feature = "test-util"))]
-pub fn relative_time_ago(then: u64, now: u64) -> String {
-    relative_time_ago_impl(then, now)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn relative_time_ago(then: u64, now: u64) -> String {
-    relative_time_ago_impl(then, now)
-}
-fn relative_time_ago_impl(then: u64, now: u64) -> String {
     let diff = now.saturating_sub(then);
     if diff < 60 {
         return "just now".to_string();
@@ -187,15 +137,7 @@ fn relative_time_ago_impl(then: u64, now: u64) -> String {
 /// repo card's own meta line — that line has room `relative_time_ago`'s
 /// compact stamp doesn't need to save, and reads better spelled out next to
 /// the language name and star count it sits beside.
-#[cfg(any(test, feature = "test-util"))]
-pub fn relative_time_words(then: u64, now: u64) -> String {
-    relative_time_words_impl(then, now)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn relative_time_words(then: u64, now: u64) -> String {
-    relative_time_words_impl(then, now)
-}
-fn relative_time_words_impl(then: u64, now: u64) -> String {
     let diff = now.saturating_sub(then);
     fn plural(n: u64, unit: &str) -> String {
         format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
@@ -233,14 +175,6 @@ fn relative_time_words_impl(then: u64, now: u64) -> String {
 /// exactly what a repo's own `?view=activity` page deliberately dropped —
 /// pulling it back in here just because this widget also touches `audit`
 /// for release/MR entries would undo that.
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ActivityKind {
-    Push { commits: u32, branch: Option<String> },
-    Release { tag: String },
-    MrMerged { number: u64 },
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ActivityKind {
     Push { commits: u32, branch: Option<String> },
@@ -264,14 +198,6 @@ impl ActivityKind {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActivityItem {
-    pub repo: String,
-    pub at: u64,
-    pub kind: ActivityKind,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ActivityItem {
     repo: String,
@@ -280,17 +206,8 @@ struct ActivityItem {
 }
 
 /// Newest-first, capped at `limit` — the merge-sort half of the sidebar,
-/// split out from the audit-reading/`IndexRepo`-scanning half above it so
-/// it's testable without either.
-#[cfg(any(test, feature = "test-util"))]
-pub fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
-    top_recent_activity_impl(items, limit)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-fn top_recent_activity(items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
-    top_recent_activity_impl(items, limit)
-}
-fn top_recent_activity_impl(mut items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
+/// kept apart from the audit-reading/`IndexRepo`-scanning half above it.
+fn top_recent_activity(mut items: Vec<ActivityItem>, limit: usize) -> Vec<ActivityItem> {
     items.sort_by_key(|i| std::cmp::Reverse(i.at));
     items.truncate(limit);
     items

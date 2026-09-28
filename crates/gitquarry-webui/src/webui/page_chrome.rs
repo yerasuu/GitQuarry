@@ -53,30 +53,6 @@ pub(crate) fn tab_links(toggle: Option<(&str, &str)>, tabs: &[(&str, String, Str
 /// `right`: pre-rendered HTML (star/text-size buttons, currently only
 /// [`header_bar`] uses this) for a right-aligned cell in the same row —
 /// empty skips the cell entirely rather than rendering an empty one.
-#[cfg(any(test, feature = "test-util"))]
-pub fn tabs_bar(
-    tabs: &[(&str, String, String)],
-    active: &str,
-    right: &maud::Markup,
-    nav_label: &str,
-    toggle_label: &str,
-) -> maud::Markup {
-    maud::html! {
-        // `role="navigation"`: this is a real nav menu wearing a `<table>`
-        // for its visual layout — without the role override, screen readers
-        // announce it as a data table (row/column counts) instead of a nav
-        // landmark reachable via landmark-jump commands.
-        table class="tabs" role="navigation" aria-label=(nav_label) {
-            tr {
-                td { (tab_links(Some(("tabs-toggle", toggle_label)), tabs, active)) }
-                @if !right.0.is_empty() {
-                    td class="tabs-right" { (right) }
-                }
-            }
-        }
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn tabs_bar(
     tabs: &[(&str, String, String)],
     active: &str,
@@ -170,16 +146,7 @@ fn title_bar(
 /// `federation`: [`federation_ui_active`]'s own result — the "peers" tab is
 /// dropped entirely when `[federation]` isn't configured, rather than shown
 /// as a tab that only ever leads to a 503.
-#[cfg(any(test, feature = "test-util"))]
-pub fn admin_header(active: &str, federation: bool, locale: gitquarry_i18n::Locale) -> String {
-    admin_header_impl(active, federation, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn admin_header(active: &str, federation: bool, locale: gitquarry_i18n::Locale) -> String {
-    admin_header_impl(active, federation, locale)
-}
-
-fn admin_header_impl(active: &str, federation: bool, locale: gitquarry_i18n::Locale) -> String {
     use gitquarry_i18n::web::chrome;
     let mut tabs: Vec<(&str, String, String)> = vec![
         (
@@ -244,26 +211,7 @@ fn account_sections(federation: bool, locale: gitquarry_i18n::Locale) -> Vec<(&'
 /// needs both sides in one unbroken markup tree, not a `header`/`body`
 /// string pair [`layout`] concatenates without knowing about the grid
 /// between them.
-#[cfg(any(test, feature = "test-util"))]
-pub fn account_settings_page(
-    active: &str,
-    content: maud::Markup,
-    federation: bool,
-    locale: gitquarry_i18n::Locale,
-) -> maud::Markup {
-    account_settings_page_impl(active, content, federation, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn account_settings_page(
-    active: &str,
-    content: maud::Markup,
-    federation: bool,
-    locale: gitquarry_i18n::Locale,
-) -> maud::Markup {
-    account_settings_page_impl(active, content, federation, locale)
-}
-
-fn account_settings_page_impl(
     active: &str,
     content: maud::Markup,
     federation: bool,
@@ -586,16 +534,6 @@ pub(crate) fn permission_label(
 /// search box as the filter (it already matches topics, not just names), so
 /// there's no separate `?topic=` param to validate/parse. Shared by the
 /// index and `/_profile`, the two places a repo's topics show up.
-#[cfg(any(test, feature = "test-util"))]
-pub fn topic_badges(topics: &std::collections::BTreeSet<String>) -> String {
-    maud::html! {
-        @for t in topics {
-            " " a class="badge accent" href=(format!("/?q={}", super::escaping::url_encode(t))) { (t) }
-        }
-    }
-    .into_string()
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn topic_badges(topics: &std::collections::BTreeSet<String>) -> String {
     maud::html! {
         @for t in topics {

@@ -26,9 +26,6 @@ use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 
-#[cfg(any(test, feature = "test-util"))]
-pub const BOOTSTRAP_COOKIE: &str = "bootstrap-grant";
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) const BOOTSTRAP_COOKIE: &str = "bootstrap-grant";
 
 /// How long one exchange of [`TOKEN`] stays usable. Long enough to create
@@ -76,16 +73,7 @@ fn ct_eq(a: &str, b: &str) -> bool {
 /// `true` if this request carries a live, correctly sealed bootstrap grant.
 /// Only ever consulted while `login::login_enforced` is false — a grant is
 /// no substitute for an admin session on a configured instance.
-#[cfg(any(test, feature = "test-util"))]
-pub fn holds_grant(ctx: &AppContext, headers: &HeaderMap) -> bool {
-    holds_grant_impl(ctx, headers)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn holds_grant(ctx: &AppContext, headers: &HeaderMap) -> bool {
-    holds_grant_impl(ctx, headers)
-}
-
-fn holds_grant_impl(ctx: &AppContext, headers: &HeaderMap) -> bool {
     let Some(raw) = get_cookie(headers, BOOTSTRAP_COOKIE) else {
         return false;
     };
