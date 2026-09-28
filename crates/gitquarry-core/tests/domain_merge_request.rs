@@ -11,13 +11,8 @@ use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use std::sync::Arc;
 
-fn test_target(root: &std::path::Path) -> ResolvedRepo {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; SALT_LEN]).unwrap());
-    let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
+fn test_target(ctx: &AppContext) -> ResolvedRepo {
+    let remote = Remote::new(ctx.backend(), "repos/team/proj".to_string(), ctx.cipher.clone());
     ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
         remote,
@@ -27,7 +22,7 @@ fn test_target(root: &std::path::Path) -> ResolvedRepo {
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; SALT_LEN]).unwrap());
     AppContext {
@@ -100,7 +95,7 @@ async fn put_branch(target: &ResolvedRepo, branch: &str, sha: &str) {
 async fn create_rejects_a_nonexistent_branch() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
@@ -116,7 +111,7 @@ async fn create_rejects_a_nonexistent_branch() {
 async fn create_then_get_roundtrips_and_numbers_increment() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
 
@@ -146,7 +141,7 @@ async fn create_then_get_roundtrips_and_numbers_increment() {
 async fn list_returns_newest_first_and_filters_by_status() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
 
@@ -177,7 +172,7 @@ async fn list_returns_newest_first_and_filters_by_status() {
 async fn close_then_reopen_roundtrips_and_rejects_wrong_transitions() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let new = NewMergeRequest {
@@ -213,7 +208,7 @@ async fn close_then_reopen_roundtrips_and_rejects_wrong_transitions() {
 async fn transition_on_a_nonexistent_number_errs() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     assert!(close(&ctx, &target, 999, gitquarry_i18n::Locale::Es).await.is_err());
 }
 
@@ -221,7 +216,7 @@ async fn transition_on_a_nonexistent_number_errs() {
 async fn add_comment_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     assert!(
         add_comment(&ctx, &target, 999, "alice", "hi", gitquarry_i18n::Locale::Es)
             .await
@@ -233,7 +228,7 @@ async fn add_comment_rejects_a_nonexistent_number() {
 async fn add_comment_then_list_comments_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let new = NewMergeRequest {
@@ -282,7 +277,7 @@ async fn create_mr_authored_by_alice(ctx: &AppContext, target: &ResolvedRepo) {
 async fn add_line_comment_rejects_a_malformed_anchor() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     create_mr_authored_by_alice(&ctx, &target).await;
 
     let anchor = |path: &str, line| CommentAnchor {
@@ -316,7 +311,7 @@ async fn add_line_comment_rejects_a_malformed_anchor() {
 async fn a_line_comment_lands_on_the_same_thread_as_a_plain_one() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     create_mr_authored_by_alice(&ctx, &target).await;
 
     add_comment(&ctx, &target, 1, "bob", "plain", gitquarry_i18n::Locale::Es)
@@ -348,7 +343,7 @@ async fn a_line_comment_lands_on_the_same_thread_as_a_plain_one() {
 async fn add_review_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     assert!(
         add_review(
             &ctx,
@@ -368,7 +363,7 @@ async fn add_review_rejects_a_nonexistent_number() {
 async fn an_author_may_comment_on_but_never_approve_their_own_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     create_mr_authored_by_alice(&ctx, &target).await;
 
     for verdict in [ReviewVerdict::Approved, ReviewVerdict::ChangesRequested] {
@@ -397,7 +392,7 @@ async fn an_author_may_comment_on_but_never_approve_their_own_mr() {
 async fn add_review_then_list_reviews_roundtrips_chronologically() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     create_mr_authored_by_alice(&ctx, &target).await;
 
     assert!(list_reviews(&ctx, &target, 1).await.unwrap().is_empty());
@@ -730,7 +725,7 @@ fn init_mirror_with_multi_commit_feature(git_dir: &std::path::Path) -> (String, 
 async fn diff_returns_the_commits_and_the_diff_between_branches() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     let mr = MergeRequestMeta {
         number: 1,
@@ -755,7 +750,7 @@ async fn diff_returns_the_commits_and_the_diff_between_branches() {
 async fn diff_is_empty_when_the_forks_branch_doesnt_exist() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     // `AppContext::open_mirror` creates an empty bare repo on demand for
     // a uid it's never seen — this fork has no `feature` branch at all.
@@ -776,7 +771,7 @@ async fn diff_is_empty_when_the_forks_branch_doesnt_exist() {
 async fn diff_supports_a_cross_fork_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let target_git_dir = init_repo_with_branches(dir.path());
 
     // A separate fork repo (distinct uid), its mirror pre-placed exactly
@@ -863,7 +858,7 @@ async fn diff_supports_a_cross_fork_mr() {
 async fn create_rejects_a_cross_repo_mr_when_source_isnt_a_fork_of_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
 
     // An unrelated repo (never forked from `target`) with its own
@@ -927,7 +922,7 @@ async fn init_target_mirror(ctx: &AppContext, target: &ResolvedRepo, conflicting
 async fn diff_survives_a_source_branch_deleted_after_the_merge() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -979,7 +974,7 @@ async fn diff_survives_a_source_branch_deleted_after_the_merge() {
 async fn diff_shows_what_a_merge_landed_when_the_branch_outlives_it() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1033,7 +1028,7 @@ async fn diff_shows_what_a_merge_landed_when_the_branch_outlives_it() {
 async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1071,7 +1066,7 @@ async fn diff_is_empty_rather_than_an_error_when_nothing_survives() {
 async fn fast_forward_moves_the_branch_without_creating_a_commit() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let (_main_sha, feature_sha) = init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1109,7 +1104,7 @@ async fn fast_forward_moves_the_branch_without_creating_a_commit() {
 async fn fast_forward_refuses_a_diverged_branch() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     // The conflicting fixture's two branches each carry their own commit,
     // so neither is an ancestor of the other.
     init_target_mirror(&ctx, &target, true).await;
@@ -1145,7 +1140,7 @@ async fn fast_forwardable_tracks_whether_the_branches_diverged() {
     for (conflicting, expected) in [(false, true), (true, false)] {
         let dir = tempfile::tempdir().unwrap();
         let ctx = test_ctx(dir.path());
-        let target = test_target(dir.path());
+        let target = test_target(&ctx);
         init_target_mirror(&ctx, &target, conflicting).await;
         let new = NewMergeRequest {
             source_repo: &target.uid,
@@ -1173,7 +1168,7 @@ async fn fast_forwardable_tracks_whether_the_branches_diverged() {
 async fn a_merge_commit_is_signed_by_the_instance_and_authored_by_the_merger() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1233,7 +1228,7 @@ async fn a_merge_commit_reads_back_as_signed_by_the_instance() {
 
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1287,7 +1282,7 @@ async fn a_merge_commit_reads_back_as_signed_by_the_instance() {
 async fn merge_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     assert!(
         merge(
             &ctx,
@@ -1306,7 +1301,7 @@ async fn merge_rejects_a_nonexistent_number() {
 async fn merge_rejects_a_mr_thats_not_open() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1337,7 +1332,7 @@ async fn merge_rejects_a_mr_thats_not_open() {
 async fn merge_succeeds_cleanly_and_updates_the_manifest_and_mr_status() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let (main_sha, _feature_sha) = init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1399,7 +1394,7 @@ async fn merge_succeeds_cleanly_and_updates_the_manifest_and_mr_status() {
 async fn merging_into_the_default_branch_stamps_last_push() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
     let (main_sha, _feature_sha) = init_mirror_with_branches(&git_dir);
     let mut manifest = Manifest::default();
@@ -1450,7 +1445,7 @@ async fn merging_into_the_default_branch_stamps_last_push() {
 async fn merging_into_a_non_default_branch_leaves_last_push_alone() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
     let (main_sha, _feature_sha) = init_mirror_with_branches(&git_dir);
     let mut manifest = Manifest::default();
@@ -1492,7 +1487,7 @@ async fn merging_into_a_non_default_branch_leaves_last_push_alone() {
 async fn merge_rejects_until_a_required_reviewer_approves() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
 
     let (mut config, etag) = target.remote.get_repo_config().await.unwrap();
@@ -1561,7 +1556,7 @@ async fn merge_rejects_until_a_required_reviewer_approves() {
 async fn merge_never_requires_the_prs_own_author_to_approve_themselves() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
 
     let (mut config, etag) = target.remote.get_repo_config().await.unwrap();
@@ -1607,7 +1602,7 @@ async fn merge_never_requires_the_prs_own_author_to_approve_themselves() {
 async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
     let (main_sha, feature_sha) = init_mirror_with_branches_and_codeowners(&git_dir);
     let mut manifest = Manifest::default();
@@ -1677,7 +1672,7 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
 async fn conflicts_reports_the_same_paths_a_merge_attempt_would() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, true).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1701,7 +1696,7 @@ async fn conflicts_reports_the_same_paths_a_merge_attempt_would() {
 async fn conflicts_is_none_when_the_branches_merge_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1722,7 +1717,7 @@ async fn conflicts_is_none_when_the_branches_merge_cleanly() {
 async fn merge_reports_conflicts_without_mutating_anything() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let (main_sha, _feature_sha) = init_target_mirror(&ctx, &target, true).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1761,7 +1756,7 @@ async fn merge_reports_conflicts_without_mutating_anything() {
 async fn merge_with_squash_strategy_makes_a_single_parent_commit_with_a_combined_message() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
     let (main_sha, _f1_sha, f2_sha) = init_mirror_with_multi_commit_feature(&git_dir);
     let mut manifest = Manifest::default();
@@ -1822,7 +1817,7 @@ async fn merge_with_squash_strategy_makes_a_single_parent_commit_with_a_combined
 async fn merge_with_rebase_strategy_replays_each_commit_linearly_and_keeps_its_author() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     let git_dir = ctx.mirrors_root.join(target.uid.as_str());
     let (main_sha, _f1_sha, f2_sha) = init_mirror_with_multi_commit_feature(&git_dir);
     let mut manifest = Manifest::default();
@@ -1885,7 +1880,7 @@ async fn merge_with_rebase_strategy_replays_each_commit_linearly_and_keeps_its_a
 async fn mark_merged_externally_records_status_without_touching_git() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1911,7 +1906,7 @@ async fn mark_merged_externally_records_status_without_touching_git() {
 async fn mark_merged_externally_is_idempotent_once_already_merged() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
@@ -1935,7 +1930,7 @@ async fn mark_merged_externally_is_idempotent_once_already_merged() {
 async fn mark_merged_externally_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     assert!(
         mark_merged_externally(&ctx, &target, 999, "deadbeef", None)
             .await
@@ -1963,7 +1958,7 @@ async fn create_test_mr(ctx: &AppContext, target: &ResolvedRepo) -> MergeRequest
 async fn edit_metadata_rejects_an_unknown_label() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -1989,7 +1984,7 @@ async fn edit_metadata_rejects_an_unknown_label() {
 async fn edit_metadata_rejects_an_unknown_assignee() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -2015,7 +2010,7 @@ async fn edit_metadata_rejects_an_unknown_assignee() {
 async fn edit_metadata_rejects_an_unknown_reviewer() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -2041,7 +2036,7 @@ async fn edit_metadata_rejects_an_unknown_reviewer() {
 async fn edit_metadata_updates_labels_assignees_and_reviewers() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     seed_label(&ctx, &target, "bug", "#d73a4a").await;
     seed_user(&ctx, "bob").await;
     seed_user(&ctx, "carol").await;
@@ -2076,7 +2071,7 @@ async fn edit_metadata_updates_labels_assignees_and_reviewers() {
 async fn mark_draft_then_mark_ready_roundtrips_and_rejects_wrong_transitions() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -2117,7 +2112,7 @@ async fn mark_draft_then_mark_ready_roundtrips_and_rejects_wrong_transitions() {
 async fn merge_rejects_a_draft_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let mr = create_test_mr(&ctx, &target).await;
     mark_draft(&ctx, &target, mr.number, gitquarry_i18n::Locale::En)
@@ -2142,7 +2137,7 @@ async fn merge_rejects_a_draft_mr() {
 async fn merge_rejects_a_mr_with_pending_changes_requested() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let mr = create_test_mr(&ctx, &target).await;
     add_review(
@@ -2202,7 +2197,7 @@ async fn merge_rejects_a_mr_with_pending_changes_requested() {
 async fn edit_comment_updates_the_body_but_rejects_a_non_author() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -2247,7 +2242,7 @@ async fn edit_comment_updates_the_body_but_rejects_a_non_author() {
 async fn delete_comment_removes_it_but_rejects_a_non_author() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -2288,7 +2283,7 @@ async fn delete_comment_removes_it_but_rejects_a_non_author() {
 async fn delete_comment_allows_a_moderator_to_remove_someone_elses() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;
@@ -2371,7 +2366,7 @@ async fn target_with_message(ctx: &AppContext, target: &ResolvedRepo, subject: &
 async fn create_falls_back_to_the_tip_commits_subject_and_body() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     target_with_message(
         &ctx,
         &target,
@@ -2404,7 +2399,7 @@ async fn create_falls_back_to_the_tip_commits_subject_and_body() {
 async fn create_keeps_whatever_the_submitter_actually_typed() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     target_with_message(&ctx, &target, "add the widget", "commit body").await;
 
     let mr = create(
@@ -2432,7 +2427,7 @@ async fn create_keeps_whatever_the_submitter_actually_typed() {
 async fn create_leaves_the_description_empty_when_the_commit_has_no_body() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     target_with_message(&ctx, &target, "just a subject", "").await;
 
     let mr = create(

@@ -12,7 +12,7 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(
         gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
             bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Files,
+            engine: gitquarry_core::config::LocalEngine::Redb,
         }),
     );
     let cipher = Arc::new(

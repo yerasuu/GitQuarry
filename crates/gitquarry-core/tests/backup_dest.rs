@@ -128,7 +128,7 @@ fn a_missing_directory_fails_validation() {
 fn source_parts(root: &std::path::Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
     let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("live passphrase", &[3u8; SALT_LEN]).unwrap());
     (backend, cipher)

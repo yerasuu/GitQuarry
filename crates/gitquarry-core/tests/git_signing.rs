@@ -14,7 +14,7 @@ use gitquarry_core::storage::local::LocalBackend;
 fn backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
     let backend = LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     });
     let cipher = Cipher::derive("test passphrase", &[31u8; SALT_LEN]).unwrap();
     (backend, cipher)
@@ -47,6 +47,10 @@ async fn a_second_instance_on_the_same_bucket_gets_the_same_key() {
     let dir = tempfile::tempdir().unwrap();
     let (backend_a, cipher_a) = backend_and_cipher(dir.path());
     let first = signing::load_or_create(&backend_a, &cipher_a).await.unwrap();
+    // redb allows only one open Database handle per file per process, so the
+    // first must close before the second opens — otherwise this second
+    // "instance" can't stand in for a genuinely separate process.
+    drop(backend_a);
 
     // A separate backend handle over the same bucket: no shared in-memory
     // state, exactly what a second deployment reads through.

@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 fn test_remote(root: &std::path::Path) -> Remote {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[3u8; SALT_LEN]).unwrap());
     Remote::new(backend, "repos/team/proj".to_string(), cipher)
@@ -258,7 +258,7 @@ async fn upload_object_stores_content_matching_its_own_hash() {
 fn test_backend_cipher(root: &std::path::Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
     let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; SALT_LEN]).unwrap());
     (backend, cipher)

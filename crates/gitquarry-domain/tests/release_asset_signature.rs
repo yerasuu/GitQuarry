@@ -15,13 +15,8 @@ use gitquarry_domain::release::{NewAsset, add_asset, create};
 use gitquarry_i18n::Locale;
 use std::sync::Arc;
 
-fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[37u8; SALT_LEN]).unwrap());
-    let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
+fn test_resolved(ctx: &AppContext) -> ResolvedRepo {
+    let remote = Remote::new(ctx.backend(), "repos/team/proj".to_string(), ctx.cipher.clone());
     ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
         remote,
@@ -31,7 +26,7 @@ fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[37u8; SALT_LEN]).unwrap());
     AppContext {
@@ -145,8 +140,8 @@ async fn make_user(ctx: &AppContext, username: &str) {
 #[tokio::test]
 async fn unsigned_asset_is_never_marked_verified() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
     let ctx = test_ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     put_tag(&resolved, "v1.0").await;
     create(
         &ctx,
@@ -193,8 +188,8 @@ async fn signed_asset_verifies_against_the_uploaders_own_stored_key() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
     let ctx = test_ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     make_user(&ctx, "alice").await;
     let key = generate_key();
     user::add_gpg_key(&ctx, "alice", &key.armored_public, Locale::En)
@@ -249,8 +244,8 @@ async fn signed_asset_by_an_unrelated_key_is_not_verified() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
     let ctx = test_ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     make_user(&ctx, "alice").await;
     // Alice only has `other`'s key on file — not the one that actually
     // signed the asset below.

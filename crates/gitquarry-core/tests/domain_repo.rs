@@ -11,7 +11,7 @@ use std::sync::Arc;
 fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
     let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
@@ -78,7 +78,7 @@ async fn delete_tag_rejects_a_protected_tag_even_though_it_exists() {
     let dir = tempfile::tempdir().unwrap();
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
     let remote = Remote::new(Arc::clone(&backend), "repos/team/proj".to_string(), Arc::clone(&cipher));
@@ -155,7 +155,7 @@ async fn delete_branch_rejects_a_protected_branch_even_though_it_exists() {
     let dir = tempfile::tempdir().unwrap();
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
     let remote = Remote::new(Arc::clone(&backend), "repos/team/proj".to_string(), Arc::clone(&cipher));

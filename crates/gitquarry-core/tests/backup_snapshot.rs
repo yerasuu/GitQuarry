@@ -10,7 +10,7 @@ use std::sync::Arc;
 fn backend(root: &std::path::Path) -> Arc<dyn Backend> {
     Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }))
 }
 

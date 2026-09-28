@@ -9,7 +9,7 @@ fn test_ctx(root: &std::path::Path, ssh_bind: &str) -> AppContext {
     let backend: std::sync::Arc<dyn gitquarry_core::storage::Backend> =
         std::sync::Arc::new(LocalBackend::new(&LocalParams {
             bucket: root.to_string_lossy().to_string(),
-            engine: LocalEngine::Files,
+            engine: LocalEngine::Redb,
         }));
     let cipher = std::sync::Arc::new(Cipher::derive("test passphrase", &[5u8; SALT_LEN]).unwrap());
     AppContext {

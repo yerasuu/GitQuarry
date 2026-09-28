@@ -17,7 +17,7 @@ use std::time::Duration;
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend = LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     });
     let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
     AppContext {

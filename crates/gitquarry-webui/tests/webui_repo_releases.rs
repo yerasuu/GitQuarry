@@ -12,7 +12,7 @@ use std::sync::Arc;
 fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; SALT_LEN]).unwrap());
     let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
@@ -30,7 +30,7 @@ fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; SALT_LEN]).unwrap());
     AppContext {

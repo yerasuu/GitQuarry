@@ -152,7 +152,7 @@ impl Backend for CountingBackend {
 fn test_ctx(root: &std::path::Path) -> (AppContext, Arc<CountingBackend>) {
     let inner = gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: gitquarry_core::config::LocalEngine::Files,
+        engine: gitquarry_core::config::LocalEngine::Redb,
     });
     let counting = Arc::new(CountingBackend {
         inner,

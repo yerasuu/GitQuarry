@@ -5,24 +5,32 @@ use gitquarry_core::storage::remote::*;
 use gitquarry_core::storage::{Backend, Cas};
 use std::sync::Arc;
 
-/// A `Remote` backed by a fresh `LocalBackend` rooted at `root`, scoped
-/// to `prefix` — end-to-end exercise of the streaming pipeline
-/// (`Cipher::seal_stream`/`open_stream` + `Backend::put_stream`/
-/// `get_stream`) through the one driver this sandbox can actually run,
-/// same spirit as a real push/clone against `driver = "local"`.
-fn test_remote(root: &std::path::Path, prefix: &str) -> Remote {
-    let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
+/// A fresh `LocalBackend` rooted at `root` — redb allows only one open
+/// `Database` handle per file per process, so tests scoping two `Remote`s
+/// to the same bucket (different prefixes, same storage) must share one
+/// of these rather than each building their own.
+fn test_backend(root: &std::path::Path) -> Arc<dyn Backend> {
+    Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
+        engine: LocalEngine::Redb,
+    }))
+}
+
+/// A `Remote` over `backend`, scoped to `prefix` — end-to-end exercise of
+/// the streaming pipeline (`Cipher::seal_stream`/`open_stream` +
+/// `Backend::put_stream`/`get_stream`) through the one driver this sandbox
+/// can actually run, same spirit as a real push/clone against
+/// `driver = "local"`.
+fn test_remote(backend: &Arc<dyn Backend>, prefix: &str) -> Remote {
     let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; SALT_LEN]).unwrap());
-    Remote::new(backend, prefix.to_string(), cipher)
+    Remote::new(backend.clone(), prefix.to_string(), cipher)
 }
 
 #[tokio::test]
 async fn upload_pack_then_download_pack_roundtrips_through_local_backend() {
     let bucket_dir = tempfile::tempdir().unwrap();
-    let remote = test_remote(bucket_dir.path(), "repos/team/proj");
+    let backend = test_backend(bucket_dir.path());
+    let remote = test_remote(&backend, "repos/team/proj");
 
     let src_dir = tempfile::tempdir().unwrap();
     let pack_path = src_dir.path().join("pack-abc.pack");
@@ -53,7 +61,8 @@ async fn upload_pack_then_download_pack_roundtrips_through_local_backend() {
 #[tokio::test]
 async fn upload_lfs_object_then_download_roundtrips_through_local_backend() {
     let bucket_dir = tempfile::tempdir().unwrap();
-    let remote = test_remote(bucket_dir.path(), "repos/team/proj");
+    let backend = test_backend(bucket_dir.path());
+    let remote = test_remote(&backend, "repos/team/proj");
     let oid = "a".repeat(64);
 
     assert!(!remote.lfs_object_exists(&oid).await.unwrap());
@@ -74,7 +83,8 @@ async fn upload_lfs_object_then_download_roundtrips_through_local_backend() {
 #[tokio::test]
 async fn release_and_asset_roundtrip_and_delete_cleanly() {
     let bucket_dir = tempfile::tempdir().unwrap();
-    let remote = test_remote(bucket_dir.path(), "repos/team/proj");
+    let backend = test_backend(bucket_dir.path());
+    let remote = test_remote(&backend, "repos/team/proj");
 
     assert_eq!(remote.get_release("v1.0").await.unwrap().1, None);
     assert_eq!(remote.list_release_tags().await.unwrap(), Vec::<String>::new());
@@ -127,8 +137,9 @@ async fn release_and_asset_roundtrip_and_delete_cleanly() {
 #[tokio::test]
 async fn copy_all_to_reencrypts_a_pack_into_a_new_prefix() {
     let bucket_dir = tempfile::tempdir().unwrap();
-    let src_remote = test_remote(bucket_dir.path(), "repos/alice/proj");
-    let dest_remote = test_remote(bucket_dir.path(), "repos/bob/proj");
+    let backend = test_backend(bucket_dir.path());
+    let src_remote = test_remote(&backend, "repos/alice/proj");
+    let dest_remote = test_remote(&backend, "repos/bob/proj");
 
     let src_dir = tempfile::tempdir().unwrap();
     let pack_path = src_dir.path().join("pack-xyz.pack");
@@ -158,8 +169,9 @@ async fn copy_all_to_reencrypts_a_pack_into_a_new_prefix() {
 #[tokio::test]
 async fn copy_all_to_reencrypts_a_plain_sealed_manifest_too() {
     let bucket_dir = tempfile::tempdir().unwrap();
-    let src_remote = test_remote(bucket_dir.path(), "repos/alice/proj");
-    let dest_remote = test_remote(bucket_dir.path(), "repos/bob/proj");
+    let backend = test_backend(bucket_dir.path());
+    let src_remote = test_remote(&backend, "repos/alice/proj");
+    let dest_remote = test_remote(&backend, "repos/bob/proj");
 
     let mut manifest = Manifest::default();
     manifest.refs.insert("refs/heads/main".to_string(), "a".repeat(40));
@@ -180,8 +192,9 @@ async fn copy_all_to_reencrypts_a_plain_sealed_manifest_too() {
 #[tokio::test]
 async fn copy_all_to_handles_mixed_stream_and_plain_sealed_objects_together() {
     let bucket_dir = tempfile::tempdir().unwrap();
-    let src_remote = test_remote(bucket_dir.path(), "repos/alice/proj");
-    let dest_remote = test_remote(bucket_dir.path(), "repos/bob/proj");
+    let backend = test_backend(bucket_dir.path());
+    let src_remote = test_remote(&backend, "repos/alice/proj");
+    let dest_remote = test_remote(&backend, "repos/bob/proj");
 
     let mut manifest = Manifest::default();
     manifest.refs.insert("refs/heads/main".to_string(), "b".repeat(40));

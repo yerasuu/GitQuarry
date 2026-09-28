@@ -128,7 +128,7 @@ impl ForgeApi for FakeForge {
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
     AppContext {
@@ -153,13 +153,8 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
     }
 }
 
-fn test_target(root: &std::path::Path) -> ResolvedRepo {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
-    let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
+fn test_target(ctx: &AppContext) -> ResolvedRepo {
+    let remote = Remote::new(ctx.backend(), "repos/team/proj".to_string(), ctx.cipher.clone());
     ResolvedRepo {
         uid: gitquarry_core::storage::uid::Uid::from("team/proj".to_string()),
         remote,
@@ -194,7 +189,7 @@ fn test_mirror() -> ExternalMirror {
 async fn discovers_a_new_remote_mr_and_links_it() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
@@ -234,7 +229,7 @@ async fn discovers_a_new_remote_mr_and_links_it() {
 async fn creates_a_linked_remote_mr_for_an_unlinked_local_one() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
@@ -272,7 +267,7 @@ async fn creates_a_linked_remote_mr_for_an_unlinked_local_one() {
 async fn comment_anti_loop_exports_once_and_imports_once() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
@@ -388,7 +383,7 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
 async fn merge_on_the_external_side_marks_the_local_mr_merged() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
@@ -445,7 +440,7 @@ async fn merge_on_the_external_side_marks_the_local_mr_merged() {
 async fn remote_title_change_wins_when_newer_than_the_cursor() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
@@ -520,7 +515,7 @@ fn a_line_comment_carries_its_position_into_the_exported_body() {
 async fn a_pull_only_mirror_never_creates_a_mr_on_the_external_side() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = ExternalMirror {
@@ -560,7 +555,7 @@ async fn a_pull_only_mirror_never_creates_a_mr_on_the_external_side() {
 async fn a_push_only_mirror_never_imports_a_remote_mr() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = ExternalMirror {
@@ -598,7 +593,7 @@ async fn a_push_only_mirror_never_imports_a_remote_mr() {
 async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mirror = test_mirror();
@@ -674,7 +669,7 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
 async fn an_external_mr_whose_branches_arent_mirrored_is_skipped_not_retried() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = test_ctx(dir.path());
-    let target = test_target(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     let mirror = test_mirror();
 

@@ -11,7 +11,7 @@ use std::time::Duration;
 fn test_backend(root: &Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
     let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[7u8; SALT_LEN]).unwrap());
     (backend, cipher)
@@ -20,8 +20,12 @@ fn test_backend(root: &Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
 /// An `AppContext` good enough for `prewarm_recent_mirrors`: it reads the
 /// recent-use index off `backend`/`cipher` and then warms each uid through
 /// `warm_mirror`, which only needs `mirrors_root`/`exe_path`/`locks`.
-fn test_ctx(bucket_root: &Path, mirrors_root: PathBuf, max_age: Duration) -> gitquarry_core::app::AppContext {
-    let (backend, cipher) = test_backend(bucket_root);
+fn test_ctx(
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
+    mirrors_root: PathBuf,
+    max_age: Duration,
+) -> gitquarry_core::app::AppContext {
     gitquarry_core::app::AppContext {
         bucket: "test".to_string(),
         ssh_bind: "127.0.0.1:2222".to_string(),
@@ -84,7 +88,12 @@ async fn prewarm_creates_a_mirror_the_local_dir_never_had() {
     let uid = Uid::from("cold-start-repo".to_string());
     recent::record_use(backend.as_ref(), &cipher, &uid).await;
 
-    let ctx = test_ctx(bucket.path(), mirrors.path().to_path_buf(), Duration::from_secs(3600));
+    let ctx = test_ctx(
+        backend.clone(),
+        cipher.clone(),
+        mirrors.path().to_path_buf(),
+        Duration::from_secs(3600),
+    );
     gitquarry_core::mirror::gc::prewarm_recent_mirrors(Arc::new(ctx)).await;
 
     let mirror = mirrors.path().join("cold-start-repo");
@@ -120,7 +129,12 @@ async fn prewarm_does_not_refresh_an_existing_mirrors_last_access() {
         .set_modified(backdated)
         .unwrap();
 
-    let ctx = test_ctx(bucket.path(), mirrors.path().to_path_buf(), Duration::from_secs(3600));
+    let ctx = test_ctx(
+        backend.clone(),
+        cipher.clone(),
+        mirrors.path().to_path_buf(),
+        Duration::from_secs(3600),
+    );
     gitquarry_core::mirror::gc::prewarm_recent_mirrors(Arc::new(ctx)).await;
 
     assert_eq!(

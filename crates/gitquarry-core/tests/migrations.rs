@@ -12,7 +12,7 @@ use std::sync::Arc;
 fn backend_and_cipher(root: &std::path::Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
     let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[7u8; SALT_LEN]).unwrap());
     (backend, cipher)

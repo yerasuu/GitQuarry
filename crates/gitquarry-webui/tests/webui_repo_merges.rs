@@ -21,13 +21,8 @@ fn no_params() -> std::collections::HashMap<String, String> {
     std::collections::HashMap::new()
 }
 
-fn test_target(root: &std::path::Path) -> ResolvedRepo {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
-    let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
+fn test_target(ctx: &AppContext) -> ResolvedRepo {
+    let remote = Remote::new(ctx.backend(), "repos/team/proj".to_string(), ctx.cipher.clone());
     ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
         remote,
@@ -37,7 +32,7 @@ fn test_target(root: &std::path::Path) -> ResolvedRepo {
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
     AppContext {
@@ -136,8 +131,8 @@ fn init_mirror_with_branches(git_dir: &std::path::Path) {
 #[tokio::test]
 async fn merges_list_shows_hint_when_empty() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let html = render_merges_list(&ctx, &target, "team/proj", "open", None, &HeaderMap::new(), Locale::En)
         .await
         .unwrap();
@@ -147,8 +142,8 @@ async fn merges_list_shows_hint_when_empty() {
 #[tokio::test]
 async fn merges_list_shows_each_mr_linked_by_number() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let new = NewMergeRequest {
@@ -171,8 +166,8 @@ async fn merges_list_shows_each_mr_linked_by_number() {
 #[tokio::test]
 async fn merge_detail_404s_for_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     assert!(
         render_merge_detail(
             &ctx,
@@ -192,8 +187,8 @@ async fn merge_detail_404s_for_a_nonexistent_number() {
 #[tokio::test]
 async fn merge_detail_shows_close_form_only_for_the_author_or_a_developer() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -230,8 +225,8 @@ async fn merge_detail_shows_close_form_only_for_the_author_or_a_developer() {
 #[tokio::test]
 async fn merge_detail_shows_existing_comments() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -268,8 +263,8 @@ async fn merge_detail_shows_existing_comments() {
 #[tokio::test]
 async fn a_line_comment_renders_in_the_diff_and_leaves_the_thread_alone() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -321,8 +316,8 @@ async fn a_line_comment_renders_in_the_diff_and_leaves_the_thread_alone() {
 #[tokio::test]
 async fn an_unplaceable_line_comment_falls_back_to_the_thread() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -373,8 +368,8 @@ async fn an_unplaceable_line_comment_falls_back_to_the_thread() {
 #[tokio::test]
 async fn merge_detail_shows_reviews_and_their_collapsed_state() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -435,8 +430,8 @@ fn an_unrecognized_verdict_falls_back_to_the_neutral_one() {
 #[tokio::test]
 async fn merge_detail_hides_the_merge_button_from_an_anonymous_viewer() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -468,8 +463,8 @@ async fn merge_detail_hides_the_merge_button_from_an_anonymous_viewer() {
 #[tokio::test]
 async fn merge_detail_shows_merge_info_once_merged() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     // `merge_request::merge` opens the target's own mirror, unlike
     // `diff`/`render_merge_detail`'s caller-supplied `git_dir` — placed
     // exactly where `AppContext::open_mirror` would put it, with a
@@ -524,8 +519,8 @@ async fn merge_detail_shows_merge_info_once_merged() {
 #[tokio::test]
 async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
@@ -606,8 +601,8 @@ async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
 #[tokio::test]
 async fn merge_detail_shows_draft_badge_and_hides_it_once_ready() {
     let dir = tempfile::tempdir().unwrap();
-    let target = test_target(dir.path());
     let ctx = test_ctx(dir.path());
+    let target = test_target(&ctx);
     let git_dir = init_repo_with_branches(dir.path());
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;

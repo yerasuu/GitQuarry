@@ -136,12 +136,12 @@ fn builds_local_config_preserving_the_existing_engine_on_resubmit() {
     };
     let existing = BackendConfig::Local(LocalParams {
         bucket: "/data/bucket".to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     });
     let BackendConfig::Local(params) = build_backend_config(&form, Some(&existing)).unwrap() else {
         panic!("expected driver local");
     };
-    assert_eq!(params.engine, LocalEngine::Files);
+    assert_eq!(params.engine, LocalEngine::Redb);
 }
 
 #[test]

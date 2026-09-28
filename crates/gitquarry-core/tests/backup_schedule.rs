@@ -13,7 +13,7 @@ use std::time::Duration;
 fn test_ctx(root: &std::path::Path) -> AppContext {
     let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     let cipher = Arc::new(Cipher::derive("test passphrase", &[31u8; SALT_LEN]).unwrap());
     AppContext {
@@ -177,7 +177,7 @@ async fn a_directory_destination_replicates_and_snapshots() {
 
     let dest: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
         bucket: dest_dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
+        engine: LocalEngine::Redb,
     }));
     // The encryption config lands first, and the settings object rides along.
     for key in [
