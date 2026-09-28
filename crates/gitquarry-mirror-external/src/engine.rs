@@ -256,11 +256,9 @@ impl SyncReport {
 }
 
 /// What one ref should do this tick, decided by [`plan_ref_sync`] before any
-/// git subprocess runs — keeps the actual decision table unit-testable
-/// without a real repo.
-#[cfg(any(test, feature = "test-util"))]
+/// git subprocess runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RefAction {
+enum RefAction {
     /// Already matches `last_synced` (or both sides already agree and this
     /// is the very first tick that's noticed) — just (re)record it.
     Record(String),
@@ -271,15 +269,6 @@ pub enum RefAction {
     /// `last_synced` sha for it, so it once existed on both: somebody
     /// deleted it. Never re-created from the surviving side — that would
     /// silently undo the deletion on the next tick, forever.
-    DeletedOneSide,
-}
-#[cfg(not(any(test, feature = "test-util")))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RefAction {
-    Record(String),
-    Push(String),
-    Pull(String),
-    Diverged,
     DeletedOneSide,
 }
 
@@ -299,27 +288,7 @@ enum RefAction {
 ///   `is_ancestor` — regardless of which one moved since `last_synced`, so
 ///   a rewound side is never replayed onto the other. Neither is an
 ///   ancestor of the other → [`RefAction::Diverged`], never forced.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn plan_ref_sync(
-    bare_repo: &std::path::Path,
-    local: Option<&str>,
-    remote: Option<&str>,
-    last_synced: Option<&str>,
-    direction: access::SyncDirection,
-) -> Result<Option<RefAction>> {
-    plan_ref_sync_impl(bare_repo, local, remote, last_synced, direction).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn plan_ref_sync(
-    bare_repo: &std::path::Path,
-    local: Option<&str>,
-    remote: Option<&str>,
-    last_synced: Option<&str>,
-    direction: access::SyncDirection,
-) -> Result<Option<RefAction>> {
-    plan_ref_sync_impl(bare_repo, local, remote, last_synced, direction).await
-}
-async fn plan_ref_sync_impl(
     bare_repo: &std::path::Path,
     local: Option<&str>,
     remote: Option<&str>,

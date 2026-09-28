@@ -51,243 +51,248 @@ async fn allow_mirror_host(ctx: &AppContext, host: &str) {
         .unwrap();
 }
 
-/// A tiny real bare repo with `a` (root commit) as the parent of both
-/// `b` and `c` (sibling children, so `b`/`c` are mutually non-ancestor —
-/// a genuine divergence) — everything [`plan_ref_sync`]'s test cases
-/// below need real objects/ancestry for.
-async fn ancestry_fixture() -> (tempfile::TempDir, String, String, String) {
-    let dir = tempfile::tempdir().unwrap();
-    let bare = dir.path().join("repo.git");
-    std::fs::create_dir_all(&bare).unwrap();
+async fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = tokio::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .await
+        .unwrap();
     assert!(
-        std::process::Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .current_dir(&bare)
-            .status()
-            .unwrap()
-            .success()
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
 
+/// Commit `a` (root) with two children `b` and `c` — so `a` is an ancestor
+/// of both and `b`/`c` genuinely diverge.
+struct History {
+    work: tempfile::TempDir,
+    a: String,
+    b: String,
+    c: String,
+}
+
+async fn history() -> History {
     let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        assert!(
-            tokio::process::Command::new("git")
-                .current_dir(dir)
-                .args(args)
-                .status()
-                .await
-                .unwrap()
-                .success()
-        );
-    }
-    async fn commit(dir: &std::path::Path, file: &str, content: &str, msg: &str) -> String {
+    let dir = work.path();
+    git(dir, &["init", "-q"]).await;
+    let commit = async |file: &str, content: &str| {
         std::fs::write(dir.join(file), content).unwrap();
-        run_git(dir, &["add", "-A"]).await;
-        run_git(
+        git(dir, &["add", "-A"]).await;
+        git(
             dir,
-            &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", msg],
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                content,
+            ],
         )
         .await;
-        let out = tokio::process::Command::new("git")
-            .current_dir(dir)
-            .args(["rev-parse", "HEAD"])
-            .output()
+        git(dir, &["rev-parse", "HEAD"]).await
+    };
+    let a = commit("f.txt", "a\n").await;
+    let b = commit("f.txt", "b\n").await;
+    git(dir, &["checkout", "-q", &a]).await;
+    let c = commit("g.txt", "c\n").await;
+    git(dir, &["branch", "-f", "keep-b", &b]).await;
+    git(dir, &["branch", "-f", "keep-c", &c]).await;
+    History { work, a, b, c }
+}
+
+/// What one sync tick did to `refs/heads/main` on each side.
+struct Tick {
+    local: Option<String>,
+    remote: Option<String>,
+    report: SyncReport,
+}
+
+/// One real [`sync_mirror_once`] tick with `refs/heads/main` at `local` in
+/// gitquarry, at `remote` on a plain bare repo standing in for the external
+/// forge, and `last_synced` as the mirror remembers it. Both sides hold every
+/// object of [`History`], so only the refs differ between cases.
+async fn tick(
+    h: &History,
+    local: Option<&str>,
+    remote: Option<&str>,
+    last_synced: Option<&str>,
+    direction: access::SyncDirection,
+) -> Tick {
+    use gitquarry_core::storage::remote::Manifest;
+    use std::collections::BTreeMap;
+
+    let root = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(root.path());
+
+    let repo = ctx.create_repo("alice/source").await.unwrap().unwrap();
+    let git_dir = h.work.path().join(".git");
+    for tip in [&h.b, &h.c] {
+        let packs = tempfile::tempdir().unwrap();
+        let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, tip, &[], packs.path())
+            .await
+            .unwrap()
+            .unwrap();
+        repo.remote
+            .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
             .await
             .unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
-    run_git(work.path(), &["init", "-q"]).await;
-    let a = commit(work.path(), "f.txt", "a\n", "a").await;
-    let b = commit(work.path(), "f.txt", "b\n", "b").await;
-    run_git(work.path(), &["checkout", "-q", &a]).await;
-    let c = commit(work.path(), "g.txt", "c\n", "c").await;
+    let refs = local
+        .map(|sha| BTreeMap::from([("refs/heads/main".to_string(), sha.to_string())]))
+        .unwrap_or_default();
+    repo.remote
+        .put_manifest(
+            &Manifest {
+                refs,
+                head: Some("refs/heads/main".to_string()),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    // Scoped: the guard holds the repo lock that `sync_mirror_once` retakes.
+    {
+        ctx.open_mirror(&repo).await.unwrap();
+    }
 
-    async fn push_as(work: &std::path::Path, bare: &std::path::Path, sha: &str, refname: &str) {
-        let bare = bare.to_string_lossy().to_string();
-        let refspec = format!("{sha}:{refname}");
-        assert!(
-            tokio::process::Command::new("git")
-                .current_dir(work)
-                .args(["push", "-q", &bare, &refspec])
-                .status()
-                .await
-                .unwrap()
-                .success()
+    let target_dir = tempfile::tempdir().unwrap();
+    let target = target_dir.path().join("target.git");
+    git(
+        target_dir.path(),
+        &["clone", "-q", "--bare", &h.work.path().to_string_lossy(), "target.git"],
+    )
+    .await;
+    for branch in ["keep-b", "keep-c", "master", "main"] {
+        let _ = tokio::process::Command::new("git")
+            .current_dir(&target)
+            .args(["update-ref", "-d", &format!("refs/heads/{branch}")])
+            .status()
+            .await;
+    }
+    if let Some(sha) = remote {
+        git(&target, &["update-ref", "refs/heads/main", sha]).await;
+    }
+
+    allow_mirror_host(&ctx, "example.invalid").await;
+    let mut mirror = domain::create(
+        &ctx,
+        &repo.uid,
+        access::ExternalMirror {
+            remote_url: "https://example.invalid/acme/target.git".to_string(),
+            token: "t".to_string(),
+            enabled: true,
+            direction,
+            label: "target".to_string(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    mirror.remote_url = target.to_string_lossy().to_string();
+    if let Some(sha) = last_synced {
+        mirror
+            .last_synced
+            .insert("refs/heads/main".to_string(), sha.to_string());
+    }
+
+    let report = sync_mirror_once(&ctx, &repo, &mirror).await.unwrap();
+    let (manifest, _) = repo.remote.get_manifest().await.unwrap();
+    let remote_refs = gitquarry_mirror_external::git_remote::list_refs_with_sha(&target)
+        .await
+        .unwrap();
+    Tick {
+        local: manifest.refs.get("refs/heads/main").cloned(),
+        remote: remote_refs.get("refs/heads/main").cloned(),
+        report,
+    }
+}
+
+use access::SyncDirection::{Bidirectional, PullOnly, PushOnly};
+
+#[tokio::test]
+async fn a_brand_new_local_only_ref_is_pushed() {
+    let h = history().await;
+    let t = tick(&h, Some(&h.b), None, None, Bidirectional).await;
+    assert_eq!((t.report.pushed, t.remote.as_deref()), (1, Some(h.b.as_str())));
+}
+
+#[tokio::test]
+async fn an_already_equal_ref_moves_nothing_with_or_without_a_baseline() {
+    let h = history().await;
+    for last in [None, Some(h.b.as_str())] {
+        let t = tick(&h, Some(&h.b), Some(&h.b), last, Bidirectional).await;
+        assert_eq!((t.report.pushed, t.report.pulled), (0, 0));
+        assert_eq!(t.report.failure_summary(), None);
+        assert_eq!(
+            (t.local.as_deref(), t.remote.as_deref()),
+            (Some(h.b.as_str()), Some(h.b.as_str()))
         );
     }
-    push_as(work.path(), &bare, &a, "refs/heads/x").await;
-    push_as(work.path(), &bare, &b, "refs/heads/y").await;
-    push_as(work.path(), &bare, &c, "refs/heads/z").await;
-    (dir, a, b, c)
 }
 
 #[tokio::test]
-async fn plan_ref_sync_pushes_a_brand_new_local_only_ref() {
-    let (dir, _a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(&bare, Some(&b), None, None, access::SyncDirection::Bidirectional)
-        .await
-        .unwrap();
-    assert_eq!(action, Some(RefAction::Push(b)));
+async fn only_the_side_that_moved_since_the_last_sync_is_propagated() {
+    let h = history().await;
+    let pushed = tick(&h, Some(&h.b), Some(&h.a), Some(&h.a), Bidirectional).await;
+    assert_eq!(
+        (pushed.report.pushed, pushed.remote.as_deref()),
+        (1, Some(h.b.as_str()))
+    );
+    let pulled = tick(&h, Some(&h.a), Some(&h.b), Some(&h.a), Bidirectional).await;
+    assert_eq!((pulled.report.pulled, pulled.local.as_deref()), (1, Some(h.b.as_str())));
 }
 
 #[tokio::test]
-async fn plan_ref_sync_pulls_a_brand_new_remote_only_ref() {
-    let (dir, _a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(&bare, None, Some(&b), None, access::SyncDirection::Bidirectional)
-        .await
-        .unwrap();
-    assert_eq!(action, Some(RefAction::Pull(b)));
+async fn with_no_baseline_the_side_that_is_ahead_fast_forwards_the_other() {
+    let h = history().await;
+    let pulled = tick(&h, Some(&h.a), Some(&h.b), None, Bidirectional).await;
+    assert_eq!((pulled.report.pulled, pulled.local.as_deref()), (1, Some(h.b.as_str())));
+    let pushed = tick(&h, Some(&h.b), Some(&h.a), None, Bidirectional).await;
+    assert_eq!(
+        (pushed.report.pushed, pushed.remote.as_deref()),
+        (1, Some(h.b.as_str()))
+    );
 }
 
 #[tokio::test]
-async fn plan_ref_sync_records_an_already_equal_ref_with_no_baseline_yet() {
-    let (dir, _a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(&bare, Some(&b), Some(&b), None, access::SyncDirection::Bidirectional)
-        .await
-        .unwrap();
-    assert_eq!(action, Some(RefAction::Record(b)));
-}
-
-#[tokio::test]
-async fn plan_ref_sync_does_nothing_once_already_recorded_and_unchanged() {
-    let (dir, _a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(
-        &bare,
-        Some(&b),
-        Some(&b),
-        Some(&b),
-        access::SyncDirection::Bidirectional,
-    )
-    .await
-    .unwrap();
-    assert_eq!(action, None);
-}
-
-#[tokio::test]
-async fn plan_ref_sync_pushes_when_only_local_moved_since_last_sync() {
-    let (dir, a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(
-        &bare,
-        Some(&b),
-        Some(&a),
-        Some(&a),
-        access::SyncDirection::Bidirectional,
-    )
-    .await
-    .unwrap();
-    assert_eq!(action, Some(RefAction::Push(b)));
-}
-
-#[tokio::test]
-async fn plan_ref_sync_pulls_when_only_remote_moved_since_last_sync() {
-    let (dir, a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(
-        &bare,
-        Some(&a),
-        Some(&b),
-        Some(&a),
-        access::SyncDirection::Bidirectional,
-    )
-    .await
-    .unwrap();
-    assert_eq!(action, Some(RefAction::Pull(b)));
-}
-
-#[tokio::test]
-async fn plan_ref_sync_fast_forward_pulls_when_both_moved_but_remote_is_ahead() {
-    let (dir, a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    // No `last_synced` baseline at all — both sides count as "moved",
-    // but `a` is a real ancestor of `b`, so this is still a clean
-    // fast-forward, not a divergence.
-    let action = plan_ref_sync(&bare, Some(&a), Some(&b), None, access::SyncDirection::Bidirectional)
-        .await
-        .unwrap();
-    assert_eq!(action, Some(RefAction::Pull(b)));
-}
-
-#[tokio::test]
-async fn plan_ref_sync_fast_forward_pushes_when_both_moved_but_local_is_ahead() {
-    let (dir, a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(&bare, Some(&b), Some(&a), None, access::SyncDirection::Bidirectional)
-        .await
-        .unwrap();
-    assert_eq!(action, Some(RefAction::Push(b)));
-}
-
-#[tokio::test]
-async fn plan_ref_sync_diverges_when_neither_side_is_an_ancestor_of_the_other() {
-    let (dir, _a, b, c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    let action = plan_ref_sync(&bare, Some(&b), Some(&c), None, access::SyncDirection::Bidirectional)
-        .await
-        .unwrap();
-    assert_eq!(action, Some(RefAction::Diverged));
-}
-
-#[tokio::test]
-async fn plan_ref_sync_diverges_rather_than_replaying_a_rewound_remote() {
-    let (dir, _a, b, c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
+async fn a_rewound_remote_diverges_rather_than_being_replayed_locally() {
+    let h = history().await;
     // The remote rewrote its history (`b` -> `c`, siblings) while the local
     // side sat exactly where the last sync left it. "Only the remote moved"
     // used to be enough to pull it, silently discarding `b` locally.
-    let action = plan_ref_sync(
-        &bare,
-        Some(&b),
-        Some(&c),
-        Some(&b),
-        access::SyncDirection::Bidirectional,
-    )
-    .await
-    .unwrap();
-    assert_eq!(action, Some(RefAction::Diverged));
+    let t = tick(&h, Some(&h.b), Some(&h.c), Some(&h.b), Bidirectional).await;
+    assert_eq!(t.report.diverged, ["refs/heads/main"]);
+    assert_eq!(t.local.as_deref(), Some(h.b.as_str()));
 }
 
 #[tokio::test]
-async fn plan_ref_sync_never_resurrects_a_ref_deleted_on_either_side() {
-    let (dir, _a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
+async fn a_ref_deleted_on_either_side_is_never_resurrected() {
+    let h = history().await;
     // Deleted locally: the remote still advertises the sha this mirror last
     // synced, so pulling it back would undo the deletion every tick.
-    assert_eq!(
-        plan_ref_sync(&bare, None, Some(&b), Some(&b), access::SyncDirection::Bidirectional)
-            .await
-            .unwrap(),
-        Some(RefAction::DeletedOneSide)
-    );
+    let t = tick(&h, None, Some(&h.b), Some(&h.b), Bidirectional).await;
+    assert_eq!((t.report.pulled, t.local.as_deref()), (0, None));
+    assert_eq!(t.report.deleted, ["refs/heads/main"]);
     // Deleted on the external forge: same, mirrored.
-    assert_eq!(
-        plan_ref_sync(&bare, Some(&b), None, Some(&b), access::SyncDirection::Bidirectional)
-            .await
-            .unwrap(),
-        Some(RefAction::DeletedOneSide)
-    );
+    let t = tick(&h, Some(&h.b), None, Some(&h.b), Bidirectional).await;
+    assert_eq!((t.report.pushed, t.remote.as_deref()), (0, None));
+    assert_eq!(t.report.deleted, ["refs/heads/main"]);
 }
 
 #[tokio::test]
-async fn plan_ref_sync_respects_push_only_and_pull_only_directions() {
-    let (dir, _a, b, _c) = ancestry_fixture().await;
-    let bare = dir.path().join("repo.git");
-    assert_eq!(
-        plan_ref_sync(&bare, None, Some(&b), None, access::SyncDirection::PushOnly)
-            .await
-            .unwrap(),
-        None
-    );
-    assert_eq!(
-        plan_ref_sync(&bare, Some(&b), None, None, access::SyncDirection::PullOnly)
-            .await
-            .unwrap(),
-        None
-    );
+async fn a_one_way_mirror_never_moves_refs_the_other_way() {
+    let h = history().await;
+    let t = tick(&h, None, Some(&h.b), None, PushOnly).await;
+    assert_eq!((t.report.pulled, t.local.as_deref()), (0, None));
+    let t = tick(&h, Some(&h.b), None, None, PullOnly).await;
+    assert_eq!((t.report.pushed, t.remote.as_deref()), (0, None));
 }
 
 /// A plain (non-`gitquarry`) bare repo with one commit already on

@@ -2004,16 +2004,16 @@ name = "gitquarry-mirror-external"
 version = "0.5.1"
 dependencies = [
  "anyhow",
- "async-trait",
+ "axum",
  "futures",
  "gitquarry-core",
  "gitquarry-forge-clients",
  "gitquarry-i18n",
- "gitquarry-mirror-external",
  "rand 0.10.2",
  "s3db",
  "s3db-crypto",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
