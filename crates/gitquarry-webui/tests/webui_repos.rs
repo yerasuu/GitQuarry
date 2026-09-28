@@ -1,81 +1,284 @@
-use gitquarry_core::auth::entities::Group;
-use gitquarry_core::storage::entities::{RepoConfig, Visibility};
+//! `/_repos`, driven through `webui::router`: users, groups and repos are
+//! seeded through `gitquarry-core`'s own domain API, viewers log in with a
+//! real password.
+
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::{HeaderMap, Request, StatusCode, header};
+use gitquarry_core::app::AppContext;
+use gitquarry_core::auth::access;
+use gitquarry_core::auth::domain::{group, user};
+use gitquarry_core::auth::entities::{Group, Permission};
+use gitquarry_core::storage::entities::{OwnerRef, Visibility};
 use gitquarry_core::storage::uid::Uid;
-use gitquarry_webui::webui::repos::{render_groups_tab, render_shared_tab, render_yours_tab};
+use gitquarry_i18n::Locale;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tower::ServiceExt;
 
-fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
-    (
-        name.to_string(),
-        RepoConfig {
-            full_name: name.to_string(),
-            visibility,
-            ..Default::default()
-        },
-    )
+const PASSWORD: &str = "correct horse battery staple";
+
+fn test_ctx(root: &std::path::Path) -> AppContext {
+    let backend: Arc<dyn gitquarry_core::storage::Backend> =
+        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
+            bucket: root.to_string_lossy().to_string(),
+            engine: gitquarry_core::config::LocalEngine::Redb,
+        }));
+    let cipher =
+        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[14u8; s3db_crypto::SALT_LEN]).unwrap());
+    AppContext {
+        bucket: "test".to_string(),
+        ssh_bind: "127.0.0.1:2222".to_string(),
+        mirrors_root: root.to_path_buf(),
+        config_path: root.join("gitquarry.toml"),
+        exe_path: root.join("gitquarry"),
+        backend,
+        locks: Default::default(),
+        cipher,
+        mirror_max_age: std::time::Duration::from_secs(60),
+        mirror_max_size_bytes: 0,
+        mirror_large_repo_threshold_bytes: u64::MAX,
+        oidc: None,
+        login_attempts: Default::default(),
+        git_rate_limiter: Default::default(),
+        federation: None,
+        allow_push_create: false,
+        trust_forwarded_for: false,
+        events: Default::default(),
+        mirror_sync: None,
+        visible_repo_uids_cache: Default::default(),
+    }
 }
 
-#[test]
-fn yours_tab_lists_personal_repos_including_private_ones() {
-    let html = render_yours_tab(
-        &[
-            repo("alice/web", Visibility::Public),
-            repo("alice/secret", Visibility::Private),
-        ],
-        gitquarry_i18n::Locale::En,
-    )
-    .into_string();
-    assert!(html.contains(r#"href="/alice/web""#));
-    assert!(html.contains(r#"href="/alice/secret""#));
-    assert!(html.contains("private"));
+struct Page {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: String,
 }
 
-#[test]
-fn yours_tab_says_so_when_there_is_nothing() {
-    let html = render_yours_tab(&[], gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("don't own any repo yet"));
+impl Page {
+    fn cookie(&self, name: &str) -> String {
+        self.headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find(|c| c.starts_with(&format!("{name}=")))
+            .and_then(|c| c.split(';').next())
+            .unwrap_or_else(|| panic!("no {name} cookie in {:?}", self.headers))
+            .to_string()
+    }
+
+    fn csrf(&self) -> String {
+        let marker = r#"name="csrf" value=""#;
+        let start = self.body.find(marker).expect("page carries no csrf field") + marker.len();
+        self.body[start..].split('"').next().unwrap().to_string()
+    }
+
+    /// The page's own content, without the topbar/footer every page shares
+    /// — the topbar names the viewer and links their account on every page.
+    fn main(&self) -> &str {
+        let start = self.body.find("<main").expect("no <main>");
+        let end = self.body.find("</main>").expect("no </main>");
+        &self.body[start..end]
+    }
+}
+
+struct Instance {
+    _dir: tempfile::TempDir,
+    ctx: Arc<AppContext>,
+    app: axum::Router,
+}
+
+impl Instance {
+    async fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(test_ctx(dir.path()));
+        let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+        Self { _dir: dir, ctx, app }
+    }
+
+    async fn user(&self, username: &str) -> Uid {
+        let new_user = user::NewUser {
+            username,
+            email: None,
+            pubkey: None,
+            password_plain: Some(PASSWORD),
+            is_admin: false,
+            repos_field: "",
+            locale: Locale::En,
+        };
+        user::create(&self.ctx, new_user).await.unwrap().unwrap();
+        access::get_user(self.ctx.backend().as_ref(), &self.ctx.cipher, username)
+            .await
+            .unwrap()
+            .0
+            .unwrap()
+            .uid
+    }
+
+    async fn group(&self, segment: &str, creator: &Uid, parent: Option<&Group>) -> Group {
+        group::create(&self.ctx, segment, None, creator.clone(), parent, Locale::En)
+            .await
+            .unwrap()
+            .unwrap();
+        let name = parent.map_or(segment.to_string(), |p| format!("{}/{segment}", p.name));
+        access::get_group(self.ctx.backend().as_ref(), &self.ctx.cipher, &name)
+            .await
+            .unwrap()
+            .0
+            .unwrap()
+    }
+
+    async fn repo(&self, full_name: &str, owner: OwnerRef, visibility: Visibility) {
+        gitquarry_core::domain::repo::create(&self.ctx, full_name, None, Some(owner), None, visibility)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    async fn send(&self, method: &str, path: &str, cookie: Option<&str>, form: Option<&[(&str, &str)]>) -> Page {
+        let mut builder = Request::builder().method(method).uri(path);
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        let body = match form {
+            Some(fields) => {
+                builder = builder.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+                Body::from(
+                    form_urlencoded::Serializer::new(String::new())
+                        .extend_pairs(fields)
+                        .finish(),
+                )
+            }
+            None => Body::empty(),
+        };
+        let mut request = builder.body(body).unwrap();
+        // `run_server` serves with connect info; without it the
+        // git-smart-HTTP layer 500s before routing.
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+        Page {
+            status,
+            headers,
+            body: String::from_utf8(bytes.to_vec()).unwrap(),
+        }
+    }
+
+    async fn get(&self, path: &str, session: Option<&str>) -> Page {
+        let page = self.send("GET", path, session, None).await;
+        assert_eq!(page.status, StatusCode::OK, "GET {path}: {}", page.body);
+        page
+    }
+
+    /// The `web-session` cookie of a real password login.
+    async fn login(&self, username: &str) -> String {
+        let form = self.send("GET", "/_login", None, None).await;
+        let anchor = form.cookie("login-csrf");
+        let csrf = form.csrf();
+        let fields = [
+            ("csrf", csrf.as_str()),
+            ("username", username),
+            ("password", PASSWORD),
+            ("return_to", "/"),
+        ];
+        let done = self.send("POST", "/_login", Some(&anchor), Some(&fields)).await;
+        assert_eq!(done.status, StatusCode::SEE_OTHER, "login failed: {}", done.body);
+        done.cookie("web-session")
+    }
+}
+/// Every tab is "repos *you* reach": an anonymous visitor is sent to log in
+/// and brought back here.
+#[tokio::test]
+async fn an_anonymous_visitor_is_sent_to_log_in() {
+    let gq = Instance::new().await;
+    let page = gq.send("GET", "/_repos", None, None).await;
+    assert_eq!(page.status, StatusCode::SEE_OTHER);
+    assert_eq!(page.headers[header::LOCATION], "/_login?return_to=/_repos");
+}
+
+#[tokio::test]
+async fn yours_tab_lists_personal_repos_including_private_ones() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice").await;
+    gq.repo("alice/web", OwnerRef::User(alice.clone()), Visibility::Public)
+        .await;
+    gq.repo("alice/secret", OwnerRef::User(alice), Visibility::Private)
+        .await;
+
+    let session = gq.login("alice").await;
+    let page = gq.get("/_repos", Some(&session)).await;
+    assert!(page.main().contains(r#"href="/alice/web""#), "{}", page.body);
+    let secret_row = page.main().split("<tr>").find(|r| r.contains("alice/secret")).unwrap();
+    assert!(secret_row.contains("private"), "{secret_row}");
+}
+
+#[tokio::test]
+async fn yours_tab_says_so_when_there_is_nothing() {
+    let gq = Instance::new().await;
+    gq.user("bob").await;
+    let session = gq.login("bob").await;
+    let page = gq.get("/_repos", Some(&session)).await;
+    assert!(page.main().contains("don't own any repo yet"), "{}", page.body);
 }
 
 /// The split is the point of this page: each group gets its own section
 /// headed by a link to that group, and a subgroup is its own section under
 /// its full path rather than folded into the parent's — separate namespace,
 /// separate repos.
-#[test]
-fn groups_tab_keeps_one_section_per_group_linked_to_its_page() {
-    let acme = Group {
-        uid: Uid::new(),
-        name: "acme".to_string(),
-        ..Default::default()
-    };
-    let team = Group {
-        uid: Uid::new(),
-        name: "acme/team".to_string(),
-        ..Default::default()
-    };
-    let html = render_groups_tab(
-        &[
-            (acme, vec![repo("acme/web", Visibility::Private)]),
-            (team, vec![repo("acme/team/api", Visibility::Public)]),
-        ],
-        gitquarry_i18n::Locale::En,
-    )
-    .into_string();
-    assert!(html.contains(r#"href="/_group/acme""#));
-    assert!(html.contains(r#"href="/_group/acme/team""#));
-    assert!(html.contains(r#"href="/acme/web""#));
-    assert!(html.contains(r#"href="/acme/team/api""#));
+#[tokio::test]
+async fn groups_tab_keeps_one_section_per_group_linked_to_its_page() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice").await;
+    let acme = gq.group("acme", &alice, None).await;
+    let team = gq.group("team", &alice, Some(&acme)).await;
+    gq.repo("acme/web", OwnerRef::Group(acme.uid), Visibility::Private)
+        .await;
+    gq.repo("acme/team/api", OwnerRef::Group(team.uid), Visibility::Public)
+        .await;
+
+    let session = gq.login("alice").await;
+    let page = gq.get("/_repos?tab=groups", Some(&session)).await;
+    for href in [
+        r#"href="/_group/acme""#,
+        r#"href="/_group/acme/team""#,
+        r#"href="/acme/web""#,
+        r#"href="/acme/team/api""#,
+    ] {
+        assert!(page.main().contains(href), "{href} missing: {}", page.body);
+    }
 }
 
-#[test]
-fn groups_tab_says_so_when_the_viewer_has_no_group() {
-    let html = render_groups_tab(&[], gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains("don't belong to any group"));
+#[tokio::test]
+async fn groups_tab_says_so_when_the_viewer_has_no_group() {
+    let gq = Instance::new().await;
+    gq.user("bob").await;
+    let session = gq.login("bob").await;
+    let page = gq.get("/_repos?tab=groups", Some(&session)).await;
+    assert!(page.main().contains("don't belong to any group"), "{}", page.body);
 }
 
-#[test]
-fn shared_tab_lists_individually_granted_repos() {
-    let html = render_shared_tab(&[repo("bob/tool", Visibility::Private)], gitquarry_i18n::Locale::En).into_string();
-    assert!(html.contains(r#"href="/bob/tool""#));
+#[tokio::test]
+async fn shared_tab_lists_individually_granted_repos() {
+    let gq = Instance::new().await;
+    gq.user("alice").await;
+    let bob = gq.user("bob").await;
+    gq.repo("bob/tool", OwnerRef::User(bob), Visibility::Private).await;
+    user::set_repo_perm(&gq.ctx, "alice", "bob/tool", Some(Permission::Reporter), Locale::En)
+        .await
+        .unwrap();
 
-    let empty = render_shared_tab(&[], gitquarry_i18n::Locale::En).into_string();
-    assert!(empty.contains("nobody granted you access"));
+    let alice = gq.login("alice").await;
+    let page = gq.get("/_repos?tab=shared", Some(&alice)).await;
+    assert!(page.main().contains(r#"href="/bob/tool""#), "{}", page.body);
+
+    let bob = gq.login("bob").await;
+    let empty = gq.get("/_repos?tab=shared", Some(&bob)).await;
+    assert!(empty.main().contains("nobody granted you access"), "{}", empty.body);
 }

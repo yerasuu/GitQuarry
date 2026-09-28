@@ -36,7 +36,7 @@ const GRANT_TTL_SECS: i64 = 3600;
 /// This process's bootstrap secret — 192 bits of CSPRNG, hex. Generated on
 /// first read rather than at startup so a fully bootstrapped instance never
 /// mints one at all.
-pub static TOKEN: LazyLock<String> = LazyLock::new(|| {
+pub(crate) static TOKEN: LazyLock<String> = LazyLock::new(|| {
     let raw: [u8; 24] = rand::random();
     raw.iter().fold(String::with_capacity(48), |mut s, b| {
         use std::fmt::Write;

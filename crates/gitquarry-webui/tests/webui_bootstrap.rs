@@ -7,9 +7,9 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
-use gitquarry_webui::webui::bootstrap::TOKEN;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use tower::ServiceExt;
 
 /// `webui::bootstrap::BOOTSTRAP_COOKIE`, private to the crate.
@@ -82,9 +82,50 @@ fn sealed_cookie(ctx: &gitquarry_core::app::AppContext, aad: &str, exp: u64) -> 
     )
 }
 
+/// One `fmt` layer write, forwarded to whoever holds the receiving end.
+struct Capture(Sender<Vec<u8>>);
+
+impl std::io::Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.send(buf.to_vec()).expect("the capture outlives its subscriber");
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Everything `print_hint` logs, read the way an operator reads it off the
+/// console at startup.
+async fn startup_log(ctx: &gitquarry_core::app::AppContext) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || Capture(tx.clone()))
+        .finish();
+    // Thread-scoped, which covers every await below only because
+    // `#[tokio::test]`'s runtime is current-thread.
+    let guard = tracing::subscriber::set_default(subscriber);
+    gitquarry_webui::webui::bootstrap::print_hint(ctx, "127.0.0.1:8080").await;
+    drop(guard);
+    String::from_utf8(rx.try_iter().flatten().collect()).unwrap()
+}
+
+/// The token out of the printed `/_bootstrap?token=…` URL.
+async fn printed_token(ctx: &gitquarry_core::app::AppContext) -> String {
+    let log = startup_log(ctx).await;
+    let marker = "http://127.0.0.1:8080/_bootstrap?token=";
+    let start = log
+        .find(marker)
+        .unwrap_or_else(|| panic!("no bootstrap URL in {log:?}"))
+        + marker.len();
+    log[start..].split_whitespace().next().unwrap().to_string()
+}
+
 /// The `name=value` half of the grant `/_bootstrap` hands out.
 async fn exchange_token(ctx: &Arc<gitquarry_core::app::AppContext>) -> String {
-    let response = get(ctx, &format!("/_bootstrap?token={}", *TOKEN), None).await;
+    let token = printed_token(ctx).await;
+    let response = get(ctx, &format!("/_bootstrap?token={token}"), None).await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers()[header::LOCATION], "/_users");
     let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
@@ -158,6 +199,7 @@ async fn a_wrong_token_buys_nothing() {
 async fn a_configured_login_closes_the_bootstrap_window() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = Arc::new(test_ctx(dir.path()));
+    let token = printed_token(&ctx).await;
     let cookie = exchange_token(&ctx).await;
     gitquarry_core::auth::domain::user::create(
         &ctx,
@@ -175,7 +217,9 @@ async fn a_configured_login_closes_the_bootstrap_window() {
     .unwrap()
     .unwrap();
 
-    let response = get(&ctx, &format!("/_bootstrap?token={}", *TOKEN), None).await;
+    assert_eq!(startup_log(&ctx).await, "", "print_hint still advertises the token");
+
+    let response = get(&ctx, &format!("/_bootstrap?token={token}"), None).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(response.headers().get(header::SET_COOKIE).is_none());
 
@@ -189,8 +233,11 @@ async fn a_configured_login_closes_the_bootstrap_window() {
     );
 }
 
-#[test]
-fn the_token_is_long_random_hex() {
-    assert_eq!(TOKEN.len(), 48);
-    assert!(TOKEN.chars().all(|c| c.is_ascii_hexdigit()));
+#[tokio::test]
+async fn the_token_is_long_random_hex() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let token = printed_token(&ctx).await;
+    assert_eq!(token.len(), 48, "{token}");
+    assert!(token.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')), "{token}");
 }

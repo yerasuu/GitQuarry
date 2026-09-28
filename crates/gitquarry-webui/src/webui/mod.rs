@@ -104,25 +104,25 @@
 //! - [`identicon`]: deterministic per-username SVG avatar, computed on the
 //!   fly — no upload, no third-party fetch (see its own doc for why).
 
-pub mod audit;
+pub(crate) mod audit;
 pub mod bootstrap;
-pub mod changelog;
-pub mod export;
-pub mod fork;
-pub mod health;
-pub mod icons;
-pub mod identicon;
-pub mod language_tag;
-pub mod license;
-pub mod markdown;
-pub mod remote_pulls;
-pub mod remote_repo;
-pub mod repo;
-pub mod repo_label;
-pub mod repo_new;
-pub mod repo_settings;
-pub mod repos;
-pub mod watch;
+pub(crate) mod changelog;
+pub(crate) mod export;
+pub(crate) mod fork;
+pub(crate) mod health;
+pub(crate) mod icons;
+pub(crate) mod identicon;
+pub(crate) mod language_tag;
+pub(crate) mod license;
+pub(crate) mod markdown;
+pub(crate) mod remote_pulls;
+pub(crate) mod remote_repo;
+pub(crate) mod repo;
+pub(crate) mod repo_label;
+pub(crate) mod repo_new;
+pub(crate) mod repo_settings;
+pub(crate) mod repos;
+pub(crate) mod watch;
 
 mod actions;
 mod compound_path;
@@ -131,7 +131,7 @@ mod csrf;
 mod density_pref;
 mod diff_view;
 mod error;
-pub mod escaping;
+pub(crate) mod escaping;
 pub(crate) mod federation_client;
 mod federation_proxy;
 mod flash;

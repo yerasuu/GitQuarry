@@ -50,10 +50,9 @@ pub(crate) async fn handler_metrics(State(ctx): State_) -> impl IntoResponse {
 /// somebody shopping for a known bug. Counters stay — an operator who
 /// considers even those sensitive can restrict the path at the proxy.
 ///
-/// The actual exposition-format text, split out from [`handler_metrics`] so
-/// it's testable without an `AppContext`/live request — same "handler stays
-/// thin, the render fn is the unit under test" split [`super::audit`]'s own
-/// `render_audit_page` already follows.
+/// The actual exposition-format text, kept apart from [`handler_metrics`] so
+/// the handler stays thin — same split [`super::audit`]'s own
+/// `render_audit_page` follows.
 pub fn render_metrics(uptime_secs: f64, locked_out: usize, git_rate_limited: usize) -> String {
     format!(
         "\
