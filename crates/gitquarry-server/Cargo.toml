@@ -57,6 +57,7 @@ test-util = []
 # Self-dependency so `cargo test` enables this crate's own `test-util`
 # automatically for its tests/*.rs.
 gitquarry = { path = ".", features = ["test-util"] }
+tempfile = "3.27.0"
 
 [lints.rust]
 unsafe_code = "forbid"

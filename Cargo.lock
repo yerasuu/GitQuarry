@@ -1876,6 +1876,7 @@ dependencies = [
  "reqwest 0.13.5",
  "s3db",
  "serde",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1939,7 +1940,6 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "gitquarry-core",
- "gitquarry-domain",
  "gitquarry-gpg",
  "gitquarry-i18n",
  "s3db",
