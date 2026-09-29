@@ -29,11 +29,6 @@ dirs = "6.0.0"
 [dev-dependencies]
 gitquarry-test-support = { path = "../gitquarry-test-support" }
 tempfile = "3.27.0"
-# Only for driving a full `Router` (middleware included) with `.oneshot()`
-# in tests — everywhere else in this tree calls handler functions
-# directly, but `rate_limit_middleware`'s test needs the actual layered
-# `Service`, not a bare handler, to prove the middleware itself applies.
-tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -55,8 +55,6 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 gitquarry-test-support = { path = "../gitquarry-test-support" }
-s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
-tower = { version = "0.5", features = ["util"] }
 # Captures `webui::bootstrap::print_hint`'s log line, the only public way to
 # learn the bootstrap token -- same version `gitquarry-server` installs.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt"] }
