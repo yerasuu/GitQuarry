@@ -750,7 +750,7 @@ pub(crate) async fn handler_repo(
         // Private -> Public is reversible from, and (once logged in, if a
         // login method is configured — see the admin gate right below) this
         // is the trusted operator surface, not the anonymous-facing one.
-        if let Some(resp) = require_admin(&ctx, &headers, &raw_repo).await {
+        if let Some(resp) = require_admin(&ctx, &headers, &format!("/{raw_repo}?view={view}")).await {
             return Ok(resp);
         }
         let topnav = login::topnav(&ctx, &headers).await;

@@ -157,7 +157,8 @@ async fn an_anonymous_visit_is_sent_to_login() {
     let gq = Instance::new().await;
     let page = gq.get(&settings_url("settings"), None).await;
     assert_eq!(page.status, StatusCode::SEE_OTHER);
-    assert!(page.location().starts_with("/_login?return_to="), "{}", page.location());
+    // Back to this very page once logged in: `?`/`=` percent-encoded, `/` kept.
+    assert_eq!(page.location(), format!("/_login?return_to=/{REPO}%3Fview%3Dsettings"));
     assert!(!page.body.contains(r#"name="description""#));
 }
 
