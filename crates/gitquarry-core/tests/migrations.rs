@@ -78,8 +78,8 @@ async fn plan_reports_without_writing() {
     store_legacy_group(&backend, &cipher, "acme", &[&alice], Vec::new()).await;
 
     let planned = migrations::plan(&backend, &cipher).await.unwrap();
-    assert_eq!(planned.len(), 1);
-    assert!(planned[0].1.changed > 0);
+    let group_members = planned.iter().find(|(m, _)| m.name == "group-members").unwrap();
+    assert!(group_members.1.changed > 0);
 
     let stored = access::get_group(backend.as_ref(), &cipher, "acme")
         .await
@@ -118,8 +118,8 @@ async fn run_pending_folds_legacy_membership_and_stamps_the_version() {
     .await;
 
     let applied = migrations::run_pending(&backend, &cipher).await.unwrap();
-    assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].1.incomplete, 0);
+    assert_eq!(applied.len(), migrations::MIGRATIONS.len());
+    assert!(applied.iter().all(|(_, outcome)| outcome.incomplete == 0));
 
     let stored = access::get_group(backend.as_ref(), &cipher, "acme")
         .await
@@ -282,4 +282,49 @@ async fn every_registered_migration_is_dispatchable() {
         Some(migrations::CURRENT_DATA_VERSION),
         "CURRENT_DATA_VERSION must match the highest registered migration"
     );
+}
+
+/// A grant held in `User::repos` with no repo permission index entry — what
+/// the admin user page wrote before 0.5.2 — must end up listed on the repo.
+#[tokio::test]
+async fn an_unindexed_grant_is_indexed_and_a_second_run_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = backend_and_cipher(dir.path());
+    let repo_uid = Uid::new();
+    let mut alice = store_user(&backend, &cipher, "alice").await;
+    alice.repos.insert(repo_uid.clone(), Permission::Developer);
+    let (_, etag) = access::get_user(backend.as_ref(), &cipher, "alice").await.unwrap();
+    access::put_user(backend.as_ref(), &cipher, &alice, etag.as_deref())
+        .await
+        .unwrap();
+    assert!(
+        access::list_repo_permissions(&backend, &cipher, &repo_uid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let planned = migrations::plan(&backend, &cipher).await.unwrap();
+    let index = planned.iter().find(|(m, _)| m.name == "repo-permission-index").unwrap();
+    assert_eq!(index.1.changed, 1);
+    assert!(
+        access::list_repo_permissions(&backend, &cipher, &repo_uid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    migrations::run_pending(&backend, &cipher).await.unwrap();
+    let granted: Vec<String> = access::list_repo_permissions(&backend, &cipher, &repo_uid)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(u, p)| format!("{}:{p:?}", u.username))
+        .collect();
+    assert_eq!(granted, ["alice:Developer"]);
+
+    let rerun = gitquarry_core::migrations::repo_permission_index::run(&backend, &cipher, migrations::Mode::Apply)
+        .await
+        .unwrap();
+    assert_eq!(rerun.changed, 0);
 }
