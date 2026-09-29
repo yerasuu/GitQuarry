@@ -302,16 +302,21 @@ async fn an_unreachable_federation_is_a_bad_gateway() {
 #[tokio::test]
 async fn every_federation_route_is_unavailable_without_federation() {
     let dir = tempfile::tempdir().unwrap();
-    let app = gitquarry_webui::webui::router(Arc::new(test_ctx(dir.path(), None)));
+    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
     for path in [
         "/_api/instance",
         "/_api/repos/team/project",
         "/_federation/gossip/peers",
-        "/_peers",
     ] {
         let response = get(&app, path, None).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "GET {path}");
     }
+    // `/_peers` is admin-gated first, so it only reports that to an admin.
+    add_user(&ctx, "alice", true).await;
+    let (session, _csrf) = login(&app, "alice").await;
+    let response = get(&app, "/_peers", Some(&session)).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 /// `/_api/repos/{*name}` forwards a client-controlled path, and `reqwest`
@@ -363,6 +368,18 @@ async fn peers_is_gated_before_anything_is_forwarded() {
     let response = get(&app, "/_peers", Some(&session)).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_nothing_forwarded(&mut rx, "a non-admin's /_peers");
+}
+
+/// Before any login method exists no session can, so the only credential
+/// that opens an admin page is the bootstrap grant — `/_peers` included.
+#[tokio::test]
+async fn a_fresh_instance_keeps_peers_closed_without_the_bootstrap_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+
+    let response = get(&app, "/_peers", None).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_nothing_forwarded(&mut rx, "an anonymous /_peers on a fresh instance");
 }
 
 #[tokio::test]

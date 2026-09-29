@@ -83,9 +83,10 @@ pub(crate) async fn require_admin_or_federation_moderator(
     headers: &HeaderMap,
     return_to: &str,
 ) -> Option<Response> {
-    let login_configured = login::login_enforced(ctx).await;
-    if !login_configured {
-        return None;
+    if !login::login_enforced(ctx).await {
+        // No moderator can exist before any login does, so first boot is
+        // exactly `require_admin`'s: the bootstrap grant or nothing.
+        return require_admin(ctx, headers, return_to).await;
     }
     match login::current_user(ctx, headers).await {
         Some(user) if user.is_admin || user.is_federation_moderator => None,
