@@ -2,27 +2,10 @@
 //! failed) if `gpg` isn't on `PATH` — same tolerance the standalone `gpg`
 //! module tests already have.
 
-use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
 use gitquarry_i18n::Locale;
-
-async fn make_user(ctx: &AppContext, username: &str) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-}
+use gitquarry_test_support::account;
 
 fn gpg_available() -> bool {
     std::process::Command::new("gpg").arg("--version").output().is_ok()
@@ -71,7 +54,7 @@ async fn add_gpg_key_rejects_garbage() {
     }
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
 
     assert!(user::add_gpg_key(&ctx, "alice", "not a key", Locale::En).await.is_err());
     let (user, _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
@@ -87,7 +70,7 @@ async fn add_gpg_key_then_remove_by_fingerprint_roundtrips() {
     }
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
     let key = generate_key();
 
     user::add_gpg_key(&ctx, "alice", &key, Locale::En).await.unwrap();
@@ -115,7 +98,7 @@ async fn remove_gpg_key_is_a_noop_for_an_unknown_fingerprint() {
     }
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
     let key = generate_key();
     user::add_gpg_key(&ctx, "alice", &key, Locale::En).await.unwrap();
 

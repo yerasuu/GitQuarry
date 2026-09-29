@@ -8,24 +8,7 @@ use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_i18n::Locale;
-
-async fn make_user(ctx: &AppContext, username: &str) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
-}
+use gitquarry_test_support::account;
 
 async fn email_of(ctx: &AppContext, username: &str) -> Option<String> {
     access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
@@ -40,7 +23,7 @@ async fn email_of(ctx: &AppContext, username: &str) -> Option<String> {
 async fn set_email_gives_an_account_created_without_one_an_address() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
     assert_eq!(email_of(&ctx, "alice").await, None);
 
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
@@ -56,7 +39,7 @@ async fn set_email_gives_an_account_created_without_one_an_address() {
 async fn a_newly_set_email_resolves_back_to_its_account() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
         .await
         .unwrap();
@@ -71,8 +54,8 @@ async fn a_newly_set_email_resolves_back_to_its_account() {
 async fn set_email_refuses_an_address_another_account_already_holds() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
-    make_user(&ctx, "bob").await;
+    account(&ctx, "alice", None).await;
+    account(&ctx, "bob", None).await;
     user::set_email(&ctx, "alice", Some("shared@example.com"), Locale::En)
         .await
         .unwrap();
@@ -93,8 +76,8 @@ async fn set_email_refuses_an_address_another_account_already_holds() {
 async fn changing_an_email_frees_the_previous_one_for_reuse() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
-    make_user(&ctx, "bob").await;
+    account(&ctx, "alice", None).await;
+    account(&ctx, "bob", None).await;
     user::set_email(&ctx, "alice", Some("first@example.com"), Locale::En)
         .await
         .unwrap();
@@ -118,8 +101,8 @@ async fn changing_an_email_frees_the_previous_one_for_reuse() {
 async fn set_email_none_clears_the_address_and_releases_the_claim() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
-    make_user(&ctx, "bob").await;
+    account(&ctx, "alice", None).await;
+    account(&ctx, "bob", None).await;
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
         .await
         .unwrap();
@@ -137,7 +120,7 @@ async fn set_email_none_clears_the_address_and_releases_the_claim() {
 async fn set_email_rejects_a_malformed_address_and_an_unknown_user() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
 
     assert!(
         user::set_email(&ctx, "alice", Some("no-at-sign"), Locale::En)
@@ -158,7 +141,7 @@ async fn set_email_rejects_a_malformed_address_and_an_unknown_user() {
 async fn set_email_to_the_current_value_is_a_noop() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
         .await
         .unwrap();
@@ -201,7 +184,7 @@ async fn a_grant_from_the_user_side_shows_up_on_the_repo_and_its_revocation_too(
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
     let repo_uid = private_repo(&ctx, "team/proj").await;
-    make_user(&ctx, "alice").await;
+    account(&ctx, "alice", None).await;
 
     user::set_repo_perm(&ctx, "alice", "team/proj", Some(Permission::Developer), Locale::En)
         .await

@@ -2,26 +2,11 @@
 //! creator's own name or a group, and its POST.
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{StatusCode, header};
 use gitquarry_core::app::AppContext;
 use gitquarry_i18n::Locale;
-use gitquarry_test_support::{Page, Session, ctx, send, user};
+use gitquarry_test_support::{Page, Session, ctx, post_form, user};
 use std::sync::Arc;
-
-/// Not `Session::post`: some cases here must submit without a CSRF field
-/// at all, or with the one a specific page carried.
-async fn post_form(app: &Router, uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Page {
-    let body = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(fields)
-        .finish();
-    let request = Request::post(uri)
-        .header(header::COOKIE, cookie)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    send(app, request).await
-}
 
 async fn get(app: &Router, uri: &str, cookie: &str) -> Page {
     Session::get_as(app, uri, Some(cookie)).await
@@ -109,7 +94,7 @@ async fn form_is_a_plain_post_not_an_async_fragment_swap() {
     let Page { status, headers, body } = post_form(
         &s.app,
         "/_new",
-        &s.alice,
+        Some(&s.alice),
         &[("namespace", "acme"), ("name", "web"), ("csrf", &csrf)],
     )
     .await;
@@ -124,10 +109,10 @@ async fn a_taken_name_rerenders_the_form_with_the_flash() {
     let form = get(&s.app, "/_new", &s.alice).await;
     let csrf = form.csrf();
     let fields = [("namespace", "alice"), ("name", "web"), ("csrf", csrf.as_str())];
-    let Page { status, .. } = post_form(&s.app, "/_new", &s.alice, &fields).await;
+    let Page { status, .. } = post_form(&s.app, "/_new", Some(&s.alice), &fields).await;
     assert!(status.is_redirection());
 
-    let Page { body: html, .. } = post_form(&s.app, "/_new", &s.alice, &fields).await;
+    let Page { body: html, .. } = post_form(&s.app, "/_new", Some(&s.alice), &fields).await;
     assert!(html.contains(r#"class="alert flash flash-err""#), "{html}");
     assert!(html.contains("a repo with that name already exists."), "{html}");
     assert!(html.contains(r#"<div id="new-repo-body">"#), "{html}");
@@ -141,7 +126,7 @@ async fn a_namespace_that_is_neither_the_creator_nor_a_group_is_refused() {
     let Page { body: html, .. } = post_form(
         &s.app,
         "/_new",
-        &s.alice,
+        Some(&s.alice),
         &[("namespace", "nobody"), ("name", "web"), ("csrf", &csrf)],
     )
     .await;
@@ -152,7 +137,13 @@ async fn a_namespace_that_is_neither_the_creator_nor_a_group_is_refused() {
 #[tokio::test]
 async fn a_post_without_the_csrf_token_creates_nothing() {
     let s = site().await;
-    let Page { status, .. } = post_form(&s.app, "/_new", &s.alice, &[("namespace", "alice"), ("name", "web")]).await;
+    let Page { status, .. } = post_form(
+        &s.app,
+        "/_new",
+        Some(&s.alice),
+        &[("namespace", "alice"), ("name", "web")],
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(s.ctx.resolve_repo("alice/web").await.unwrap().is_none());
 }
@@ -170,7 +161,7 @@ async fn only_an_admin_reaches_the_form() {
     let bob = login(&s.app, "bob").await;
     let Page { status, .. } = get(&s.app, "/_new", &bob).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let Page { status, .. } = post_form(&s.app, "/_new", &bob, &[("namespace", "bob"), ("name", "web")]).await;
+    let Page { status, .. } = post_form(&s.app, "/_new", Some(&bob), &[("namespace", "bob"), ("name", "web")]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(s.ctx.resolve_repo("bob/web").await.unwrap().is_none());
 }

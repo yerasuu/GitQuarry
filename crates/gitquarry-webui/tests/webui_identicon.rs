@@ -3,8 +3,7 @@
 
 use axum::Router;
 use axum::http::StatusCode;
-use gitquarry_core::auth::domain::user::{self, NewUser};
-use gitquarry_test_support::{Session, ctx};
+use gitquarry_test_support::{Session, account, ctx};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,24 +11,8 @@ use std::sync::Arc;
 /// avatar.
 async fn app_with_users(root: &Path, usernames: &[&str]) -> Router {
     let ctx = Arc::new(ctx(root));
-    // Not `gitquarry_test_support::user`: a password user would switch
-    // login enforcement on, and these profiles are read anonymously.
     for username in usernames {
-        user::create(
-            &ctx,
-            NewUser {
-                username,
-                email: None,
-                pubkey: None,
-                password_plain: None,
-                is_admin: false,
-                repos_field: "",
-                locale: gitquarry_i18n::Locale::En,
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        account(&ctx, username, None).await;
     }
     gitquarry_webui::webui::router(ctx)
 }

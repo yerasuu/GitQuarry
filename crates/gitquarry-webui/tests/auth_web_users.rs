@@ -7,7 +7,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain;
 use gitquarry_core::auth::entities::{Permission, User};
-use gitquarry_test_support::{Page, Session, ctx, send};
+use gitquarry_test_support::{Session, ctx, post_form, send};
 use std::sync::Arc;
 
 async fn setup(root: &std::path::Path) -> (Arc<AppContext>, axum::Router, Session) {
@@ -33,18 +33,6 @@ async fn users_page(app: &axum::Router, session: &Session, uri: &str) -> String 
     page.body
 }
 
-/// A `/_users` form post the way `style/app.js` sends a `data-async`
-/// submit, which gets back just the fragment its target names.
-async fn post_async(app: &axum::Router, session: &Session, body: &str) -> Page {
-    let request = Request::post("/_users")
-        .header(header::COOKIE, &session.cookie)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header("x-gq-async", "1")
-        .body(Body::from(format!("csrf={}&{body}", session.csrf)))
-        .unwrap();
-    send(app, request).await
-}
-
 #[tokio::test]
 async fn only_an_admin_reaches_the_page_or_its_actions() {
     let dir = tempfile::tempdir().unwrap();
@@ -68,12 +56,15 @@ async fn a_users_post_without_the_session_csrf_token_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, carol) = setup(dir.path()).await;
 
-    let request = Request::post("/_users")
-        .header(header::COOKIE, &carol.cookie)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from("csrf=forged&user_action=toggle_admin&username=alice"))
-        .unwrap();
-    assert_eq!(send(&app, request).await.status, StatusCode::BAD_REQUEST);
+    let fields = [
+        ("csrf", "forged"),
+        ("user_action", "toggle_admin"),
+        ("username", "alice"),
+    ];
+    assert_eq!(
+        post_form(&app, "/_users", Some(&carol.cookie), &fields).await.status,
+        StatusCode::BAD_REQUEST
+    );
     assert!(!user(&ctx, "alice").await.is_admin);
 }
 
@@ -135,12 +126,18 @@ async fn card_actions_and_delete_target_the_right_fragment() {
     let dir = tempfile::tempdir().unwrap();
     let (_ctx, app, carol) = setup(dir.path()).await;
 
-    let page = post_async(
-        &app,
-        &carol,
-        "user_action=set_storage_quota&username=alice&storage_quota=5G",
-    )
-    .await;
+    // `x-gq-async` because that is how `style/app.js` sends a `data-async`
+    // submit, so only the fragment its target names comes back.
+    let request = Request::post("/_users")
+        .header(header::COOKIE, &carol.cookie)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("x-gq-async", "1")
+        .body(Body::from(format!(
+            "csrf={}&user_action=set_storage_quota&username=alice&storage_quota=5G",
+            carol.csrf
+        )))
+        .unwrap();
+    let page = send(&app, request).await;
     assert_eq!(page.status, StatusCode::OK);
     let card = page.body;
     assert!(
@@ -159,7 +156,16 @@ async fn card_actions_and_delete_target_the_right_fragment() {
         "{card}"
     );
 
-    let page = post_async(&app, &carol, "user_action=delete_user&username=alice").await;
+    let request = Request::post("/_users")
+        .header(header::COOKIE, &carol.cookie)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("x-gq-async", "1")
+        .body(Body::from(format!(
+            "csrf={}&user_action=delete_user&username=alice",
+            carol.csrf
+        )))
+        .unwrap();
+    let page = send(&app, request).await;
     assert_eq!(page.status, StatusCode::OK);
     let list = page.body;
     assert!(list.starts_with(r#"<div id="users-list">"#), "{list}");

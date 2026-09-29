@@ -5,27 +5,10 @@
 //! paths consults the other — so the pair can drift into states where an
 //! address is listed twice, or listed but claimed by nobody.
 
-use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
 use gitquarry_i18n::Locale;
-
-async fn make_user(ctx: &AppContext, username: &str, email: Option<&str>) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: email.map(str::to_string),
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-}
+use gitquarry_test_support::account;
 
 /// Adding your own primary address as a secondary must not silently store
 /// it twice: `claim_secondary_email` returns `Ok(true)` when the address
@@ -35,7 +18,7 @@ async fn make_user(ctx: &AppContext, username: &str, email: Option<&str>) {
 async fn own_primary_address_is_refused_as_a_secondary() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice", Some("alice@example.com")).await;
+    account(&ctx, "alice", Some("alice@example.com")).await;
 
     let added = user::add_secondary_email(&ctx, "alice", "alice@example.com", Locale::En).await;
 
@@ -58,8 +41,8 @@ async fn own_primary_address_is_refused_as_a_secondary() {
 async fn a_primary_claim_cannot_take_an_address_another_account_holds_as_secondary() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "bob", Some("bob@example.com")).await;
-    make_user(&ctx, "alice", None).await;
+    account(&ctx, "bob", Some("bob@example.com")).await;
+    account(&ctx, "alice", None).await;
     user::add_secondary_email(&ctx, "bob", "shared@example.com", Locale::En)
         .await
         .unwrap();
@@ -81,8 +64,8 @@ async fn a_primary_claim_cannot_take_an_address_another_account_holds_as_seconda
 async fn a_secondary_removal_leaves_the_address_free_for_another_account() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = gitquarry_test_support::ctx(dir.path());
-    make_user(&ctx, "alice", None).await;
-    make_user(&ctx, "bob", None).await;
+    account(&ctx, "alice", None).await;
+    account(&ctx, "bob", None).await;
     user::add_secondary_email(&ctx, "alice", "shared@example.com", Locale::En)
         .await
         .unwrap();

@@ -7,7 +7,7 @@ mod git;
 mod web;
 
 pub use git::{Work, git};
-pub use web::{Page, Session, send};
+pub use web::{Page, Session, post_form, send};
 
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::user::{self, NewUser};
@@ -80,6 +80,30 @@ pub async fn user(ctx: &AppContext, username: &str, is_admin: bool) {
         .await
         .expect("creating the test user")
         .expect("test username already taken");
+}
+
+/// A user with no password, so login enforcement stays off and no Argon2
+/// hash is paid for — for tests about the account itself rather than about
+/// logging in. `email` is claimed as the primary address.
+pub async fn account(ctx: &AppContext, username: &str, email: Option<&str>) -> gitquarry_core::auth::entities::User {
+    let new_user = NewUser {
+        username,
+        email: email.map(str::to_string),
+        pubkey: None,
+        password_plain: None,
+        is_admin: false,
+        repos_field: "",
+        locale: gitquarry_i18n::Locale::En,
+    };
+    user::create(ctx, new_user)
+        .await
+        .expect("creating the test account")
+        .expect("test username already taken");
+    gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
+        .await
+        .expect("reading the test account back")
+        .0
+        .expect("the test account was just created")
 }
 
 /// A federation process over a fresh bucket under `root`, whose `core`

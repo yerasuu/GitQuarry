@@ -9,12 +9,11 @@
 //! `PATH`, same as `git_browse_signature.rs`, whose fixture shape this
 //! reuses.
 
-use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::domain::commit_signature::{CommitSigner, verified_signer};
 use gitquarry_core::storage::commit_sig::{bump_signing_epoch, signing_epoch};
 use gitquarry_i18n::Locale;
-use gitquarry_test_support::ctx;
+use gitquarry_test_support::{account, ctx};
 
 fn gpg_available() -> bool {
     std::process::Command::new("gpg").arg("--version").output().is_ok()
@@ -120,23 +119,6 @@ Expire-Date: 0
     }
 }
 
-async fn make_user(ctx: &AppContext, username: &str, email: &str) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: Some(email.to_string()),
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-}
-
 #[tokio::test]
 async fn signing_epoch_starts_at_zero_and_every_bump_changes_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -163,7 +145,7 @@ async fn registering_a_key_after_a_miss_makes_the_commit_verify() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = ctx(dir.path());
     let backend = ctx.backend();
-    make_user(&ctx, "alice", "test@example.com").await;
+    account(&ctx, "alice", Some("test@example.com")).await;
 
     // Cold: the account exists and claims the email, but has no key yet.
     let before = verified_signer(
@@ -207,7 +189,7 @@ async fn removing_a_key_stops_it_vouching_for_an_already_verified_commit() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = ctx(dir.path());
     let backend = ctx.backend();
-    make_user(&ctx, "alice", "test@example.com").await;
+    account(&ctx, "alice", Some("test@example.com")).await;
     user::add_gpg_key(&ctx, "alice", &repo.armored_public, Locale::En)
         .await
         .unwrap();

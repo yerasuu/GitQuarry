@@ -1798,8 +1798,8 @@ async fn edit_metadata_updates_labels_assignees_and_reviewers() {
     let ctx = ctx(dir.path());
     let target = test_target(&ctx);
     seed_label(&ctx, &target, "bug", "#d73a4a").await;
-    gitquarry_test_support::user(&ctx, "bob", false).await;
-    gitquarry_test_support::user(&ctx, "carol", false).await;
+    gitquarry_test_support::account(&ctx, "bob", None).await;
+    gitquarry_test_support::account(&ctx, "carol", None).await;
     put_branch(&target, "main", &"a".repeat(40)).await;
     put_branch(&target, "feature", &"b".repeat(40)).await;
     let mr = create_test_mr(&ctx, &target).await;

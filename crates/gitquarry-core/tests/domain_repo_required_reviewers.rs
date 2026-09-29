@@ -43,7 +43,7 @@ async fn set_required_reviewers_stores_every_real_username() {
     .unwrap()
     .unwrap();
     for username in ["alice", "bob"] {
-        gitquarry_test_support::user(&ctx, username, false).await;
+        gitquarry_test_support::account(&ctx, username, None).await;
     }
 
     let (cas, reviewers) = repo::set_required_reviewers(&ctx, &resolved, "alice, bob", gitquarry_i18n::Locale::En)

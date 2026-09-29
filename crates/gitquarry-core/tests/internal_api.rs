@@ -6,7 +6,6 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use gitquarry_core::storage;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_i18n::Locale;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -20,20 +19,7 @@ async fn body_status(resp: Response) -> (StatusCode, serde_json::Value) {
 async fn authorize_reflects_a_real_owner_grant() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    gitquarry_test_support::account(&ctx, "alice", None).await;
     ctx.create_repo("alice/proj").await.unwrap();
 
     let body = serde_json::to_vec(&serde_json::json!({
@@ -65,20 +51,7 @@ async fn authorize_rejects_a_stranger() {
 async fn authorize_and_summarize_returns_a_private_repos_summary_only_to_someone_entitled() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    gitquarry_test_support::account(&ctx, "alice", None).await;
     let resolved = ctx.create_repo("alice/proj").await.unwrap().unwrap();
     let (mut config, etag) = resolved.remote.get_repo_config().await.unwrap();
     config.full_name = "alice/proj".to_string();
@@ -185,20 +158,7 @@ async fn public_repos_lists_only_visible_public_repos() {
 async fn fork_from_remote_rejects_a_namespace_the_acting_user_doesnt_control() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
-    gitquarry_core::auth::domain::user::create(
-        &ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username: "mallory",
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    gitquarry_test_support::account(&ctx, "mallory", None).await;
 
     let body = serde_json::to_vec(&serde_json::json!({
         "source_git_base_url": "http://127.0.0.1:1",

@@ -1,9 +1,10 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
-use gitquarry_core::auth::domain::{self, user};
+use gitquarry_core::auth::domain;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::uid::Uid;
+use gitquarry_test_support::account;
 use reqwest::StatusCode;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -11,27 +12,8 @@ use std::sync::Arc;
 /// Creates alice plus her private `alice/proj`, returning her uid and the
 /// repo's: a PAT scope names a repo by its uid, not its name.
 async fn make_alice(ctx: &AppContext) -> (Uid, Uid) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username: "alice",
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    let owner = account(ctx, "alice", None).await.uid;
     let repo = private_repo(ctx, "alice/proj").await;
-    let owner = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
-        .await
-        .unwrap()
-        .0
-        .unwrap()
-        .uid;
     (owner, repo)
 }
 

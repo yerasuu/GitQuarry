@@ -6,6 +6,7 @@ use gitquarry_core::auth::domain;
 use gitquarry_core::storage::entities::{OwnerRef, RepoConfig};
 use gitquarry_core::storage::settings::{add_owner_index, put_repo_config};
 use gitquarry_core::storage::uid::Uid;
+use gitquarry_test_support::account;
 
 async fn seed_owned_repo(ctx: &AppContext, owner: &OwnerRef, pack_bytes: u64, lfs_bytes: u64) {
     let uid = Uid::new();
@@ -28,28 +29,11 @@ async fn seed_owned_repo(ctx: &AppContext, owner: &OwnerRef, pack_bytes: u64, lf
 }
 
 async fn make_user(ctx: &AppContext, username: &str, quota_bytes: Option<u64>) -> OwnerRef {
-    domain::user::create(
-        ctx,
-        domain::user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let uid = account(ctx, username, None).await.uid;
     domain::user::set_storage_quota(ctx, username, quota_bytes, gitquarry_i18n::Locale::En)
         .await
         .unwrap();
-    let (user, _etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
-        .await
-        .unwrap();
-    OwnerRef::User(user.unwrap().uid)
+    OwnerRef::User(uid)
 }
 
 async fn make_group(ctx: &AppContext, name: &str, quota_bytes: Option<u64>) -> OwnerRef {

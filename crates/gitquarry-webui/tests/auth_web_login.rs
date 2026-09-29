@@ -10,7 +10,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::{access, domain};
 use gitquarry_core::crypto::CompressionStrategy;
-use gitquarry_test_support::{PASSWORD, Page, Session, ctx, send, user};
+use gitquarry_test_support::{PASSWORD, Page, Session, ctx, post_form, send, user};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,17 +43,6 @@ fn offline_oidc_client() -> gitquarry_auth_crypto::oidc::OidcClient {
     .set_redirect_uri(RedirectUrl::new("https://git.invalid/_callback".to_string()).unwrap())
 }
 
-fn post_form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
-    let body = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(fields)
-        .finish();
-    Request::post(uri)
-        .header(header::COOKIE, cookie)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap()
-}
-
 /// The full `Set-Cookie` line for `name`, attributes included.
 fn set_cookie_line(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
@@ -74,18 +63,16 @@ async fn login_form(app: &axum::Router) -> (String, String) {
 
 async fn submit_login(app: &axum::Router, username: &str, password: &str, return_to: &str) -> Page {
     let (anchor, csrf) = login_form(app).await;
-    send(
+    post_form(
         app,
-        post_form(
-            "/_login",
-            &anchor,
-            &[
-                ("csrf", &csrf),
-                ("username", username),
-                ("password", password),
-                ("return_to", return_to),
-            ],
-        ),
+        "/_login",
+        Some(&anchor),
+        &[
+            ("csrf", &csrf),
+            ("username", username),
+            ("password", password),
+            ("return_to", return_to),
+        ],
     )
     .await
 }
@@ -224,13 +211,13 @@ async fn a_login_post_without_its_csrf_anchor_is_refused() {
     let (_ctx, app) = app_with_alice(dir.path()).await;
     let fields = [("username", "alice"), ("password", PASSWORD), ("csrf", "forged")];
 
-    let response = send(&app, post_form("/_login", "", &fields)).await;
+    let response = post_form(&app, "/_login", None, &fields).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(set_cookie_line(&response.headers, "web-session").is_none());
 
     // A real anchor doesn't help a token that wasn't derived from it.
     let (anchor, _csrf) = login_form(&app).await;
-    let response = send(&app, post_form("/_login", &anchor, &fields)).await;
+    let response = post_form(&app, "/_login", Some(&anchor), &fields).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(set_cookie_line(&response.headers, "web-session").is_none());
 }
@@ -263,14 +250,14 @@ async fn logout_needs_the_session_csrf_token_and_then_clears_the_cookie() {
     let (_ctx, app) = app_with_alice(dir.path()).await;
     let session = Session::login(&app, "alice").await.cookie;
 
-    let response = send(&app, post_form("/_logout", &session, &[("csrf", "forged")])).await;
+    let response = post_form(&app, "/_logout", Some(&session), &[("csrf", "forged")]).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(set_cookie_line(&response.headers, "web-session").is_none());
 
     // The token the topbar's own logout form carries.
     let page = Session::get_as(&app, "/", Some(&session)).await;
     assert!(page.body.contains(r#"action="/_logout""#), "{}", page.body);
-    let response = send(&app, post_form("/_logout", &session, &[("csrf", &page.csrf())])).await;
+    let response = post_form(&app, "/_logout", Some(&session), &[("csrf", &page.csrf())]).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_eq!(response.location(), "/");
     let line = set_cookie_line(&response.headers, "web-session").unwrap();
@@ -345,33 +332,31 @@ async fn a_totp_account_gets_a_pending_step_and_no_session_until_the_code_verifi
     assert!(page.body.contains(r#"action="/_login_totp""#), "{}", page.body);
     let csrf = page.csrf();
 
-    let response = send(
+    let response = post_form(
         &app,
-        post_form(
-            "/_login_totp",
-            &pending,
-            &[("csrf", "forged"), ("code", "aaaa-bbbb-cccc-dddd")],
-        ),
+        "/_login_totp",
+        Some(&pending),
+        &[("csrf", "forged"), ("code", "aaaa-bbbb-cccc-dddd")],
     )
     .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(set_cookie_line(&response.headers, "web-session").is_none());
 
-    let response = send(
+    let response = post_form(
         &app,
-        post_form("/_login_totp", &pending, &[("csrf", &csrf), ("code", "not-a-code")]),
+        "/_login_totp",
+        Some(&pending),
+        &[("csrf", &csrf), ("code", "not-a-code")],
     )
     .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(set_cookie_line(&response.headers, "web-session").is_none());
 
-    let response = send(
+    let response = post_form(
         &app,
-        post_form(
-            "/_login_totp",
-            &pending,
-            &[("csrf", &csrf), ("code", "aaaa-bbbb-cccc-dddd")],
-        ),
+        "/_login_totp",
+        Some(&pending),
+        &[("csrf", &csrf), ("code", "aaaa-bbbb-cccc-dddd")],
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
@@ -385,13 +370,11 @@ async fn a_totp_account_gets_a_pending_step_and_no_session_until_the_code_verifi
     assert!(session_is_live(&app, &session).await);
 
     // A recovery code is single-use, even replayed with the same pending cookie.
-    let response = send(
+    let response = post_form(
         &app,
-        post_form(
-            "/_login_totp",
-            &pending,
-            &[("csrf", &csrf), ("code", "aaaa-bbbb-cccc-dddd")],
-        ),
+        "/_login_totp",
+        Some(&pending),
+        &[("csrf", &csrf), ("code", "aaaa-bbbb-cccc-dddd")],
     )
     .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
@@ -411,9 +394,11 @@ async fn the_totp_step_refuses_a_missing_or_expired_pending_cookie() {
     // closed rather than being a "password already matched" claim forever.
     let legacy = sealed_cookie(&ctx, "pending-totp", r#"{"username":"alice","return_to":"/"}"#);
     let csrf = Session::get_as(&app, "/_login_totp", Some(&legacy)).await.csrf();
-    let response = send(
+    let response = post_form(
         &app,
-        post_form("/_login_totp", &legacy, &[("csrf", &csrf), ("code", "123456")]),
+        "/_login_totp",
+        Some(&legacy),
+        &[("csrf", &csrf), ("code", "123456")],
     )
     .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);

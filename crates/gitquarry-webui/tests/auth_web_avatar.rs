@@ -3,29 +3,8 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use gitquarry_test_support::{Page, Session, ctx, send, user};
+use gitquarry_test_support::{Session, ctx, post_form, send, user};
 use std::sync::Arc;
-
-/// A form post as `cookie`, carrying exactly `fields` — including whatever
-/// `csrf` the test chooses to send.
-fn form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
-    let body = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(fields)
-        .finish();
-    Request::post(uri)
-        .header(header::COOKIE, cookie)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap()
-}
-
-/// [`form`] as `style/app.js` sends a `data-async` submit, which gets back
-/// just the fragment its target names.
-async fn post_async(app: &axum::Router, session: &Session, uri: &str, fields: &[(&str, &str)]) -> Page {
-    let mut request = form(uri, &session.cookie, fields);
-    request.headers_mut().insert("x-gq-async", "1".parse().unwrap());
-    send(app, request).await
-}
 
 /// The page at `uri` for `session`, which must render.
 async fn page(app: &axum::Router, session: &Session, uri: &str) -> String {
@@ -60,7 +39,18 @@ async fn email_forms_target_their_own_section() {
         ("email_action", "add_secondary_email"),
         ("secondary_email", "alt@example.com"),
     ];
-    let response = post_async(&app, &session, "/_account/profile/emails", &fields).await;
+    // `x-gq-async` because that is how `style/app.js` sends a `data-async`
+    // submit, so only the fragment its target names comes back.
+    let body = form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(&fields)
+        .finish();
+    let request = Request::post("/_account/profile/emails")
+        .header(header::COOKIE, &session.cookie)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("x-gq-async", "1")
+        .body(Body::from(body))
+        .unwrap();
+    let response = send(&app, request).await;
     assert_eq!(response.status, StatusCode::OK);
     let fragment = response.body;
     assert!(
@@ -74,7 +64,16 @@ async fn email_forms_target_their_own_section() {
         ("email_action", "set_email"),
         ("email", "alice@example.com"),
     ];
-    let response = post_async(&app, &session, "/_account/profile/emails", &fields).await;
+    let body = form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(&fields)
+        .finish();
+    let request = Request::post("/_account/profile/emails")
+        .header(header::COOKIE, &session.cookie)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("x-gq-async", "1")
+        .body(Body::from(body))
+        .unwrap();
+    let response = send(&app, request).await;
     assert_eq!(response.status, StatusCode::OK);
     let fragment = response.body;
     assert!(
@@ -107,7 +106,7 @@ async fn an_email_post_without_the_session_csrf_token_is_refused() {
         ("email_action", "set_email"),
         ("email", "mallory@example.com"),
     ];
-    let response = send(&app, form("/_account/profile/emails", &session.cookie, &fields)).await;
+    let response = post_form(&app, "/_account/profile/emails", Some(&session.cookie), &fields).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     let html = page(&app, &session, "/_account/profile").await;
     assert!(!html.contains("mallory@example.com"), "{html}");

@@ -7,7 +7,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_i18n::Locale;
-use gitquarry_test_support::{Session, Work, ctx, git};
+use gitquarry_test_support::{Session, Work, account, ctx, git};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -114,20 +114,7 @@ async fn commit_by_a_registered_gpg_key_shows_the_gitquarry_verified_badge() {
     let (home, armored) = gpg_key("alice@example.com");
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, sha) = publish_commit(dir.path(), "alice@example.com", Some(home.path())).await;
-    user::create(
-        &ctx,
-        user::NewUser {
-            username: "alice",
-            email: Some("alice@example.com".to_string()),
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    account(&ctx, "alice", Some("alice@example.com")).await;
     user::add_gpg_key(&ctx, "alice", &armored, Locale::En).await.unwrap();
 
     let html = get(&app, &format!("/team/proj?view=commit&sha={sha}"), None).await;

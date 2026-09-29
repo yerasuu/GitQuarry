@@ -2,33 +2,18 @@
 //! write forms, what the tag field suggests, and how assets are labelled.
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{StatusCode, header};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::remote::{AssetMeta, ReleaseMeta};
 use gitquarry_i18n::Locale;
-use gitquarry_test_support::{Page, Session, Work, ctx, git, send};
+use gitquarry_test_support::{Page, Session, Work, ctx, git, post_form};
 use std::sync::Arc;
 
 async fn get(app: &Router, uri: &str, cookie: &str) -> Page {
     Session::get_as(app, uri, Some(cookie)).await
-}
-
-/// Not `Session::post`: some cases here submit with no session at all, or
-/// with the CSRF token a specific page carried.
-async fn post_form(app: &Router, uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Page {
-    let body = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(fields)
-        .finish();
-    let request = Request::post(uri)
-        .header(header::COOKIE, cookie)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    send(app, request).await
 }
 
 struct Repo {
@@ -177,7 +162,7 @@ async fn generate_notes_never_echoes_a_prefill_to_someone_without_write() {
         status,
         headers,
         body: html,
-    } = post_form(&r.app, "/_releases/generate_notes/team/proj", "", &leaked).await;
+    } = post_form(&r.app, "/_releases/generate_notes/team/proj", None, &leaked).await;
     assert!(status.is_redirection(), "{status}");
     assert!(
         headers[header::LOCATION].to_str().unwrap().starts_with("/_login"),
@@ -189,7 +174,8 @@ async fn generate_notes_never_echoes_a_prefill_to_someone_without_write() {
     let csrf = get(&r.app, "/team/proj?view=releases", &bob).await.csrf();
     let mut fields = leaked.to_vec();
     fields.push(("csrf", &csrf));
-    let Page { status, body: html, .. } = post_form(&r.app, "/_releases/generate_notes/team/proj", &bob, &fields).await;
+    let Page { status, body: html, .. } =
+        post_form(&r.app, "/_releases/generate_notes/team/proj", Some(&bob), &fields).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(!html.contains("leaked"), "{html}");
 }

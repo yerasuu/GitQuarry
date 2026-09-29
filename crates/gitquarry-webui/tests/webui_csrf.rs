@@ -1,9 +1,8 @@
 //! Double-submit CSRF as a browser meets it: the token a page embeds, the
 //! POST that has to echo it back, and every way of getting it wrong.
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
-use gitquarry_test_support::{PASSWORD, Page, Session, send};
+use axum::http::{StatusCode, header};
+use gitquarry_test_support::{PASSWORD, Page, Session, post_form};
 use std::sync::Arc;
 
 /// A password user is what makes `/_login` render its form at all.
@@ -11,19 +10,6 @@ async fn app_with_user(root: &std::path::Path) -> axum::Router {
     let ctx = Arc::new(gitquarry_test_support::ctx(root));
     gitquarry_test_support::user(&ctx, "alice", false).await;
     gitquarry_webui::webui::router(ctx)
-}
-
-/// Unlike `Session::post`, sends exactly `fields`: these tests forge,
-/// omit or borrow the token on purpose.
-async fn post_form(app: &axum::Router, path: &str, cookie: Option<&str>, fields: &[(&str, &str)]) -> Page {
-    let body = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(fields)
-        .finish();
-    let mut builder = Request::post(path).header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, cookie);
-    }
-    send(app, builder.body(Body::from(body)).unwrap()).await
 }
 
 /// Whether `page` plants a `name` cookie at all; `Page::cookie` panics

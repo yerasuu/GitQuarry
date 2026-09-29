@@ -75,13 +75,13 @@ impl Session {
     pub async fn login(app: &axum::Router, username: &str) -> Session {
         let form = Session::get_as(app, "/_login", None).await;
         let anchor = form.cookie("login-csrf");
+        let csrf = form.csrf();
         let fields = [
-            ("csrf", form.csrf()),
-            ("username", username.to_string()),
-            ("password", crate::PASSWORD.to_string()),
-            ("return_to", "/".to_string()),
-        ]
-        .map(|(k, v)| (k.to_string(), v));
+            ("csrf", csrf.as_str()),
+            ("username", username),
+            ("password", crate::PASSWORD),
+            ("return_to", "/"),
+        ];
         let done = post_form(app, "/_login", Some(&anchor), &fields).await;
         assert_eq!(done.status, StatusCode::SEE_OTHER, "login failed: {}", done.body);
         let cookie = done.cookie("web-session");
@@ -99,8 +99,9 @@ impl Session {
 
     /// Submits `fields` plus this session's own CSRF token.
     pub async fn post(&self, app: &axum::Router, path: &str, fields: &[(&str, &str)]) -> Page {
-        let mut all = vec![("csrf".to_string(), self.csrf.clone())];
-        all.extend(fields.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        let mut all = Vec::with_capacity(fields.len() + 1);
+        all.push(("csrf", self.csrf.as_str()));
+        all.extend_from_slice(fields);
         post_form(app, path, Some(&self.cookie), &all).await
     }
 
@@ -114,7 +115,10 @@ impl Session {
     }
 }
 
-async fn post_form(app: &axum::Router, path: &str, cookie: Option<&str>, fields: &[(String, String)]) -> Page {
+/// A form POST exactly as given — no CSRF token added — for tests about what
+/// happens when the token is missing, forged, or taken from somewhere else.
+/// [`Session::post`] is the one that adds the session's own.
+pub async fn post_form(app: &axum::Router, path: &str, cookie: Option<&str>, fields: &[(&str, &str)]) -> Page {
     let mut builder = Request::post(path).header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
