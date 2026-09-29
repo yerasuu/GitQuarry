@@ -113,18 +113,87 @@ async fn blank_form_defaults_to_s3_with_every_field_empty() {
     assert!(!html.contains(r#"value="my-bucket""#));
 }
 
+/// The wizard is served before any admin exists, to whoever reaches the
+/// port — so the stored credentials themselves never go back out.
 #[tokio::test]
-async fn prefilled_form_carries_the_existing_config_but_never_an_admin() {
+async fn prefilled_form_carries_the_existing_config_but_never_a_secret_or_an_admin() {
     let dir = tempfile::tempdir().unwrap();
     let wizard = start(&dir.path().join("gitquarry.toml"), Some(s3_prefill())).await;
     let html = wizard.get().await;
-    for value in ["main", "my-bucket", "us-east-1", "AKIA", "hunter2"] {
+    for value in ["main", "my-bucket", "us-east-1", "AKIA"] {
         assert!(html.contains(&format!(r#"value="{value}""#)), "{value} not prefilled");
+    }
+    for secret in ["s3cret", "hunter2"] {
+        assert!(!html.contains(secret), "{secret} rendered into the page");
     }
     assert!(html.contains(r#"<option value="s3" selected>"#));
     assert!(html.contains(r#"name="s3_path_style" value="1" checked"#));
     // Seeding an admin is the whole point of this run of the wizard.
     assert!(!html.contains(r#"name="admin_username" size="30" required value"#));
+}
+
+/// Leaving a secret blank keeps the stored one only while it would go to the
+/// same place: pointing the form at another endpoint with the secret left
+/// blank must not hand the stored secret to that endpoint.
+#[tokio::test]
+async fn a_blank_secret_is_reused_only_for_the_same_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let wizard = start(&dir.path().join("gitquarry.toml"), Some(s3_prefill())).await;
+    let s3 = |endpoint: &'static str| {
+        [
+            ("driver", "s3"),
+            ("s3_bucket", "my-bucket"),
+            ("s3_region", "us-east-1"),
+            ("s3_endpoint_url", endpoint),
+            ("s3_access_key_id", "AKIA"),
+            ("s3_path_style", "1"),
+        ]
+    };
+    let mut elsewhere = with_admin(&s3("https://attacker.example"));
+    elsewhere.retain(|(k, _)| *k != "passphrase");
+    let (status, html) = wizard.post(&elsewhere).await;
+    assert_eq!(status, 400);
+    assert!(html.contains("s3: secret access key is empty"), "{html}");
+
+    // Same destination: the blanks pass validation and the stored values are
+    // used for the real round trip (which then fails here, having no network
+    // S3 to reach — but never on a missing secret or passphrase).
+    let mut same = with_admin(&s3(""));
+    same.retain(|(k, _)| *k != "passphrase");
+    let (status, html) = wizard.post(&same).await;
+    assert_eq!(status, 400);
+    assert!(
+        !html.contains("is empty") && !html.contains("can&#39;t be empty"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn a_prefilled_local_resubmit_with_a_blank_passphrase_keeps_the_stored_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gitquarry.toml");
+    let bucket = dir.path().join("bucket");
+    std::fs::create_dir(&bucket).unwrap();
+    let bucket_str = bucket.to_string_lossy().to_string();
+    let prefill = Prefill {
+        name: "main".to_string(),
+        bucket_cfg: BucketConfig {
+            backend: BackendConfig::Local(LocalParams {
+                bucket: bucket_str.clone(),
+                engine: LocalEngine::Redb,
+            }),
+            passphrase: "stored passphrase".to_string(),
+            resilience: Default::default(),
+        },
+    };
+    let wizard = start(&config, Some(prefill)).await;
+
+    let mut fields = with_admin(&[("driver", "local"), ("local_bucket", &bucket_str)]);
+    fields.retain(|(k, _)| *k != "passphrase");
+    let (status, _) = wizard.post(&fields).await;
+    assert_eq!(status, 200);
+    let outcome = wizard.handle.await.unwrap().unwrap();
+    assert_eq!(outcome.bucket_cfg.passphrase, "stored passphrase");
 }
 
 #[tokio::test]
