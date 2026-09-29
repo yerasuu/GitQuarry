@@ -135,10 +135,9 @@ async fn archive_one_matches_archive_pair_for_each_format() {
 // bigger than MAX_ARCHIVE_BYTES must never be fully buffered first. The
 // fixture is a sparse 513 MiB file of zeros, streamed into a pack by
 // `hash-object` (it's over git's default 512 MiB `core.bigFileThreshold`) so
-// neither disk nor git ever holds it uncompressed; `archive` still has to
-// read 512 MiB of tar output before the cap trips, hence `#[ignore]`.
+// neither disk nor git ever holds it uncompressed; `archive` still reads
+// 512 MiB of tar output before the cap trips.
 #[tokio::test]
-#[ignore = "streams 512 MiB of git archive output into memory"]
 async fn archive_rejects_output_over_max_archive_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
