@@ -6,6 +6,7 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
+use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::Cipher;
 use gitquarry_i18n::Locale;
@@ -200,4 +201,73 @@ async fn set_email_to_the_current_value_is_a_noop() {
         .await
         .unwrap();
     assert_eq!(email_of(&ctx, "alice").await.as_deref(), Some("alice@example.com"));
+}
+
+async fn private_repo(ctx: &AppContext, full_name: &str) -> gitquarry_core::storage::uid::Uid {
+    gitquarry_core::domain::repo::create(
+        ctx,
+        full_name,
+        None,
+        None,
+        None,
+        gitquarry_core::storage::entities::Visibility::Private,
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .uid
+}
+
+async fn granted_on(ctx: &AppContext, repo_uid: &gitquarry_core::storage::uid::Uid) -> Vec<String> {
+    access::list_repo_permissions(&ctx.backend(), &ctx.cipher, repo_uid)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(u, _)| u.username)
+        .collect()
+}
+
+/// The repo's own permission grid lists grantees from the repo permission
+/// index, so a grant made from the admin user page has to land there too —
+/// otherwise it's live but invisible, and can't be revoked from the repo.
+#[tokio::test]
+async fn a_grant_from_the_user_side_shows_up_on_the_repo_and_its_revocation_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let repo_uid = private_repo(&ctx, "team/proj").await;
+    make_user(&ctx, "alice").await;
+
+    user::set_repo_perm(&ctx, "alice", "team/proj", Some(Permission::Developer), Locale::En)
+        .await
+        .unwrap();
+    assert_eq!(granted_on(&ctx, &repo_uid).await, ["alice"]);
+
+    user::set_repo_perm(&ctx, "alice", "team/proj", None, Locale::En)
+        .await
+        .unwrap();
+    assert!(granted_on(&ctx, &repo_uid).await.is_empty());
+}
+
+#[tokio::test]
+async fn repos_granted_at_account_creation_show_up_on_the_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = test_ctx(dir.path());
+    let repo_uid = private_repo(&ctx, "team/proj").await;
+
+    user::create(
+        &ctx,
+        user::NewUser {
+            username: "bob",
+            email: None,
+            pubkey: None,
+            password_plain: None,
+            is_admin: false,
+            repos_field: "team/proj:reporter",
+            locale: Locale::En,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(granted_on(&ctx, &repo_uid).await, ["bob"]);
 }
