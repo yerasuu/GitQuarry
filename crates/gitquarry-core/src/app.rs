@@ -500,6 +500,11 @@ impl AppContext {
     /// namespace: a repo at `acme/team` and a subgroup called `acme/team`
     /// would both answer to `/acme/team`, so whichever exists first wins
     /// (see `auth::access::namespace_reserved`).
+    ///
+    /// Only the identity: no `RepoConfig` is written, so until the caller
+    /// writes one the repo has no `full_name` and renders unlinked. Go
+    /// through `domain::repo::create` unless the caller builds its own
+    /// config (fork, template, remote fork).
     pub async fn create_repo(&self, full_name: &str) -> Result<Option<ResolvedRepo>> {
         if crate::auth::access::namespace_reserved(self.backend().as_ref(), &self.cipher, full_name).await? {
             return Ok(None);
