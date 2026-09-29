@@ -1,42 +1,8 @@
-use gitquarry_core::app::{AppContext, Locks};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Backend;
+use gitquarry_core::app::AppContext;
 use gitquarry_mirror_external::engine::*;
 use gitquarry_mirror_external::{access, domain};
-use s3db::LocalBackend;
+use gitquarry_test_support::{Work, ctx, git};
 use std::sync::Arc;
-use std::time::Duration;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend: Arc::new(backend) as Arc<dyn Backend>,
-        locks: Locks::default(),
-        cipher,
-        mirror_max_age: Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// Every build allows the forges it has a client for, but a test's
 /// stand-in target isn't one of those — so a test that stores a mirror adds
@@ -51,59 +17,23 @@ async fn allow_mirror_host(ctx: &AppContext, host: &str) {
         .unwrap();
 }
 
-async fn git(dir: &std::path::Path, args: &[&str]) -> String {
-    let out = tokio::process::Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
 /// Commit `a` (root) with two children `b` and `c` — so `a` is an ancestor
 /// of both and `b`/`c` genuinely diverge.
 struct History {
-    work: tempfile::TempDir,
+    work: Work,
     a: String,
     b: String,
     c: String,
 }
 
 async fn history() -> History {
-    let work = tempfile::tempdir().unwrap();
-    let dir = work.path();
-    git(dir, &["init", "-q"]).await;
-    let commit = async |file: &str, content: &str| {
-        std::fs::write(dir.join(file), content).unwrap();
-        git(dir, &["add", "-A"]).await;
-        git(
-            dir,
-            &[
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "user.name=t",
-                "commit",
-                "-q",
-                "-m",
-                content,
-            ],
-        )
-        .await;
-        git(dir, &["rev-parse", "HEAD"]).await
-    };
-    let a = commit("f.txt", "a\n").await;
-    let b = commit("f.txt", "b\n").await;
-    git(dir, &["checkout", "-q", &a]).await;
-    let c = commit("g.txt", "c\n").await;
-    git(dir, &["branch", "-f", "keep-b", &b]).await;
-    git(dir, &["branch", "-f", "keep-c", &c]).await;
+    let work = Work::new().await;
+    let a = work.commit(&[("f.txt", "a\n")], "a\n").await;
+    let b = work.commit(&[("f.txt", "b\n")], "b\n").await;
+    git(work.path(), &["checkout", "-q", &a]).await;
+    let c = work.commit(&[("g.txt", "c\n")], "c\n").await;
+    git(work.path(), &["branch", "-f", "keep-b", &b]).await;
+    git(work.path(), &["branch", "-f", "keep-c", &c]).await;
     History { work, a, b, c }
 }
 
@@ -129,10 +59,10 @@ async fn tick(
     use std::collections::BTreeMap;
 
     let root = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(root.path());
+    let ctx = ctx(root.path());
 
     let repo = ctx.create_repo("alice/source").await.unwrap().unwrap();
-    let git_dir = h.work.path().join(".git");
+    let git_dir = h.work.git_dir();
     for tip in [&h.b, &h.c] {
         let packs = tempfile::tempdir().unwrap();
         let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, tip, &[], packs.path())
@@ -302,61 +232,15 @@ async fn plain_bare_repo_with_commit(content: &str) -> (tempfile::TempDir, std::
     let dir = tempfile::tempdir().unwrap();
     let bare = dir.path().join("target.git");
     std::fs::create_dir_all(&bare).unwrap();
-    assert!(
-        tokio::process::Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .current_dir(&bare)
-            .status()
-            .await
-            .unwrap()
-            .success()
-    );
+    git(&bare, &["init", "--quiet", "--bare"]).await;
 
-    let work = tempfile::tempdir().unwrap();
-    assert!(
-        tokio::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(work.path())
-            .status()
-            .await
-            .unwrap()
-            .success()
-    );
-    std::fs::write(work.path().join("f.txt"), content).unwrap();
-    assert!(
-        tokio::process::Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(work.path())
-            .status()
-            .await
-            .unwrap()
-            .success()
-    );
-    assert!(
-        tokio::process::Command::new("git")
-            .args(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "c"])
-            .current_dir(work.path())
-            .status()
-            .await
-            .unwrap()
-            .success()
-    );
-    let out = tokio::process::Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    assert!(
-        tokio::process::Command::new("git")
-            .current_dir(work.path())
-            .args(["push", "-q", &bare.to_string_lossy(), "HEAD:refs/heads/main"])
-            .status()
-            .await
-            .unwrap()
-            .success()
-    );
+    let work = Work::new().await;
+    let sha = work.commit(&[("f.txt", content)], "c").await;
+    git(
+        work.path(),
+        &["push", "-q", &bare.to_string_lossy(), "HEAD:refs/heads/main"],
+    )
+    .await;
     (dir, bare, sha)
 }
 
@@ -368,8 +252,8 @@ async fn plain_bare_repo_with_commit(content: &str) -> (tempfile::TempDir, std::
 /// (see its doc comment — "the pre-receive hook already pushed to the
 /// bucket"), which assumes the *real* `gitquarry pre-receive-hook`
 /// subcommand ran and wrote that S3 state. No test in this codebase
-/// points `AppContext::exe_path` at a real invocable binary (every
-/// `test_ctx`-style helper uses a nonexistent placeholder path — a
+/// points `AppContext::exe_path` at a real invocable binary (the
+/// shared `gitquarry_test_support::ctx` uses a nonexistent placeholder path — a
 /// `cargo test` unit-test binary has no `CARGO_BIN_EXE_*` for its own
 /// crate to substitute one), so exercising that hook for real is out of
 /// scope here; this test instead verifies what this module actually
@@ -377,26 +261,15 @@ async fn plain_bare_repo_with_commit(content: &str) -> (tempfile::TempDir, std::
 /// git genuinely has to negotiate and accept a push into.
 #[tokio::test]
 async fn sync_mirror_once_pushes_a_changed_local_ref_to_the_external_target() {
-    use gitquarry_core::storage::remote::Manifest;
-    use std::collections::BTreeMap;
-    use tokio::process::Command;
-
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
 
     // The "external forge" stand-in: a plain bare repo, empty until the
     // push lands — no gitquarry machinery involved on this side at all.
     let target_dir = tempfile::tempdir().unwrap();
     let target_path = target_dir.path().join("target.git");
     std::fs::create_dir_all(&target_path).unwrap();
-    assert!(
-        std::process::Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .current_dir(&target_path)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(&target_path, &["init", "--quiet", "--bare"]).await;
 
     // Source repo — has one real commit, built the same "scratch working
     // tree -> pack -> upload_pack + put_manifest" way
@@ -405,58 +278,9 @@ async fn sync_mirror_once_pushes_a_changed_local_ref_to_the_external_target() {
     // `open_mirror` so `sync_mirror_once` has a real bare repo to push
     // from.
     let source = ctx.create_repo("alice/source").await.unwrap().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
-    }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("README.md"), b"hello from source\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
-    run_git(
-        work.path(),
-        &[
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ],
-    )
-    .await;
-    let sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-
-    let git_dir = work.path().join(".git");
-    let pack_dir = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
-        .await
-        .unwrap()
-        .unwrap();
-    source
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    source
-        .remote
-        .put_manifest(
-            &Manifest {
-                refs: BTreeMap::from([("refs/heads/main".to_string(), sha.clone())]),
-                head: Some("refs/heads/main".to_string()),
-            },
-            None,
-        )
-        .await
-        .unwrap();
+    let work = Work::new().await;
+    let sha = work.commit(&[("README.md", "hello from source\n")], "init").await;
+    work.push(&source, "refs/heads/main").await;
     // Scoped: `open_mirror` holds this repo's lock for as long as the
     // guard lives, and `sync_mirror_once` below re-opens the same
     // mirror (its own lock acquisition) — keeping this one alive past
@@ -509,84 +333,22 @@ async fn sync_mirror_once_pushes_a_changed_local_ref_to_the_external_target() {
 /// still means "every branch," unchanged.
 #[tokio::test]
 async fn sync_mirror_once_only_pushes_branches_matching_the_configured_pattern() {
-    use gitquarry_core::storage::remote::Manifest;
-    use std::collections::{BTreeMap, BTreeSet};
-    use tokio::process::Command;
+    use std::collections::BTreeSet;
 
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
 
     let target_dir = tempfile::tempdir().unwrap();
     let target_path = target_dir.path().join("target.git");
     std::fs::create_dir_all(&target_path).unwrap();
-    assert!(
-        std::process::Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .current_dir(&target_path)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(&target_path, &["init", "--quiet", "--bare"]).await;
 
     let source = ctx.create_repo("alice/pattern-source").await.unwrap().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
-    }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("README.md"), b"hello from source\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
-    run_git(
-        work.path(),
-        &[
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ],
-    )
-    .await;
-    let sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-
-    let git_dir = work.path().join(".git");
-    let pack_dir = tempfile::tempdir().unwrap();
-    // One pack covers all three refs below -- they all point at the same
-    // commit, so nothing beyond it needs to be reachable.
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
-        .await
-        .unwrap()
-        .unwrap();
-    source
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    source
-        .remote
-        .put_manifest(
-            &Manifest {
-                refs: BTreeMap::from([
-                    ("refs/heads/main".to_string(), sha.clone()),
-                    ("refs/heads/release/1.0".to_string(), sha.clone()),
-                    ("refs/tags/v1".to_string(), sha.clone()),
-                ]),
-                head: Some("refs/heads/main".to_string()),
-            },
-            None,
-        )
-        .await
-        .unwrap();
+    let work = Work::new().await;
+    let sha = work.commit(&[("README.md", "hello from source\n")], "init").await;
+    git(work.path(), &["branch", "release/1.0"]).await;
+    git(work.path(), &["tag", "v1"]).await;
+    work.push(&source, "refs/heads/main").await;
     {
         ctx.open_mirror(&source).await.unwrap();
     }
@@ -641,7 +403,7 @@ async fn sync_mirror_once_only_pushes_branches_matching_the_configured_pattern()
 #[tokio::test]
 async fn sync_mirror_once_pulls_a_new_ref_from_the_external_target() {
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
 
     let (_target_dir, target_path, sha) = plain_bare_repo_with_commit("hello from target\n").await;
 
@@ -717,66 +479,15 @@ async fn sync_mirror_once_pulls_a_new_ref_from_the_external_target() {
 /// sides exactly as they were, never forcing either one.
 #[tokio::test]
 async fn sync_mirror_once_marks_a_genuine_divergence_without_forcing_either_side() {
-    use gitquarry_core::storage::remote::Manifest;
-    use std::collections::BTreeMap;
-    use tokio::process::Command;
-
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
 
     let (_target_dir, target_path, target_sha) = plain_bare_repo_with_commit("hello from target\n").await;
 
     let source = ctx.create_repo("alice/source-diverge").await.unwrap().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        assert!(
-            Command::new("git")
-                .current_dir(dir)
-                .args(args)
-                .status()
-                .await
-                .unwrap()
-                .success()
-        );
-    }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("g.txt"), b"hello from source\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
-    run_git(
-        work.path(),
-        &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "s"],
-    )
-    .await;
-    let source_sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let source_sha = String::from_utf8_lossy(&source_sha_out.stdout).trim().to_string();
-
-    let git_dir = work.path().join(".git");
-    let pack_dir = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &source_sha, &[], pack_dir.path())
-        .await
-        .unwrap()
-        .unwrap();
-    source
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    source
-        .remote
-        .put_manifest(
-            &Manifest {
-                refs: BTreeMap::from([("refs/heads/main".to_string(), source_sha.clone())]),
-                head: Some("refs/heads/main".to_string()),
-            },
-            None,
-        )
-        .await
-        .unwrap();
+    let work = Work::new().await;
+    let source_sha = work.commit(&[("g.txt", "hello from source\n")], "s").await;
+    work.push(&source, "refs/heads/main").await;
     {
         ctx.open_mirror(&source).await.unwrap();
     }
@@ -830,7 +541,7 @@ async fn sync_mirror_once_marks_a_genuine_divergence_without_forcing_either_side
 #[tokio::test]
 async fn sync_one_mirror_now_surfaces_a_real_failure_instead_of_swallowing_it() {
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
     let source = ctx.create_repo("alice/source-broken").await.unwrap().unwrap();
     {
         ctx.open_mirror(&source).await.unwrap();
@@ -923,7 +634,7 @@ fn a_divergence_is_reported_too_but_never_over_a_real_error() {
 #[tokio::test]
 async fn sync_mirror_once_refuses_a_pull_that_violates_the_repos_own_policy() {
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
 
     let (_target_dir, target_path, sha) = plain_bare_repo_with_commit("unsigned work\n").await;
 
@@ -1002,7 +713,7 @@ fn a_ref_deleted_on_one_side_isnt_reported_as_a_sweep_failure() {
 #[tokio::test]
 async fn a_deleted_repo_stops_being_mirrored_outward() {
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
 
     let (_target_dir, target_path, _sha) = plain_bare_repo_with_commit("upstream\n").await;
     let source = ctx.create_repo("alice/source-deleted").await.unwrap().unwrap();

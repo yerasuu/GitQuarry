@@ -1,23 +1,12 @@
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::{Group, Permission, Team, User};
-use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::migrations;
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::uid::Uid;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
+use gitquarry_test_support::{backend, cipher};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-
-fn backend_and_cipher(root: &std::path::Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
-    let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[7u8; SALT_LEN]).unwrap());
-    (backend, cipher)
-}
 
 async fn store_user(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, username: &str) -> User {
     let user = User {
@@ -54,7 +43,8 @@ async fn store_legacy_group(
 #[tokio::test]
 async fn a_fresh_bucket_reports_version_zero_and_every_migration_pending() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     assert_eq!(
         migrations::stored_version(backend.as_ref(), &cipher)
             .await
@@ -73,7 +63,8 @@ async fn a_fresh_bucket_reports_version_zero_and_every_migration_pending() {
 #[tokio::test]
 async fn plan_reports_without_writing() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let alice = store_user(&backend, &cipher, "alice").await;
     store_legacy_group(&backend, &cipher, "acme", &[&alice], Vec::new()).await;
 
@@ -100,7 +91,8 @@ async fn plan_reports_without_writing() {
 #[tokio::test]
 async fn run_pending_folds_legacy_membership_and_stamps_the_version() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let alice = store_user(&backend, &cipher, "alice").await;
     let bob = store_user(&backend, &cipher, "bob").await;
     store_legacy_group(
@@ -153,7 +145,8 @@ async fn run_pending_folds_legacy_membership_and_stamps_the_version() {
 #[tokio::test]
 async fn a_scoped_team_becomes_a_per_repo_grant_not_a_group_role() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let alice = store_user(&backend, &cipher, "alice").await;
     let web = Uid::new();
     store_legacy_group(
@@ -191,7 +184,8 @@ async fn a_scoped_team_becomes_a_per_repo_grant_not_a_group_role() {
 #[tokio::test]
 async fn a_scoped_team_never_lowers_a_grant_the_user_already_holds() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let web = Uid::new();
     let alice = User {
         uid: Uid::new(),
@@ -231,7 +225,8 @@ async fn a_scoped_team_never_lowers_a_grant_the_user_already_holds() {
 #[tokio::test]
 async fn running_twice_changes_nothing_the_second_time() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let alice = store_user(&backend, &cipher, "alice").await;
     store_legacy_group(&backend, &cipher, "acme", &[&alice], Vec::new()).await;
 
@@ -259,7 +254,8 @@ async fn running_twice_changes_nothing_the_second_time() {
 #[tokio::test]
 async fn the_stamp_records_what_was_applied() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     migrations::run_pending(&backend, &cipher).await.unwrap();
     let state = migrations::stored_version(backend.as_ref(), &cipher).await.unwrap();
     assert_eq!(state.version, migrations::CURRENT_DATA_VERSION);
@@ -274,7 +270,8 @@ async fn the_stamp_records_what_was_applied() {
 #[tokio::test]
 async fn every_registered_migration_is_dispatchable() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let planned = migrations::plan(&backend, &cipher).await.unwrap();
     assert_eq!(planned.len(), migrations::MIGRATIONS.len());
     assert_eq!(
@@ -289,7 +286,8 @@ async fn every_registered_migration_is_dispatchable() {
 #[tokio::test]
 async fn an_unindexed_grant_is_indexed_and_a_second_run_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let repo_uid = Uid::new();
     let mut alice = store_user(&backend, &cipher, "alice").await;
     alice.repos.insert(repo_uid.clone(), Permission::Developer);

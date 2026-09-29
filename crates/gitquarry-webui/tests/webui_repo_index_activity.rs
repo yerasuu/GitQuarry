@@ -2,49 +2,12 @@
 //! `last_push*` fields), releases and merged MRs (from the audit log),
 //! newest first, capped, and never about a repo the viewer can't see.
 
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::Request;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::entities::Visibility;
-use std::net::SocketAddr;
-use std::path::Path;
+use gitquarry_test_support::{Session, ctx};
 use std::sync::Arc;
-use tower::ServiceExt;
 
 const HOUR: u64 = 3600;
-
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// `name`, last pushed `hours_ago` with `commits` commits to `branch`.
 async fn pushed_repo(
@@ -79,15 +42,7 @@ async fn pushed_repo(
 /// Each sidebar entry, in order, as "<repo> <description>".
 async fn sidebar(ctx: Arc<AppContext>) -> Vec<String> {
     let app = gitquarry_webui::webui::router(ctx);
-    let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = app.oneshot(request).await.unwrap();
-    let body = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
-        .await
-        .unwrap();
-    let html = String::from_utf8(body.to_vec()).unwrap();
+    let html = Session::get_as(&app, "/", None).await.body;
     let start = html
         .find(r#"<ul class="index-activity">"#)
         .unwrap_or_else(|| panic!("no sidebar: {html}"));
@@ -107,7 +62,7 @@ async fn sidebar(ctx: Arc<AppContext>) -> Vec<String> {
 #[tokio::test]
 async fn sorts_newest_first_and_caps_at_five() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(ctx(dir.path()));
     for (i, name) in ["a/one", "a/two", "a/three", "a/four", "a/five", "a/six"]
         .iter()
         .enumerate()
@@ -129,7 +84,7 @@ async fn sorts_newest_first_and_caps_at_five() {
 #[tokio::test]
 async fn describes_pushes_releases_and_merged_mrs() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(ctx(dir.path()));
     pushed_repo(&ctx, "acme/one", Visibility::Public, 1, 1, Some("main")).await;
     pushed_repo(&ctx, "acme/two", Visibility::Public, 2, 4, Some("master")).await;
     pushed_repo(&ctx, "acme/three", Visibility::Public, 3, 2, None).await;
@@ -171,7 +126,7 @@ async fn describes_pushes_releases_and_merged_mrs() {
 #[tokio::test]
 async fn never_mentions_a_repo_the_viewer_cannot_see() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(ctx(dir.path()));
     pushed_repo(&ctx, "acme/open", Visibility::Public, 2, 1, Some("main")).await;
     pushed_repo(&ctx, "acme/secret", Visibility::Private, 1, 1, Some("main")).await;
     let backend = ctx.backend();

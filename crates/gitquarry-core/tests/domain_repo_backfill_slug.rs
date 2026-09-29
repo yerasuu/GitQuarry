@@ -3,48 +3,15 @@
 //! tightened its charset) a clean slug the first time a uid-based listing
 //! loads it.
 
-use gitquarry_core::app::AppContext;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::repo;
+use gitquarry_core::storage;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::storage::{self, Backend};
 use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn Backend> = Arc::new(s3db::LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 #[tokio::test]
 async fn backfills_display_name_and_slug_for_a_legacy_full_name() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     // Simulates a repo whose name predates `sanitize_path`'s charset
     // tightening — `domain::repo::create` itself never validates the
     // charset (that's the caller's job), so this is a legitimate way to get
@@ -85,7 +52,7 @@ async fn backfills_display_name_and_slug_for_a_legacy_full_name() {
 #[tokio::test]
 async fn is_a_no_op_once_already_backfilled() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let resolved = repo::create(&ctx, "team/legacy name", None, None, None, Visibility::Public)
         .await
         .unwrap()

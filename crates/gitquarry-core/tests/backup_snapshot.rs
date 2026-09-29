@@ -1,23 +1,11 @@
 use gitquarry_core::backup::inventory::Class;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
 use gitquarry_core::backup::snapshot::{self, DEFAULT_CLASSES};
-use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::Backend;
-use s3db::LocalBackend;
+use gitquarry_test_support::{backend, cipher};
 use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
-
-fn backend(root: &std::path::Path) -> Arc<dyn Backend> {
-    Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }))
-}
-
-fn cipher(seed: u8) -> Arc<Cipher> {
-    Arc::new(Cipher::derive("test passphrase", &[seed; SALT_LEN]).unwrap())
-}
 
 /// Writes `body` sealed the way live gitquarry data is: with the object's own
 /// key as AAD.
@@ -41,7 +29,7 @@ fn fresh_run() -> BackupRun {
 async fn a_snapshot_reseals_entities_under_its_own_keys() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"alice").await;
     put_sealed(&src, &c, ".conf/global.json", b"settings").await;
     put_sealed(&src, &c, "repos/r1/.conf/config.json", b"repo config").await;
@@ -73,7 +61,7 @@ async fn a_snapshot_reseals_entities_under_its_own_keys() {
 async fn a_snapshot_leaves_out_the_classes_it_was_not_asked_for() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"alice").await;
     put_sealed(&src, &c, "repos/r1/objects/pack/pack-aa.pack", b"packdata").await;
     put_sealed(&src, &c, "repos/r1/lfs/oid1", b"lfsdata").await;
@@ -101,7 +89,7 @@ async fn a_snapshot_leaves_out_the_classes_it_was_not_asked_for() {
 async fn a_snapshot_never_captures_another_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"alice").await;
 
     let mut run = fresh_run();
@@ -128,8 +116,9 @@ async fn a_snapshot_can_target_another_bucket_with_its_own_key() {
     let dest_dir = tempfile::tempdir().unwrap();
     let src = backend(src_dir.path());
     let dest = backend(dest_dir.path());
-    let src_cipher = cipher(1);
-    let dest_cipher = cipher(2);
+    let src_cipher = cipher();
+    // A key of its own, so the assertion below proves it was resealed.
+    let dest_cipher = Arc::new(Cipher::derive("test passphrase", &[2u8; SALT_LEN]).unwrap());
     put_sealed(&src, &src_cipher, ".conf/users/alice.json", b"alice").await;
 
     let mut run = fresh_run();
@@ -160,7 +149,7 @@ async fn a_snapshot_can_target_another_bucket_with_its_own_key() {
 async fn re_running_the_same_snapshot_id_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"alice").await;
 
     let mut first = fresh_run();
@@ -182,7 +171,7 @@ async fn re_running_the_same_snapshot_id_is_idempotent() {
 async fn snapshots_list_newest_first() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"alice").await;
 
     for id in ["snap1", "snap2", "snap3"] {
@@ -201,7 +190,7 @@ async fn snapshots_list_newest_first() {
 async fn a_restore_writes_the_snapshot_back_over_live_data() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"before").await;
 
     let mut run = fresh_run();
@@ -226,7 +215,7 @@ async fn a_restore_writes_the_snapshot_back_over_live_data() {
 async fn a_dry_run_restore_counts_but_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"before").await;
 
     let mut run = fresh_run();
@@ -246,7 +235,7 @@ async fn a_dry_run_restore_counts_but_writes_nothing() {
 async fn restoring_a_snapshot_that_does_not_exist_fails_clearly() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
 
     let err = snapshot::restore(&src, &c, src.as_ref(), &c, "nope", true)
         .await
@@ -258,7 +247,7 @@ async fn restoring_a_snapshot_that_does_not_exist_fails_clearly() {
 async fn deleting_a_snapshot_removes_its_objects_and_manifest() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, ".conf/users/alice.json", b"alice").await;
     put_sealed(&src, &c, ".conf/groups/team.json", b"team").await;
 
@@ -279,7 +268,7 @@ async fn deleting_a_snapshot_removes_its_objects_and_manifest() {
 async fn a_snapshot_id_that_would_escape_its_prefix_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     let mut run = fresh_run();
 
     for bad in ["../repos", ".hidden", "with/slash", ""] {
@@ -297,7 +286,7 @@ async fn a_snapshot_id_that_would_escape_its_prefix_is_refused() {
 async fn a_snapshot_can_be_asked_for_a_blob_class_explicitly() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     put_sealed(&src, &c, "repos/r1/lfs/oid1", b"lfsdata").await;
 
     let mut run = fresh_run();
@@ -317,7 +306,7 @@ async fn a_snapshot_can_be_asked_for_a_blob_class_explicitly() {
 async fn the_encryption_config_is_refused_as_a_snapshot_class() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
-    let c = cipher(1);
+    let c = cipher();
     let mut run = fresh_run();
 
     // It isn't sealed under the data key, so there's nothing to open and

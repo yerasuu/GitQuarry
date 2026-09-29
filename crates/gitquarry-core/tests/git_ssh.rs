@@ -7,11 +7,7 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::user::{self, NewUser};
 use gitquarry_core::auth::entities::Permission;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_i18n::Locale;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::sync::Arc;
@@ -27,36 +23,6 @@ fn tools_available() -> bool {
         .all(|tool| std::process::Command::new(tool).arg("-V").output().is_ok())
 }
 
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[21u8; SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
 struct Server {
     ctx: Arc<AppContext>,
     port: u16,
@@ -68,7 +34,7 @@ struct Server {
 impl Server {
     async fn start() -> Self {
         let bucket = tempfile::tempdir().unwrap();
-        let ctx = Arc::new(test_ctx(bucket.path()));
+        let ctx = Arc::new(gitquarry_test_support::ctx(bucket.path()));
         ctx.create_repo(REPO).await.unwrap().unwrap();
 
         // run_server only takes an address, so a free port is found by

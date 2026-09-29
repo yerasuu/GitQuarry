@@ -1,44 +1,6 @@
 use gitquarry_core::auth::domain::group::*;
 use gitquarry_core::auth::entities::{Group, Permission, Team, User};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::uid::Uid;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
-
-fn test_backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Cipher::derive("test passphrase", &[6u8; SALT_LEN]).unwrap();
-    (backend, cipher)
-}
-
-fn test_ctx(backend: LocalBackend, cipher: Cipher) -> gitquarry_core::app::AppContext {
-    gitquarry_core::app::AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: std::path::PathBuf::new(),
-        config_path: std::path::PathBuf::new(),
-        exe_path: std::path::PathBuf::new(),
-        backend: std::sync::Arc::new(backend),
-        locks: Default::default(),
-        cipher: std::sync::Arc::new(cipher),
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// A stored user `set_member`/`remove_member` can resolve by name — those
 /// look the acting username up for real (a typo must not silently grant
@@ -63,8 +25,7 @@ async fn stored_user(ctx: &gitquarry_core::app::AppContext, username: &str) -> U
 #[tokio::test]
 async fn create_makes_the_creator_the_sole_owner_member() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let creator = Uid::new();
     create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
         .await
@@ -85,8 +46,7 @@ async fn create_makes_the_creator_the_sole_owner_member() {
 #[tokio::test]
 async fn set_member_adds_then_changes_a_role() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let alice = stored_user(&ctx, "alice").await;
     let mut group = Group::default();
     set_member(&ctx, &mut group, "alice", "developer", gitquarry_i18n::Locale::En)
@@ -103,8 +63,7 @@ async fn set_member_adds_then_changes_a_role() {
 #[tokio::test]
 async fn set_member_rejects_an_unknown_tier_and_an_unknown_user() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     stored_user(&ctx, "alice").await;
     let mut group = Group::default();
     assert!(
@@ -127,8 +86,7 @@ async fn set_member_rejects_an_unknown_tier_and_an_unknown_user() {
 #[tokio::test]
 async fn remove_member_also_strips_the_legacy_grants() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let alice = stored_user(&ctx, "alice").await;
     let mut group = Group {
         members: std::collections::BTreeMap::from([(alice.uid.clone(), Permission::Developer)]),
@@ -151,8 +109,7 @@ async fn remove_member_also_strips_the_legacy_grants() {
 #[tokio::test]
 async fn create_nests_a_subgroup_under_its_parent_path() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let creator = Uid::new();
     create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
         .await
@@ -188,8 +145,7 @@ async fn create_nests_a_subgroup_under_its_parent_path() {
 #[tokio::test]
 async fn create_refuses_a_path_an_existing_repo_already_holds() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     gitquarry_core::domain::repo::create(
         &ctx,
         "acme/team",
@@ -225,8 +181,7 @@ async fn create_refuses_a_path_an_existing_repo_already_holds() {
 #[tokio::test]
 async fn delete_refuses_while_subgroups_remain() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let creator = Uid::new();
     create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
         .await
@@ -257,8 +212,7 @@ async fn delete_refuses_while_subgroups_remain() {
 #[tokio::test]
 async fn create_repo_refuses_a_path_a_subgroup_already_holds() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let creator = Uid::new();
     create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)
         .await
@@ -284,8 +238,7 @@ async fn create_repo_refuses_a_path_a_subgroup_already_holds() {
 #[tokio::test]
 async fn list_groups_for_user_reads_the_index_and_drops_stale_pointers() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let ctx = test_ctx(backend, cipher);
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let alice = stored_user(&ctx, "alice").await;
     let creator = Uid::new();
     create(&ctx, "acme", None, creator.clone(), None, gitquarry_i18n::Locale::En)

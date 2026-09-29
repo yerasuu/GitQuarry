@@ -5,10 +5,11 @@
 
 use axum::http::{StatusCode, header};
 use gitquarry_core::app::AppContext;
-use gitquarry_core::auth::domain::user::{self, NewUser};
+use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::storage::entities::{RepoConfig, Visibility};
 use gitquarry_core::storage::settings;
+use gitquarry_test_support::PASSWORD;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -22,46 +23,12 @@ const PRIVATE: &str = "team/proj";
 /// Public: reads are open to anonymous callers, writes still need one.
 const PUBLIC: &str = "team/open";
 
-const PASSWORD: &str = "correct-password";
-
 struct Server {
     base: String,
     addr: std::net::SocketAddr,
     ctx: Arc<AppContext>,
     client: reqwest::Client,
     _dir: tempfile::TempDir,
-}
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
 }
 
 async fn create_repo(ctx: &AppContext, full_name: &str, visibility: Visibility) {
@@ -84,20 +51,7 @@ async fn create_repo(ctx: &AppContext, full_name: &str, visibility: Visibility) 
 }
 
 async fn create_user(ctx: &AppContext, username: &str, perm: Permission) {
-    user::create(
-        ctx,
-        NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: Some(PASSWORD),
-            is_admin: false,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    gitquarry_test_support::user(ctx, username, false).await;
     for repo in [PRIVATE, PUBLIC] {
         user::set_repo_perm(ctx, username, repo, Some(perm), gitquarry_i18n::Locale::En)
             .await
@@ -108,7 +62,7 @@ async fn create_user(ctx: &AppContext, username: &str, perm: Permission) {
 /// alice and bob can push (`Developer`), carol can only read (`Reporter`).
 async fn start() -> Server {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     create_repo(&ctx, PRIVATE, Visibility::Private).await;
     create_repo(&ctx, PUBLIC, Visibility::Public).await;
     create_user(&ctx, "alice", Permission::Developer).await;

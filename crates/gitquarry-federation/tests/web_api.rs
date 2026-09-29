@@ -1,53 +1,11 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use gitquarry_federation::access;
-use gitquarry_federation::core_client::CoreClient;
 use gitquarry_federation::entities::Peer;
-use gitquarry_federation::gossip::GossipTable;
-use gitquarry_federation::state::FederationState;
 use gitquarry_federation::web::router;
+use gitquarry_test_support::{Page, federation_state, send};
 use gitquarry_wire::InstanceInfo;
-use s3db::{BackendConfig, LocalBackend, LocalEngine, LocalParams};
 use std::sync::Arc;
-use tower::ServiceExt;
-
-fn test_state(root: &std::path::Path) -> Arc<FederationState> {
-    let bucket = root.to_string_lossy().to_string();
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: bucket.clone(),
-        engine: LocalEngine::Files,
-    });
-    let cipher = s3db_crypto::Cipher::derive("test passphrase", &[44u8; s3db_crypto::SALT_LEN]).unwrap();
-    Arc::new(FederationState {
-        backend: Arc::new(backend),
-        cipher: Arc::new(cipher),
-        core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string()),
-        backend_config: BackendConfig::Local(LocalParams {
-            bucket,
-            engine: LocalEngine::Files,
-        }),
-        gossip: Arc::new(GossipTable::default()),
-        self_announce: None,
-        rate_limiter: std::sync::Arc::new(gitquarry_federation::rate_limit::PeerRateLimiter::default()),
-        rate_limit_public_max: 60,
-        rate_limit_public_window: std::time::Duration::from_secs(60),
-        rate_limit_token_max: 120,
-        rate_limit_token_window: std::time::Duration::from_secs(60),
-        rate_limit_peer_override_by_ip: true,
-    })
-}
-
-async fn send(state: &Arc<FederationState>, req: Request<Body>) -> (StatusCode, Vec<u8>) {
-    let resp = router(Arc::clone(state)).oneshot(req).await.unwrap();
-    let status = resp.status();
-    (
-        status,
-        axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-}
 
 fn get(uri: &str) -> Request<Body> {
     Request::get(uri).body(Body::empty()).unwrap()
@@ -56,7 +14,7 @@ fn get(uri: &str) -> Request<Body> {
 #[tokio::test]
 async fn banned_peers_lists_only_banned_ones_with_reason_and_actor() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path());
+    let state = federation_state(dir.path(), "http://127.0.0.1:1");
     let linked = Peer {
         name: "good-peer".to_string(),
         web_base_url: "https://good.example".to_string(),
@@ -88,9 +46,9 @@ async fn banned_peers_lists_only_banned_ones_with_reason_and_actor() {
         .await
         .unwrap();
 
-    let (status, bytes) = send(&state, get("/_api/banned-peers")).await;
+    let Page { status, body, .. } = send(&router(Arc::clone(&state)), get("/_api/banned-peers")).await;
     assert_eq!(status, StatusCode::OK);
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let list = json.as_array().unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["peer_name"], "bad-peer");
@@ -101,10 +59,10 @@ async fn banned_peers_lists_only_banned_ones_with_reason_and_actor() {
 #[tokio::test]
 async fn instance_get_reports_a_live_count_of_currently_banned_peers() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path());
+    let state = federation_state(dir.path(), "http://127.0.0.1:1");
 
-    let (_, bytes) = send(&state, get("/_api/instance")).await;
-    let info: InstanceInfo = serde_json::from_slice(&bytes).unwrap();
+    let body = send(&router(Arc::clone(&state)), get("/_api/instance")).await.body;
+    let info: InstanceInfo = serde_json::from_str(&body).unwrap();
     assert_eq!(info.total_bans_issued, 0);
 
     for name in ["bad-1", "bad-2"] {
@@ -125,7 +83,7 @@ async fn instance_get_reports_a_live_count_of_currently_banned_peers() {
             .unwrap();
     }
 
-    let (_, bytes) = send(&state, get("/_api/instance")).await;
-    let info: InstanceInfo = serde_json::from_slice(&bytes).unwrap();
+    let body = send(&router(Arc::clone(&state)), get("/_api/instance")).await.body;
+    let info: InstanceInfo = serde_json::from_str(&body).unwrap();
     assert_eq!(info.total_bans_issued, 2);
 }

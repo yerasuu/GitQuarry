@@ -1,19 +1,6 @@
 use gitquarry_core::backup::inventory::Class;
 use gitquarry_core::backup::report::{self, BackupRun, LIST_LIMIT, MAX_SAMPLES, Outcome, Trigger};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Backend;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
-
-fn test_backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Cipher::derive("test passphrase", &[9u8; SALT_LEN]).unwrap();
-    (backend, cipher)
-}
+use gitquarry_test_support::cipher;
 
 #[test]
 fn a_starting_run_is_recorded_as_running() {
@@ -104,8 +91,9 @@ fn failure_and_unknown_samples_are_capped_but_totals_are_not() {
 #[tokio::test]
 async fn saved_runs_come_back_newest_first() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: &dyn Backend = &backend;
+    let bucket = gitquarry_test_support::backend(dir.path());
+    let backend = bucket.as_ref();
+    let cipher = cipher();
 
     let mut ids = Vec::new();
     for _ in 0..3 {
@@ -125,8 +113,9 @@ async fn saved_runs_come_back_newest_first() {
 #[tokio::test]
 async fn saving_the_same_run_twice_overwrites_it() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: &dyn Backend = &backend;
+    let bucket = gitquarry_test_support::backend(dir.path());
+    let backend = bucket.as_ref();
+    let cipher = cipher();
 
     // The real lifecycle: `Running` at the start, final outcome at the end,
     // same id both times.
@@ -144,8 +133,9 @@ async fn saving_the_same_run_twice_overwrites_it() {
 #[tokio::test]
 async fn list_recent_honors_its_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: &dyn Backend = &backend;
+    let bucket = gitquarry_test_support::backend(dir.path());
+    let backend = bucket.as_ref();
+    let cipher = cipher();
 
     for _ in 0..4 {
         let run = BackupRun::starting("self", Trigger::Cli);
@@ -158,8 +148,9 @@ async fn list_recent_honors_its_limit() {
 #[tokio::test]
 async fn pruning_keeps_the_newest_records_only() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: &dyn Backend = &backend;
+    let bucket = gitquarry_test_support::backend(dir.path());
+    let backend = bucket.as_ref();
+    let cipher = cipher();
 
     let mut ids = Vec::new();
     for _ in 0..(LIST_LIMIT + 3) {
@@ -182,8 +173,9 @@ async fn pruning_keeps_the_newest_records_only() {
 #[tokio::test]
 async fn pruning_a_short_history_does_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: &dyn Backend = &backend;
+    let bucket = gitquarry_test_support::backend(dir.path());
+    let backend = bucket.as_ref();
+    let cipher = cipher();
 
     let run = BackupRun::starting("self", Trigger::Cli);
     report::save(backend, &cipher, &run).await.unwrap();

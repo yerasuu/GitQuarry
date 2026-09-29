@@ -4,46 +4,11 @@ use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use gitquarry_core::app::AppContext;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_i18n::Locale;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> Arc<AppContext> {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[31u8; SALT_LEN]).unwrap());
-    Arc::new(AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    })
-}
 
 async fn body_status(resp: Response) -> (StatusCode, serde_json::Value) {
     let status = resp.status();
@@ -54,7 +19,7 @@ async fn body_status(resp: Response) -> (StatusCode, serde_json::Value) {
 #[tokio::test]
 async fn authorize_reflects_a_real_owner_grant() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     gitquarry_core::auth::domain::user::create(
         &ctx,
         gitquarry_core::auth::domain::user::NewUser {
@@ -84,7 +49,7 @@ async fn authorize_reflects_a_real_owner_grant() {
 #[tokio::test]
 async fn authorize_rejects_a_stranger() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     ctx.create_repo("alice/proj").await.unwrap();
 
     let body = serde_json::to_vec(&serde_json::json!({
@@ -99,7 +64,7 @@ async fn authorize_rejects_a_stranger() {
 #[tokio::test]
 async fn authorize_and_summarize_returns_a_private_repos_summary_only_to_someone_entitled() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     gitquarry_core::auth::domain::user::create(
         &ctx,
         gitquarry_core::auth::domain::user::NewUser {
@@ -150,7 +115,7 @@ async fn authorize_and_summarize_returns_a_private_repos_summary_only_to_someone
 #[tokio::test]
 async fn uid_for_name_finds_a_private_repo_by_exact_name() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     let resolved = ctx.create_repo("alice/secret").await.unwrap().unwrap();
     let (mut config, etag) = resolved.remote.get_repo_config().await.unwrap();
     config.full_name = "alice/secret".to_string();
@@ -178,7 +143,7 @@ async fn uid_for_name_finds_a_private_repo_by_exact_name() {
 #[tokio::test]
 async fn uid_for_name_404s_for_a_nonexistent_repo() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     let resp = handler_uid_for_name(
         State(ctx),
         Query(HashMap::from([("name".to_string(), "nobody/nothing".to_string())])),
@@ -190,7 +155,7 @@ async fn uid_for_name_404s_for_a_nonexistent_repo() {
 #[tokio::test]
 async fn public_repos_lists_only_visible_public_repos() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     let resolved = ctx.create_repo("acme/demo").await.unwrap().unwrap();
     let config = storage::entities::RepoConfig {
         uid: resolved.uid.clone(),
@@ -219,7 +184,7 @@ async fn public_repos_lists_only_visible_public_repos() {
 #[tokio::test]
 async fn fork_from_remote_rejects_a_namespace_the_acting_user_doesnt_control() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     gitquarry_core::auth::domain::user::create(
         &ctx,
         gitquarry_core::auth::domain::user::NewUser {

@@ -1,24 +1,21 @@
 use gitquarry_federation::domain::fork::*;
-use s3db::LocalBackend;
+use gitquarry_test_support::{backend, cipher};
 
 use gitquarry_federation::access;
 use gitquarry_federation::core_client::CoreClient;
 use gitquarry_federation::entities::PeerAccessLevel;
 use gitquarry_wire::Uid;
-use s3db::Cipher;
 
 #[tokio::test]
 async fn request_fork_rejects_a_peer_that_isnt_linked() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = LocalBackend::new(&s3db::LocalParams {
-        bucket: dir.path().to_string_lossy().to_string(),
-        engine: s3db::LocalEngine::Files,
-    });
-    let cipher = Cipher::derive("test passphrase", &[27u8; s3db_crypto::SALT_LEN]).unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
     let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
     let dest_uid = Uid::new();
     let err = request_fork(
-        &backend,
+        backend,
         &cipher,
         &core,
         RequestFork {
@@ -39,11 +36,9 @@ async fn request_fork_rejects_a_peer_that_isnt_linked() {
 #[tokio::test]
 async fn request_fork_rejects_a_browse_only_peer() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = LocalBackend::new(&s3db::LocalParams {
-        bucket: dir.path().to_string_lossy().to_string(),
-        engine: s3db::LocalEngine::Files,
-    });
-    let cipher = Cipher::derive("test passphrase", &[28u8; s3db_crypto::SALT_LEN]).unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
     let peer = gitquarry_federation::entities::Peer {
         name: "acme".to_string(),
         web_base_url: "https://acme.example".to_string(),
@@ -56,12 +51,12 @@ async fn request_fork_rejects_a_browse_only_peer() {
         banned_by: String::new(),
         ..Default::default()
     };
-    access::put_peer(&backend, &cipher, &peer, None).await.unwrap();
+    access::put_peer(backend, &cipher, &peer, None).await.unwrap();
 
     let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
     let dest_uid = Uid::new();
     let err = request_fork(
-        &backend,
+        backend,
         &cipher,
         &core,
         RequestFork {
@@ -82,11 +77,9 @@ async fn request_fork_rejects_a_browse_only_peer() {
 #[tokio::test]
 async fn request_fork_rejects_a_banned_peer_even_at_full_access_level() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = LocalBackend::new(&s3db::LocalParams {
-        bucket: dir.path().to_string_lossy().to_string(),
-        engine: s3db::LocalEngine::Files,
-    });
-    let cipher = Cipher::derive("test passphrase", &[29u8; s3db_crypto::SALT_LEN]).unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
     let peer = gitquarry_federation::entities::Peer {
         name: "acme".to_string(),
         web_base_url: "https://acme.example".to_string(),
@@ -99,12 +92,12 @@ async fn request_fork_rejects_a_banned_peer_even_at_full_access_level() {
         banned_by: "alice".to_string(),
         ..Default::default()
     };
-    access::put_peer(&backend, &cipher, &peer, None).await.unwrap();
+    access::put_peer(backend, &cipher, &peer, None).await.unwrap();
 
     let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
     let dest_uid = Uid::new();
     let err = request_fork(
-        &backend,
+        backend,
         &cipher,
         &core,
         RequestFork {

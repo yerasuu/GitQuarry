@@ -8,16 +8,12 @@ use axum::body::Bytes;
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use gitquarry_core::app::{AppContext, Locks, ResolvedRepo};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
+use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
 use gitquarry_core::storage::merge_requests::{self, CommentAnchor, DiffSide, MrComment, MrStatus};
-use gitquarry_core::storage::remote::Manifest;
 use gitquarry_mirror_external::access::{self, ExternalMirror, ExternalMirrorProvider, ExternalPrLink, SyncDirection};
 use gitquarry_mirror_external::{domain, engine};
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
+use gitquarry_test_support::{Work, ctx, git};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -206,97 +202,15 @@ async fn fake_gitlab(initial: FakeGitLab) -> (String, Shared) {
     (base, state)
 }
 
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Locks::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
-async fn git(dir: &std::path::Path, args: &[&str]) -> String {
-    let out = tokio::process::Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
 /// Real `main` and `feature` (one commit ahead) in the bucket: importing an
 /// MR writes its branches into the repo's git mirror, so they have to name
 /// objects that exist.
 async fn push_main_and_feature(repo: &ResolvedRepo) {
-    let work = tempfile::tempdir().unwrap();
-    let dir = work.path();
-    git(dir, &["init", "-q"]).await;
-    let commit = async |content: &str| {
-        std::fs::write(dir.join("f.txt"), content).unwrap();
-        git(dir, &["add", "-A"]).await;
-        git(
-            dir,
-            &[
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "user.name=t",
-                "commit",
-                "-q",
-                "-m",
-                content,
-            ],
-        )
-        .await;
-        git(dir, &["rev-parse", "HEAD"]).await
-    };
-    let main = commit("main\n").await;
-    let feature = commit("feature\n").await;
-    let packs = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&dir.join(".git"), &feature, &[], packs.path())
-        .await
-        .unwrap()
-        .unwrap();
-    repo.remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    let (_, etag) = repo.remote.get_manifest().await.unwrap_or((Manifest::default(), None));
-    let manifest = Manifest {
-        refs: [("refs/heads/main", main), ("refs/heads/feature", feature)]
-            .into_iter()
-            .map(|(r, sha)| (r.to_string(), sha))
-            .collect(),
-        head: Some("refs/heads/main".to_string()),
-    };
-    repo.remote.put_manifest(&manifest, etag.as_deref()).await.unwrap();
+    let work = Work::new().await;
+    work.commit(&[("f.txt", "main\n")], "main\n").await;
+    git(work.path(), &["checkout", "-q", "-b", "feature"]).await;
+    work.commit(&[("f.txt", "feature\n")], "feature\n").await;
+    work.push(repo, "refs/heads/main").await;
 }
 
 struct World {
@@ -310,7 +224,7 @@ struct World {
 /// A repo with `main` and `feature` already mirrored, plus one stored GitLab mirror of it pointed at the stand-in.
 async fn world(direction: SyncDirection, gitlab: FakeGitLab) -> World {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
     push_main_and_feature(&repo).await;
 

@@ -1,45 +1,10 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::backup::report::{self, Outcome, Trigger};
 use gitquarry_core::backup::schedule::{self, DEFAULT_INTERVAL, MIN_INTERVAL};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::entities::ServerSettings;
 use gitquarry_core::storage::settings::put_settings;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
-use std::sync::Arc;
+use gitquarry_test_support::ctx;
 use std::time::Duration;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[31u8; SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 async fn save_settings(ctx: &AppContext, settings: &ServerSettings) {
     let backend = ctx.backend();
@@ -87,7 +52,7 @@ fn an_unparseable_interval_falls_back_to_the_default_rather_than_off() {
 #[tokio::test]
 async fn a_run_with_no_destination_configured_is_recorded_as_failed() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
 
     let run = schedule::run_once(&ctx, Trigger::Cli).await.unwrap();
     assert_eq!(run.outcome, Outcome::Failed);
@@ -112,7 +77,7 @@ async fn a_run_with_no_destination_configured_is_recorded_as_failed() {
 #[tokio::test]
 async fn a_run_against_an_unparseable_destination_is_recorded_as_failed() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     save_settings(
         &ctx,
         &ServerSettings {
@@ -134,7 +99,7 @@ async fn a_run_against_an_unparseable_destination_is_recorded_as_failed() {
 #[tokio::test]
 async fn a_self_destination_takes_a_snapshot_and_no_replica() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     save_settings(
         &ctx,
         &ServerSettings {
@@ -160,7 +125,7 @@ async fn a_self_destination_takes_a_snapshot_and_no_replica() {
 async fn a_directory_destination_replicates_and_snapshots() {
     let dir = tempfile::tempdir().unwrap();
     let dest_dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     // A replica needs the source to have been bootstrapped, since that's the
     // object it copies first.
     gitquarry_core::crypto::bootstrap::get_or_create_cipher(ctx.backend().as_ref(), "test passphrase")
@@ -178,10 +143,7 @@ async fn a_directory_destination_replicates_and_snapshots() {
     let run = schedule::run_once(&ctx, Trigger::Cli).await.unwrap();
     assert_eq!(run.outcome, Outcome::Ok, "run failed: {:?}", run.error);
 
-    let dest: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: dest_dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
+    let dest = gitquarry_test_support::backend(dest_dir.path());
     // The encryption config lands first, and the settings object rides along.
     for key in [
         gitquarry_core::crypto::bootstrap::ENCRYPTION_META_KEY,
@@ -195,7 +157,7 @@ async fn a_directory_destination_replicates_and_snapshots() {
 #[tokio::test]
 async fn the_snapshot_half_can_be_turned_off() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     save_settings(
         &ctx,
         &ServerSettings {
@@ -220,7 +182,7 @@ async fn the_snapshot_half_can_be_turned_off() {
 #[tokio::test]
 async fn snapshot_retention_applies_at_the_end_of_a_run() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     save_settings(
         &ctx,
         &ServerSettings {
@@ -246,7 +208,7 @@ async fn snapshot_retention_applies_at_the_end_of_a_run() {
 #[tokio::test]
 async fn retention_is_off_unless_configured() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     save_settings(
         &ctx,
         &ServerSettings {

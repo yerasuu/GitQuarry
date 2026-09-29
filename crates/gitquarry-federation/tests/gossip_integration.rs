@@ -4,40 +4,20 @@
 //! auto-link threshold, then a real auto-link firing once it's cleared.
 
 use gitquarry_federation::access;
-use gitquarry_federation::core_client::CoreClient;
-use gitquarry_federation::gossip::{GossipCandidateWire, GossipTable, bootstrap_seeds, run_auto_link_tick};
+use gitquarry_federation::gossip::{GossipCandidateWire, bootstrap_seeds, run_auto_link_tick};
 use gitquarry_federation::state::FederationState;
 use gitquarry_federation::web;
-use s3db::{BackendConfig, LocalBackend, LocalEngine, LocalParams};
+use gitquarry_test_support::federation_state;
 use std::sync::Arc;
 
 fn test_state(root: &std::path::Path, name: &str, web_base_url: String) -> Arc<FederationState> {
-    let bucket = root.to_string_lossy().to_string();
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: bucket.clone(),
-        engine: LocalEngine::Files,
-    });
-    let cipher = s3db_crypto::Cipher::derive("test passphrase", &[42u8; s3db_crypto::SALT_LEN]).unwrap();
     Arc::new(FederationState {
-        backend: Arc::new(backend),
-        cipher: Arc::new(cipher),
-        core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string()),
-        backend_config: BackendConfig::Local(LocalParams {
-            bucket,
-            engine: LocalEngine::Files,
-        }),
-        gossip: Arc::new(GossipTable::default()),
         self_announce: Some(GossipCandidateWire {
             name: name.to_string(),
             web_base_url: web_base_url.clone(),
             git_base_url: web_base_url,
         }),
-        rate_limiter: Arc::new(gitquarry_federation::rate_limit::PeerRateLimiter::default()),
-        rate_limit_public_max: 60,
-        rate_limit_public_window: std::time::Duration::from_secs(60),
-        rate_limit_token_max: 120,
-        rate_limit_token_window: std::time::Duration::from_secs(60),
-        rate_limit_peer_override_by_ip: true,
+        ..(*federation_state(root, "http://127.0.0.1:1")).clone()
     })
 }
 

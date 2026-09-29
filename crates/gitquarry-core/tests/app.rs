@@ -1,5 +1,4 @@
 use gitquarry_core::app::*;
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::Cas;
 use std::sync::Arc;
@@ -110,7 +109,7 @@ fn limited_count_reflects_only_keys_actually_over_their_cap() {
 /// `request_cache.rs` tests use one for.
 #[derive(Debug)]
 struct CountingBackend {
-    inner: s3db::LocalBackend,
+    inner: Arc<dyn Backend>,
     gets: AtomicUsize,
 }
 
@@ -146,37 +145,17 @@ impl Backend for CountingBackend {
     }
 }
 
+/// The shared fixture with its backend wrapped, so the test can count the
+/// reads that reach the bucket.
 fn test_ctx(root: &std::path::Path) -> (AppContext, Arc<CountingBackend>) {
-    let inner = s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: gitquarry_core::config::LocalEngine::Redb,
-    });
+    let base = gitquarry_test_support::ctx(root);
     let counting = Arc::new(CountingBackend {
-        inner,
+        inner: Arc::clone(&base.backend),
         gets: AtomicUsize::new(0),
     });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[4u8; s3db_crypto::SALT_LEN]).unwrap());
     let ctx = AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
         backend: Arc::clone(&counting) as Arc<dyn Backend>,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+        ..base
     };
     (ctx, counting)
 }

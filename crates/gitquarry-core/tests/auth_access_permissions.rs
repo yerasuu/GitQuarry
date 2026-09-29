@@ -1,8 +1,10 @@
 use gitquarry_core::auth::access::*;
 use gitquarry_core::auth::entities::{Group, Permission, Team, User};
 use gitquarry_core::crypto::Cipher;
+use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::settings::claim_repo_name_self_healing;
 use gitquarry_core::storage::uid::Uid;
+use std::sync::Arc;
 
 /// `repos` labels double as deterministic test uids via `Uid`'s
 /// `From<String>` — [`Bucket::permission`] claims each repo label under that
@@ -90,21 +92,18 @@ fn legacy_group(name: &str, owners: &[&User], teams: Vec<Team>) -> Group {
 /// `Group` records, so both have to exist for the decision to see them.
 struct Bucket {
     _dir: tempfile::TempDir,
-    backend: s3db::LocalBackend,
-    cipher: Cipher,
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
 }
 
 impl Bucket {
     async fn with_groups(groups: &[Group]) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let backend = s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: dir.path().to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        });
-        let cipher = Cipher::derive("test passphrase", &[7u8; s3db_crypto::SALT_LEN]).unwrap();
+        let backend = gitquarry_test_support::backend(dir.path());
+        let cipher = gitquarry_test_support::cipher();
         for group in groups {
-            put_group(&backend, &cipher, group, None).await.unwrap();
-            let _ = group.claim_uid(&backend, &cipher).await;
+            put_group(&*backend, &cipher, group, None).await.unwrap();
+            let _ = group.claim_uid(&*backend, &cipher).await;
         }
         Self {
             _dir: dir,
@@ -117,10 +116,10 @@ impl Bucket {
     /// call already did), so explicit grants and scoped legacy teams keyed by
     /// that uid apply to it.
     async fn permission(&self, user: &User, repo: &str) -> Option<Permission> {
-        claim_repo_name_self_healing(&self.backend, &self.cipher, repo, &ruid(repo), |_| async { Ok(true) })
+        claim_repo_name_self_healing(&*self.backend, &self.cipher, repo, &ruid(repo), |_| async { Ok(true) })
             .await
             .unwrap();
-        effective_permission_for_user(&self.backend, &self.cipher, user, repo)
+        effective_permission_for_user(&*self.backend, &self.cipher, user, repo)
             .await
             .unwrap()
     }
@@ -173,7 +172,7 @@ async fn effective_permission_grants_nothing_to_a_non_member() {
 async fn effective_permission_resolves_a_repo_that_does_not_exist_yet() {
     let alice = user_with_repos("alice", &[("acme/ghost", Permission::Maintainer)]);
     let bucket = Bucket::with_groups(&[group("acme", &[(&alice, Permission::Reporter)])]).await;
-    let unclaimed = |repo| effective_permission_for_user(&bucket.backend, &bucket.cipher, &alice, repo);
+    let unclaimed = |repo| effective_permission_for_user(&*bucket.backend, &bucket.cipher, &alice, repo);
     assert_eq!(unclaimed("acme/ghost").await.unwrap(), Some(Permission::Reporter));
     assert_eq!(unclaimed("alice/ghost").await.unwrap(), Some(Permission::Owner));
 }

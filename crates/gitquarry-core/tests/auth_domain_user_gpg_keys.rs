@@ -5,41 +5,7 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_i18n::Locale;
-use s3db::LocalBackend;
-use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 async fn make_user(ctx: &AppContext, username: &str) {
     user::create(
@@ -104,7 +70,7 @@ async fn add_gpg_key_rejects_garbage() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
 
     assert!(user::add_gpg_key(&ctx, "alice", "not a key", Locale::En).await.is_err());
@@ -120,7 +86,7 @@ async fn add_gpg_key_then_remove_by_fingerprint_roundtrips() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     let key = generate_key();
 
@@ -148,7 +114,7 @@ async fn remove_gpg_key_is_a_noop_for_an_unknown_fingerprint() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     let key = generate_key();
     user::add_gpg_key(&ctx, "alice", &key, Locale::En).await.unwrap();

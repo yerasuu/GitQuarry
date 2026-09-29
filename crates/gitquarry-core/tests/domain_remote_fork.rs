@@ -1,42 +1,7 @@
-use gitquarry_core::app::AppContext;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::remote_fork::*;
 use gitquarry_core::storage;
 use gitquarry_core::storage::uid::Uid;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[19u8; SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend: Arc::new(backend) as Arc<dyn gitquarry_core::storage::Backend>,
-        locks: gitquarry_core::app::Locks::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// Same end-to-end shape as the old `fork_from_peer` test this replaces:
 /// spins up a real "instance B" over a real socket, seeds one public
@@ -46,10 +11,9 @@ fn test_ctx(root: &std::path::Path) -> AppContext {
 #[tokio::test]
 async fn seed_from_remote_copies_a_real_repo_from_a_real_remote() {
     use gitquarry_core::storage::entities::Visibility;
-    use tokio::process::Command;
 
     let dir_b = tempfile::tempdir().unwrap();
-    let ctx_b = Arc::new(test_ctx(dir_b.path()));
+    let ctx_b = Arc::new(gitquarry_test_support::ctx(dir_b.path()));
 
     let source = ctx_b.create_repo("acme/demo").await.unwrap().unwrap();
     let config = gitquarry_core::storage::entities::RepoConfig {
@@ -69,58 +33,9 @@ async fn seed_from_remote_copies_a_real_repo_from_a_real_remote() {
     .unwrap();
     storage::settings::set_visible_index(ctx_b.backend().as_ref(), &ctx_b.cipher, &source.uid, true).await;
 
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
-    }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("README.md"), b"hello from B\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
-    run_git(
-        work.path(),
-        &[
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ],
-    )
-    .await;
-    let sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-
-    let git_dir = work.path().join(".git");
-    let pack_dir = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
-        .await
-        .unwrap()
-        .unwrap();
-    source
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    source
-        .remote
-        .put_manifest(
-            &gitquarry_core::storage::remote::Manifest {
-                refs: std::collections::BTreeMap::from([("refs/heads/main".to_string(), sha.clone())]),
-                head: Some("refs/heads/main".to_string()),
-            },
-            None,
-        )
-        .await
-        .unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let sha = work.commit(&[("README.md", "hello from B\n")], "init").await;
+    work.push(&source, "refs/heads/main").await;
 
     let bind_addr = "127.0.0.1:18458";
     tokio::spawn(async move {
@@ -155,7 +70,7 @@ async fn seed_from_remote_copies_a_real_repo_from_a_real_remote() {
     }
 
     let dir_a = tempfile::tempdir().unwrap();
-    let ctx_a = test_ctx(dir_a.path());
+    let ctx_a = gitquarry_test_support::ctx(dir_a.path());
 
     let dest_owner = gitquarry_core::storage::entities::OwnerRef::User(Uid::from("alice-uid".to_string()));
     let dest = seed_from_remote(

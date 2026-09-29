@@ -3,73 +3,13 @@
 //! never break out of its `Content-Disposition` quoted-string.
 
 use axum::Router;
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::{HeaderMap, Request, StatusCode, header};
-use gitquarry_core::app::AppContext;
+use axum::http::{StatusCode, header};
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::storage::remote::Manifest;
-use std::net::SocketAddr;
-use std::path::Path;
+use gitquarry_test_support::{Page, Session, Work, ctx};
 use std::sync::Arc;
-use tower::ServiceExt;
-
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[21u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
-async fn git(dir: &Path, args: &[&str]) -> String {
-    // Signing is forced off so a developer's global `commit.gpgsign` can't
-    // turn every commit here into a pinentry prompt.
-    let out = tokio::process::Command::new("git")
-        .current_dir(dir)
-        .args(["-c", "commit.gpgsign=false"])
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "Test Author")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test Author")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
-}
 
 struct Seeded {
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _root: tempfile::TempDir,
     app: Router,
     sha: String,
 }
@@ -78,17 +18,18 @@ struct Seeded {
 /// raw view treats differently, pushed the way `git push` leaves a repo.
 async fn seeded() -> Seeded {
     let root = tempfile::tempdir().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
     let repo = gitquarry_core::domain::repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
 
+    let work = Work::new().await;
     let w = work.path();
-    git(w, &["init", "--quiet", "--initial-branch=main"]).await;
     std::fs::create_dir_all(w.join("assets")).unwrap();
     std::fs::create_dir_all(w.join("docs")).unwrap();
+    // Written by hand rather than through `Work::commit`, whose contents are
+    // `&str`: the PNG signature isn't valid UTF-8.
     for (name, content) in [
         ("README.md", &b"# Hello\n"[..]),
         ("page.html", b"<script>alert(1)</script>\n"),
@@ -104,62 +45,28 @@ async fn seeded() -> Seeded {
     ] {
         std::fs::write(w.join(name), content).unwrap();
     }
-    git(w, &["add", "."]).await;
-    git(w, &["commit", "--quiet", "-m", "every kind of file"]).await;
-    let sha = git(w, &["rev-parse", "HEAD"]).await;
-
-    let packs = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&w.join(".git"), &sha, &[], packs.path())
-        .await
-        .unwrap()
-        .unwrap();
-    repo.remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    let (_, etag) = repo.remote.get_manifest().await.unwrap();
-    repo.remote
-        .put_manifest(
-            &Manifest {
-                refs: [("refs/heads/main".to_string(), sha.clone())].into(),
-                head: Some("refs/heads/main".to_string()),
-            },
-            etag.as_deref(),
-        )
-        .await
-        .unwrap();
+    let sha = work.commit(&[], "every kind of file").await;
+    work.push(&repo, "refs/heads/main").await;
 
     Seeded {
-        _dirs: (root, work),
+        _root: root,
         app: gitquarry_webui::webui::router(ctx),
         sha,
     }
 }
 
-async fn get(app: &Router, uri: &str) -> (StatusCode, HeaderMap, String) {
-    let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
-    // `run_server` serves with `into_make_service_with_connect_info`; a bare
-    // `oneshot` doesn't, and the git-smart-HTTP layer 500s without it.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = app.clone().oneshot(request).await.unwrap();
-    let (parts, body) = response.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-    (
-        parts.status,
-        parts.headers,
-        String::from_utf8_lossy(&bytes).into_owned(),
-    )
+async fn get(app: &Router, uri: &str) -> Page {
+    Session::get_as(app, uri, None).await
 }
 
 /// `(Content-Type, Content-Disposition)` of the raw view of `path`, which
 /// must already be percent-encoded for the query string.
 async fn raw_headers(app: &Router, path: &str) -> (String, Option<String>) {
-    let (status, headers, body) = get(app, &format!("/_raw/plain/team/proj?path={path}")).await;
-    assert_eq!(status, StatusCode::OK, "{path}: {body}");
-    let content_type = headers[header::CONTENT_TYPE].to_str().unwrap().to_string();
-    let disposition = headers
+    let page = get(app, &format!("/_raw/plain/team/proj?path={path}")).await;
+    assert_eq!(page.status, StatusCode::OK, "{path}: {}", page.body);
+    let content_type = page.headers[header::CONTENT_TYPE].to_str().unwrap().to_string();
+    let disposition = page
+        .headers
         .get(header::CONTENT_DISPOSITION)
         .map(|v| v.to_str().unwrap().to_string());
     (content_type, disposition)
@@ -190,13 +97,15 @@ async fn common_extensions_get_their_content_type_and_render_inline() {
 async fn blob_view_embeds_images_and_prints_code() {
     let s = seeded().await;
 
-    let (status, _, svg) = get(&s.app, "/team/proj?view=blob&path=assets/logo.svg").await;
-    assert_eq!(status, StatusCode::OK, "{svg}");
+    let svg = get(&s.app, "/team/proj?view=blob&path=assets/logo.svg").await;
+    assert_eq!(svg.status, StatusCode::OK, "{}", svg.body);
+    let svg = svg.body;
     assert!(svg.contains(r#"<img src="/_raw/plain/"#), "{svg}");
     assert!(!svg.contains(r#"<pre class="blob">"#), "{svg}");
 
-    let (status, _, readme) = get(&s.app, "/team/proj?view=blob&path=README.md").await;
-    assert_eq!(status, StatusCode::OK, "{readme}");
+    let readme = get(&s.app, "/team/proj?view=blob&path=README.md").await;
+    assert_eq!(readme.status, StatusCode::OK, "{}", readme.body);
+    let readme = readme.body;
     assert!(!readme.contains(r#"<img src="/_raw/plain/"#), "{readme}");
     assert!(readme.contains(r#"<pre class="blob">"#), "{readme}");
 }
@@ -246,26 +155,30 @@ async fn disposition_filename_stays_inside_its_quoted_string() {
 async fn a_control_character_in_the_path_never_reaches_a_header() {
     let s = seeded().await;
 
-    let (status, headers, _) = get(&s.app, "/_raw/plain/team/proj?path=bad%0D%0Aname.svg").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(headers.get(header::CONTENT_DISPOSITION).is_none(), "{headers:?}");
+    let page = get(&s.app, "/_raw/plain/team/proj?path=bad%0D%0Aname.svg").await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST);
+    assert!(
+        page.headers.get(header::CONTENT_DISPOSITION).is_none(),
+        "{:?}",
+        page.headers
+    );
 }
 
 #[tokio::test]
 async fn patch_and_snapshot_downloads_name_their_file() {
     let s = seeded().await;
 
-    let (status, headers, _) = get(&s.app, &format!("/_raw/patch/team/proj?sha={}", s.sha)).await;
-    assert_eq!(status, StatusCode::OK);
-    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    let patch = get(&s.app, &format!("/_raw/patch/team/proj?sha={}", s.sha)).await;
+    assert_eq!(patch.status, StatusCode::OK);
+    let disposition = patch.headers[header::CONTENT_DISPOSITION].to_str().unwrap();
     assert!(disposition.starts_with("attachment; filename=\""), "{disposition}");
     assert!(disposition.contains(&s.sha[..7]), "{disposition}");
     assert!(disposition.ends_with(".patch\""), "{disposition}");
 
-    let (status, headers, _) = get(&s.app, "/_raw/snapshot/team/proj?fmt=zip").await;
-    assert_eq!(status, StatusCode::OK);
+    let snapshot = get(&s.app, "/_raw/snapshot/team/proj?fmt=zip").await;
+    assert_eq!(snapshot.status, StatusCode::OK);
     assert_eq!(
-        headers[header::CONTENT_DISPOSITION],
+        snapshot.headers[header::CONTENT_DISPOSITION],
         "attachment; filename=\"proj-main.zip\""
     );
 }

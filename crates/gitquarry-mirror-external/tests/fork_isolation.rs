@@ -3,51 +3,15 @@
 //! third-party credential. Lives here rather than in `gitquarry-core`'s own
 //! tests because writing an `ExternalMirror` needs this crate.
 
-use gitquarry_core::app::{AppContext, Locks};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::entities::{OwnerRef, Visibility};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_mirror_external::{access, domain};
-use s3db::LocalBackend;
-use std::sync::Arc;
-use std::time::Duration;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend: Arc::new(backend) as Arc<dyn Backend>,
-        locks: Locks::default(),
-        cipher,
-        mirror_max_age: Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
+use gitquarry_test_support::ctx;
 
 #[tokio::test]
 async fn a_fork_doesnt_inherit_the_sources_mirror_credential() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     let source = gitquarry_core::domain::repo::create(&ctx, "alice/mirrored", None, None, None, Visibility::Public)
         .await
         .unwrap()

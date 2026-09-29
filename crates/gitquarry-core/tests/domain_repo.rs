@@ -1,21 +1,16 @@
-use gitquarry_core::app::{AppContext, ResolvedRepo};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
+use gitquarry_core::app::ResolvedRepo;
 use gitquarry_core::domain::repo::*;
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_core::storage::{self, Cas};
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
 
 fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
-    let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
+    let remote = Remote::new(
+        gitquarry_test_support::backend(root),
+        "repos/team/proj".to_string(),
+        gitquarry_test_support::cipher(),
+    );
     ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
         remote,
@@ -77,11 +72,8 @@ async fn delete_tag_rejects_a_nonexistent_tag() {
 #[tokio::test]
 async fn delete_tag_rejects_a_protected_tag_even_though_it_exists() {
     let dir = tempfile::tempdir().unwrap();
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
+    let backend = gitquarry_test_support::backend(dir.path());
+    let cipher = gitquarry_test_support::cipher();
     let remote = Remote::new(Arc::clone(&backend), "repos/team/proj".to_string(), Arc::clone(&cipher));
     let resolved = ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
@@ -154,11 +146,8 @@ async fn delete_branch_rejects_the_default_branch() {
 #[tokio::test]
 async fn delete_branch_rejects_a_protected_branch_even_though_it_exists() {
     let dir = tempfile::tempdir().unwrap();
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; SALT_LEN]).unwrap());
+    let backend = gitquarry_test_support::backend(dir.path());
+    let cipher = gitquarry_test_support::cipher();
     let remote = Remote::new(Arc::clone(&backend), "repos/team/proj".to_string(), Arc::clone(&cipher));
     let resolved = ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
@@ -222,40 +211,10 @@ fn parse_csv_field_splits_and_trims() {
     assert!(branches.contains("develop"));
 }
 
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[14u8; SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
 #[tokio::test]
 async fn set_topics_normalizes_each_entry_and_drops_the_ones_left_empty() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
     let long = "a".repeat(50);
 
@@ -274,7 +233,7 @@ async fn set_topics_normalizes_each_entry_and_drops_the_ones_left_empty() {
 #[tokio::test]
 async fn set_labels_stores_name_color_pairs_last_duplicate_winning() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
 
     let (_, labels) = set_labels(&ctx, &repo, "bug:#111111, enhancement:#a2eeef, bug:#d73a4a")
@@ -300,7 +259,7 @@ async fn set_labels_stores_name_color_pairs_last_duplicate_winning() {
 #[tokio::test]
 async fn set_labels_rejects_a_malformed_entry_and_keeps_the_stored_labels() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let repo = ctx.create_repo("team/proj").await.unwrap().unwrap();
     set_labels(&ctx, &repo, "bug:#d73a4a").await.unwrap();
 

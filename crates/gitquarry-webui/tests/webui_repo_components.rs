@@ -3,130 +3,17 @@
 //! diffs, and the tree page's recent-commits table.
 
 use axum::Router;
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode, header};
-use gitquarry_core::app::AppContext;
-use gitquarry_core::storage::Cas;
+use axum::http::StatusCode;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::storage::remote::Manifest;
-use std::net::SocketAddr;
-use std::path::Path;
+use gitquarry_test_support::{Session, Work, ctx, git};
 use std::sync::Arc;
-use tower::ServiceExt;
-
-const SALT_BYTE: u8 = 43;
 
 const LEAD: &str = "l1\nl2\nl3\nl4\nl5\nl6\nl7\n";
 
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher = Arc::new(
-        gitquarry_core::crypto::Cipher::derive("test passphrase", &[SALT_BYTE; s3db_crypto::SALT_LEN]).unwrap(),
-    );
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
-}
-
-/// Pushes `work`'s whole history and every ref it has into a fresh public
-/// `team/proj` as a real pack, so the server's own mirror serves it.
-async fn publish(root: &Path, work: &Path) -> (Arc<AppContext>, Router) {
-    let ctx = Arc::new(test_ctx(root));
-    let repo = gitquarry_core::domain::repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
-        .await
-        .unwrap()
-        .unwrap();
-    let packs = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(
-        &work.join(".git"),
-        &git(work, &["rev-parse", "HEAD"]),
-        &[],
-        packs.path(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    repo.remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    let refs = git(work, &["for-each-ref", "--format=%(refname) %(objectname)"]);
-    let manifest = Manifest {
-        refs: refs
-            .lines()
-            .filter_map(|line| line.split_once(' '))
-            .map(|(name, sha)| (name.to_string(), sha.to_string()))
-            .collect(),
-        head: Some("refs/heads/main".to_string()),
-    };
-    let (_, etag) = repo.remote.get_manifest().await.unwrap();
-    assert_eq!(
-        repo.remote.put_manifest(&manifest, etag.as_deref()).await.unwrap(),
-        Cas::Ok
-    );
-    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
-    (ctx, app)
-}
-
 async fn get(app: &Router, uri: &str, cookie: Option<&str>) -> String {
-    let mut builder = Request::builder().uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, cookie);
-    }
-    let mut request = builder.body(Body::empty()).unwrap();
-    // `run_server` serves with connect info; a bare `oneshot` doesn't, and
-    // the git-smart-HTTP layer 500s without it.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let html = String::from_utf8(bytes.to_vec()).unwrap();
-    assert_eq!(status, StatusCode::OK, "{uri}: {html}");
-    html
+    let page = Session::get_as(app, uri, cookie).await;
+    assert_eq!(page.status, StatusCode::OK, "{uri}: {}", page.body);
+    page.body
 }
 
 /// `main` is `start` -> `before` (tagged `v1.0`) -> `rework`, and `rework`
@@ -143,31 +30,43 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let work = dir.path().join("work");
-    std::fs::create_dir_all(work.join("src")).unwrap();
-    git(&work, &["init", "--quiet", "--initial-branch=main"]);
-    std::fs::write(work.join("README"), "hi\n").unwrap();
-    git(&work, &["add", "-A"]);
-    git(&work, &["commit", "--quiet", "-m", "start"]);
+    let work = Work::new().await;
+    work.commit(&[("README", "hi\n")], "start").await;
 
-    std::fs::write(work.join("notes"), "old one\nold two\ncontext\n").unwrap();
-    std::fs::write(work.join("src/main.rs"), format!("{LEAD}gone\n")).unwrap();
-    std::fs::write(work.join("gone.go"), "package gone\n").unwrap();
-    std::fs::write(work.join("a b.rs"), "a\n").unwrap();
-    git(&work, &["add", "-A"]);
-    git(&work, &["commit", "--quiet", "-m", "before"]);
-    git(&work, &["tag", "v1.0"]);
+    let lead_gone = format!("{LEAD}gone\n");
+    work.commit(
+        &[
+            ("notes", "old one\nold two\ncontext\n"),
+            ("src/main.rs", &lead_gone),
+            ("gone.go", "package gone\n"),
+            ("a b.rs", "a\n"),
+        ],
+        "before",
+    )
+    .await;
+    git(work.path(), &["tag", "v1.0"]).await;
 
-    std::fs::write(work.join("notes"), "new one\ncontext\n").unwrap();
-    std::fs::write(work.join("src/main.rs"), format!("{LEAD}added\n")).unwrap();
-    std::fs::remove_file(work.join("gone.go")).unwrap();
-    std::fs::write(work.join("added.py"), "print()\n").unwrap();
-    std::fs::write(work.join("a b.rs"), "a\nb\n").unwrap();
-    git(&work, &["add", "-A"]);
-    git(&work, &["commit", "--quiet", "-m", "rework"]);
-    let rework = git(&work, &["rev-parse", "HEAD"]);
+    std::fs::remove_file(work.path().join("gone.go")).unwrap();
+    let lead_added = format!("{LEAD}added\n");
+    let rework = work
+        .commit(
+            &[
+                ("notes", "new one\ncontext\n"),
+                ("src/main.rs", &lead_added),
+                ("added.py", "print()\n"),
+                ("a b.rs", "a\nb\n"),
+            ],
+            "rework",
+        )
+        .await;
 
-    let (_ctx, app) = publish(dir.path(), &work).await;
+    let ctx = Arc::new(ctx(dir.path()));
+    let repo = gitquarry_core::domain::repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
+        .await
+        .unwrap()
+        .unwrap();
+    work.push(&repo, "refs/heads/main").await;
+    let app = gitquarry_webui::webui::router(ctx);
     Fixture { _dir: dir, app, rework }
 }
 

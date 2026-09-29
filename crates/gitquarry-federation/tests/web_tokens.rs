@@ -4,18 +4,13 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
-use gitquarry_federation::core_client::CoreClient;
 use gitquarry_federation::entities::Peer;
-use gitquarry_federation::gossip::GossipTable;
-use gitquarry_federation::rate_limit::PeerRateLimiter;
 use gitquarry_federation::state::FederationState;
 use gitquarry_federation::web::router;
 use gitquarry_federation::{access, domain};
+use gitquarry_test_support::{federation_state, send};
 use gitquarry_wire::Uid;
-use s3db::{BackendConfig, LocalBackend, LocalEngine, LocalParams};
 use std::sync::Arc;
-use std::time::Duration;
-use tower::ServiceExt;
 
 const REPO_UID: &str = "repo-uid-1";
 
@@ -38,52 +33,15 @@ async fn fake_core() -> String {
     base
 }
 
-async fn test_state(root: &std::path::Path) -> Arc<FederationState> {
-    let bucket = root.to_string_lossy().to_string();
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: bucket.clone(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = s3db_crypto::Cipher::derive("test passphrase", &[23u8; s3db_crypto::SALT_LEN]).unwrap();
-    Arc::new(FederationState {
-        backend: Arc::new(backend),
-        cipher: Arc::new(cipher),
-        core: CoreClient::new(fake_core().await, "unused".to_string()),
-        backend_config: BackendConfig::Local(LocalParams {
-            bucket,
-            engine: LocalEngine::Redb,
-        }),
-        gossip: Arc::new(GossipTable::default()),
-        self_announce: None,
-        rate_limiter: Arc::new(PeerRateLimiter::default()),
-        rate_limit_public_max: 60,
-        rate_limit_public_window: Duration::from_secs(60),
-        rate_limit_token_max: 120,
-        rate_limit_token_window: Duration::from_secs(60),
-        rate_limit_peer_override_by_ip: true,
-    })
-}
-
 fn as_alice(req: axum::http::request::Builder) -> axum::http::request::Builder {
     req.header("x-gitquarry-user", "alice")
         .header("x-gitquarry-user-uid", "alice-uid")
         .header("x-gitquarry-csrf", "tok")
 }
 
-async fn send(state: &Arc<FederationState>, req: Request<Body>) -> (StatusCode, String) {
-    let resp = router(Arc::clone(state)).oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    (status, String::from_utf8(bytes.to_vec()).unwrap())
-}
-
 async fn page(state: &Arc<FederationState>) -> String {
-    send(
-        state,
-        as_alice(Request::get("/_account/tokens")).body(Body::empty()).unwrap(),
-    )
-    .await
-    .1
+    let req = as_alice(Request::get("/_account/tokens")).body(Body::empty()).unwrap();
+    send(&router(Arc::clone(state)), req).await.body
 }
 
 async fn post(state: &Arc<FederationState>, form: &str) -> String {
@@ -91,7 +49,7 @@ async fn post(state: &Arc<FederationState>, form: &str) -> String {
         .header("content-type", "application/x-www-form-urlencoded")
         .body(Body::from(form.to_string()))
         .unwrap();
-    send(state, req).await.1
+    send(&router(Arc::clone(state)), req).await.body
 }
 
 async fn seed_token(state: &FederationState, write: bool) {
@@ -111,18 +69,21 @@ async fn seed_token(state: &FederationState, write: bool) {
 #[tokio::test]
 async fn is_refused_without_the_user_and_uid_core_forwards() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path()).await;
+    let state = federation_state(dir.path(), &fake_core().await);
     let req = Request::get("/_account/tokens")
         .header("x-gitquarry-user", "alice")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(send(&state, req).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        send(&router(Arc::clone(&state)), req).await.status,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
 async fn empty_state_shows_hints() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path()).await;
+    let state = federation_state(dir.path(), &fake_core().await);
     let html = page(&state).await;
     assert!(html.contains("no tokens yet"));
     assert!(html.contains("no peers linked"));
@@ -131,7 +92,7 @@ async fn empty_state_shows_hints() {
 #[tokio::test]
 async fn read_only_and_read_write_tokens_render_distinct_scope_labels() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path()).await;
+    let state = federation_state(dir.path(), &fake_core().await);
     seed_token(&state, false).await;
     seed_token(&state, true).await;
     let html = page(&state).await;
@@ -142,7 +103,7 @@ async fn read_only_and_read_write_tokens_render_distinct_scope_labels() {
 #[tokio::test]
 async fn a_created_token_is_shown_once_and_resolves_to_its_owner() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path()).await;
+    let state = federation_state(dir.path(), &fake_core().await);
 
     let html = post(&state, "action=create&label=peer+A&repos=alice%2Fdemo").await;
     assert!(html.contains("your new token"), "{html}");
@@ -169,7 +130,7 @@ async fn a_created_token_is_shown_once_and_resolves_to_its_owner() {
 #[tokio::test]
 async fn creating_a_token_for_an_unknown_repo_or_with_a_bad_label_creates_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path()).await;
+    let state = federation_state(dir.path(), &fake_core().await);
 
     let html = post(&state, "action=create&label=peer+A&repos=mallory%2Fsecret").await;
     assert!(
@@ -189,7 +150,7 @@ async fn creating_a_token_for_an_unknown_repo_or_with_a_bad_label_creates_nothin
 #[tokio::test]
 async fn a_linked_peer_offers_the_link_form() {
     let dir = tempfile::tempdir().unwrap();
-    let state = test_state(dir.path()).await;
+    let state = federation_state(dir.path(), &fake_core().await);
     let peer = Peer {
         name: "acme".to_string(),
         web_base_url: "https://acme.example".to_string(),

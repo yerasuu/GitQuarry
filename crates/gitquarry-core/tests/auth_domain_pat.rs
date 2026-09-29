@@ -2,44 +2,11 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::{self, user};
 use gitquarry_core::auth::entities::Permission;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::uid::Uid;
 use reqwest::StatusCode;
-use s3db::LocalBackend;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[13u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// Creates alice plus her private `alice/proj`, returning her uid and the
 /// repo's: a PAT scope names a repo by its uid, not its name.
@@ -126,7 +93,7 @@ async fn push(base: &str, repo: &str, secret: &str) -> StatusCode {
 #[tokio::test]
 async fn create_rejects_empty_scopes() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let (owner_uid, _repo) = make_alice(&ctx).await;
     assert!(
         domain::pat::create(&ctx, &owner_uid, "empty", BTreeMap::new(), None)
@@ -138,7 +105,7 @@ async fn create_rejects_empty_scopes() {
 #[tokio::test]
 async fn created_secret_resolves_back_to_the_token() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let (owner_uid, repo_uid) = make_alice(&ctx).await;
     let scopes = BTreeMap::from([(repo_uid, Permission::Developer)]);
     let (token, secret) = domain::pat::create(&ctx, &owner_uid, "laptop", scopes, None)
@@ -157,7 +124,7 @@ async fn created_secret_resolves_back_to_the_token() {
 #[tokio::test]
 async fn a_pat_opens_its_scoped_repo_over_http_and_not_an_unscoped_one() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     let (owner_uid, proj) = make_alice(&ctx).await;
     private_repo(&ctx, "alice/other").await;
     let scopes = BTreeMap::from([(proj, Permission::Developer)]);
@@ -184,7 +151,7 @@ async fn a_pat_opens_its_scoped_repo_over_http_and_not_an_unscoped_one() {
 #[tokio::test]
 async fn a_pat_is_capped_at_its_ceiling_never_the_owners_real_permission() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     // alice is implicit Owner of her own namespace, but this token's own
     // ceiling on the repo is only Reporter (read-only).
     let (owner_uid, proj) = make_alice(&ctx).await;
@@ -202,7 +169,7 @@ async fn a_pat_is_capped_at_its_ceiling_never_the_owners_real_permission() {
 #[tokio::test]
 async fn an_expired_pat_is_refused_over_http() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     let (owner_uid, proj) = make_alice(&ctx).await;
     let scopes = BTreeMap::from([(proj, Permission::Developer)]);
     let (token, secret) = domain::pat::create(&ctx, &owner_uid, "old", scopes, Some(1))
@@ -233,7 +200,7 @@ async fn an_expired_pat_is_refused_over_http() {
 #[tokio::test]
 async fn revoke_removes_the_token_and_its_owner_index_entry() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let (owner_uid, repo_uid) = make_alice(&ctx).await;
     let scopes = BTreeMap::from([(repo_uid, Permission::Developer)]);
     let (token, secret) = domain::pat::create(&ctx, &owner_uid, "laptop", scopes, None)
@@ -262,7 +229,7 @@ async fn revoke_removes_the_token_and_its_owner_index_entry() {
 #[tokio::test]
 async fn revoke_is_a_no_op_for_a_non_owner_without_admin() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let (owner_uid, repo_uid) = make_alice(&ctx).await;
     let other_uid = Uid::new();
     let scopes = BTreeMap::from([(repo_uid, Permission::Developer)]);

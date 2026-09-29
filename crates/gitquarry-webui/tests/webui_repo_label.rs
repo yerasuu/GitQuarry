@@ -2,64 +2,17 @@
 //! by: `display_name` replaces only the local segment, and the href next to
 //! it keeps the slug — the only string that routes.
 
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::entities::Visibility;
-use std::net::SocketAddr;
-use std::path::Path;
+use gitquarry_test_support::{Session, ctx};
 use std::sync::Arc;
-use tower::ServiceExt;
-
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[25u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 async fn get(ctx: &Arc<AppContext>, uri: &str) -> String {
-    let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
-    // `run_server` serves with `into_make_service_with_connect_info`; a bare
-    // `oneshot` doesn't, and the git-smart-HTTP layer 500s without it.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = gitquarry_webui::webui::router(Arc::clone(ctx))
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let page = String::from_utf8(bytes.to_vec()).unwrap();
-    assert_eq!(status, StatusCode::OK, "GET {uri}: {page}");
-    page
+    let app = gitquarry_webui::webui::router(Arc::clone(ctx));
+    let page = Session::get_as(&app, uri, None).await;
+    assert_eq!(page.status, StatusCode::OK, "GET {uri}: {}", page.body);
+    page.body
 }
 
 async fn create(ctx: &AppContext, full_name: &str, display_name: Option<&str>) {
@@ -82,7 +35,7 @@ async fn the_index_lists_each_repo_under_its_label_and_links_its_slug() {
     // listing otherwise renames a drifted slug (`domain::repo::backfill_slug`)
     // and the hrefs below would follow the rename.
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
     create(&ctx, "acme/My-Proj", Some("My Proj!")).await;
     create(&ctx, "acme/plain", None).await;
     create(&ctx, "acme/blank", Some("")).await;
@@ -115,7 +68,7 @@ async fn the_index_lists_each_repo_under_its_label_and_links_its_slug() {
 #[tokio::test]
 async fn a_repo_page_is_titled_by_its_label() {
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
     create(&ctx, "acme/my-proj", Some("My Proj!")).await;
     create(&ctx, "acme/plain", None).await;
 

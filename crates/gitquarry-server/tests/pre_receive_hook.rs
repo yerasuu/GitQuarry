@@ -7,14 +7,13 @@
 
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::{Group, Permission, User};
-use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::crypto::{Cipher, bootstrap};
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::entities::{OwnerRef, RepoConfig};
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::settings;
 use gitquarry_core::storage::uid::Uid;
-use s3db::LocalBackend;
+use gitquarry_test_support::backend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -61,13 +60,6 @@ fn git(git_dir: &Path, args: &[&str], stdin: &str) -> String {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "git {args:?} failed");
     String::from_utf8(out.stdout).unwrap().trim().to_string()
-}
-
-fn backend(bucket: &Path) -> Arc<dyn Backend> {
-    Arc::new(LocalBackend::new(&LocalParams {
-        bucket: bucket.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }))
 }
 
 async fn put_user(backend: &dyn Backend, cipher: &Cipher, name: &str, is_admin: bool) -> User {

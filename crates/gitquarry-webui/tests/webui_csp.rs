@@ -13,46 +13,9 @@
 //! next month has to be covered without anyone remembering this file
 //! exists.
 
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::Request;
-use gitquarry_core::app::AppContext;
-use std::net::SocketAddr;
+use gitquarry_test_support::Session;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tower::ServiceExt;
-
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// Every `.rs` file in the crate, path and contents.
 fn crate_sources() -> Vec<(String, String)> {
@@ -161,16 +124,10 @@ fn no_view_links_to_a_javascript_url() {
 /// here rather than only in a browser console.
 async fn served_policy(path: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
-    let app = gitquarry_webui::webui::router(Arc::new(test_ctx(dir.path())));
-    let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
-    // `run_server` serves with `into_make_service_with_connect_info`; a bare
-    // `oneshot` doesn't, and the git-smart-HTTP layer 500s without it.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = app.oneshot(request).await.unwrap();
-    response
-        .headers()
+    let app = gitquarry_webui::webui::router(Arc::new(gitquarry_test_support::ctx(dir.path())));
+    Session::get_as(&app, path, None)
+        .await
+        .headers
         .get("content-security-policy")
         .unwrap_or_else(|| panic!("GET {path} carries no Content-Security-Policy"))
         .to_str()

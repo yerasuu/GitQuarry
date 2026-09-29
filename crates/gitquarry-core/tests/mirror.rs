@@ -36,51 +36,13 @@ async fn pre_receive_hook_runs_an_exe_whose_path_has_spaces_and_quotes() {
 /// pattern used for layer 1.
 #[tokio::test]
 async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
-    use gitquarry_core::app::{AppContext, Locks};
-    use gitquarry_core::config::{LocalEngine, LocalParams};
-    use gitquarry_core::crypto::Cipher;
-    use gitquarry_core::storage::Backend;
     use gitquarry_core::storage::entities::{RepoConfig, Visibility};
-    use gitquarry_core::storage::remote::Manifest;
     use gitquarry_core::storage::settings;
-    use s3db::LocalBackend;
-    use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::process::Command;
-
-    fn test_ctx(root: &std::path::Path) -> AppContext {
-        let backend = LocalBackend::new(&LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: LocalEngine::Files,
-        });
-        let cipher = Arc::new(Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
-        AppContext {
-            bucket: "test".to_string(),
-            ssh_bind: "127.0.0.1:2222".to_string(),
-            mirrors_root: root.to_path_buf(),
-            config_path: root.join("gitquarry.toml"),
-            exe_path: root.join("gitquarry"),
-            backend: Arc::new(backend) as Arc<dyn Backend>,
-            locks: Locks::default(),
-            cipher,
-            mirror_max_age: Duration::from_secs(60),
-            mirror_max_size_bytes: 0,
-            mirror_large_repo_threshold_bytes: u64::MAX,
-            oidc: None,
-            login_attempts: Default::default(),
-            git_rate_limiter: Default::default(),
-            federation: None,
-            allow_push_create: false,
-            trust_forwarded_for: false,
-            events: Default::default(),
-            mirror_sync: None,
-            visible_repo_uids_cache: Default::default(),
-        }
-    }
 
     let dir_b = tempfile::tempdir().unwrap();
-    let ctx_b = Arc::new(test_ctx(dir_b.path()));
+    let ctx_b = Arc::new(gitquarry_test_support::ctx(dir_b.path()));
 
     let resolved = ctx_b.create_repo("acme/demo").await.unwrap().unwrap();
     let config = RepoConfig {
@@ -102,58 +64,9 @@ async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
 
     // A real commit via a real scratch working tree — simpler and more
     // realistic than hand-building blob/tree/commit objects.
-    let work = tempfile::tempdir().unwrap();
-    async fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git").current_dir(dir).args(args).status().await.unwrap();
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
-    }
-    run_git(work.path(), &["init", "-q"]).await;
-    std::fs::write(work.path().join("README.md"), b"hello from B\n").unwrap();
-    run_git(work.path(), &["add", "-A"]).await;
-    run_git(
-        work.path(),
-        &[
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ],
-    )
-    .await;
-    let sha_out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .unwrap();
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-
-    let git_dir = work.path().join(".git");
-    let pack_dir = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&git_dir, &sha, &[], pack_dir.path())
-        .await
-        .unwrap()
-        .unwrap();
-    resolved
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    resolved
-        .remote
-        .put_manifest(
-            &Manifest {
-                refs: BTreeMap::from([("refs/heads/main".to_string(), sha.clone())]),
-                head: Some("refs/heads/main".to_string()),
-            },
-            None,
-        )
-        .await
-        .unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let sha = work.commit(&[("README.md", "hello from B\n")], "init").await;
+    work.push(&resolved, "refs/heads/main").await;
 
     let bind_addr = "127.0.0.1:18454";
     tokio::spawn(async move {
@@ -188,7 +101,7 @@ async fn open_remote_mirror_fetches_a_real_peers_repo_over_git_smart_http() {
     }
 
     let dir_a = tempfile::tempdir().unwrap();
-    let ctx_a = test_ctx(dir_a.path());
+    let ctx_a = gitquarry_test_support::ctx(dir_a.path());
 
     let mirror = ctx_a
         .open_remote_mirror_at("instance-b", &format!("http://{bind_addr}"), "acme/demo")

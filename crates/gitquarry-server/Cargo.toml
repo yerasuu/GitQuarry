@@ -48,6 +48,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
+gitquarry-test-support = { path = "../gitquarry-test-support" }
 tempfile = "3.27.0"
 
 [lints.rust]

@@ -54,6 +54,7 @@ tempfile = "3.27.0"
 tracing = "0.1.44"
 
 [dev-dependencies]
+gitquarry-test-support = { path = "../gitquarry-test-support" }
 s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 tower = { version = "0.5", features = ["util"] }
 # Captures `webui::bootstrap::print_hint`'s log line, the only public way to

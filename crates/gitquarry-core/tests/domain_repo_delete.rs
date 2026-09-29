@@ -1,45 +1,12 @@
 //! `domain::repo::delete`/`restore`/`purge` and the grace-window sweep
 //! (`mirror::deleted_repo_sweep`) that ties them together.
 
-use gitquarry_core::app::AppContext;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::repo;
 use gitquarry_core::mirror::deleted_repo_sweep;
+use gitquarry_core::storage;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::storage::{self, Backend};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn Backend> = Arc::new(s3db::LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[7u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
@@ -48,7 +15,7 @@ fn now_secs() -> u64 {
 #[tokio::test]
 async fn delete_hides_the_repo_then_restore_undoes_it() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
@@ -90,7 +57,7 @@ async fn delete_hides_the_repo_then_restore_undoes_it() {
 #[tokio::test]
 async fn delete_twice_and_restore_without_deleting_both_reject() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
@@ -104,7 +71,7 @@ async fn delete_twice_and_restore_without_deleting_both_reject() {
 #[tokio::test]
 async fn purge_wipes_the_repo_and_frees_its_name() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
@@ -127,7 +94,7 @@ async fn purge_wipes_the_repo_and_frees_its_name() {
 #[tokio::test]
 async fn purge_on_a_live_repo_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let resolved = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
@@ -143,7 +110,7 @@ async fn purge_on_a_live_repo_is_rejected() {
 #[tokio::test]
 async fn sweep_purges_only_repos_past_their_grace_window() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
 
     let expired = repo::create(&ctx, "team/expired", None, None, None, Visibility::Public)
         .await

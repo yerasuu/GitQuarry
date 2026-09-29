@@ -1871,6 +1871,7 @@ dependencies = [
  "gitquarry-domain",
  "gitquarry-i18n",
  "gitquarry-mirror-external",
+ "gitquarry-test-support",
  "gitquarry-webui",
  "reqwest 0.13.5",
  "s3db",
@@ -1913,6 +1914,7 @@ dependencies = [
  "gitquarry-forge-clients",
  "gitquarry-gpg",
  "gitquarry-i18n",
+ "gitquarry-test-support",
  "gitquarry-wire",
  "hmac 0.13.0",
  "rand 0.10.2",
@@ -1940,6 +1942,7 @@ dependencies = [
  "gitquarry-core",
  "gitquarry-gpg",
  "gitquarry-i18n",
+ "gitquarry-test-support",
  "s3db",
  "s3db-crypto",
  "sha2 0.11.0",
@@ -1955,6 +1958,7 @@ dependencies = [
  "anyhow",
  "axum",
  "dirs",
+ "gitquarry-test-support",
  "gitquarry-wire",
  "rand 0.10.2",
  "reqwest 0.13.5",
@@ -2007,6 +2011,7 @@ dependencies = [
  "gitquarry-core",
  "gitquarry-forge-clients",
  "gitquarry-i18n",
+ "gitquarry-test-support",
  "rand 0.10.2",
  "s3db",
  "s3db-crypto",
@@ -2015,6 +2020,22 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "gitquarry-test-support"
+version = "0.5.1"
+dependencies = [
+ "axum",
+ "form_urlencoded",
+ "gitquarry-core",
+ "gitquarry-federation",
+ "gitquarry-i18n",
+ "s3db",
+ "s3db-crypto",
+ "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -2032,6 +2053,7 @@ dependencies = [
  "gitquarry-domain",
  "gitquarry-i18n",
  "gitquarry-mirror-external",
+ "gitquarry-test-support",
  "gitquarry-wire",
  "lru",
  "maud",

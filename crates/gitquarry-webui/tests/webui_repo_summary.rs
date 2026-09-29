@@ -3,142 +3,40 @@
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::entities::Visibility;
-use gitquarry_core::storage::remote::Manifest;
-use std::net::SocketAddr;
+use gitquarry_test_support::{Work, send};
 use std::path::Path;
 use std::sync::Arc;
-use tower::ServiceExt;
 
 fn test_ctx(root: &Path, ssh_bind: &str) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
     AppContext {
-        bucket: "test".to_string(),
         ssh_bind: ssh_bind.to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+        ..gitquarry_test_support::ctx(root)
     }
 }
 
-async fn git(dir: &Path, args: &[&str]) -> String {
-    // Signing is forced off so a developer's global `commit.gpgsign` can't
-    // turn every commit here into a pinentry prompt.
-    let out = tokio::process::Command::new("git")
-        .current_dir(dir)
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "Test Author")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test Author")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env("GIT_AUTHOR_DATE", "2024-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2024-01-01T00:00:00Z")
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap()
-}
-
-/// What a `git push` of every ref in `work` leaves in the bucket: its
-/// objects as one uploaded pack, its refs in the manifest.
-async fn push_all(ctx: &AppContext, name: &str, work: &Path) {
-    let resolved = ctx.resolve_repo(name).await.unwrap().unwrap();
-    let packs = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_all_objects(&work.join(".git"), packs.path())
-        .await
-        .unwrap()
-        .unwrap();
-    resolved
-        .remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    let refs = git(work, &["for-each-ref", "--format=%(refname) %(objectname)"])
-        .await
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .map(|(name, sha)| (name.to_string(), sha.to_string()))
-        .collect();
-    let (_, etag) = resolved.remote.get_manifest().await.unwrap();
-    resolved
-        .remote
-        .put_manifest(
-            &Manifest {
-                refs,
-                head: Some("refs/heads/main".to_string()),
-            },
-            etag.as_deref(),
-        )
-        .await
-        .unwrap();
-}
-
 async fn get(app: &Router, uri: &str) -> (StatusCode, String) {
-    let mut request = Request::builder()
-        .uri(uri)
+    let request = Request::get(uri)
         .header(header::HOST, "git.example.com:8080")
         .body(Body::empty())
         .unwrap();
-    // `run_server` serves with `into_make_service_with_connect_info`; a bare
-    // `oneshot` doesn't, and the git-smart-HTTP layer 500s without it.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
-        .await
-        .unwrap();
-    (status, String::from_utf8_lossy(&body).into_owned())
+    let page = send(app, request).await;
+    (page.status, page.body)
 }
 
 /// `name`, public, holding one commit of `files` on `main` — `None` leaves
 /// it empty, never pushed to.
 async fn repo_with(ctx: &AppContext, name: &str, files: Option<&[(&str, &str)]>) {
-    gitquarry_core::domain::repo::create(ctx, name, None, None, None, Visibility::Public)
+    let resolved = gitquarry_core::domain::repo::create(ctx, name, None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
     let Some(files) = files else { return };
-    let work = tempfile::tempdir().unwrap();
-    let w = work.path();
-    git(w, &["init", "--quiet", "--initial-branch=main"]).await;
-    for (path, content) in files {
-        std::fs::write(w.join(path), content).unwrap();
-    }
-    git(w, &["add", "."]).await;
-    git(w, &["commit", "--quiet", "-m", "init"]).await;
-    push_all(ctx, name, w).await;
+    let work = Work::new().await;
+    work.commit(files, "init").await;
+    work.push(&resolved, "refs/heads/main").await;
 }
 
 async fn page(app: &Router, uri: &str) -> String {

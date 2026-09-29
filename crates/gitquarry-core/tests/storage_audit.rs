@@ -1,10 +1,6 @@
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::audit::*;
-use s3db::{Collection, LocalBackend};
-use s3db_crypto::SALT_LEN;
-use std::sync::Arc;
+use gitquarry_test_support::{backend, cipher};
+use s3db::Collection;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -15,15 +11,6 @@ fn epoch_formats_as_1970() {
 #[test]
 fn known_instant_formats_correctly() {
     assert_eq!(format_unix_secs(1_709_641_696), "2024-03-05T12:28:16Z");
-}
-
-fn test_backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Cipher::derive("test passphrase", &[7u8; SALT_LEN]).unwrap();
-    (backend, cipher)
 }
 
 // Bucket layout: `.conf/audit/<YYYY-MM>/<20-digit millis>-<8 hex>.json`, one
@@ -61,9 +48,10 @@ fn months_back((y, mo): (i64, u32), back: u32) -> String {
 #[tokio::test]
 async fn record_writes_under_the_current_month_with_a_chronological_name() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let before = now();
-    record(&backend, &cipher, "alice", "repo.create", "alice/one", None).await;
+    record(backend.as_ref(), &cipher, "alice", "repo.create", "alice/one", None).await;
     let after = now();
 
     let keys = backend.list_prefix(AUDIT_PREFIX).await.unwrap();
@@ -84,8 +72,8 @@ async fn record_writes_under_the_current_month_with_a_chronological_name() {
 #[tokio::test]
 async fn records_show_up_in_list_recent_newest_first() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     // Writes two entries directly under explicit, deterministically distinct
     // millis instead of two real `record()` calls a sleep apart, since two
     // calls landing in the same wall-clock millisecond under parallel test
@@ -118,8 +106,8 @@ async fn records_show_up_in_list_recent_newest_first() {
 #[tokio::test]
 async fn list_recent_walks_back_month_by_month_across_the_year_boundary() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let current = month_of(now().as_secs());
     let (y, mo) = current.split_once('-').unwrap();
     let old_month = months_back((y.parse().unwrap(), mo.parse().unwrap()), 11);
@@ -157,8 +145,8 @@ async fn list_recent_walks_back_month_by_month_across_the_year_boundary() {
 #[tokio::test]
 async fn list_recent_still_finds_legacy_flat_entries() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     Collection::new_owned(".conf/audit".to_string())
         .put(
             backend.as_ref(),
@@ -183,8 +171,8 @@ async fn list_recent_still_finds_legacy_flat_entries() {
 #[tokio::test]
 async fn list_recent_for_filters_by_target() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     record(backend.as_ref(), &cipher, "alice", "repo.create", "alice/one", None).await;
     record(backend.as_ref(), &cipher, "bob", "repo.create", "bob/two", None).await;
 

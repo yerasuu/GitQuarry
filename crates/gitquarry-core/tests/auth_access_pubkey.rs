@@ -1,7 +1,5 @@
 use gitquarry_core::auth::access::{self, key_fingerprint};
 use gitquarry_core::auth::entities::User;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use std::collections::BTreeMap;
 
 const TEST_KEY: &str =
@@ -25,11 +23,8 @@ fn fingerprint_ignores_comment() {
 #[tokio::test]
 async fn a_claimed_fingerprint_resolves_only_while_the_user_still_holds_that_key() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = s3db::LocalBackend::new(&LocalParams {
-        bucket: dir.path().to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Cipher::derive("test passphrase", &[3u8; s3db_crypto::SALT_LEN]).unwrap();
+    let backend = gitquarry_test_support::backend(dir.path());
+    let cipher = gitquarry_test_support::cipher();
     let user = User {
         uid: Default::default(),
         username: "alice".to_string(),
@@ -57,29 +52,29 @@ async fn a_claimed_fingerprint_resolves_only_while_the_user_still_holds_that_key
         avatar_content_type: None,
         secondary_emails: Default::default(),
     };
-    access::put_user(&backend, &cipher, &user, None).await.unwrap();
+    access::put_user(&*backend, &cipher, &user, None).await.unwrap();
 
     let held = key_fingerprint(OTHER_KEY).unwrap();
-    assert!(access::claim_pubkey(&backend, &cipher, &held, "alice").await.unwrap());
-    let resolved = access::resolve_by_fingerprint(&backend, &cipher, &held).await.unwrap();
+    assert!(access::claim_pubkey(&*backend, &cipher, &held, "alice").await.unwrap());
+    let resolved = access::resolve_by_fingerprint(&*backend, &cipher, &held).await.unwrap();
     assert_eq!(resolved.map(|u| u.username).as_deref(), Some("alice"));
 
     // An index entry left pointing at alice for a key she no longer holds
     // (a revocation whose index cleanup never ran) must not log anyone in.
     let revoked = key_fingerprint(REVOKED_KEY).unwrap();
     assert!(
-        access::claim_pubkey(&backend, &cipher, &revoked, "alice")
+        access::claim_pubkey(&*backend, &cipher, &revoked, "alice")
             .await
             .unwrap()
     );
     assert!(
-        access::resolve_by_fingerprint(&backend, &cipher, &revoked)
+        access::resolve_by_fingerprint(&*backend, &cipher, &revoked)
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        access::resolve_by_fingerprint(&backend, &cipher, "SHA256:doesnotexist")
+        access::resolve_by_fingerprint(&*backend, &cipher, "SHA256:doesnotexist")
             .await
             .unwrap()
             .is_none()

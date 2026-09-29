@@ -2,84 +2,14 @@
 //! `security` along with the section itself.
 
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
-use axum::response::Response;
 use gitquarry_core::app::AppContext;
-use gitquarry_core::auth::domain;
-use std::net::SocketAddr;
+use gitquarry_test_support::{PASSWORD, Session, ctx, send, user};
 use std::sync::Arc;
-use tower::ServiceExt;
 
-const PASSWORD: &str = "correct horse battery staple";
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher = Arc::new(
-        gitquarry_core::crypto::Cipher::derive("test passphrase", &[SALT_BYTE; s3db_crypto::SALT_LEN]).unwrap(),
-    );
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
-async fn create_user(ctx: &AppContext, username: &str, is_admin: bool) {
-    domain::user::create(
-        ctx,
-        domain::user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: Some(PASSWORD),
-            is_admin,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-}
-
-async fn send(app: &axum::Router, mut request: Request<Body>) -> Response {
-    // `run_server` serves with `into_make_service_with_connect_info`; a bare
-    // `oneshot` doesn't add it, and its absence 500s before routing.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    app.clone().oneshot(request).await.unwrap()
-}
-
-fn get(uri: &str, cookie: &str) -> Request<Body> {
-    Request::get(uri)
-        .header(header::COOKIE, cookie)
-        .body(Body::empty())
-        .unwrap()
-}
-
-fn post_form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
+/// A form post as `cookie`, carrying exactly `fields` — including whatever
+/// `csrf` the test chooses to send.
+fn form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
     let body = form_urlencoded::Serializer::new(String::new())
         .extend_pairs(fields)
         .finish();
@@ -90,73 +20,21 @@ fn post_form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> 
         .unwrap()
 }
 
-/// [`post_form`] as `style/app.js` sends a `data-async` submit, which gets
-/// back just the fragment its target names.
-fn post_async(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
-    let mut request = post_form(uri, cookie, fields);
-    request.headers_mut().insert("x-gq-async", "1".parse().unwrap());
-    request
+/// The page at `uri` for `session`, which must render.
+async fn page(app: &axum::Router, session: &Session, uri: &str) -> String {
+    let page = session.get(app, uri).await;
+    assert_eq!(page.status, StatusCode::OK, "GET {uri}");
+    page.body
 }
 
-async fn text(response: Response) -> String {
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
-}
-
-/// `name=value` out of the response's `Set-Cookie`, the shape a browser
-/// sends back in `Cookie`.
-fn cookie_pair(response: &Response, name: &str) -> String {
-    response
-        .headers()
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find(|v| v.starts_with(&format!("{name}=")))
-        .and_then(|v| v.split(';').next())
-        .unwrap_or_else(|| panic!("no Set-Cookie for {name}"))
-        .to_string()
-}
-
-fn csrf_in(html: &str) -> String {
-    let marker = r#"name="csrf" value=""#;
-    let start = html.find(marker).unwrap_or_else(|| panic!("no csrf field in {html}")) + marker.len();
-    html[start..start + html[start..].find('"').unwrap()].to_string()
-}
-
-/// A real password login, returning the session cookie.
-async fn log_in(app: &axum::Router, username: &str) -> String {
-    let response = send(app, get("/_login", "")).await;
-    let anchor = cookie_pair(&response, "login-csrf");
-    let csrf = csrf_in(&text(response).await);
-    let fields = [("csrf", csrf.as_str()), ("username", username), ("password", PASSWORD)];
-    let response = send(app, post_form("/_login", &anchor, &fields)).await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    cookie_pair(&response, "web-session")
-}
-
-/// The page at `uri` for `cookie`'s session, plus the CSRF token its forms
-/// carry — read out of the markup the way a browser submits it.
-async fn page(app: &axum::Router, uri: &str, cookie: &str) -> (String, String) {
-    let response = send(app, get(uri, cookie)).await;
-    assert_eq!(response.status(), StatusCode::OK, "GET {uri}");
-    let html = text(response).await;
-    let csrf = csrf_in(&html);
-    (html, csrf)
-}
-
-fn location(response: &Response) -> &str {
-    response.headers()[header::LOCATION].to_str().unwrap()
-}
-
-const SALT_BYTE: u8 = 13;
 const PUBKEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK787z0ABFAXS4w2j6x8H+c/+hhOEFYZwauXxV9nstMy alice@laptop";
 
-async fn app_with_alice(root: &std::path::Path) -> (Arc<AppContext>, axum::Router, String) {
-    let ctx = test_ctx(root);
-    create_user(&ctx, "alice", false).await;
+async fn app_with_alice(root: &std::path::Path) -> (Arc<AppContext>, axum::Router, Session) {
+    let ctx = ctx(root);
+    user(&ctx, "alice", false).await;
     let ctx = Arc::new(ctx);
     let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
-    let session = log_in(&app, "alice").await;
+    let session = Session::login(&app, "alice").await;
     (ctx, app, session)
 }
 
@@ -176,7 +54,7 @@ async fn add_forms_target_their_own_table() {
     let dir = tempfile::tempdir().unwrap();
     let (_ctx, app, session) = app_with_alice(dir.path()).await;
 
-    let (html, _csrf) = page(&app, "/_account/keys", &session).await;
+    let html = page(&app, &session, "/_account/keys").await;
     assert!(
         html.contains(r##"data-async data-async-target="#ssh-keys-table""##),
         "{html}"
@@ -192,7 +70,7 @@ async fn gpg_keys_section_shows_hint_when_empty() {
     let dir = tempfile::tempdir().unwrap();
     let (_ctx, app, session) = app_with_alice(dir.path()).await;
 
-    let (html, _csrf) = page(&app, "/_account/keys", &session).await;
+    let html = page(&app, &session, "/_account/keys").await;
     assert!(html.contains("no keys yet"), "{html}");
     assert!(html.contains(r#"value="add_gpg_key""#));
 }
@@ -213,7 +91,7 @@ async fn gpg_keys_section_lists_each_stored_key_by_fingerprint() {
         .await
         .unwrap();
 
-    let (html, _csrf) = page(&app, "/_account/keys", &session).await;
+    let html = page(&app, &session, "/_account/keys").await;
     assert!(html.contains("ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234"), "{html}");
     assert!(html.contains(r#"value="remove_gpg_key""#));
     // The raw armored block itself never gets re-rendered — only the
@@ -228,31 +106,30 @@ async fn gpg_keys_section_lists_each_stored_key_by_fingerprint() {
 async fn adding_an_ssh_key_needs_the_account_password() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, session) = app_with_alice(dir.path()).await;
-    let (html, csrf) = page(&app, "/_account/keys", &session).await;
+    let html = page(&app, &session, "/_account/keys").await;
     assert!(html.contains(r#"name="reauth""#), "{html}");
 
     for reauth in ["", "not my password"] {
-        let fields = [
-            ("csrf", csrf.as_str()),
-            ("keys_action", "add_pubkey"),
-            ("pubkey", PUBKEY),
-            ("reauth", reauth),
-        ];
-        let response = send(&app, post_form("/_account/keys", &session, &fields)).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(text(response).await.contains("wrong password or code"));
+        let fields = [("keys_action", "add_pubkey"), ("pubkey", PUBKEY), ("reauth", reauth)];
+        let response = session.post(&app, "/_account/keys", &fields).await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert!(response.body.contains("wrong password or code"));
     }
     assert!(stored_pubkeys(&ctx).await.is_empty());
 
     let fields = [
-        ("csrf", csrf.as_str()),
+        ("csrf", session.csrf.as_str()),
         ("keys_action", "add_pubkey"),
         ("pubkey", PUBKEY),
         ("reauth", PASSWORD),
     ];
-    let response = send(&app, post_async("/_account/keys", &session, &fields)).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let fragment = text(response).await;
+    let mut request = form("/_account/keys", &session.cookie, &fields);
+    // `style/app.js` marks a `data-async` submit this way, which gets back
+    // just the fragment its target names.
+    request.headers_mut().insert("x-gq-async", "1".parse().unwrap());
+    let response = send(&app, request).await;
+    assert_eq!(response.status, StatusCode::OK);
+    let fragment = response.body;
     assert!(fragment.starts_with(r#"<div id="ssh-keys-table">"#), "{fragment}");
     let fingerprint = gitquarry_core::auth::access::key_fingerprint(PUBKEY).unwrap();
     assert!(fragment.contains(&fingerprint), "{fragment}");
@@ -270,11 +147,11 @@ async fn a_keys_post_without_the_session_csrf_token_is_refused() {
         ("pubkey", PUBKEY),
         ("reauth", PASSWORD),
     ];
-    let response = send(&app, post_form("/_account/keys", &session, &fields)).await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = send(&app, form("/_account/keys", &session.cookie, &fields)).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(stored_pubkeys(&ctx).await.is_empty());
 
-    let response = send(&app, post_form("/_account/keys", "", &fields)).await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(location(&response), "/_login?return_to=/_account/keys");
+    let response = send(&app, form("/_account/keys", "", &fields)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.location(), "/_login?return_to=/_account/keys");
 }

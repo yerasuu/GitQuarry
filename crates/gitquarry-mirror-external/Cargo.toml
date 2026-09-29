@@ -19,6 +19,7 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "
 tracing = "0.1.44"
 
 [dev-dependencies]
+gitquarry-test-support = { path = "../gitquarry-test-support" }
 s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
 axum = "0.8.9"
 serde_json = "1.0.151"

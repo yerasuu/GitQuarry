@@ -12,12 +12,11 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use gitquarry_core::app::{AppContext, FederationLink};
+use gitquarry_test_support::{Page, Session, ctx, user};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tower::ServiceExt;
 
-const PASSWORD: &str = "correct horse battery";
 const INTERNAL_TOKEN: &str = "core-to-federation-secret";
 const CLIENT_IP: [u8; 4] = [203, 0, 113, 7];
 
@@ -61,78 +60,36 @@ async fn spawn_fake_federation() -> (String, UnboundedReceiver<Received>) {
     (format!("http://{addr}"), rx)
 }
 
-fn test_ctx(root: &std::path::Path, federation_url: Option<String>) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[31u8; s3db_crypto::SALT_LEN]).unwrap());
+fn federated(root: &std::path::Path, base_url: String) -> AppContext {
     AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: federation_url.map(|base_url| FederationLink {
+        federation: Some(FederationLink {
             base_url,
             internal_token: INTERNAL_TOKEN.to_string(),
             http: reqwest::Client::new(),
         }),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+        ..ctx(root)
     }
 }
 
 /// A core wired to a fresh fake federation.
 async fn wired(root: &std::path::Path) -> (Arc<AppContext>, axum::Router, UnboundedReceiver<Received>) {
     let (url, rx) = spawn_fake_federation().await;
-    let ctx = Arc::new(test_ctx(root, Some(url)));
+    let ctx = Arc::new(federated(root, url));
     let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
     (ctx, app, rx)
 }
 
-async fn add_user(ctx: &AppContext, username: &str, is_admin: bool) {
-    gitquarry_core::auth::domain::user::create(
-        ctx,
-        gitquarry_core::auth::domain::user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: Some(PASSWORD),
-            is_admin,
-            repos_field: "",
-            locale: gitquarry_i18n::Locale::En,
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
-}
-
-async fn send(app: &axum::Router, mut request: Request<Body>) -> Response {
-    // `run_server` serves with `into_make_service_with_connect_info`, which
-    // is where the proxy's `X-Forwarded-For` comes from.
+/// Through the shared `send`, but from `CLIENT_IP` rather than its
+/// loopback default, so the proxy's `X-Forwarded-For` is told apart from
+/// anything a client claims.
+async fn send(app: &axum::Router, mut request: Request<Body>) -> Page {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from((CLIENT_IP, 4242))));
-    app.clone().oneshot(request).await.unwrap()
+    gitquarry_test_support::send(app, request).await
 }
 
-async fn get(app: &axum::Router, path: &str, cookie: Option<&str>) -> Response {
+async fn get(app: &axum::Router, path: &str, cookie: Option<&str>) -> Page {
     let mut builder = Request::builder().uri(path);
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
@@ -140,7 +97,9 @@ async fn get(app: &axum::Router, path: &str, cookie: Option<&str>) -> Response {
     send(app, builder.body(Body::empty()).unwrap()).await
 }
 
-async fn post_form(app: &axum::Router, path: &str, cookie: Option<&str>, body: &str) -> Response {
+/// A raw form body, so a test can send a missing or wrong CSRF token that
+/// `Session::post` would never produce.
+async fn post_form(app: &axum::Router, path: &str, cookie: Option<&str>, body: &str) -> Page {
     let mut builder = Request::builder()
         .method("POST")
         .uri(path)
@@ -149,44 +108,6 @@ async fn post_form(app: &axum::Router, path: &str, cookie: Option<&str>, body: &
         builder = builder.header(header::COOKIE, cookie);
     }
     send(app, builder.body(Body::from(body.to_string())).unwrap()).await
-}
-
-async fn body_text(response: Response) -> String {
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
-fn csrf_in(html: &str) -> Option<String> {
-    let rest = &html[html.find(r#"name="csrf""#)?..];
-    let rest = &rest[rest.find(r#"value=""#)? + r#"value=""#.len()..];
-    Some(rest[..rest.find('"')?].to_string())
-}
-
-fn set_cookie_pair(response: &Response, name: &str) -> Option<String> {
-    response
-        .headers()
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find(|v| v.starts_with(&format!("{name}=")))
-        .map(|v| v.split(';').next().unwrap_or_default().to_string())
-}
-
-/// `(web-session=... pair, the CSRF token pages render for it)` from a real
-/// password login.
-async fn login(app: &axum::Router, username: &str) -> (String, String) {
-    let response = get(app, "/_login", None).await;
-    let anchor = set_cookie_pair(&response, "login-csrf").expect("no login-csrf cookie");
-    let token = csrf_in(&body_text(response).await).expect("no csrf field on /_login");
-    let form = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs([("username", username), ("password", PASSWORD), ("csrf", &token)])
-        .finish();
-    let response = post_form(app, "/_login", Some(&anchor), &form).await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let session = set_cookie_pair(&response, "web-session").expect("login set no session cookie");
-    let html = body_text(get(app, "/_account/security", Some(&session)).await).await;
-    let csrf = csrf_in(&html).expect("no csrf field on an authenticated page");
-    (session, csrf)
 }
 
 /// The one request federation received for the call just made.
@@ -227,7 +148,7 @@ async fn a_public_api_call_forwards_its_bearer_token_and_nothing_session_related
         .body(Body::empty())
         .unwrap();
     let response = send(&app, request).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
 
     let got = received(&mut rx);
     assert_eq!(got.method, "GET");
@@ -259,7 +180,7 @@ async fn a_public_api_post_forwards_body_and_content_type_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let (_ctx, app, mut rx) = wired(dir.path()).await;
     let response = post_form(&app, "/_api/pulls", None, "title=a%2Bb&body=x").await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
     let got = received(&mut rx);
     assert_eq!(got.method, "POST");
     assert_eq!(got.uri, "/_api/pulls");
@@ -283,26 +204,26 @@ async fn federation_s_response_is_relayed_without_its_hop_by_hop_headers() {
 
     let response = get(&app, "/_api/instance", None).await;
     received(&mut rx);
-    assert_eq!(response.status(), StatusCode::CREATED);
-    assert_eq!(response.headers()["x-federation-marker"], "relayed");
-    assert!(response.headers().get("keep-alive").is_none());
-    assert!(response.headers().get(header::CONNECTION).is_none());
-    assert_eq!(body_text(response).await, "from federation");
+    assert_eq!(response.status, StatusCode::CREATED);
+    assert_eq!(response.headers["x-federation-marker"], "relayed");
+    assert!(response.headers.get("keep-alive").is_none());
+    assert!(response.headers.get(header::CONNECTION).is_none());
+    assert_eq!(response.body, "from federation");
 }
 
 #[tokio::test]
 async fn an_unreachable_federation_is_a_bad_gateway() {
     let dir = tempfile::tempdir().unwrap();
     // Port 1: nothing listens there, so the connect is refused outright.
-    let app = gitquarry_webui::webui::router(Arc::new(test_ctx(dir.path(), Some("http://127.0.0.1:1".to_string()))));
+    let app = gitquarry_webui::webui::router(Arc::new(federated(dir.path(), "http://127.0.0.1:1".to_string())));
     let response = get(&app, "/_api/instance", None).await;
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(response.status, StatusCode::BAD_GATEWAY);
 }
 
 #[tokio::test]
 async fn every_federation_route_is_unavailable_without_federation() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let ctx = Arc::new(ctx(dir.path()));
     let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
     for path in [
         "/_api/instance",
@@ -310,13 +231,13 @@ async fn every_federation_route_is_unavailable_without_federation() {
         "/_federation/gossip/peers",
     ] {
         let response = get(&app, path, None).await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "GET {path}");
+        assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE, "GET {path}");
     }
     // `/_peers` is admin-gated first, so it only reports that to an admin.
-    add_user(&ctx, "alice", true).await;
-    let (session, _csrf) = login(&app, "alice").await;
+    user(&ctx, "alice", true).await;
+    let session = Session::login(&app, "alice").await.cookie;
     let response = get(&app, "/_peers", Some(&session)).await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 /// `/_api/repos/{*name}` forwards a client-controlled path, and `reqwest`
@@ -335,7 +256,7 @@ async fn a_path_that_climbs_out_of_the_api_surface_never_reaches_federation() {
         "/_api/repos/./_peers",
     ] {
         let response = get(&app, path, None).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "GET {path}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "GET {path}");
         assert_nothing_forwarded(&mut rx, path);
     }
 }
@@ -348,7 +269,7 @@ async fn ordinary_api_paths_are_forwarded_verbatim() {
     // query half is federation's own business — only the path can traverse.
     for path in ["/_api/repos/team/my.repo.name", "/_api/repos/team/project?path=../etc"] {
         let response = get(&app, path, None).await;
-        assert_eq!(response.status(), StatusCode::CREATED, "GET {path}");
+        assert_eq!(response.status, StatusCode::CREATED, "GET {path}");
         assert_eq!(received(&mut rx).uri, path);
     }
 }
@@ -357,16 +278,16 @@ async fn ordinary_api_paths_are_forwarded_verbatim() {
 async fn peers_is_gated_before_anything_is_forwarded() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, mut rx) = wired(dir.path()).await;
-    add_user(&ctx, "bob", false).await;
+    user(&ctx, "bob", false).await;
 
     let response = get(&app, "/_peers", None).await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(response.headers()[header::LOCATION], "/_login?return_to=/_peers");
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.location(), "/_login?return_to=/_peers");
     assert_nothing_forwarded(&mut rx, "an anonymous /_peers");
 
-    let (session, _csrf) = login(&app, "bob").await;
+    let session = Session::login(&app, "bob").await.cookie;
     let response = get(&app, "/_peers", Some(&session)).await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
     assert_nothing_forwarded(&mut rx, "a non-admin's /_peers");
 }
 
@@ -378,7 +299,7 @@ async fn a_fresh_instance_keeps_peers_closed_without_the_bootstrap_grant() {
     let (_ctx, app, mut rx) = wired(dir.path()).await;
 
     let response = get(&app, "/_peers", None).await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
     assert_nothing_forwarded(&mut rx, "an anonymous /_peers on a fresh instance");
 }
 
@@ -386,13 +307,13 @@ async fn a_fresh_instance_keeps_peers_closed_without_the_bootstrap_grant() {
 async fn a_federation_moderator_reaches_peers_without_being_admin() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, mut rx) = wired(dir.path()).await;
-    add_user(&ctx, "carol", false).await;
+    user(&ctx, "carol", false).await;
     gitquarry_core::auth::domain::user::toggle_federation_moderator(&ctx, "carol", gitquarry_i18n::Locale::En)
         .await
         .unwrap();
-    let (session, _csrf) = login(&app, "carol").await;
+    let session = Session::login(&app, "carol").await.cookie;
     let response = get(&app, "/_peers", Some(&session)).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
     assert_eq!(received(&mut rx).header("x-gitquarry-user"), Some("carol"));
 }
 
@@ -403,8 +324,8 @@ async fn a_federation_moderator_reaches_peers_without_being_admin() {
 async fn peers_asserts_the_session_s_user_and_csrf_token_to_federation() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, mut rx) = wired(dir.path()).await;
-    add_user(&ctx, "alice", true).await;
-    let (session, csrf) = login(&app, "alice").await;
+    user(&ctx, "alice", true).await;
+    let Session { cookie: session, csrf } = Session::login(&app, "alice").await;
     let request = Request::builder()
         .uri("/_peers")
         .header(header::COOKIE, &session)
@@ -412,7 +333,7 @@ async fn peers_asserts_the_session_s_user_and_csrf_token_to_federation() {
         .body(Body::empty())
         .unwrap();
     let response = send(&app, request).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
 
     let got = received(&mut rx);
     assert_eq!(got.method, "GET");
@@ -433,8 +354,8 @@ async fn peers_asserts_the_session_s_user_and_csrf_token_to_federation() {
 async fn a_peers_mutation_is_forwarded_only_with_this_session_s_csrf_token() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, mut rx) = wired(dir.path()).await;
-    add_user(&ctx, "alice", true).await;
-    let (session, csrf) = login(&app, "alice").await;
+    user(&ctx, "alice", true).await;
+    let Session { cookie: session, csrf } = Session::login(&app, "alice").await;
     let session_value = session.strip_prefix("web-session=").unwrap();
 
     for body in [
@@ -443,13 +364,13 @@ async fn a_peers_mutation_is_forwarded_only_with_this_session_s_csrf_token() {
         format!("action=ban_peer&name=evil&csrf={}", url_encode(session_value)),
     ] {
         let response = post_form(&app, "/_peers", Some(&session), &body).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
         assert_nothing_forwarded(&mut rx, &body);
     }
 
     let body = format!("action=ban_peer&csrf={csrf}&name=evil");
     let response = post_form(&app, "/_peers", Some(&session), &body).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
     let got = received(&mut rx);
     assert_eq!(got.method, "POST");
     assert_eq!(
@@ -466,7 +387,7 @@ async fn a_peers_mutation_is_forwarded_only_with_this_session_s_csrf_token() {
 async fn account_tokens_asserts_the_session_s_own_uid() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, mut rx) = wired(dir.path()).await;
-    add_user(&ctx, "bob", false).await;
+    user(&ctx, "bob", false).await;
     let uid = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, "bob")
         .await
         .unwrap()
@@ -476,10 +397,10 @@ async fn account_tokens_asserts_the_session_s_own_uid() {
         .to_string();
 
     let response = get(&app, "/_account/tokens", None).await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_nothing_forwarded(&mut rx, "an anonymous /_account/tokens");
 
-    let (session, csrf) = login(&app, "bob").await;
+    let Session { cookie: session, csrf } = Session::login(&app, "bob").await;
     let request = Request::builder()
         .uri("/_account/tokens")
         .header(header::COOKIE, &session)
@@ -487,7 +408,7 @@ async fn account_tokens_asserts_the_session_s_own_uid() {
         .body(Body::empty())
         .unwrap();
     let response = send(&app, request).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
     let got = received(&mut rx);
     assert_eq!(got.uri, "/_account/tokens");
     assert_signed(&got);
@@ -497,11 +418,11 @@ async fn account_tokens_asserts_the_session_s_own_uid() {
     assert_eq!(got.header("x-gitquarry-csrf"), Some(csrf.as_str()));
 
     let response = post_form(&app, "/_account/tokens", Some(&session), "action=revoke&id=1").await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_nothing_forwarded(&mut rx, "a tokens mutation without csrf");
     let body = format!("action=revoke&id=1&csrf={csrf}");
     let response = post_form(&app, "/_account/tokens", Some(&session), &body).await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
     assert_eq!(&received(&mut rx).body[..], body.as_bytes());
 }
 
@@ -509,7 +430,7 @@ async fn account_tokens_asserts_the_session_s_own_uid() {
 async fn a_remote_comment_is_csrf_checked_here_and_re_encoded_without_the_token() {
     let dir = tempfile::tempdir().unwrap();
     let (ctx, app, mut rx) = wired(dir.path()).await;
-    add_user(&ctx, "bob", false).await;
+    user(&ctx, "bob", false).await;
     let uid = gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, "bob")
         .await
         .unwrap()
@@ -520,10 +441,10 @@ async fn a_remote_comment_is_csrf_checked_here_and_re_encoded_without_the_token(
     let form = "peer=instance-b&repo=acme%2Fdemo&number=7&body=hi+there";
 
     let response = post_form(&app, "/_remote_pulls/comment", None, form).await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_nothing_forwarded(&mut rx, "an anonymous comment");
 
-    let (session, csrf) = login(&app, "bob").await;
+    let Session { cookie: session, csrf } = Session::login(&app, "bob").await;
     let response = post_form(
         &app,
         "/_remote_pulls/comment",
@@ -531,7 +452,7 @@ async fn a_remote_comment_is_csrf_checked_here_and_re_encoded_without_the_token(
         &format!("{form}&csrf=wrong"),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_nothing_forwarded(&mut rx, "a comment with a bad csrf token");
 
     let response = post_form(
@@ -541,7 +462,7 @@ async fn a_remote_comment_is_csrf_checked_here_and_re_encoded_without_the_token(
         &format!("{form}&csrf={csrf}"),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED);
     let got = received(&mut rx);
     assert_eq!(got.method, "POST");
     assert_eq!(got.uri, "/_remote_pulls/comment");

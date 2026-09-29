@@ -11,6 +11,7 @@ members = [
     "crates/gitquarry-federation",
     "crates/gitquarry-forge-clients",
     "crates/gitquarry-mirror-external",
+    "crates/gitquarry-test-support",
 ]
 # No root [package]: this manifest is workspace-only. `cargo build` from
 # here builds every member; `cargo build -p gitquarry` builds just the

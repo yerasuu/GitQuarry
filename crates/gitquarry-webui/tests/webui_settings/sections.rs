@@ -101,9 +101,12 @@ async fn a_save_without_the_sessions_csrf_token_changes_nothing() {
     let gq = Instance::new().await;
     let root = gq.login("root").await;
     for csrf in ["", "not-the-token"] {
-        let fields = [("csrf", csrf), ("source_link", "root/site")];
+        let forged = Session {
+            cookie: root.cookie.clone(),
+            csrf: csrf.to_string(),
+        };
         let page = gq
-            .send("POST", "/_settings/footer", Some(&root.cookie), Some(&fields))
+            .post("/_settings/footer", &forged, &[("source_link", "root/site")])
             .await;
         assert_eq!(page.status, StatusCode::BAD_REQUEST, "csrf {csrf:?}");
     }

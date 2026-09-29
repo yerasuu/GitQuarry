@@ -4,11 +4,8 @@
 
 use crate::support::*;
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use gitquarry_core::auth::entities::Permission;
-use std::net::SocketAddr;
-use tower::ServiceExt;
 
 /// Regression: 13 sections wrapped badly (or forced `table.tabs`'s own
 /// horizontal scroll) in the old horizontal `project_subnav` row — the
@@ -129,9 +126,7 @@ async fn an_async_save_answers_with_the_section_fragment() {
         ("conf_action", "set_topics"),
         ("topics", "rust"),
     ];
-    let mut request = Request::builder()
-        .method("POST")
-        .uri(format!("/{REPO}"))
+    let request = Request::post(format!("/{REPO}"))
         .header(header::COOKIE, &root.cookie)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header("x-gq-async", "1")
@@ -141,13 +136,9 @@ async fn an_async_save_answers_with_the_section_fragment() {
                 .finish(),
         ))
         .unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = gq.app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    let html = String::from_utf8(bytes.to_vec()).unwrap();
+    let page = gitquarry_test_support::send(&gq.app, request).await;
+    assert_eq!(page.status, StatusCode::OK);
+    let html = page.body;
     assert!(html.starts_with(r#"<div id="repo-settings-body">"#), "{html}");
     assert!(!html.contains("<html"), "{html}");
 }
@@ -178,21 +169,23 @@ async fn a_post_without_the_sessions_csrf_token_changes_nothing() {
     let gq = Instance::new().await;
     let root = gq.login("root").await;
     for csrf in ["", "not-the-token"] {
-        let fields = [("csrf", csrf), ("conf_action", "set_topics"), ("topics", "rust")];
+        let forged = Session {
+            cookie: root.cookie.clone(),
+            csrf: csrf.to_string(),
+        };
         let page = gq
-            .send("POST", &format!("/{REPO}"), Some(&root.cookie), Some(&fields))
+            .save(&forged, &[("conf_action", "set_topics"), ("topics", "rust")])
             .await;
         assert_eq!(page.status, StatusCode::BAD_REQUEST, "csrf {csrf:?}");
     }
     // Another session's token doesn't validate under this one.
     let alice = gq.login("alice").await;
-    let fields = [
-        ("csrf", alice.csrf.as_str()),
-        ("conf_action", "set_topics"),
-        ("topics", "rust"),
-    ];
+    let crossed = Session {
+        cookie: root.cookie,
+        csrf: alice.csrf,
+    };
     let page = gq
-        .send("POST", &format!("/{REPO}"), Some(&root.cookie), Some(&fields))
+        .save(&crossed, &[("conf_action", "set_topics"), ("topics", "rust")])
         .await;
     assert_eq!(page.status, StatusCode::BAD_REQUEST);
     assert!(gq.config().await.topics.is_empty());

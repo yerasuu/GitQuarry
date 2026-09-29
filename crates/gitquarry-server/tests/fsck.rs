@@ -2,9 +2,7 @@
 //! checked is what an operator gets: which objects `--apply` deletes and
 //! which it must leave alone.
 
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::storage::Backend;
-use s3db::LocalBackend;
+use gitquarry_test_support::backend;
 use std::path::Path;
 use std::process::Command;
 
@@ -16,13 +14,6 @@ const KNOWN: [&str; 4] = [
 ];
 const MARKERS: [&str; 2] = ["repos/a/objects/", "repos/a/.conf/"];
 const UNEXPECTED: [&str; 2] = ["repos/a/README.md", "repos/a/objects/pack/junk.txt"];
-
-fn backend(bucket: &Path) -> LocalBackend {
-    LocalBackend::new(&LocalParams {
-        bucket: bucket.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    })
-}
 
 async fn present(bucket: &Path) -> Vec<String> {
     let b = backend(bucket);

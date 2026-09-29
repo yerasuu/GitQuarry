@@ -1,19 +1,11 @@
 use gitquarry_core::backup::inventory::Selection;
 use gitquarry_core::backup::replica;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
-use gitquarry_core::config::{LocalEngine, LocalParams};
 use gitquarry_core::storage::Backend;
-use s3db::LocalBackend;
+use gitquarry_test_support::backend;
 use std::sync::Arc;
 
 const ENCRYPTION_KEY: &str = ".conf/encryption.json";
-
-fn backend(root: &std::path::Path) -> Arc<dyn Backend> {
-    Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }))
-}
 
 /// The replica path never decrypts anything, so these tests write raw bytes
 /// straight through the backend — a `Cipher` would only obscure what's being

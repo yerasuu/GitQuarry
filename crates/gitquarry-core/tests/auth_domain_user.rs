@@ -7,41 +7,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_i18n::Locale;
-use s3db::LocalBackend;
-use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 async fn make_user(ctx: &AppContext, username: &str) {
     user::create(
@@ -73,7 +39,7 @@ async fn email_of(ctx: &AppContext, username: &str) -> Option<String> {
 #[tokio::test]
 async fn set_email_gives_an_account_created_without_one_an_address() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     assert_eq!(email_of(&ctx, "alice").await, None);
 
@@ -89,7 +55,7 @@ async fn set_email_gives_an_account_created_without_one_an_address() {
 #[tokio::test]
 async fn a_newly_set_email_resolves_back_to_its_account() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
         .await
@@ -104,7 +70,7 @@ async fn a_newly_set_email_resolves_back_to_its_account() {
 #[tokio::test]
 async fn set_email_refuses_an_address_another_account_already_holds() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     make_user(&ctx, "bob").await;
     user::set_email(&ctx, "alice", Some("shared@example.com"), Locale::En)
@@ -126,7 +92,7 @@ async fn set_email_refuses_an_address_another_account_already_holds() {
 #[tokio::test]
 async fn changing_an_email_frees_the_previous_one_for_reuse() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     make_user(&ctx, "bob").await;
     user::set_email(&ctx, "alice", Some("first@example.com"), Locale::En)
@@ -151,7 +117,7 @@ async fn changing_an_email_frees_the_previous_one_for_reuse() {
 #[tokio::test]
 async fn set_email_none_clears_the_address_and_releases_the_claim() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     make_user(&ctx, "bob").await;
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
@@ -170,7 +136,7 @@ async fn set_email_none_clears_the_address_and_releases_the_claim() {
 #[tokio::test]
 async fn set_email_rejects_a_malformed_address_and_an_unknown_user() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
 
     assert!(
@@ -191,7 +157,7 @@ async fn set_email_rejects_a_malformed_address_and_an_unknown_user() {
 #[tokio::test]
 async fn set_email_to_the_current_value_is_a_noop() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice").await;
     user::set_email(&ctx, "alice", Some("alice@example.com"), Locale::En)
         .await
@@ -233,7 +199,7 @@ async fn granted_on(ctx: &AppContext, repo_uid: &gitquarry_core::storage::uid::U
 #[tokio::test]
 async fn a_grant_from_the_user_side_shows_up_on_the_repo_and_its_revocation_too() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let repo_uid = private_repo(&ctx, "team/proj").await;
     make_user(&ctx, "alice").await;
 
@@ -251,7 +217,7 @@ async fn a_grant_from_the_user_side_shows_up_on_the_repo_and_its_revocation_too(
 #[tokio::test]
 async fn repos_granted_at_account_creation_show_up_on_the_repo() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     let repo_uid = private_repo(&ctx, "team/proj").await;
 
     user::create(

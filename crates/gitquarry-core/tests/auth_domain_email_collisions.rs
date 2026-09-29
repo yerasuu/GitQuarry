@@ -8,41 +8,7 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_i18n::Locale;
-use s3db::LocalBackend;
-use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[29u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 async fn make_user(ctx: &AppContext, username: &str, email: Option<&str>) {
     user::create(
@@ -68,7 +34,7 @@ async fn make_user(ctx: &AppContext, username: &str, email: Option<&str>) {
 #[tokio::test]
 async fn own_primary_address_is_refused_as_a_secondary() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice", Some("alice@example.com")).await;
 
     let added = user::add_secondary_email(&ctx, "alice", "alice@example.com", Locale::En).await;
@@ -91,7 +57,7 @@ async fn own_primary_address_is_refused_as_a_secondary() {
 #[tokio::test]
 async fn a_primary_claim_cannot_take_an_address_another_account_holds_as_secondary() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "bob", Some("bob@example.com")).await;
     make_user(&ctx, "alice", None).await;
     user::add_secondary_email(&ctx, "bob", "shared@example.com", Locale::En)
@@ -114,7 +80,7 @@ async fn a_primary_claim_cannot_take_an_address_another_account_holds_as_seconda
 #[tokio::test]
 async fn a_secondary_removal_leaves_the_address_free_for_another_account() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     make_user(&ctx, "alice", None).await;
     make_user(&ctx, "bob", None).await;
     user::add_secondary_email(&ctx, "alice", "shared@example.com", Locale::En)

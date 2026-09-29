@@ -107,14 +107,11 @@ async fn run_now_is_its_own_form_so_it_cannot_carry_unsaved_edits() {
 async fn run_now_needs_the_sessions_csrf_token() {
     let gq = Instance::new().await;
     let root = gq.login("root").await;
-    let page = gq
-        .send(
-            "POST",
-            "/_settings/backup/run",
-            Some(&root.cookie),
-            Some(&[("csrf", "not-the-token")]),
-        )
-        .await;
+    let forged = Session {
+        csrf: "not-the-token".to_string(),
+        ..root
+    };
+    let page = gq.post("/_settings/backup/run", &forged, &[]).await;
     assert_eq!(page.status, StatusCode::BAD_REQUEST);
     let runs = report::list_recent(gq.ctx.backend().as_ref(), &gq.ctx.cipher, 20)
         .await

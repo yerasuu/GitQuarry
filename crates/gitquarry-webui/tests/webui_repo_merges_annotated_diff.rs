@@ -3,104 +3,20 @@
 //! `GET /{repo}?view=merge` renders them.
 
 use axum::Router;
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::http::StatusCode;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
 use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
 use gitquarry_core::domain::repo;
-use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide};
-use gitquarry_core::storage::remote::Manifest;
 use gitquarry_i18n::Locale;
-use std::net::SocketAddr;
-use std::path::Path;
+use gitquarry_test_support::{Page, Session, Work, git};
 use std::sync::Arc;
-use tower::ServiceExt;
-
-const PASSWORD: &str = "correct horse battery staple";
+use std::time::Duration;
 
 const LEAD: &str = "l1\nl2\nl3\nl4\nl5\nl6\nl7\n";
-
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[17u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.join("mirrors"),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
-}
-
-/// Uploads everything reachable from `feature_sha` as one pack and points
-/// `main`/`feature` at the two commits.
-async fn push(repo: &ResolvedRepo, work: &Path, main_sha: &str, feature_sha: &str) {
-    let packs = tempfile::tempdir().unwrap();
-    let pack = gitquarry_core::git::pack_objects_for_push(&work.join(".git"), feature_sha, &[], packs.path())
-        .await
-        .unwrap()
-        .unwrap();
-    repo.remote
-        .upload_pack(&pack.base_name, &pack.pack_path, &pack.idx_path)
-        .await
-        .unwrap();
-    let (_, etag) = repo.remote.get_manifest().await.unwrap();
-    let manifest = Manifest {
-        refs: [
-            ("refs/heads/main".to_string(), main_sha.to_string()),
-            ("refs/heads/feature".to_string(), feature_sha.to_string()),
-        ]
-        .into(),
-        head: Some("refs/heads/main".to_string()),
-    };
-    assert_eq!(
-        repo.remote.put_manifest(&manifest, etag.as_deref()).await.unwrap(),
-        Cas::Ok
-    );
-}
 
 /// A public `team/proj` whose `feature` branch swaps `f.txt`'s last line
 /// (`gone` -> `added`, line 8 of 8) one commit ahead of `main`, so the
@@ -115,25 +31,22 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path()));
+    let ctx = Arc::new(AppContext {
+        mirror_max_age: Duration::from_secs(1),
+        ..gitquarry_test_support::ctx(dir.path())
+    });
     let repo = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
         .unwrap()
         .unwrap();
 
-    let work = dir.path().join("work");
-    std::fs::create_dir_all(&work).unwrap();
-    git(&work, &["init", "--quiet", "--initial-branch=main"]);
-    std::fs::write(work.join("f.txt"), format!("{LEAD}gone\n")).unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "--quiet", "-m", "initial"]);
-    let main_sha = git(&work, &["rev-parse", "HEAD"]);
-    git(&work, &["checkout", "--quiet", "-b", "feature"]);
-    std::fs::write(work.join("f.txt"), format!("{LEAD}added\n")).unwrap();
-    git(&work, &["commit", "--quiet", "-am", "swap the last line"]);
-    let feature_sha = git(&work, &["rev-parse", "HEAD"]);
-
-    push(&repo, &work, &main_sha, &feature_sha).await;
+    let work = Work::new().await;
+    let lead_gone = format!("{LEAD}gone\n");
+    work.commit(&[("f.txt", &lead_gone)], "initial").await;
+    git(work.path(), &["checkout", "--quiet", "-b", "feature"]).await;
+    let lead_added = format!("{LEAD}added\n");
+    work.commit(&[("f.txt", &lead_added)], "swap the last line").await;
+    work.push(&repo, "refs/heads/main").await;
 
     let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
     Fixture {
@@ -157,20 +70,7 @@ async fn open_mr(f: &Fixture) {
 }
 
 async fn add_user(ctx: &AppContext, username: &str, perm: Option<Permission>) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: Some(PASSWORD),
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
+    gitquarry_test_support::user(ctx, username, false).await;
     if perm.is_some() {
         user::set_repo_perm(ctx, username, "team/proj", perm, Locale::En)
             .await
@@ -178,93 +78,20 @@ async fn add_user(ctx: &AppContext, username: &str, perm: Option<Permission>) {
     }
 }
 
-async fn send(
-    app: &Router,
-    method: &str,
-    uri: &str,
-    cookie: Option<&str>,
-    form: Option<&[(&str, &str)]>,
-) -> (StatusCode, HeaderMap, String) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, cookie);
-    }
-    let body = match form {
-        Some(pairs) => {
-            builder = builder.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-            Body::from(
-                form_urlencoded::Serializer::new(String::new())
-                    .extend_pairs(pairs)
-                    .finish(),
-            )
-        }
-        None => Body::empty(),
-    };
-    let mut request = builder.body(body).unwrap();
-    // `run_server` serves with connect info; a bare `oneshot` doesn't, and
-    // the git-smart-HTTP layer 500s without it.
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = app.clone().oneshot(request).await.unwrap();
-    let (parts, body) = response.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-    (parts.status, parts.headers, String::from_utf8(bytes.to_vec()).unwrap())
-}
-
-fn set_cookie_value(headers: &HeaderMap, name: &str) -> String {
-    let prefix = format!("{name}=");
-    headers
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find_map(|v| v.strip_prefix(&prefix))
-        .map(|v| v.split(';').next().unwrap().to_string())
-        .unwrap_or_else(|| panic!("no {name} cookie set: {headers:?}"))
-}
-
-/// The value of the first `<input name="csrf">` on the page, read the way a
-/// browser submitting that form would.
-fn csrf_from(html: &str) -> String {
-    html.split(r#"name="csrf" value=""#)
-        .nth(1)
-        .and_then(|rest| rest.split('"').next())
-        .unwrap_or_else(|| panic!("no csrf field: {html}"))
-        .to_string()
-}
-
-/// A real password login; the returned value is the `Cookie` header that
-/// carries the session from then on.
+/// The `Cookie` header that carries a real password login's session.
 async fn login(app: &Router, username: &str) -> String {
-    let (_, headers, html) = send(app, "GET", "/_login", None, None).await;
-    let anchor = format!("login-csrf={}", set_cookie_value(&headers, "login-csrf"));
-    let csrf = csrf_from(&html);
-    let (status, headers, _) = send(
-        app,
-        "POST",
-        "/_login",
-        Some(&anchor),
-        Some(&[
-            ("username", username),
-            ("password", PASSWORD),
-            ("return_to", "/"),
-            ("csrf", &csrf),
-        ]),
-    )
-    .await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    format!("web-session={}", set_cookie_value(&headers, "web-session"))
+    Session::login(app, username).await.cookie
 }
 
 async fn detail(f: &Fixture, cookie: Option<&str>) -> String {
-    let (status, _, html) = send(&f.app, "GET", "/team/proj?view=merge&number=1", cookie, None).await;
+    let Page { status, body: html, .. } = Session::get_as(&f.app, "/team/proj?view=merge&number=1", cookie).await;
     assert_eq!(status, StatusCode::OK, "{html}");
     html
 }
 
 async fn detail_at(f: &Fixture, query: &str, cookie: Option<&str>) -> String {
     let uri = format!("/team/proj?view=merge&number=1{query}");
-    let (status, _, html) = send(&f.app, "GET", &uri, cookie, None).await;
+    let Page { status, body: html, .. } = Session::get_as(&f.app, &uri, cookie).await;
     assert_eq!(status, StatusCode::OK, "{html}");
     html
 }

@@ -6,30 +6,18 @@
 //! verifying, silently, and a reader would see previously-good commits turn
 //! unverified for no visible reason.
 
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::git::signing;
-use s3db::LocalBackend;
-use s3db_crypto::SALT_LEN;
-
-fn backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Redb,
-    });
-    let cipher = Cipher::derive("test passphrase", &[31u8; SALT_LEN]).unwrap();
-    (backend, cipher)
-}
+use gitquarry_test_support::{backend, cipher};
 
 /// Generated once, then read back — not re-minted on the next call, which
 /// is what a process restart looks like from here.
 #[tokio::test]
 async fn the_key_is_generated_once_and_then_reused() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
+    let (backend, cipher) = (backend(dir.path()), cipher());
 
-    let first = signing::load_or_create(&backend, &cipher).await.unwrap();
-    let second = signing::load_or_create(&backend, &cipher).await.unwrap();
+    let first = signing::load_or_create(&*backend, &cipher).await.unwrap();
+    let second = signing::load_or_create(&*backend, &cipher).await.unwrap();
 
     assert_eq!(first.openssh_public, second.openssh_public);
     assert!(
@@ -46,8 +34,8 @@ async fn the_key_is_generated_once_and_then_reused() {
 #[tokio::test]
 async fn a_second_instance_on_the_same_bucket_gets_the_same_key() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend_a, cipher_a) = backend_and_cipher(dir.path());
-    let first = signing::load_or_create(&backend_a, &cipher_a).await.unwrap();
+    let backend_a = backend(dir.path());
+    let first = signing::load_or_create(&*backend_a, &cipher()).await.unwrap();
     // redb allows only one open Database handle per file per process, so the
     // first must close before the second opens — otherwise this second
     // "instance" can't stand in for a genuinely separate process.
@@ -55,8 +43,8 @@ async fn a_second_instance_on_the_same_bucket_gets_the_same_key() {
 
     // A separate backend handle over the same bucket: no shared in-memory
     // state, exactly what a second deployment reads through.
-    let (backend_b, cipher_b) = backend_and_cipher(dir.path());
-    let second = signing::load_or_create(&backend_b, &cipher_b).await.unwrap();
+    let backend_b = backend(dir.path());
+    let second = signing::load_or_create(&*backend_b, &cipher()).await.unwrap();
 
     assert_eq!(first.openssh_public, second.openssh_public);
 }
@@ -68,11 +56,10 @@ async fn a_second_instance_on_the_same_bucket_gets_the_same_key() {
 async fn a_different_bucket_gets_a_different_key() {
     let dev = tempfile::tempdir().unwrap();
     let prod = tempfile::tempdir().unwrap();
-    let (dev_backend, dev_cipher) = backend_and_cipher(dev.path());
-    let (prod_backend, prod_cipher) = backend_and_cipher(prod.path());
+    let (dev_backend, prod_backend) = (backend(dev.path()), backend(prod.path()));
 
-    let dev_key = signing::load_or_create(&dev_backend, &dev_cipher).await.unwrap();
-    let prod_key = signing::load_or_create(&prod_backend, &prod_cipher).await.unwrap();
+    let dev_key = signing::load_or_create(&*dev_backend, &cipher()).await.unwrap();
+    let prod_key = signing::load_or_create(&*prod_backend, &cipher()).await.unwrap();
 
     assert_ne!(dev_key.openssh_public, prod_key.openssh_public);
 }
@@ -83,8 +70,8 @@ async fn a_different_bucket_gets_a_different_key() {
 #[tokio::test]
 async fn the_allowed_signers_line_names_the_instance_address_and_its_key() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = backend_and_cipher(dir.path());
-    let key = signing::load_or_create(&backend, &cipher).await.unwrap();
+    let (backend, cipher) = (backend(dir.path()), cipher());
+    let key = signing::load_or_create(&*backend, &cipher).await.unwrap();
 
     let line = key.allowed_signers_line();
 

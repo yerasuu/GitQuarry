@@ -5,6 +5,7 @@
 use gitquarry_core::app::{AppContext, FederationLink};
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::uid::Uid;
+use gitquarry_test_support::PASSWORD;
 
 use axum::body::Bytes;
 use axum::http::{Method, StatusCode, header};
@@ -22,38 +23,8 @@ const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
 /// "not a git/LFS endpoint" apart from any status the git handler returns.
 const PASSTHROUGH: StatusCode = StatusCode::IM_A_TEAPOT;
 
-fn test_ctx(root: &std::path::Path, federation: Option<FederationLink>) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[9u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
+/// Kept beside the shared `user` because some tests need a password with a
+/// colon in it, or none at all.
 async fn create_user(ctx: &AppContext, username: &str, password: Option<&str>) {
     gitquarry_core::auth::domain::user::create(
         ctx,
@@ -126,7 +97,7 @@ fn upload_pack_refs(client: &reqwest::Client, base: &str, repo: &str) -> reqwest
 #[tokio::test]
 async fn git_and_lfs_endpoints_are_intercepted_with_the_method_each_expects() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     create_repo(&ctx, "team/proj", Visibility::Private).await;
     let base = serve(ctx).await;
     let client = reqwest::Client::new();
@@ -205,7 +176,7 @@ async fn git_and_lfs_endpoints_are_intercepted_with_the_method_each_expects() {
 #[tokio::test]
 async fn info_refs_advertises_the_service_named_anywhere_in_the_query() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     create_repo(&ctx, "acme/demo", Visibility::Public).await;
     let base = serve(ctx).await;
     let client = reqwest::Client::new();
@@ -251,7 +222,7 @@ async fn info_refs_advertises_the_service_named_anywhere_in_the_query() {
 #[tokio::test]
 async fn a_private_repo_asks_for_basic_credentials_when_none_are_usable() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     create_repo(&ctx, "acme/demo", Visibility::Private).await;
     let base = serve(ctx).await;
     let client = reqwest::Client::new();
@@ -272,7 +243,7 @@ async fn a_private_repo_asks_for_basic_credentials_when_none_are_usable() {
 #[tokio::test]
 async fn basic_credentials_split_at_the_first_colon_so_a_password_may_contain_one() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     create_user(&ctx, "alice", Some("hunter:2")).await;
     create_repo(&ctx, "alice/proj", Visibility::Private).await;
     let base = serve(ctx).await;
@@ -337,7 +308,7 @@ async fn spawn_fake_token_resolver(known_secret: &'static str, write: bool, repo
 async fn serve_with_federation_token(dir: &std::path::Path, secret: &'static str, write: bool) -> String {
     // The resolver needs the repo's uid, which only exists once the repo
     // does, so the context gets its federation link after the fact.
-    let mut ctx = test_ctx(dir, None);
+    let mut ctx = gitquarry_test_support::ctx(dir);
     create_user(&ctx, "alice", None).await;
     let repo_uid = create_repo(&ctx, "alice/proj", Visibility::Private).await;
     ctx.federation = Some(FederationLink {
@@ -403,7 +374,7 @@ async fn a_write_federation_token_can_push() {
 #[tokio::test]
 async fn a_token_is_just_an_unknown_username_without_federation_configured() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     create_user(&ctx, "alice", None).await;
     create_repo(&ctx, "alice/proj", Visibility::Private).await;
     let base = serve(ctx).await;
@@ -419,8 +390,8 @@ async fn a_token_is_just_an_unknown_username_without_federation_configured() {
 #[tokio::test]
 async fn too_many_wrong_passwords_slow_a_username_down_without_locking_its_owner_out() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
-    create_user(&ctx, "alice", Some("correct-password")).await;
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    gitquarry_test_support::user(&ctx, "alice", false).await;
     create_repo(&ctx, "alice/proj", Visibility::Private).await;
     let base = serve(Arc::clone(&ctx)).await;
     let client = reqwest::Client::new();
@@ -442,7 +413,7 @@ async fn too_many_wrong_passwords_slow_a_username_down_without_locking_its_owner
     // is one second.
     let started = Instant::now();
     let status = upload_pack_refs(&client, &base, "alice/proj")
-        .basic_auth("alice", Some("correct-password"))
+        .basic_auth("alice", Some(PASSWORD))
         .send()
         .await
         .unwrap()
@@ -454,8 +425,8 @@ async fn too_many_wrong_passwords_slow_a_username_down_without_locking_its_owner
 #[tokio::test]
 async fn a_correct_password_clears_the_failure_counter() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(dir.path(), None));
-    create_user(&ctx, "alice", Some("correct-password")).await;
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    gitquarry_test_support::user(&ctx, "alice", false).await;
     create_repo(&ctx, "alice/proj", Visibility::Private).await;
     let base = serve(Arc::clone(&ctx)).await;
     let client = reqwest::Client::new();
@@ -471,7 +442,7 @@ async fn a_correct_password_clears_the_failure_counter() {
             StatusCode::UNAUTHORIZED
         );
     }
-    assert_eq!(attempt("correct-password").await.unwrap().status(), StatusCode::OK);
+    assert_eq!(attempt(PASSWORD).await.unwrap().status(), StatusCode::OK);
     // Had the counter survived, this would be failure number
     // LOGIN_MAX_ATTEMPTS and start the penalty.
     assert_eq!(
@@ -490,8 +461,10 @@ async fn spend_anonymous_budget(request: impl Fn(usize) -> reqwest::RequestBuild
 }
 
 async fn serve_public_repo(dir: &std::path::Path, trust_forwarded_for: bool) -> String {
-    let mut ctx = test_ctx(dir, None);
-    ctx.trust_forwarded_for = trust_forwarded_for;
+    let ctx = AppContext {
+        trust_forwarded_for,
+        ..gitquarry_test_support::ctx(dir)
+    };
     create_repo(&ctx, "acme/demo", Visibility::Public).await;
     serve(Arc::new(ctx)).await
 }

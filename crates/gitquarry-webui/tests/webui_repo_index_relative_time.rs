@@ -10,14 +10,11 @@
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::Request;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::storage::entities::Visibility;
-use std::net::SocketAddr;
-use std::path::Path;
+use gitquarry_test_support::{ctx, send};
 use std::sync::Arc;
-use tower::ServiceExt;
 
 const MINUTE: u64 = 60;
 const HOUR: u64 = 3600;
@@ -25,38 +22,6 @@ const DAY: u64 = 86_400;
 const WEEK: u64 = 604_800;
 const MONTH: u64 = 2_629_800;
 const YEAR: u64 = 31_557_600;
-
-fn test_ctx(root: &Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> =
-        Arc::new(s3db::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Redb,
-        }));
-    let cipher =
-        Arc::new(gitquarry_core::crypto::Cipher::derive("test passphrase", &[11u8; s3db_crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        mirror_large_repo_threshold_bytes: u64::MAX,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        federation: None,
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -74,7 +39,7 @@ struct Index {
 
 async fn index() -> Index {
     let root = tempfile::tempdir().unwrap();
-    let ctx = Arc::new(test_ctx(root.path()));
+    let ctx = Arc::new(ctx(root.path()));
     let resolved = gitquarry_core::domain::repo::create(&ctx, "acme/web", None, None, None, Visibility::Public)
         .await
         .unwrap()
@@ -109,19 +74,8 @@ async fn repo_list_pushed_at(index: &Index, last_push: u64) -> String {
     .await
     .unwrap();
 
-    let mut request = Request::builder()
-        .uri("/")
-        .header("x-gq-async", "1")
-        .body(Body::empty())
-        .unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-    let response = index.app.clone().oneshot(request).await.unwrap();
-    let body = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
-        .await
-        .unwrap();
-    String::from_utf8(body.to_vec()).unwrap()
+    let request = Request::get("/").header("x-gq-async", "1").body(Body::empty()).unwrap();
+    send(&index.app, request).await.body
 }
 
 async fn words_ago(index: &Index, secs_ago: u64) -> String {
