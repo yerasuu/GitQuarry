@@ -68,7 +68,7 @@ cargo build --release -p gitquarry
 ```
 
 With no config file anywhere in the resolution order, the first run serves a
-setup wizard on `--web-bind`: pick a driver, enter credentials, and it
+setup wizard at `/_setup` on `--web-bind`: pick a driver, enter credentials, and it
 verifies them against the bucket, writes the config, and creates the admin
 account — no restart needed.
 

@@ -22,7 +22,7 @@ use anyhow::{Context, Result, bail, ensure};
 use axum::Router;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use gitquarry_auth_crypto::password as pw;
 use gitquarry_core::auth::access;
@@ -72,6 +72,10 @@ struct WizardState {
 
 type State_ = axum::extract::State<Arc<WizardState>>;
 
+/// The wizard's own path, under the `/_` prefix every non-repo route uses,
+/// so the page it serves reads as setup and not as some repository.
+const SETUP_PATH: &str = "/_setup";
+
 pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -> Result<WizardOutcome> {
     let is_prefilled = prefill.is_some();
     let (result_tx, result_rx) = oneshot::channel();
@@ -84,14 +88,15 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
     });
 
     let app = Router::new()
-        .route("/", get(handler_get).post(handler_post))
+        .route("/", get(|| async { Redirect::to(SETUP_PATH) }))
+        .route(SETUP_PATH, get(handler_get).post(handler_post))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(web_bind)
         .await
         .with_context(|| format!("couldn't listen on {web_bind} for the setup wizard"))?;
     info!(
-        "{} — open http://{web_bind} to {}",
+        "{} — open http://{web_bind}{SETUP_PATH} to {}",
         if is_prefilled {
             format!("{} connects but has no admin user yet", config_path.display())
         } else {
@@ -638,7 +643,7 @@ instead of showing/hiding based on what you pick in "driver" — only the sectio
 picked is read, the other four are ignored. Each driver has its own fields below, nothing is
 shared between sections.</p>
 {flash}
-<form method="post" action="/">
+<form method="post" action="{SETUP_PATH}">
 <h4>entry</h4>
 <table class="commit-meta">
 <tr><td>name</td><td><input name="name" size="40" required autofocus value="{name}" placeholder="how you'll refer to this (--bucket, [buckets.&lt;name&gt;])"></td></tr>

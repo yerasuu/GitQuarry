@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 struct Wizard {
+    base: String,
     url: String,
     http: reqwest::Client,
     handle: JoinHandle<anyhow::Result<WizardOutcome>>,
@@ -24,8 +25,13 @@ async fn start(config_path: &Path, prefill: Option<Prefill>) -> Wizard {
     let config_path = config_path.to_path_buf();
     let handle = tokio::spawn(async move { setup::run(&config_path, &bind, prefill).await });
     let wizard = Wizard {
-        url: format!("http://127.0.0.1:{port}/"),
-        http: reqwest::Client::new(),
+        base: format!("http://127.0.0.1:{port}"),
+        url: format!("http://127.0.0.1:{port}/_setup"),
+        // Redirects are asserted on, not followed.
+        http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap(),
         handle,
     };
     for _ in 0..100 {
@@ -101,6 +107,16 @@ fn s3_prefill() -> Prefill {
             resilience: Default::default(),
         },
     }
+}
+
+#[tokio::test]
+async fn the_root_sends_to_setup_and_the_form_posts_back_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let wizard = start(&dir.path().join("gitquarry.toml"), None).await;
+    let root = wizard.http.get(format!("{}/", wizard.base)).send().await.unwrap();
+    assert_eq!(root.status().as_u16(), 303);
+    assert_eq!(root.headers()["location"], "/_setup");
+    assert!(wizard.get().await.contains(r#"<form method="post" action="/_setup">"#));
 }
 
 #[tokio::test]

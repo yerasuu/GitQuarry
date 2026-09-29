@@ -117,7 +117,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // No `gitquarry.toml` anywhere in the resolution order at all (as
     // opposed to one that exists but is broken/misconfigured, which still
     // hard-fails below exactly as before): first run, hand off to the setup
-    // wizard instead of erroring out. It serves one form on `--web-bind`,
+    // wizard instead of erroring out. It serves one form at `/_setup` on `--web-bind`,
     // verifies everything against S3 for real, writes the config, and
     // returns exactly what the branch below would've loaded from it — same
     // process, no restart needed to pick up what it just wrote.
