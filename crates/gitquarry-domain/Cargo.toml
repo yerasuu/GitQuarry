@@ -7,18 +7,18 @@ description = "Product-facing functionality (release CRUD, operator maintenance 
 license.workspace = true
 
 [dependencies]
-gitquarry-core = { path = "../gitquarry-core" }
-gitquarry-i18n = { path = "../gitquarry-i18n" }
-gitquarry-gpg = { path = "../gitquarry-gpg" }
-anyhow = "1.0.104"
-sha2 = "0.11.0"
-tempfile = "3.27.0"
-tokio = { version = "1.53.1", features = ["fs"] }
-tracing = "0.1.44"
+gitquarry-core = { workspace = true }
+gitquarry-i18n = { workspace = true }
+gitquarry-gpg = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
-gitquarry-test-support = { path = "../gitquarry-test-support" }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+gitquarry-test-support = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints.rust]
 unsafe_code = "forbid"

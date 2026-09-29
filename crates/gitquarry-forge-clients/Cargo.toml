@@ -7,16 +7,16 @@ description = "ForgeApi trait plus thin REST adapters for GitHub/GitLab/Codeberg
 license.workspace = true
 
 [dependencies]
-async-trait = "0.1.91"
-anyhow = "1.0.104"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
-tracing = "0.1.44"
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-axum = "0.8.9"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net"] }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
 
 [lints.rust]
 unsafe_code = "forbid"
