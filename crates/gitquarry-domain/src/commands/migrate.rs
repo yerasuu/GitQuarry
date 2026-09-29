@@ -70,10 +70,11 @@ pub async fn run(rest: &[String]) -> Result<()> {
         return Ok(());
     }
     for (migration, outcome) in &outcomes {
-        info!(
-            "gitquarry: {} ({}): {}",
-            migration.version, migration.name, outcome.summary
-        );
+        let summary = match outcome.summary.as_str() {
+            "" => "nothing to change",
+            summary => summary,
+        };
+        info!("gitquarry: {} ({}): {summary}", migration.version, migration.name);
         if outcome.incomplete > 0 {
             warn!(
                 "gitquarry: warning: {} item(s) were changed concurrently and left alone -- run again.",

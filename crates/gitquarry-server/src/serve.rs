@@ -318,9 +318,13 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // exactly what it did before, so the server starts and the next
     // startup, or `gitquarry migrate --apply`, picks up the rest.
     for (migration, outcome) in gitquarry_core::migrations::run_pending(&backend, &cipher).await? {
+        let summary = match outcome.summary.as_str() {
+            "" => "nothing to change",
+            summary => summary,
+        };
         info!(
-            "applied data migration {} ({}): {}",
-            migration.version, migration.name, outcome.summary
+            "applied data migration {} ({}): {summary}",
+            migration.version, migration.name
         );
         if outcome.incomplete > 0 {
             warn!(
