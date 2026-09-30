@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-argon2 = { version = "0.5.3", features = ["std"] }
+argon2 = "0.6.0"
 data-encoding = { workspace = true }
 hmac = { workspace = true }
 rand = { workspace = true }

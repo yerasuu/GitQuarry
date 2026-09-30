@@ -47,11 +47,7 @@ pub use s3db::{Backend, Cas, get_json, list_all_keys, put_json};
 /// reads `MeteredBackend`'s counters yet.
 pub fn build_backend(cfg: &BucketConfig) -> anyhow::Result<Arc<dyn Backend>> {
     let raw = s3db::build_backend(&cfg.backend)?;
-    Ok(s3db::build_resilient_backend(
-        raw,
-        cfg.resilience.clone(),
-        std::sync::Arc::new(s3db::NoopMetrics),
-    ))
+    Ok(s3db::build_resilient_backend(raw, cfg.resilience.clone(), std::sync::Arc::new(s3db::NoopMetrics)).backend)
 }
 
 /// Delay before a CAS-conflict retry, exponential (capped) with a little

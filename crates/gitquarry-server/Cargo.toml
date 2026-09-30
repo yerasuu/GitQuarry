@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 gitquarry-test-support = { workspace = true }
+reqwest = { workspace = true, features = ["form"] }
 tempfile = { workspace = true }
 
 [lints.rust]

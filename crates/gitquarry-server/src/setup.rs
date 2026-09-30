@@ -300,8 +300,7 @@ fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> 
             !r.secret_access_key.to_string().is_empty(),
             "r2: secret access key is empty"
         ),
-        // Dropped from s3db; never built from this form.
-        BackendConfig::Azure(_) | BackendConfig::Gcs(_) | BackendConfig::Local(_) => {}
+        BackendConfig::Local(_) => {}
     }
     Ok(cfg)
 }
@@ -518,9 +517,6 @@ impl From<&Prefill> for FieldValues {
                 v.r2_account_id = r.account_id.clone();
                 v.r2_access_key_id = r.access_key_id.clone();
             }
-            // Dropped from s3db: nothing on this form can edit one, so it
-            // starts blank and the operator picks a driver still supported.
-            BackendConfig::Azure(_) | BackendConfig::Gcs(_) => {}
             BackendConfig::Local(l) => {
                 v.driver = "local";
                 v.local_bucket = l.bucket.clone();

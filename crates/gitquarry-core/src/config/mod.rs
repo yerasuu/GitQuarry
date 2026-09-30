@@ -15,7 +15,7 @@ use tracing::warn;
 // `Backend` without depending on gitquarry) — re-exported here so
 // `gitquarry.toml` parsing and every existing call site keep working
 // unchanged.
-pub use s3db::{AzureParams, BackendConfig, GcsParams, LocalEngine, LocalParams, R2Params, ResilienceConfig, S3Params};
+pub use s3db::{BackendConfig, LocalEngine, LocalParams, R2Params, ResilienceConfig, S3Params};
 
 /// The main toml (buckets/credentials/passphrase) lives loose at the project
 /// root, NOT under `.conf/`: `.conf/` is for everything else (remote config

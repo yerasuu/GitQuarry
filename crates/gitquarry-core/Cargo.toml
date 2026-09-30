@@ -24,7 +24,7 @@ axum = { workspace = true, features = ["multipart"] }
 reqwest = { workspace = true }
 
 # git/ssh
-russh = "0.62.5"
+russh = "0.63.3"
 
 # Crypto (encryption-at-rest lives in s3db; password/TOTP/OIDC live in
 # gitquarry-auth-crypto)
@@ -55,7 +55,7 @@ gitquarry-auth-crypto = { workspace = true }
 # Release source-archive generation: one `git archive --format=tar` decode,
 # re-emitted as both .tar.gz and .zip in-process (see git::browse::archive_pair)
 # instead of decoding the tree from git twice.
-flate2 = "1.1.5"
+flate2 = "1.1.10"
 tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tracing = { workspace = true }

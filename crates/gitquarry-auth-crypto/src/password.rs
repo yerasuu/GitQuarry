@@ -6,9 +6,7 @@
 //! material.
 
 use anyhow::Result;
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use std::sync::LazyLock;
 
 /// Argon2id at 64 MiB / 3 passes / 1 lane, rather than `Argon2::default()`'s
@@ -27,10 +25,9 @@ fn hasher() -> Argon2<'static> {
 }
 
 pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut OsRng);
     hasher()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
+        .hash_password(password.as_bytes())
+        .map(|h: PasswordHash| h.to_string())
         .map_err(|e| anyhow::anyhow!("hasheando password: {e}"))
 }
 
