@@ -353,8 +353,11 @@ async fn registration_finish_refuses_any_challenge_cookie_but_this_accounts_live
     let cases = [
         ("missing", String::new(), challenge.clone()),
         (
+            // Same account, same challenge: only the purpose is wrong.
             "another purpose",
-            gq.sealed_challenge(&json!({ "purpose": "login", "challenge": challenge, "username": null, "exp": far })),
+            gq.sealed_challenge(
+                &json!({ "purpose": "second-factor", "challenge": challenge, "username": "alice", "exp": far }),
+            ),
             challenge.clone(),
         ),
         (
@@ -701,6 +704,46 @@ async fn the_totp_page_offers_a_passkey_only_to_an_account_that_has_one() {
     assert_eq!(page.status, StatusCode::OK);
     assert!(page.body.contains(r#"action="/_login_totp""#), "{}", page.body);
     assert!(!page.body.contains("data-passkey"), "{}", page.body);
+}
+
+/// Before any login method exists the admin pages are held open by the
+/// bootstrap grant alone; a passkey session must not be a way past that.
+#[tokio::test]
+async fn a_passkey_can_not_sign_in_while_no_login_is_enforced() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(ctx(dir.path()));
+    let (mut settings, etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+        .await
+        .unwrap();
+    settings.public_url = Some(PUBLIC_URL.to_string());
+    storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher)
+        .await
+        .unwrap();
+    // Registered straight through the domain: no password user exists, so
+    // there is no session to register it from.
+    let alice = gitquarry_test_support::account(&ctx, "alice", None).await;
+    let key = Authenticator::new(Key::p256(1), b"alice-laptop", &rp());
+    let challenge = webauthn::new_challenge();
+    let reg = key.register(&challenge, UP | UV);
+    let credential =
+        webauthn::verify_registration(&rp(), &challenge, &reg.client_data_json, &reg.attestation_object, true).unwrap();
+    domain::passkey::register(&ctx, &alice, credential, "laptop")
+        .await
+        .unwrap();
+    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+
+    let login = Session::get_as(&app, "/_login", None).await;
+    assert!(!login.body.contains(r#"data-passkey="sign-in""#), "{}", login.body);
+    let forged_challenge = webauthn::new_challenge();
+    let finish = post_json(
+        &app,
+        "/_login/passkey/finish",
+        "",
+        &assertion_body(&key, &forged_challenge, UP | UV, 0, "", "/"),
+    )
+    .await;
+    assert_eq!(finish.status, StatusCode::NOT_FOUND, "{}", finish.body);
+    assert!(set_cookie_line(&finish, "web-session").is_none());
 }
 
 #[tokio::test]
