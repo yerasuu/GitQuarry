@@ -90,6 +90,7 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
     let app = Router::new()
         .route("/", get(|| async { Redirect::to(SETUP_PATH) }))
         .route(SETUP_PATH, get(handler_get).post(handler_post))
+        .merge(gitquarry_webui::webui::asset_routes())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(web_bind)
