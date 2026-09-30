@@ -160,6 +160,9 @@ pub async fn run(rest: &[String]) -> Result<()> {
         // bucket) — same first-run wizard as a missing config, just
         // pre-filled with what's already known instead of starting blank.
         if access::list_usernames(backend.as_ref()).await?.is_empty() {
+            // The wizard opens the bucket itself for its round trip, and a
+            // local redb bucket admits one open handle per process.
+            drop(backend);
             let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
             let outcome = setup::run(
                 &config_path,
