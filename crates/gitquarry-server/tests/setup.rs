@@ -146,6 +146,14 @@ async fn blank_form_defaults_to_s3_with_every_field_empty() {
     assert!(html.contains(r#"name="name" size="40" required autofocus value="""#));
     assert!(html.contains(r#"<option value="s3" selected>"#));
     assert!(!html.contains(r#"value="my-bucket""#));
+    // Only the drivers s3db keeps: s3, r2 (the same driver) and local.
+    let offered: Vec<&str> = html
+        .split(r#"<option value=""#)
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    assert_eq!(offered, ["s3", "r2", "local"]);
+    assert!(!html.contains("azure") && !html.contains("gcs"), "{html}");
 }
 
 /// The wizard is served before any admin exists, to whoever reaches the
@@ -259,19 +267,25 @@ async fn invalid_submissions_re_render_with_the_reason_and_write_nothing() {
             ],
             "r2: account id is empty",
         ),
+        // Dropped drivers, even with their old fields filled in.
         (
             &[
                 ("driver", "azure"),
                 ("azure_bucket", "c"),
                 ("azure_account_name", "a"),
+                ("azure_tenant_id", "t"),
                 ("azure_client_id", "i"),
                 ("azure_client_secret", "s"),
             ],
-            "azure: tenant id is empty",
+            "unknown driver: azure",
         ),
         (
-            &[("driver", "gcs"), ("gcs_bucket", "b")],
-            "gcs: service account JSON path is empty",
+            &[
+                ("driver", "gcs"),
+                ("gcs_bucket", "b"),
+                ("gcs_service_account_json_path", "/k.json"),
+            ],
+            "unknown driver: gcs",
         ),
         (&[("driver", "local")], "local: directory can&#39;t be empty"),
         (&[("driver", "ftp")], "unknown driver: ftp"),

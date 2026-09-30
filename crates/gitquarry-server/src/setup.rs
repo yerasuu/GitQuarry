@@ -4,7 +4,7 @@
 //! already-written config — infra-as-code, a config copied ahead of the
 //! first real deploy, ...) — see `crate::serve::run` for both checks. One
 //! form, served on the same `--web-bind` the real web UI will use once
-//! configured: a storage driver (s3/r2/azure/gcs/local) + its credentials +
+//! configured: a storage driver (s3/r2/local) + its credentials +
 //! encryption passphrase, plus an initial admin user for the web UI. On the
 //! second path every field above the admin user is pre-filled from the
 //! config already on disk (still editable — this is the one screen, not a
@@ -27,9 +27,7 @@ use axum::routing::get;
 use gitquarry_auth_crypto::password as pw;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::User;
-use gitquarry_core::config::{
-    self, AzureParams, BackendConfig, BucketConfig, GcsParams, LocalEngine, LocalParams, R2Params, S3Params,
-};
+use gitquarry_core::config::{self, BackendConfig, BucketConfig, LocalEngine, LocalParams, R2Params, S3Params};
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::{self, Backend};
 use gitquarry_webui::webui::{esc, layout, non_empty};
@@ -130,7 +128,7 @@ async fn handler_get(State(state): State_) -> Html<String> {
 /// [`build_backend_config`] — no field is shared across two driver sections
 /// (there used to be one `bucket`/`access_key_id`/`secret_access_key` each,
 /// reused by whichever driver was picked; confusing to fill out since
-/// nothing on the page said which of the five sections a given value
+/// nothing on the page said which of the sections a given value
 /// actually belonged to once submitted).
 #[derive(Deserialize)]
 struct WizardForm {
@@ -159,20 +157,6 @@ struct WizardForm {
     r2_access_key_id: String,
     #[serde(default)]
     r2_secret_access_key: String,
-    #[serde(default)]
-    azure_bucket: String,
-    #[serde(default)]
-    azure_account_name: String,
-    #[serde(default)]
-    azure_tenant_id: String,
-    #[serde(default)]
-    azure_client_id: String,
-    #[serde(default)]
-    azure_client_secret: String,
-    #[serde(default)]
-    gcs_bucket: String,
-    #[serde(default)]
-    gcs_service_account_json_path: String,
     #[serde(default)]
     local_bucket: String,
     /// Blank on a pre-filled run keeps the stored passphrase — see
@@ -316,8 +300,8 @@ fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> 
             !r.secret_access_key.to_string().is_empty(),
             "r2: secret access key is empty"
         ),
-        BackendConfig::Azure(a) => ensure!(!a.client_secret.to_string().is_empty(), "azure: client secret is empty"),
-        BackendConfig::Gcs(_) | BackendConfig::Local(_) => {}
+        // Dropped from s3db; never built from this form.
+        BackendConfig::Azure(_) | BackendConfig::Gcs(_) | BackendConfig::Local(_) => {}
     }
     Ok(cfg)
 }
@@ -340,15 +324,6 @@ fn same_destination(new: &BackendConfig, stored: &BackendConfig) -> bool {
         (BackendConfig::R2(n), BackendConfig::R2(s)) => {
             n.bucket == s.bucket && n.account_id == s.account_id && n.access_key_id == s.access_key_id
         }
-        (BackendConfig::Azure(n), BackendConfig::Azure(s)) => {
-            n.bucket == s.bucket
-                && n.account_name == s.account_name
-                && n.tenant_id == s.tenant_id
-                && n.client_id == s.client_id
-        }
-        (BackendConfig::Gcs(n), BackendConfig::Gcs(s)) => {
-            n.bucket == s.bucket && n.service_account_json_path == s.service_account_json_path
-        }
         (BackendConfig::Local(n), BackendConfig::Local(s)) => n.bucket == s.bucket,
         _ => false,
     }
@@ -363,9 +338,6 @@ fn keep_blank_secrets(cfg: &mut BackendConfig, stored: &BackendConfig) {
         }
         (BackendConfig::R2(n), BackendConfig::R2(s)) if n.secret_access_key.to_string().is_empty() => {
             n.secret_access_key = s.secret_access_key.clone();
-        }
-        (BackendConfig::Azure(n), BackendConfig::Azure(s)) if n.client_secret.to_string().is_empty() => {
-            n.client_secret = s.client_secret.clone();
         }
         _ => {}
     }
@@ -406,37 +378,6 @@ fn backend_config_from_form(form: &WizardForm, existing: Option<&BackendConfig>)
                 account_id,
                 access_key_id,
                 secret_access_key: secret_access_key.into(),
-            }))
-        }
-        "azure" => {
-            let bucket = form.azure_bucket.trim().to_string();
-            ensure!(!bucket.is_empty(), "azure: container name can't be empty");
-            let account_name = form.azure_account_name.trim().to_string();
-            let tenant_id = form.azure_tenant_id.trim().to_string();
-            let client_id = form.azure_client_id.trim().to_string();
-            let client_secret = form.azure_client_secret.trim().to_string();
-            ensure!(!account_name.is_empty(), "azure: account name is empty");
-            ensure!(!tenant_id.is_empty(), "azure: tenant id is empty");
-            ensure!(!client_id.is_empty(), "azure: client id is empty");
-            Ok(BackendConfig::Azure(AzureParams {
-                bucket,
-                account_name,
-                tenant_id,
-                client_id,
-                client_secret: client_secret.into(),
-            }))
-        }
-        "gcs" => {
-            let bucket = form.gcs_bucket.trim().to_string();
-            ensure!(!bucket.is_empty(), "gcs: bucket name can't be empty");
-            let service_account_json_path = form.gcs_service_account_json_path.trim().to_string();
-            ensure!(
-                !service_account_json_path.is_empty(),
-                "gcs: service account JSON path is empty"
-            );
-            Ok(BackendConfig::Gcs(GcsParams {
-                bucket,
-                service_account_json_path,
             }))
         }
         "local" => {
@@ -537,12 +478,6 @@ struct FieldValues {
     r2_bucket: String,
     r2_account_id: String,
     r2_access_key_id: String,
-    azure_bucket: String,
-    azure_account_name: String,
-    azure_tenant_id: String,
-    azure_client_id: String,
-    gcs_bucket: String,
-    gcs_service_account_json_path: String,
     local_bucket: String,
 }
 
@@ -559,12 +494,6 @@ impl FieldValues {
             r2_bucket: String::new(),
             r2_account_id: String::new(),
             r2_access_key_id: String::new(),
-            azure_bucket: String::new(),
-            azure_account_name: String::new(),
-            azure_tenant_id: String::new(),
-            azure_client_id: String::new(),
-            gcs_bucket: String::new(),
-            gcs_service_account_json_path: String::new(),
             local_bucket: String::new(),
         }
     }
@@ -589,18 +518,9 @@ impl From<&Prefill> for FieldValues {
                 v.r2_account_id = r.account_id.clone();
                 v.r2_access_key_id = r.access_key_id.clone();
             }
-            BackendConfig::Azure(a) => {
-                v.driver = "azure";
-                v.azure_bucket = a.bucket.clone();
-                v.azure_account_name = a.account_name.clone();
-                v.azure_tenant_id = a.tenant_id.clone();
-                v.azure_client_id = a.client_id.clone();
-            }
-            BackendConfig::Gcs(g) => {
-                v.driver = "gcs";
-                v.gcs_bucket = g.bucket.clone();
-                v.gcs_service_account_json_path = g.service_account_json_path.clone();
-            }
+            // Dropped from s3db: nothing on this form can edit one, so it
+            // starts blank and the operator picks a driver still supported.
+            BackendConfig::Azure(_) | BackendConfig::Gcs(_) => {}
             BackendConfig::Local(l) => {
                 v.driver = "local";
                 v.local_bucket = l.bucket.clone();
@@ -639,9 +559,9 @@ bucket itself.</p>"#
     let passphrase_attrs = if prefill.is_some() { keep_hint } else { " required" };
     let body = format!(
         r#"{intro}
-<p class="muted">This page doesn't use JavaScript, so it shows all five drivers' fields together
+<p class="muted">This page doesn't use JavaScript, so it shows all three drivers' fields together
 instead of showing/hiding based on what you pick in "driver" — only the section for the driver you
-picked is read, the other four are ignored. Each driver has its own fields below, nothing is
+picked is read, the other two are ignored. Each driver has its own fields below, nothing is
 shared between sections.</p>
 {flash}
 <form method="post" action="{SETUP_PATH}">
@@ -652,8 +572,6 @@ shared between sections.</p>
 <select name="driver">
 <option value="s3" {s3_sel}>s3 (AWS S3 or compatible: MinIO, etc.)</option>
 <option value="r2" {r2_sel}>r2 (Cloudflare R2)</option>
-<option value="azure" {azure_sel}>azure (Azure Blob Storage)</option>
-<option value="gcs" {gcs_sel}>gcs (Google Cloud Storage)</option>
 <option value="local" {local_sel}>local (directory on this filesystem)</option>
 </select>
 </td></tr>
@@ -677,22 +595,6 @@ shared between sections.</p>
 <tr><td>secret access key</td><td><input type="password" name="r2_secret_access_key" size="40"{keep_hint}></td></tr>
 </table>
 
-<h4>driver: azure</h4>
-<p class="muted">Auth is Entra ID (an app registration's client secret), not a storage account key.</p>
-<table class="commit-meta">
-<tr><td>container</td><td><input name="azure_bucket" size="40" value="{azure_bucket}"></td></tr>
-<tr><td>account name</td><td><input name="azure_account_name" size="40" value="{azure_account_name}"></td></tr>
-<tr><td>tenant id</td><td><input name="azure_tenant_id" size="40" value="{azure_tenant_id}"></td></tr>
-<tr><td>client id</td><td><input name="azure_client_id" size="40" value="{azure_client_id}"></td></tr>
-<tr><td>client secret</td><td><input type="password" name="azure_client_secret" size="40"{keep_hint}></td></tr>
-</table>
-
-<h4>driver: gcs</h4>
-<table class="commit-meta">
-<tr><td>bucket</td><td><input name="gcs_bucket" size="40" value="{gcs_bucket}"></td></tr>
-<tr><td>service account json path</td><td><input name="gcs_service_account_json_path" size="40" value="{gcs_service_account_json_path}" placeholder="/etc/gitquarry/gcs-key.json"></td></tr>
-</table>
-
 <h4>driver: local</h4>
 <table class="commit-meta">
 <tr><td>directory</td><td><input name="local_bucket" size="40" value="{local_bucket}" placeholder="/var/lib/gitquarry/my-bucket"></td></tr>
@@ -713,8 +615,6 @@ shared between sections.</p>
         name = val(&v.name),
         s3_sel = selected("s3"),
         r2_sel = selected("r2"),
-        azure_sel = selected("azure"),
-        gcs_sel = selected("gcs"),
         local_sel = selected("local"),
         s3_bucket = val(&v.s3_bucket),
         s3_region = val(&v.s3_region),
@@ -724,12 +624,6 @@ shared between sections.</p>
         r2_bucket = val(&v.r2_bucket),
         r2_account_id = val(&v.r2_account_id),
         r2_access_key_id = val(&v.r2_access_key_id),
-        azure_bucket = val(&v.azure_bucket),
-        azure_account_name = val(&v.azure_account_name),
-        azure_tenant_id = val(&v.azure_tenant_id),
-        azure_client_id = val(&v.azure_client_id),
-        gcs_bucket = val(&v.gcs_bucket),
-        gcs_service_account_json_path = val(&v.gcs_service_account_json_path),
         local_bucket = val(&v.local_bucket),
     );
     layout("setup", "", &body, "", "", "", gitquarry_i18n::Locale::DEFAULT)
