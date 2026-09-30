@@ -119,6 +119,25 @@ async fn the_root_sends_to_setup_and_the_form_posts_back_there() {
     assert!(wizard.get().await.contains(r#"<form method="post" action="/_setup">"#));
 }
 
+/// The wizard is its own short-lived server, so it has to serve the
+/// stylesheet and scripts the shared page chrome links, or the one page it
+/// shows renders unstyled.
+#[tokio::test]
+async fn every_asset_the_wizard_page_links_is_served() {
+    let dir = tempfile::tempdir().unwrap();
+    let wizard = start(&dir.path().join("gitquarry.toml"), None).await;
+    let html = wizard.get().await;
+    let assets: Vec<&str> = html
+        .split(['"', '\''])
+        .filter(|chunk| chunk.starts_with("/_assets/"))
+        .collect();
+    assert!(assets.iter().any(|a| a.starts_with("/_assets/style.css")), "{html}");
+    for asset in assets {
+        let resp = wizard.http.get(format!("{}{asset}", wizard.base)).send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 200, "{asset}");
+    }
+}
+
 #[tokio::test]
 async fn blank_form_defaults_to_s3_with_every_field_empty() {
     let dir = tempfile::tempdir().unwrap();

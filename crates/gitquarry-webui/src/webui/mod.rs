@@ -414,6 +414,21 @@ pub(crate) fn hljs_line_numbers_js_url() -> &'static str {
     &URL
 }
 
+/// `/_assets/*` alone: the stylesheet, scripts and icon every page's chrome
+/// ([`layout`]) links. Stateless, so any router can mount it — the one
+/// outside [`router`] being `gitquarry-server`'s setup wizard, a separate
+/// short-lived server whose page uses the same chrome.
+pub fn asset_routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
+    Router::new()
+        .route("/_assets/style.css", get(handler_style_css))
+        .route("/_assets/app.js", get(handler_app_js))
+        .route("/_assets/favicon.svg", get(handler_favicon_svg))
+        .route("/_assets/styler.js", get(handler_styler_js))
+        .route("/_assets/passkey.js", get(handler_passkey_js))
+        .route("/_assets/hljs.js", get(handler_hljs_js))
+        .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
+}
+
 /// The whole route table, layers included, with nothing bound yet.
 ///
 /// Split out of [`run_server`] so `tests/webui_routes.rs` can assert
@@ -422,13 +437,7 @@ pub(crate) fn hljs_line_numbers_js_url() -> &'static str {
 /// storage backend.
 pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
-        .route("/_assets/style.css", get(handler_style_css))
-        .route("/_assets/app.js", get(handler_app_js))
-        .route("/_assets/favicon.svg", get(handler_favicon_svg))
-        .route("/_assets/styler.js", get(handler_styler_js))
-        .route("/_assets/passkey.js", get(handler_passkey_js))
-        .route("/_assets/hljs.js", get(handler_hljs_js))
-        .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
+        .merge(asset_routes())
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
         .route("/_metrics", get(health::handler_metrics))
