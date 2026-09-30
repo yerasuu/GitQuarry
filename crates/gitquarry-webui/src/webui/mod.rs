@@ -555,6 +555,14 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             get(crate::auth::web::login::handler_login).post(crate::auth::web::login::handler_login_local),
         )
         .route(
+            "/_login/passkey/begin",
+            post(crate::auth::web::passkey::handler_login_begin),
+        )
+        .route(
+            "/_login/passkey/finish",
+            post(crate::auth::web::passkey::handler_login_finish),
+        )
+        .route(
             "/_login_totp",
             get(crate::auth::web::login::handler_login_totp_get).post(crate::auth::web::login::handler_login_totp_post),
         )

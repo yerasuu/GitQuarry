@@ -164,6 +164,65 @@ async fn register(gq: &Instance, session: &Session, key: &Authenticator, label: 
     assert_eq!(page.status, StatusCode::OK, "{}", page.body);
 }
 
+fn assertion_body(key: &Authenticator, challenge: &str, flags: u8, counter: u32, csrf: &str, return_to: &str) -> Value {
+    let parts = key.assert(challenge, flags, counter);
+    json!({
+        "csrf": csrf,
+        "id": webauthn::encode_id(&key.credential_id),
+        "clientDataJSON": webauthn::encode_id(&parts.client_data_json),
+        "authenticatorData": webauthn::encode_id(&parts.authenticator_data),
+        "signature": webauthn::encode_id(&parts.signature),
+        "userHandle": null,
+        "return_to": return_to,
+    })
+}
+
+/// A passkey-only sign-in from a fresh `/_login` visit, as `passkey.js`
+/// runs it: begin anchored on the page's `login-csrf`, then finish.
+async fn passkey_login(gq: &Instance, key: &Authenticator, flags: u8, counter: u32, return_to: &str) -> Page {
+    let form = Session::get_as(&gq.app, "/_login", None).await;
+    assert!(form.body.contains(r#"data-passkey="sign-in""#), "{}", form.body);
+    let anchor = form.cookie("login-csrf");
+    let csrf = form.csrf();
+    let begin = post_json(&gq.app, "/_login/passkey/begin", &anchor, &json!({ "csrf": csrf })).await;
+    assert_eq!(begin.status, StatusCode::OK, "{}", begin.body);
+    let options: Value = serde_json::from_str(&begin.body).unwrap();
+    assert_eq!(options["rpId"], "git.example.com");
+    assert_eq!(options["userVerification"], "required");
+    assert_eq!(options["allowCredentials"], json!([]));
+    let challenge = options["challenge"].as_str().unwrap();
+    post_json(
+        &gq.app,
+        "/_login/passkey/finish",
+        &format!("{anchor}; {}", begin.cookie("passkey-challenge")),
+        &assertion_body(key, challenge, flags, counter, &csrf, return_to),
+    )
+    .await
+}
+
+async fn session_is_live(gq: &Instance, page: &Page) -> bool {
+    let Some(line) = set_cookie_line(page, "web-session") else {
+        return false;
+    };
+    let cookie = line.split(';').next().unwrap();
+    Session::get_as(&gq.app, "/_account/security", Some(cookie))
+        .await
+        .status
+        == StatusCode::OK
+}
+
+async fn enable_totp(ctx: &AppContext, username: &str) {
+    let (user, etag) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
+        .await
+        .unwrap();
+    let mut user = user.unwrap();
+    user.totp_secret = Some(gitquarry_auth_crypto::totp::generate_secret());
+    user.totp_enabled = true;
+    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref())
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn the_public_url_setting_accepts_https_domains_and_localhost_only() {
     let gq = Instance::new().await;
@@ -440,6 +499,93 @@ async fn a_passkey_is_removed_only_by_its_owner_with_their_password() {
 }
 
 #[tokio::test]
+async fn a_passkey_alone_signs_its_owner_in_past_2fa_and_back_to_a_local_page() {
+    let gq = Instance::with_passkeys().await;
+    let alice = Session::login(&gq.app, "alice").await;
+    let key = Authenticator::new(Key::p256(1), b"alice-laptop", &rp());
+    register(&gq, &alice, &key, "laptop").await;
+    // A 2FA account: the passkey counts as both factors.
+    enable_totp(&gq.ctx, "alice").await;
+
+    let page = passkey_login(&gq, &key, UP | UV, 1, "/team/proj").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(
+        serde_json::from_str::<Value>(&page.body).unwrap(),
+        json!({ "redirect": "/team/proj" })
+    );
+    let line = set_cookie_line(&page, "web-session").unwrap();
+    assert!(line.contains("; HttpOnly; SameSite=Lax"), "{line}");
+    assert!(set_cookie_line(&page, "pending-totp").is_none());
+    assert!(clears_challenge(&page));
+    assert!(session_is_live(&gq, &page).await);
+
+    let page = passkey_login(&gq, &key, UP | UV, 2, "//evil.example.org/phish").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(
+        serde_json::from_str::<Value>(&page.body).unwrap(),
+        json!({ "redirect": "/" })
+    );
+
+    let owner = access::get_user(gq.ctx.backend().as_ref(), &gq.ctx.cipher, "alice")
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    let stored = &domain::passkey::list(&gq.ctx, &owner.uid).await.unwrap()[0];
+    assert_eq!(stored.sign_count, 2);
+    assert!(stored.last_used_at.is_some());
+
+    // A password change bumps the session epoch; a passkey session obeys it
+    // like any other.
+    let before = passkey_login(&gq, &key, UP | UV, 3, "/").await;
+    assert!(session_is_live(&gq, &before).await);
+    domain::user::set_password(
+        &gq.ctx,
+        "alice",
+        Some("a brand new passphrase"),
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    .unwrap();
+    assert!(!session_is_live(&gq, &before).await);
+}
+
+#[tokio::test]
+async fn a_passkey_sign_in_is_refused_without_uv_for_an_unknown_key_or_from_another_origin() {
+    let gq = Instance::with_passkeys().await;
+    let alice = Session::login(&gq.app, "alice").await;
+    let key = Authenticator::new(Key::p256(1), b"alice-laptop", &rp());
+    register(&gq, &alice, &key, "laptop").await;
+
+    let unknown = Authenticator::new(Key::p256(2), b"never-registered", &rp());
+    let mut phished = Authenticator::new(Key::p256(1), b"alice-laptop", &rp());
+    phished.origin = "https://git.example.com.evil.example.org".to_string();
+    for (case, key, flags) in [
+        ("no user verification", &key, UP),
+        ("unknown credential", &unknown, UP | UV),
+        ("another origin", &phished, UP | UV),
+    ] {
+        let page = passkey_login(&gq, key, flags, 0, "/").await;
+        assert_eq!(page.status, StatusCode::BAD_REQUEST, "{case}: {}", page.body);
+        assert!(page.body.contains("that passkey didn"), "{case}: {}", page.body);
+        assert!(set_cookie_line(&page, "web-session").is_none(), "{case}");
+        assert!(clears_challenge(&page), "{case}");
+    }
+
+    // Begin is anchored on the login page's own token.
+    let form = Session::get_as(&gq.app, "/_login", None).await;
+    let page = post_json(
+        &gq.app,
+        "/_login/passkey/begin",
+        &form.cookie("login-csrf"),
+        &json!({ "csrf": "forged" }),
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST);
+    assert!(set_cookie_line(&page, "passkey-challenge").is_none());
+}
+
+#[tokio::test]
 async fn with_no_public_url_every_passkey_route_is_404_and_no_control_renders() {
     let gq = Instance::new().await;
     let alice = Session::login(&gq.app, "alice").await;
@@ -463,6 +609,15 @@ async fn with_no_public_url_every_passkey_route_is_404_and_no_control_renders() 
         )
         .await;
     assert_eq!(page.status, StatusCode::NOT_FOUND);
+
+    let login = Session::get_as(&gq.app, "/_login", None).await;
+    assert!(!login.body.contains("data-passkey"), "{}", login.body);
+    let anchor = login.cookie("login-csrf");
+    let body = json!({ "csrf": login.csrf() });
+    for path in ["/_login/passkey/begin", "/_login/passkey/finish"] {
+        let page = post_json(&gq.app, path, &anchor, &body).await;
+        assert_eq!(page.status, StatusCode::NOT_FOUND, "{path}");
+    }
 }
 
 fn now_secs() -> u64 {

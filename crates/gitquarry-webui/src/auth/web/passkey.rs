@@ -1,5 +1,6 @@
 //! Passkeys (WebAuthn) in the web UI: registering one from
-//! `/_account/security` and removing it again. The ceremonies themselves are
+//! `/_account/security`, removing it again, and signing in with one alone
+//! from `/_login`. The ceremonies themselves are
 //! `style/passkey.js` calling `navigator.credentials`; this module hands it
 //! the options, keeps the challenge in a sealed single-use cookie, and has
 //! [`gitquarry_core::auth::domain::passkey`] check and store what comes back.
@@ -74,6 +75,7 @@ async fn require_rp(ctx: &AppContext, locale: Locale) -> Result<RelyingParty, Ap
 #[serde(rename_all = "kebab-case")]
 enum Purpose {
     Register,
+    Login,
 }
 
 /// What a begin step leaves for its finish step. Sealed under
@@ -484,4 +486,150 @@ pub(super) async fn render_section(
             }))
         }
     })
+}
+
+/// The relying party a sign-in may use: passkeys on *and* login enforced —
+/// on an instance where nobody has to log in (no OIDC, no password yet) a
+/// passkey session would be the one way past a gate that is meant to be
+/// held open by the bootstrap grant instead.
+pub(super) async fn sign_in_relying_party(ctx: &AppContext) -> Option<RelyingParty> {
+    if !login::login_enforced(ctx).await {
+        return None;
+    }
+    relying_party(ctx).await
+}
+
+async fn require_sign_in_rp(ctx: &AppContext, locale: Locale) -> Result<RelyingParty, AppError> {
+    sign_in_relying_party(ctx)
+        .await
+        .ok_or_else(|| AppError::not_found(anyhow!("{}", gitquarry_i18n::shared::auth::passkeys_off(locale))))
+}
+
+/// The "sign in with a passkey" button for a page whose own CSRF anchor
+/// (`csrf`, already derived) the begin and finish steps under `base` check.
+pub(super) fn sign_in_control(label: &str, base: &str, csrf: &str, return_to: &str) -> Markup {
+    html! {
+        div data-passkey="sign-in" data-begin-url=(format!("{base}/begin")) data-finish-url=(format!("{base}/finish"))
+            data-csrf=(csrf) data-return-to=(return_to) hidden {
+            p { button type="button" data-passkey-start { (label) } }
+            div class="field-error" data-passkey-flash hidden {}
+        }
+        script src=(crate::webui::passkey_js_url()) defer {}
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CsrfOnly {
+    #[serde(default)]
+    csrf: String,
+}
+
+/// `POST /_login/passkey/begin`: `PublicKeyCredentialRequestOptions` for a
+/// discoverable credential — no `allowCredentials`, the authenticator
+/// offers whichever passkeys it holds for this site. Anchored on the same
+/// `login-csrf` cookie as the password form: logging someone into an
+/// account of the attacker's choosing is the attack either way.
+pub(crate) async fn handler_login_begin(
+    State(ctx): State_,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let locale = effective_locale(&ctx, &headers).await;
+    let rp = require_sign_in_rp(&ctx, locale).await?;
+    let form: CsrfOnly = parse_json(&body, locale)?;
+    crate::webui::require_csrf_for(&headers, login::LOGIN_CSRF_COOKIE, &form.csrf)?;
+    let (challenge, cookie) = plant_challenge(&ctx, &headers, Purpose::Login, None)?;
+    let options = serde_json::json!({
+        "challenge": challenge,
+        "rpId": rp.id,
+        "userVerification": "required",
+        "allowCredentials": [],
+        "timeout": CEREMONY_TIMEOUT_MS,
+    });
+    with_cookie(axum::Json(options).into_response(), cookie, locale)
+}
+
+/// A `navigator.credentials.get()` response as `passkey.js` posts it.
+#[derive(Deserialize)]
+pub(crate) struct AssertionForm {
+    #[serde(default)]
+    csrf: String,
+    /// `rawId`, base64url.
+    #[serde(default)]
+    id: String,
+    #[serde(default, rename = "clientDataJSON")]
+    client_data_json: String,
+    #[serde(default, rename = "authenticatorData")]
+    authenticator_data: String,
+    #[serde(default)]
+    signature: String,
+    #[serde(default, rename = "userHandle")]
+    user_handle: Option<String>,
+    #[serde(default)]
+    return_to: String,
+}
+
+impl AssertionForm {
+    /// Decoded for `domain::passkey::verify`. The id is re-encoded rather
+    /// than passed through, so only canonical base64url reaches the lookup.
+    fn assertion(&self, locale: Locale) -> Result<domain::passkey::Assertion, AppError> {
+        Ok(domain::passkey::Assertion {
+            credential_id: webauthn::encode_id(&decode(&self.id, locale)?),
+            client_data_json: decode(&self.client_data_json, locale)?,
+            authenticator_data: decode(&self.authenticator_data, locale)?,
+            signature: decode(&self.signature, locale)?,
+            user_handle: match self.user_handle.as_deref() {
+                Some(handle) if !handle.is_empty() => Some(decode(handle, locale)?),
+                _ => None,
+            },
+        })
+    }
+}
+
+fn did_not_work(locale: Locale) -> AppError {
+    AppError::bad_request(anyhow!(
+        "{}",
+        gitquarry_i18n::shared::auth::passkey_did_not_work(locale)
+    ))
+}
+
+/// Where `passkey.js` goes once the session cookie is set.
+fn redirect_json(to: &str) -> Response {
+    axum::Json(serde_json::json!({ "redirect": to })).into_response()
+}
+
+/// `POST /_login/passkey/finish`: a passkey alone signs its owner in. It
+/// counts as both factors — something held plus the PIN or biometric the
+/// authenticator verified (`require_uv`) — so a 2FA account gets no TOTP
+/// step after it.
+pub(crate) async fn handler_login_finish(State(ctx): State_, headers: HeaderMap, body: Bytes) -> Response {
+    let outcome = login_finish(&ctx, &headers, &body).await;
+    clear_challenge(&headers, outcome)
+}
+
+async fn login_finish(ctx: &AppContext, headers: &HeaderMap, body: &[u8]) -> Result<Response, AppError> {
+    let locale = effective_locale(ctx, headers).await;
+    let rp = require_sign_in_rp(ctx, locale).await?;
+    let form: AssertionForm = parse_json(body, locale)?;
+    crate::webui::require_csrf_for(headers, login::LOGIN_CSRF_COOKIE, &form.csrf)?;
+    let challenge = take_challenge(ctx, headers, Purpose::Login, None, locale)?;
+    let assertion = form.assertion(locale)?;
+    let (user, passkey) = match domain::passkey::verify(ctx, &rp, &challenge, &assertion, None, true).await? {
+        Ok(verified) => verified,
+        Err(refusal) => {
+            warn!(target: "webui::passkey", credential = %assertion.credential_id, refusal = %refusal, "passkey sign-in refused");
+            return Err(did_not_work(locale));
+        }
+    };
+    gitquarry_core::storage::audit::record(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        &user.username,
+        "passkey.login",
+        &user.username,
+        Some(passkey.label),
+    )
+    .await;
+    let return_to = login::safe_return_to(&form.return_to);
+    login::issue_session(headers, &ctx.cipher, &user, &[], redirect_json(return_to), locale)
 }

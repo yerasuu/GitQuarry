@@ -16,6 +16,11 @@
 //     the form's current-password field, `navigator.credentials.create()`,
 //     finish with the label; the finish response is the refreshed passkeys
 //     section, which replaces `data-target`.
+//   - `[data-passkey="sign-in"]` (`/_login`, `/_login_totp`): its
+//     `[data-passkey-start]` button runs begin, `navigator.credentials.get()`
+//     and finish against `data-begin-url`/`data-finish-url` with
+//     `data-csrf`; finish answers `{ redirect }` once the session cookie is
+//     set, and the browser goes there.
 
 (function () {
   "use strict";
@@ -135,6 +140,43 @@
       })
       .catch((err) => showError(form, err));
   }
+
+  function signIn(scope) {
+    clearError(scope);
+    const csrf = scope.dataset.csrf;
+    postJson(scope.dataset.beginUrl, { csrf })
+      .then((resp) => resp.json())
+      .then((options) => {
+        options.challenge = toBuffer(options.challenge);
+        options.allowCredentials = descriptors(options.allowCredentials);
+        return navigator.credentials.get({ publicKey: options });
+      })
+      .then((credential) =>
+        postJson(scope.dataset.finishUrl, {
+          csrf,
+          return_to: scope.dataset.returnTo || "",
+          id: toBase64url(credential.rawId),
+          clientDataJSON: toBase64url(credential.response.clientDataJSON),
+          authenticatorData: toBase64url(credential.response.authenticatorData),
+          signature: toBase64url(credential.response.signature),
+          userHandle: credential.response.userHandle ? toBase64url(credential.response.userHandle) : null,
+        }),
+      )
+      .then((resp) => resp.json())
+      .then((body) => {
+        window.location.assign(body.redirect);
+      })
+      .catch((err) => showError(scope, err));
+  }
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-passkey-start]");
+    const scope = button && button.closest("[data-passkey='sign-in']");
+    if (scope) {
+      event.preventDefault();
+      signIn(scope);
+    }
+  });
 
   document.addEventListener("submit", (event) => {
     const form = event.target.closest("form[data-passkey='register']");

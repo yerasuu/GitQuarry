@@ -394,3 +394,13 @@ msg!(
         Locale::En => "that passkey doesn't exist",
     }
 );
+
+msg!(
+    /// Any refused passkey sign-in or second factor. Deliberately one
+    /// sentence for every `PasskeyRefusal`: which check tripped is for the
+    /// log, not for whoever is trying keys.
+    passkey_did_not_work() {
+        Locale::Es => "esa passkey no ha funcionado",
+        Locale::En => "that passkey didn't work",
+    }
+);
