@@ -313,6 +313,46 @@ pub struct PersonalAccessToken {
     pub last_used_at: Option<String>,
 }
 
+/// One WebAuthn credential (passkey) a user registered — a second factor
+/// after the password, and, being a discoverable credential, a way to sign
+/// in on its own. Keyed by [`Self::key`] (a digest of the credential id,
+/// see `access::passkey_key`) rather than the id itself: an id may run to
+/// 1023 bytes, which base64-encoded no longer fits an S3 key.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[entity(collection = ".conf/passkeys")]
+pub struct Passkey {
+    #[serde(default)]
+    #[entity(key)]
+    pub key: String,
+    /// The credential id as the browser sends it (base64url) — compared
+    /// against the one a sign-in names before this record is trusted, so a
+    /// digest collision can't hand one user's record to another's key.
+    #[serde(default)]
+    pub credential_id: String,
+    /// [`User::uid`], not username, so a renamed owner keeps the passkey.
+    #[serde(default)]
+    pub owner_uid: Uid,
+    /// The COSE_Key as registered, base64url — re-parsed on every sign-in.
+    #[serde(default)]
+    pub public_key: String,
+    /// The authenticator's signature counter after its last use; a value
+    /// that doesn't move forward is refused (see `webauthn::verify_assertion`).
+    #[serde(default)]
+    pub sign_count: u32,
+    /// Display-only, chosen by the owner — never parsed.
+    #[serde(default)]
+    pub label: String,
+    /// A synced (multi-device) passkey rather than one bound to a single
+    /// hardware key. Shown to the owner, never used to decide anything.
+    #[serde(default)]
+    pub backup_eligible: bool,
+    /// `format_unix_secs`-formatted.
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+}
+
 /// A shared namespace multiple users can push into — a repo lives at
 /// `<group>/<repo>` the same way a personal one lives at
 /// `<username>/<repo>`. Membership is direct and GitLab-shaped:

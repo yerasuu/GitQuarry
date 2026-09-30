@@ -6,5 +6,6 @@
 //! mutates them. Same one-file-per-concern shape `crate::domain` uses.
 
 pub mod group;
+pub mod passkey;
 pub mod pat;
 pub mod user;

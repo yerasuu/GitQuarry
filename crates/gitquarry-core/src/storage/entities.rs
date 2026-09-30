@@ -150,6 +150,13 @@ pub struct ServerSettings {
     /// varies too much per deployment to default to anything real.
     #[serde(default)]
     pub source_link: Option<String>,
+    /// The URL people reach this instance at (`https://git.example.com`).
+    /// Passkeys are bound to its host (the WebAuthn relying-party id) and
+    /// signed for its origin, so they stay off until this is set: deriving
+    /// either from a request's own `Host` header would let any name the
+    /// server answers to mint credentials for itself.
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
