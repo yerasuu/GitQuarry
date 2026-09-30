@@ -278,8 +278,8 @@ pub struct RepoConfig {
     #[serde(default)]
     pub last_push_commits: Option<u32>,
     /// Short name (`refs/heads/` stripped) of the branch [`Self::last_push`]
-    /// landed on — always the repo's default branch, since that's the only
-    /// branch this ever fires for, but stored rather than re-derived so the
+    /// landed on — any branch, not only the default one (the default wins
+    /// when one push moves several). Stored rather than re-derived so the
     /// home page's activity line doesn't need its own `Manifest` fetch just
     /// to name it.
     #[serde(default)]

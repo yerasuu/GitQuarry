@@ -1215,10 +1215,9 @@ async fn merging_into_the_default_branch_stamps_last_push() {
 }
 
 /// Same merge as above, but into a branch that isn't the repo's default —
-/// `last_push` must stay untouched, same "default branch only" scoping the
-/// pre-receive hook and the mirror-external sync engine both apply.
+/// it still counts as activity, same as a push to that branch would.
 #[tokio::test]
-async fn merging_into_a_non_default_branch_leaves_last_push_alone() {
+async fn merging_into_a_non_default_branch_stamps_last_push_too() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = ctx(dir.path());
     let target = test_target(&ctx);
@@ -1256,7 +1255,8 @@ async fn merging_into_a_non_default_branch_leaves_last_push_alone() {
     .unwrap();
 
     let (after, _etag) = target.remote.get_repo_config().await.unwrap();
-    assert_eq!(after.last_push, None);
+    assert!(after.last_push.is_some());
+    assert_eq!(after.last_push_branch, Some("release".to_string()));
 }
 
 #[tokio::test]

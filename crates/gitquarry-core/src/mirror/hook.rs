@@ -400,26 +400,30 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
                 )
                 .await;
             }
-            // Only the default branch moves the "last updated" stamp: a
-            // push that only touches a feature branch or a tag isn't code
-            // landing on the repo's main line, which is what the home
-            // page's "updated X ago" is meant to answer.
-            if let Some(default_update) = updates
+            // Any branch moves the "last updated" stamp, so work on a
+            // feature branch shows up on the home page too. Tags don't:
+            // those already surface as releases. When one push moves
+            // several branches, the default one names the activity line.
+            let is_branch_push = |u: &&RefUpdate| u.refname.starts_with("refs/heads/") && !is_zero_sha(&u.new);
+            let stamped_update = updates
                 .iter()
+                .filter(is_branch_push)
                 .find(|u| new_manifest.head.as_deref() == Some(u.refname.as_str()))
-            {
-                // A brand-new default branch has no `old` to range from —
-                // every commit reachable from `new` is new to this repo.
-                let range = if is_zero_sha(&default_update.old) {
-                    default_update.new.clone()
+                .or_else(|| updates.iter().find(is_branch_push));
+            if let Some(stamped_update) = stamped_update {
+                // A brand-new branch has no `old` to range from — every
+                // commit reachable from `new` counts, same as git's own
+                // "new branch" push summary.
+                let range = if is_zero_sha(&stamped_update.old) {
+                    stamped_update.new.clone()
                 } else {
-                    format!("{}..{}", default_update.old, default_update.new)
+                    format!("{}..{}", stamped_update.old, stamped_update.new)
                 };
                 let commits = git::rev_list_count(Path::new(&git_dir), &range).await.unwrap_or(0);
-                let branch = default_update
+                let branch = stamped_update
                     .refname
                     .strip_prefix("refs/heads/")
-                    .unwrap_or(&default_update.refname);
+                    .unwrap_or(&stamped_update.refname);
                 crate::storage::settings::touch_last_push(
                     hook_ctx.backend.as_ref(),
                     &hook_ctx.cipher,
