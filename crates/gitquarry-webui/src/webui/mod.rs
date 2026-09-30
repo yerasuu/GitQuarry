@@ -567,6 +567,14 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             get(crate::auth::web::login::handler_login_totp_get).post(crate::auth::web::login::handler_login_totp_post),
         )
         .route(
+            "/_login_totp/passkey/begin",
+            post(crate::auth::web::passkey::handler_second_factor_begin),
+        )
+        .route(
+            "/_login_totp/passkey/finish",
+            post(crate::auth::web::passkey::handler_second_factor_finish),
+        )
+        .route(
             "/_releases/create/{*repo}",
             get(repo::releases::handler_mutation_get).post(repo::releases::handler_create_post),
         )

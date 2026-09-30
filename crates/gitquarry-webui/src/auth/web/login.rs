@@ -46,7 +46,7 @@ const FLOW_COOKIE: &str = "oidc-flow";
 const FLOW_TTL_SECS: i64 = 600;
 pub(crate) const SESSION_COOKIE: &str = "web-session";
 const SESSION_TTL: Duration = Duration::from_secs(7 * 86400);
-const PENDING_TOTP_COOKIE: &str = "pending-totp";
+pub(super) const PENDING_TOTP_COOKIE: &str = "pending-totp";
 /// Anchors the CSRF token on `/_login`'s own form. Everything else in this
 /// app double-submits against the session cookie, which by definition
 /// doesn't exist yet here — see [`crate::webui::require_csrf_for`].
@@ -108,9 +108,9 @@ struct SessionCookie {
 /// [`handler_login_totp_post`], which re-fetches the user fresh) plus where
 /// to send the browser once the code verifies too.
 #[derive(Serialize, Deserialize)]
-struct PendingTotpCookie {
-    username: String,
-    return_to: String,
+pub(super) struct PendingTotpCookie {
+    pub(super) username: String,
+    pub(super) return_to: String,
     /// The real deadline on the "password already matched" claim — see
     /// [`FlowCookie::exp`] for why `Max-Age` alone isn't one.
     #[serde(default)]
@@ -498,6 +498,14 @@ pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMa
             }
             p { button type="submit" { (gitquarry_i18n::web::auth::login::verify_button(locale)) } }
         }
+        @if super::passkey::second_factor_offered(&ctx, &headers, locale).await {
+            (super::passkey::sign_in_control(
+                &gitquarry_i18n::web::auth::login::use_passkey_instead_button(locale),
+                "/_login_totp/passkey",
+                &csrf,
+                "",
+            ))
+        }
     }
     .into_string();
     Ok(Html(layout(
@@ -519,6 +527,36 @@ pub(crate) struct TotpLoginForm {
     csrf: String,
 }
 
+/// The live pending-TOTP claim this request carries: the password matched
+/// for `username` less than [`PENDING_TOTP_TTL_SECS`] ago. Shared by the
+/// code step and the passkey second factor, which finish the same login.
+pub(super) fn open_pending_totp(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    locale: gitquarry_i18n::Locale,
+) -> Result<PendingTotpCookie, AppError> {
+    let raw = get_cookie(headers, PENDING_TOTP_COOKIE)
+        .context(gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale))
+        .map_err(AppError::bad_request)?;
+    let sealed = B64
+        .decode(raw)
+        .context(gitquarry_i18n::shared::auth::invalid_totp_cookie(locale))
+        .map_err(AppError::bad_request)?;
+    let plain = ctx
+        .cipher
+        .open(PENDING_TOTP_COOKIE, &sealed)
+        .map_err(AppError::bad_request)?;
+    let pending: PendingTotpCookie =
+        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::auth::corrupt_totp_cookie(locale))?;
+    if expired(pending.exp) {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "{}",
+            gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale)
+        )));
+    }
+    Ok(pending)
+}
+
 /// `POST /_login_totp`: verifies `code` against the pending cookie's
 /// username's stored secret. Rate-limited via the *same* [`gitquarry_core::app::LoginAttempts`]
 /// keyed by that username — a code-guessing attempt after a correct password
@@ -538,25 +576,7 @@ pub(crate) async fn handler_login_totp_post(
     // flow: a cross-site form that completes someone else's second factor
     // lands them inside an account they didn't choose.
     crate::webui::require_csrf_for(&headers, PENDING_TOTP_COOKIE, &form.csrf)?;
-    let raw = get_cookie(&headers, PENDING_TOTP_COOKIE)
-        .context(gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale))
-        .map_err(AppError::bad_request)?;
-    let sealed = B64
-        .decode(raw)
-        .context(gitquarry_i18n::shared::auth::invalid_totp_cookie(locale))
-        .map_err(AppError::bad_request)?;
-    let plain = ctx
-        .cipher
-        .open(PENDING_TOTP_COOKIE, &sealed)
-        .map_err(AppError::bad_request)?;
-    let pending: PendingTotpCookie =
-        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::auth::corrupt_totp_cookie(locale))?;
-    if expired(pending.exp) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale)
-        )));
-    }
+    let pending = open_pending_totp(&ctx, &headers, locale)?;
 
     let penalty = ctx.login_attempts.penalty(&pending.username);
     if !penalty.is_zero() {

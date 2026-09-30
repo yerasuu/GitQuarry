@@ -585,6 +585,124 @@ async fn a_passkey_sign_in_is_refused_without_uv_for_an_unknown_key_or_from_anot
     assert!(set_cookie_line(&page, "passkey-challenge").is_none());
 }
 
+/// A password login for a 2FA account, stopped at `/_login_totp`: its
+/// `pending-totp` cookie and that page.
+async fn pending_totp(gq: &Instance, username: &str, return_to: &str) -> (String, Page) {
+    let form = Session::get_as(&gq.app, "/_login", None).await;
+    let anchor = form.cookie("login-csrf");
+    let csrf = form.csrf();
+    let done = post_form(
+        &gq.app,
+        "/_login",
+        Some(&anchor),
+        &[
+            ("csrf", &csrf),
+            ("username", username),
+            ("password", PASSWORD),
+            ("return_to", return_to),
+        ],
+    )
+    .await;
+    assert_eq!(done.location(), "/_login_totp", "{}", done.body);
+    let pending = done.cookie("pending-totp");
+    let page = Session::get_as(&gq.app, "/_login_totp", Some(&pending)).await;
+    (pending, page)
+}
+
+/// The passkey step of `/_login_totp` with `key`, as `passkey.js` runs it.
+async fn second_factor(gq: &Instance, pending: &str, page: &Page, key: &Authenticator, flags: u8) -> (Value, Page) {
+    let csrf = page.csrf();
+    let begin = post_json(&gq.app, "/_login_totp/passkey/begin", pending, &json!({ "csrf": csrf })).await;
+    assert_eq!(begin.status, StatusCode::OK, "{}", begin.body);
+    let options: Value = serde_json::from_str(&begin.body).unwrap();
+    let finish = post_json(
+        &gq.app,
+        "/_login_totp/passkey/finish",
+        &format!("{pending}; {}", begin.cookie("passkey-challenge")),
+        &assertion_body(key, options["challenge"].as_str().unwrap(), flags, 0, &csrf, ""),
+    )
+    .await;
+    (options, finish)
+}
+
+#[tokio::test]
+async fn a_passkey_completes_a_pending_2fa_login_in_place_of_the_code() {
+    let gq = Instance::with_passkeys().await;
+    let alice = Session::login(&gq.app, "alice").await;
+    let key = Authenticator::new(Key::ed25519(3), b"alice-yubikey", &rp());
+    register(&gq, &alice, &key, "yubikey").await;
+    enable_totp(&gq.ctx, "alice").await;
+
+    let (pending, page) = pending_totp(&gq, "alice", "/team/proj").await;
+    assert!(
+        page.body.contains(r#"data-begin-url="/_login_totp/passkey/begin""#),
+        "{}",
+        page.body
+    );
+
+    // Presence alone is enough here: the password already matched.
+    let (options, done) = second_factor(&gq, &pending, &page, &key, UP).await;
+    assert_eq!(options["userVerification"], "preferred");
+    assert_eq!(
+        options["allowCredentials"],
+        json!([{ "type": "public-key", "id": webauthn::encode_id(b"alice-yubikey") }])
+    );
+    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(
+        serde_json::from_str::<Value>(&done.body).unwrap(),
+        json!({ "redirect": "/team/proj" })
+    );
+    let cleared = set_cookie_line(&done, "pending-totp").unwrap();
+    assert!(cleared.starts_with("pending-totp=; "), "{cleared}");
+    assert!(clears_challenge(&done));
+    assert!(session_is_live(&gq, &done).await);
+}
+
+#[tokio::test]
+async fn the_second_factor_refuses_another_accounts_passkey() {
+    let gq = Instance::with_passkeys().await;
+    let alice = Session::login(&gq.app, "alice").await;
+    let bob = Session::login(&gq.app, "bob").await;
+    register(
+        &gq,
+        &alice,
+        &Authenticator::new(Key::p256(1), b"alice-laptop", &rp()),
+        "laptop",
+    )
+    .await;
+    let bobs_key = Authenticator::new(Key::p256(2), b"bob-phone", &rp());
+    register(&gq, &bob, &bobs_key, "phone").await;
+    enable_totp(&gq.ctx, "alice").await;
+
+    let (pending, page) = pending_totp(&gq, "alice", "/").await;
+    let (_, done) = second_factor(&gq, &pending, &page, &bobs_key, UP | UV).await;
+    assert_eq!(done.status, StatusCode::BAD_REQUEST, "{}", done.body);
+    assert!(done.body.contains("that passkey didn"), "{}", done.body);
+    assert!(set_cookie_line(&done, "web-session").is_none());
+    assert!(set_cookie_line(&done, "pending-totp").is_none());
+
+    // A forged anchor gets no challenge at all.
+    let forged = post_json(
+        &gq.app,
+        "/_login_totp/passkey/begin",
+        &pending,
+        &json!({ "csrf": "forged" }),
+    )
+    .await;
+    assert_eq!(forged.status, StatusCode::BAD_REQUEST);
+    assert!(set_cookie_line(&forged, "passkey-challenge").is_none());
+}
+
+#[tokio::test]
+async fn the_totp_page_offers_a_passkey_only_to_an_account_that_has_one() {
+    let gq = Instance::with_passkeys().await;
+    enable_totp(&gq.ctx, "alice").await;
+    let (_, page) = pending_totp(&gq, "alice", "/").await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.body.contains(r#"action="/_login_totp""#), "{}", page.body);
+    assert!(!page.body.contains("data-passkey"), "{}", page.body);
+}
+
 #[tokio::test]
 async fn with_no_public_url_every_passkey_route_is_404_and_no_control_renders() {
     let gq = Instance::new().await;
@@ -614,10 +732,20 @@ async fn with_no_public_url_every_passkey_route_is_404_and_no_control_renders() 
     assert!(!login.body.contains("data-passkey"), "{}", login.body);
     let anchor = login.cookie("login-csrf");
     let body = json!({ "csrf": login.csrf() });
-    for path in ["/_login/passkey/begin", "/_login/passkey/finish"] {
+    for path in [
+        "/_login/passkey/begin",
+        "/_login/passkey/finish",
+        "/_login_totp/passkey/begin",
+        "/_login_totp/passkey/finish",
+    ] {
         let page = post_json(&gq.app, path, &anchor, &body).await;
         assert_eq!(page.status, StatusCode::NOT_FOUND, "{path}");
     }
+
+    // Nor does the 2FA step offer one.
+    enable_totp(&gq.ctx, "alice").await;
+    let (_, page) = pending_totp(&gq, "alice", "/").await;
+    assert!(!page.body.contains("data-passkey"), "{}", page.body);
 }
 
 fn now_secs() -> u64 {

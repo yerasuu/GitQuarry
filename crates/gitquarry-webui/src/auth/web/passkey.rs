@@ -1,6 +1,6 @@
 //! Passkeys (WebAuthn) in the web UI: registering one from
-//! `/_account/security`, removing it again, and signing in with one alone
-//! from `/_login`. The ceremonies themselves are
+//! `/_account/security`, removing it again, signing in with one alone from
+//! `/_login`, and using one in place of the TOTP code at `/_login_totp`. The ceremonies themselves are
 //! `style/passkey.js` calling `navigator.credentials`; this module hands it
 //! the options, keeps the challenge in a sealed single-use cookie, and has
 //! [`gitquarry_core::auth::domain::passkey`] check and store what comes back.
@@ -76,6 +76,7 @@ async fn require_rp(ctx: &AppContext, locale: Locale) -> Result<RelyingParty, Ap
 enum Purpose {
     Register,
     Login,
+    SecondFactor,
 }
 
 /// What a begin step leaves for its finish step. Sealed under
@@ -632,4 +633,117 @@ async fn login_finish(ctx: &AppContext, headers: &HeaderMap, body: &[u8]) -> Res
     .await;
     let return_to = login::safe_return_to(&form.return_to);
     login::issue_session(headers, &ctx.cipher, &user, &[], redirect_json(return_to), locale)
+}
+
+/// The account a pending-TOTP login is for, and its passkeys, when the
+/// second-factor passkey button is worth showing at all.
+async fn second_factor_passkeys(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    locale: Locale,
+) -> Result<Option<(User, Vec<gitquarry_core::auth::entities::Passkey>)>, AppError> {
+    let pending = login::open_pending_totp(ctx, headers, locale)?;
+    let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &pending.username)
+        .await?
+        .0
+    else {
+        return Ok(None);
+    };
+    let passkeys = domain::passkey::list(ctx, &user.uid).await?;
+    Ok((!passkeys.is_empty()).then_some((user, passkeys)))
+}
+
+/// Whether `/_login_totp` offers "use a passkey instead": passkeys on and
+/// the pending account has at least one.
+pub(super) async fn second_factor_offered(ctx: &AppContext, headers: &HeaderMap, locale: Locale) -> bool {
+    relying_party(ctx).await.is_some() && matches!(second_factor_passkeys(ctx, headers, locale).await, Ok(Some(_)))
+}
+
+/// `POST /_login_totp/passkey/begin`: request options naming the pending
+/// account's own passkeys. Anchored on the `pending-totp` cookie, which is
+/// also what says whose they are. `userVerification` is only preferred:
+/// the password already stood in for "something known".
+pub(crate) async fn handler_second_factor_begin(
+    State(ctx): State_,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let locale = effective_locale(&ctx, &headers).await;
+    let rp = require_rp(&ctx, locale).await?;
+    let form: CsrfOnly = parse_json(&body, locale)?;
+    crate::webui::require_csrf_for(&headers, login::PENDING_TOTP_COOKIE, &form.csrf)?;
+    let Some((user, passkeys)) = second_factor_passkeys(&ctx, &headers, locale).await? else {
+        return Err(did_not_work(locale));
+    };
+    let (challenge, cookie) = plant_challenge(&ctx, &headers, Purpose::SecondFactor, Some(&user.username))?;
+    let options = serde_json::json!({
+        "challenge": challenge,
+        "rpId": rp.id,
+        "userVerification": "preferred",
+        "allowCredentials": passkeys
+            .iter()
+            .map(|p| serde_json::json!({ "type": "public-key", "id": p.credential_id }))
+            .collect::<Vec<_>>(),
+        "timeout": CEREMONY_TIMEOUT_MS,
+    });
+    with_cookie(axum::Json(options).into_response(), cookie, locale)
+}
+
+/// `POST /_login_totp/passkey/finish`: completes the pending login exactly
+/// as a correct code would, and a refusal counts against the same
+/// `LoginAttempts` bucket a wrong code does — guesses at the second factor
+/// add up whichever way they're made.
+pub(crate) async fn handler_second_factor_finish(State(ctx): State_, headers: HeaderMap, body: Bytes) -> Response {
+    let outcome = second_factor_finish(&ctx, &headers, &body).await;
+    clear_challenge(&headers, outcome)
+}
+
+async fn second_factor_finish(ctx: &AppContext, headers: &HeaderMap, body: &[u8]) -> Result<Response, AppError> {
+    let locale = effective_locale(ctx, headers).await;
+    let rp = require_rp(ctx, locale).await?;
+    let form: AssertionForm = parse_json(body, locale)?;
+    crate::webui::require_csrf_for(headers, login::PENDING_TOTP_COOKIE, &form.csrf)?;
+    let pending = login::open_pending_totp(ctx, headers, locale)?;
+    let challenge = take_challenge(ctx, headers, Purpose::SecondFactor, Some(&pending.username), locale)?;
+    let assertion = form.assertion(locale)?;
+
+    let penalty = ctx.login_attempts.penalty(&pending.username);
+    if !penalty.is_zero() {
+        tokio::time::sleep(penalty).await;
+    }
+    let Some(expected) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &pending.username)
+        .await?
+        .0
+    else {
+        ctx.login_attempts.record_failure(&pending.username);
+        return Err(did_not_work(locale));
+    };
+    let (user, passkey) = match domain::passkey::verify(ctx, &rp, &challenge, &assertion, Some(&expected.uid), false)
+        .await?
+    {
+        Ok(verified) => verified,
+        Err(refusal) => {
+            ctx.login_attempts.record_failure(&pending.username);
+            warn!(target: "webui::passkey", user = %pending.username, credential = %assertion.credential_id, refusal = %refusal, "passkey second factor refused");
+            return Err(did_not_work(locale));
+        }
+    };
+    ctx.login_attempts.clear(&user.username);
+    gitquarry_core::storage::audit::record(
+        ctx.backend().as_ref(),
+        &ctx.cipher,
+        &user.username,
+        "passkey.second_factor",
+        &user.username,
+        Some(passkey.label),
+    )
+    .await;
+    login::issue_session(
+        headers,
+        &ctx.cipher,
+        &user,
+        &[login::PENDING_TOTP_COOKIE],
+        redirect_json(&pending.return_to),
+        locale,
+    )
 }
