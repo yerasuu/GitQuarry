@@ -1,105 +1,16 @@
-//! `webauthn` against a software authenticator built here from the spec:
-//! real P-256 / Ed25519 keys, real CBOR, real signatures — so every
-//! rejection below is a byte a genuine browser or authenticator could send.
+//! `webauthn` against the shared software authenticator (real P-256 /
+//! Ed25519 keys, real CBOR, real signatures) — so every rejection below is
+//! a byte a genuine browser or authenticator could send.
 
 use ciborium::value::Value;
 use gitquarry_auth_crypto::webauthn::*;
+use gitquarry_test_support::authenticator::{AT, Key, UP, UV, attestation_object, auth_data, cbor, client_data};
 use sha2::{Digest, Sha256};
 
 const ORIGIN: &str = "https://git.example.com";
 
 fn rp() -> RelyingParty {
     RelyingParty::from_public_url("https://git.example.com/").unwrap()
-}
-
-const UP: u8 = 0x01;
-const UV: u8 = 0x04;
-const AT: u8 = 0x40;
-
-enum Key {
-    P256(p256::ecdsa::SigningKey),
-    Ed25519(ed25519_dalek::SigningKey),
-}
-
-impl Key {
-    fn p256(seed: u8) -> Key {
-        Key::P256(p256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap())
-    }
-
-    fn ed25519(seed: u8) -> Key {
-        Key::Ed25519(ed25519_dalek::SigningKey::from_bytes(&[seed; 32]))
-    }
-
-    fn cose(&self) -> Vec<u8> {
-        let int = |i: i64| Value::Integer(i.into());
-        let map = match self {
-            Key::P256(k) => {
-                let point = k.verifying_key().to_sec1_point(false);
-                let bytes = point.as_bytes();
-                vec![
-                    (int(1), int(2)),
-                    (int(3), int(-7)),
-                    (int(-1), int(1)),
-                    (int(-2), Value::Bytes(bytes[1..33].to_vec())),
-                    (int(-3), Value::Bytes(bytes[33..65].to_vec())),
-                ]
-            }
-            Key::Ed25519(k) => vec![
-                (int(1), int(1)),
-                (int(3), int(-8)),
-                (int(-1), int(6)),
-                (int(-2), Value::Bytes(k.verifying_key().to_bytes().to_vec())),
-            ],
-        };
-        let mut out = Vec::new();
-        ciborium::ser::into_writer(&Value::Map(map), &mut out).unwrap();
-        out
-    }
-
-    fn sign(&self, message: &[u8]) -> Vec<u8> {
-        match self {
-            Key::P256(k) => {
-                use p256::ecdsa::signature::Signer;
-                let sig: p256::ecdsa::Signature = k.sign(message);
-                sig.to_der().as_bytes().to_vec()
-            }
-            Key::Ed25519(k) => {
-                use ed25519_dalek::Signer;
-                k.sign(message).to_bytes().to_vec()
-            }
-        }
-    }
-}
-
-fn client_data(ceremony: &str, challenge: &str, origin: &str) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "type": ceremony, "challenge": challenge, "origin": origin, "crossOrigin": false,
-    }))
-    .unwrap()
-}
-
-fn auth_data(rp_id: &str, flags: u8, counter: u32, attested: Option<(&[u8], &[u8])>) -> Vec<u8> {
-    let mut out = Sha256::digest(rp_id.as_bytes()).to_vec();
-    out.push(flags);
-    out.extend_from_slice(&counter.to_be_bytes());
-    if let Some((id, cose)) = attested {
-        out.extend_from_slice(&[0u8; 16]);
-        out.extend_from_slice(&u16::try_from(id.len()).unwrap().to_be_bytes());
-        out.extend_from_slice(id);
-        out.extend_from_slice(cose);
-    }
-    out
-}
-
-fn attestation_object(auth: Vec<u8>) -> Vec<u8> {
-    let object = Value::Map(vec![
-        (Value::Text("fmt".into()), Value::Text("none".into())),
-        (Value::Text("attStmt".into()), Value::Map(vec![])),
-        (Value::Text("authData".into()), Value::Bytes(auth)),
-    ]);
-    let mut out = Vec::new();
-    ciborium::ser::into_writer(&object, &mut out).unwrap();
-    out
 }
 
 fn register(key: &Key, challenge: &str, flags: u8) -> Result<NewCredential, WebauthnError> {
@@ -292,8 +203,7 @@ fn registration_refuses_unsupported_keys_and_garbage() {
     let challenge = new_challenge();
     let client = client_data("webauthn.create", &challenge, ORIGIN);
     let int = |i: i64| Value::Integer(i.into());
-    let mut rs256 = Vec::new();
-    ciborium::ser::into_writer(&Value::Map(vec![(int(1), int(3)), (int(3), int(-257))]), &mut rs256).unwrap();
+    let rs256 = cbor(&Value::Map(vec![(int(1), int(3)), (int(3), int(-257))]));
     let auth = attestation_object(auth_data("git.example.com", UP | UV | AT, 0, Some((b"id", &rs256))));
     assert_eq!(
         verify_registration(&rp(), &challenge, &client, &auth, true),
