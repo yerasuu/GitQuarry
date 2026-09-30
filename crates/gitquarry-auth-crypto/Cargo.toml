@@ -15,6 +15,16 @@ rand = { workspace = true }
 sha1 = { workspace = true }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 openidconnect = { workspace = true }
+# WebAuthn (src/webauthn.rs): CBOR for attestation objects and COSE keys,
+# and the two signature algorithms passkeys use — p256/ed25519-dalek at the
+# versions russh already resolves, so no second copy of either is built.
+ciborium = "0.2.2"
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+url = "2.5.8"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
