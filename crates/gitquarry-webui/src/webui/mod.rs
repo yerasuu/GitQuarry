@@ -352,6 +352,22 @@ pub(crate) fn styler_js_url() -> &'static str {
     &URL
 }
 
+/// `GET /_assets/passkey.js` — the WebAuthn ceremonies (see that file's own
+/// comment). Its own file rather than part of `app.js` because only the
+/// pages with a passkey control load it.
+async fn handler_passkey_js(headers: axum::http::HeaderMap) -> Response {
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(PASSKEY_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", PASSKEY_JS, &ETAG, true)
+}
+const PASSKEY_JS: &str = include_str!("style/passkey.js");
+
+/// The `<script src>` for [`handler_passkey_js`] — see [`versioned_asset_url`].
+pub(crate) fn passkey_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/passkey.js", PASSKEY_JS));
+    &URL
+}
+
 /// `GET /_assets/hljs.js` — `highlight.js`, vendored the same way
 /// [`handler_styler_js`] is (`scripts/vendor-hljs.sh` re-runs the fetch on a
 /// version bump). Client-side syntax highlighting for the blob view and
@@ -410,6 +426,7 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         .route("/_assets/app.js", get(handler_app_js))
         .route("/_assets/favicon.svg", get(handler_favicon_svg))
         .route("/_assets/styler.js", get(handler_styler_js))
+        .route("/_assets/passkey.js", get(handler_passkey_js))
         .route("/_assets/hljs.js", get(handler_hljs_js))
         .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
@@ -484,6 +501,18 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             "/_account/security",
             get(crate::auth::web::security::handler_security_get)
                 .post(crate::auth::web::security::handler_security_post),
+        )
+        .route(
+            "/_account/passkeys/begin",
+            post(crate::auth::web::passkey::handler_register_begin),
+        )
+        .route(
+            "/_account/passkeys/finish",
+            post(crate::auth::web::passkey::handler_register_finish),
+        )
+        .route(
+            "/_account/passkeys/remove",
+            post(crate::auth::web::passkey::handler_remove),
         )
         .route(
             "/_account/keys",

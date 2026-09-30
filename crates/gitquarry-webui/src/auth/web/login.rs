@@ -120,14 +120,14 @@ struct PendingTotpCookie {
 /// Rejects anything that isn't an in-app path, so a crafted `?return_to=`
 /// can't turn our own `/_login` into an open redirect to an attacker's site.
 /// See [`is_local_redirect`] for what counts as safe.
-fn safe_return_to(s: &str) -> &str {
+pub(super) fn safe_return_to(s: &str) -> &str {
     if is_local_redirect(s) { s } else { "/" }
 }
 
 /// Unix seconds `ttl_secs` from now — how every short-lived cookie here
 /// stamps its own deadline. `0` on a clock that can't produce one, which
 /// [`expired`] then treats as already past.
-fn deadline(ttl_secs: i64) -> u64 {
+pub(super) fn deadline(ttl_secs: i64) -> u64 {
     SystemTime::now()
         .checked_add(Duration::from_secs(ttl_secs.max(0) as u64))
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -137,7 +137,7 @@ fn deadline(ttl_secs: i64) -> u64 {
 
 /// `true` if `exp` is in the past. Used on the way *in*, so a cookie a
 /// client chose to keep past its `Max-Age` is rejected on its own terms.
-fn expired(exp: u64) -> bool {
+pub(super) fn expired(exp: u64) -> bool {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

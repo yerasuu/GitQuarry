@@ -186,3 +186,27 @@ msg!(remove_secondary_email_confirm(email: &str) {
     Locale::Es => "¿quitar el correo secundario '{email}'?",
     Locale::En => "remove secondary email '{email}'?",
 });
+
+// Passkeys section — see `webui::auth::web::passkey`.
+msg!(passkeys_heading() { Locale::Es => "passkeys", Locale::En => "passkeys" });
+msg!(passkeys_purpose() {
+    Locale::Es => "Inicia sesión sin contraseña, o úsala en lugar de un código 2FA.",
+    Locale::En => "Sign in without a password, or use one in place of a 2FA code.",
+});
+msg!(passkeys_off_hint() {
+    Locale::Es => "Las passkeys están desactivadas hasta que un admin configure la URL pública de la instancia en /_settings/network.",
+    Locale::En => "Passkeys are off until an admin sets this instance's public URL in /_settings/network.",
+});
+msg!(passkey_name_column_header() { Locale::Es => "nombre", Locale::En => "name" });
+msg!(passkey_created_column_header() { Locale::Es => "añadida", Locale::En => "added" });
+msg!(passkey_last_used_column_header() { Locale::Es => "último uso", Locale::En => "last used" });
+msg!(passkey_never_used() { Locale::Es => "nunca", Locale::En => "never" });
+msg!(passkey_synced_badge() { Locale::Es => "sincronizada", Locale::En => "synced" });
+msg!(no_passkeys_yet_hint() { Locale::Es => "(sin passkeys todavía)", Locale::En => "(no passkeys yet)" });
+msg!(passkey_name_label() { Locale::Es => "nombre de la passkey", Locale::En => "passkey name" });
+msg!(passkey_name_placeholder() { Locale::Es => "p. ej. portátil", Locale::En => "e.g. laptop" });
+msg!(add_passkey_button() { Locale::Es => "añadir passkey", Locale::En => "add passkey" });
+msg!(remove_passkey_confirm(label: &str) {
+    Locale::Es => "¿eliminar la passkey '{label}'? dejará de servir para iniciar sesión.",
+    Locale::En => "remove passkey '{label}'? it stops working for sign-in.",
+});
