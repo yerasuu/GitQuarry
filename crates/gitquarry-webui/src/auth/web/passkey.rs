@@ -224,6 +224,38 @@ pub(crate) struct RegisterBegin {
     /// an SSH key).
     #[serde(default)]
     reauth: String,
+    /// Which of the form's two buttons was pressed. Absent leaves the
+    /// browser's own chooser alone.
+    #[serde(default)]
+    kind: Option<AuthenticatorKind>,
+}
+
+/// Where the new passkey should live. Both end up the same discoverable,
+/// user-verified credential; the choice only steers which prompt the
+/// browser opens first, since Chrome otherwise goes straight to its own
+/// password manager and hides the security-key path behind "use another
+/// device".
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+enum AuthenticatorKind {
+    /// A roaming FIDO2 key (USB/NFC/BLE). It must hold resident keys,
+    /// since `/_login` signs in from the credential alone.
+    SecurityKey,
+    /// This device's platform authenticator, a password manager or wallet
+    /// (iCloud Keychain, Google Password Manager, Bitwarden…), or a phone
+    /// over hybrid. No `authenticatorAttachment` here: a phone over hybrid
+    /// and some wallet extensions count as cross-platform.
+    Device,
+}
+
+impl AuthenticatorKind {
+    /// WebAuthn L3 `hints`, the attachment that goes with them.
+    fn selection(self) -> (serde_json::Value, Option<&'static str>) {
+        match self {
+            Self::SecurityKey => (serde_json::json!(["security-key"]), Some("cross-platform")),
+            Self::Device => (serde_json::json!(["client-device", "hybrid"]), None),
+        }
+    }
 }
 
 /// `POST /_account/passkeys/begin`: `PublicKeyCredentialCreationOptions`
@@ -248,7 +280,8 @@ pub(crate) async fn handler_register_begin(
 
     let existing = domain::passkey::list(&ctx, &me.uid).await?;
     let (challenge, cookie) = plant_challenge(&ctx, &headers, Purpose::Register, Some(&me.username))?;
-    let options = serde_json::json!({
+    let mut selection = serde_json::json!({ "residentKey": "required", "userVerification": "required" });
+    let mut options = serde_json::json!({
         "challenge": challenge,
         "rp": { "id": rp.id, "name": "GitQuarry" },
         "user": {
@@ -266,10 +299,16 @@ pub(crate) async fn handler_register_begin(
             .iter()
             .map(|p| serde_json::json!({ "type": "public-key", "id": p.credential_id }))
             .collect::<Vec<_>>(),
-        "authenticatorSelection": { "residentKey": "required", "userVerification": "required" },
         "attestation": "none",
         "timeout": CEREMONY_TIMEOUT_MS,
     });
+    if let Some((hints, attachment)) = form.kind.map(AuthenticatorKind::selection) {
+        options["hints"] = hints;
+        if let Some(attachment) = attachment {
+            selection["authenticatorAttachment"] = attachment.into();
+        }
+    }
+    options["authenticatorSelection"] = selection;
     with_cookie(axum::Json(options).into_response(), cookie, locale)
 }
 
@@ -480,7 +519,10 @@ pub(super) async fn render_section(
                             }))
                         }
                         div class="field-error" data-passkey-flash hidden {}
-                        button type="submit" { (t::add_passkey_button(locale)) }
+                        button type="submit" name="kind" value="security-key" { (t::add_security_key_button(locale)) }
+                        " "
+                        button type="submit" name="kind" value="device" { (t::add_device_passkey_button(locale)) }
+                        p class="muted" { (t::add_passkey_kind_hint(locale)) }
                     }
                     script src=(crate::webui::passkey_js_url()) defer {}
                 }

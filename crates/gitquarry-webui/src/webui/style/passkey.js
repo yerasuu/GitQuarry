@@ -13,7 +13,8 @@
 //
 // Shapes:
 //   - `form[data-passkey="register"]` (`/_account/security`): begin with
-//     the form's current-password field, `navigator.credentials.create()`,
+//     the form's current-password field and the pressed button's `kind`
+//     (`security-key` or `device`), `navigator.credentials.create()`,
 //     finish with the label; the finish response is the refreshed passkeys
 //     section, which replaces `data-target`.
 //   - `[data-passkey="sign-in"]` (`/_login`, `/_login_totp`): its
@@ -107,11 +108,15 @@
     return field ? field.value : "";
   }
 
-  function register(form) {
+  function register(form, kind) {
     clearError(form);
     const csrf = fieldValue(form, "csrf");
     const label = fieldValue(form, "label");
-    postJson(form.dataset.beginUrl, { csrf, reauth: fieldValue(form, "reauth") })
+    const begin = { csrf, reauth: fieldValue(form, "reauth") };
+    if (kind) {
+      begin.kind = kind;
+    }
+    postJson(form.dataset.beginUrl, begin)
       .then((resp) => resp.json())
       .then((options) => {
         options.challenge = toBuffer(options.challenge);
@@ -182,7 +187,9 @@
     const form = event.target.closest("form[data-passkey='register']");
     if (form) {
       event.preventDefault();
-      register(form);
+      // Empty only where `submitter` isn't supported; the server then
+      // leaves the browser's own chooser alone.
+      register(form, event.submitter ? event.submitter.value : "");
     }
   });
 

@@ -135,6 +135,11 @@ async fn begin_registration(gq: &Instance, session: &Session) -> (Value, String)
     )
 }
 
+async fn begin_kind(gq: &Instance, session: &Session, kind: &str) -> Page {
+    let body = json!({ "csrf": session.csrf, "reauth": PASSWORD, "kind": kind });
+    post_json(&gq.app, "/_account/passkeys/begin", &session.cookie, &body).await
+}
+
 async fn finish_registration(
     gq: &Instance,
     session: &Session,
@@ -316,6 +321,44 @@ async fn a_passkey_registered_from_the_security_page_is_listed_there() {
         options["excludeCredentials"],
         json!([{ "type": "public-key", "id": webauthn::encode_id(b"alice-laptop") }])
     );
+}
+
+#[tokio::test]
+async fn registration_begin_steers_the_browser_to_a_security_key_or_to_the_device_and_its_wallets() {
+    let gq = Instance::with_passkeys().await;
+    let alice = Session::login(&gq.app, "alice").await;
+
+    let page = alice.get(&gq.app, "/_account/security").await;
+    assert!(
+        page.body.contains(r#"name="kind" value="security-key""#),
+        "{}",
+        page.body
+    );
+    assert!(page.body.contains(r#"name="kind" value="device""#), "{}", page.body);
+
+    let key: Value = serde_json::from_str(&begin_kind(&gq, &alice, "security-key").await.body).unwrap();
+    assert_eq!(key["hints"], json!(["security-key"]));
+    assert_eq!(
+        key["authenticatorSelection"]["authenticatorAttachment"],
+        "cross-platform"
+    );
+    assert_eq!(key["authenticatorSelection"]["residentKey"], "required");
+
+    let device: Value = serde_json::from_str(&begin_kind(&gq, &alice, "device").await.body).unwrap();
+    assert_eq!(device["hints"], json!(["client-device", "hybrid"]));
+    assert!(
+        device["authenticatorSelection"]
+            .get("authenticatorAttachment")
+            .is_none()
+    );
+    assert_eq!(device["authenticatorSelection"]["userVerification"], "required");
+
+    let (unspecified, _) = begin_registration(&gq, &alice).await;
+    assert!(unspecified.get("hints").is_none());
+
+    let page = begin_kind(&gq, &alice, "floppy").await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST);
+    assert!(set_cookie_line(&page, "passkey-challenge").is_none());
 }
 
 #[tokio::test]

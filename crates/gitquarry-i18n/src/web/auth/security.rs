@@ -205,7 +205,15 @@ msg!(passkey_synced_badge() { Locale::Es => "sincronizada", Locale::En => "synce
 msg!(no_passkeys_yet_hint() { Locale::Es => "(sin passkeys todavía)", Locale::En => "(no passkeys yet)" });
 msg!(passkey_name_label() { Locale::Es => "nombre de la passkey", Locale::En => "passkey name" });
 msg!(passkey_name_placeholder() { Locale::Es => "p. ej. portátil", Locale::En => "e.g. laptop" });
-msg!(add_passkey_button() { Locale::Es => "añadir passkey", Locale::En => "add passkey" });
+msg!(add_security_key_button() { Locale::Es => "añadir llave física", Locale::En => "add security key" });
+msg!(add_device_passkey_button() {
+    Locale::Es => "añadir en este dispositivo o wallet",
+    Locale::En => "add on this device or wallet",
+});
+msg!(add_passkey_kind_hint() {
+    Locale::Es => "llave física: YubiKey u otra llave FIDO2 por USB/NFC. dispositivo o wallet: el desbloqueo del sistema, un gestor de contraseñas o el móvil.",
+    Locale::En => "security key: a YubiKey or other FIDO2 key over USB/NFC. device or wallet: the system unlock, a password manager or your phone.",
+});
 msg!(remove_passkey_confirm(label: &str) {
     Locale::Es => "¿eliminar la passkey '{label}'? dejará de servir para iniciar sesión.",
     Locale::En => "remove passkey '{label}'? it stops working for sign-in.",
