@@ -2,7 +2,7 @@
 
 Git remote over S3, in Rust. Public surface: `ssh://` and git-smart-HTTP for push/pull, plus a read-only browsing UI on the same server. No `git://` daemon, no S3 remote helper — both were dropped, not kept opt-in.
 
-One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh, git-smart-HTTP, domain, storage), `gitquarry-webui` (browsing, login/settings/search) and `gitquarry-mirror-external`. `develop`/`master` carry that and nothing else; the optional modules sit on `feature/{cicd,federation,artifacts,tracker}`, each a snapshot of where that module last built, and the commit that removed one is the recipe for putting it back.
+One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh, git-smart-HTTP, domain, storage), `gitquarry-webui` (browsing, login/settings/search) `gitquarry-mirror-external` and the optional `gitquarry-federation` (its own binary, enabled by `[federation]`). `develop`/`master` carry that and nothing else; the other optional modules sit on `feature/{cicd,artifacts,tracker}`, each a snapshot of where that module last built, and the commit that removed one is the recipe for putting it back.
 
 ## Config
 
@@ -141,7 +141,7 @@ the range, never by feel:
   notes doesn't compile — then the bump as its own commit, then
   tag `vX.Y.Z` annotated and signed on `master`, after the
   `develop` -> `master` PR.
-- `CHANGELOG.md` is the other half of the notes, grouped by area.
+- `CHANGELOG.md` is the other half of the notes: one section per release, newest first, Keep a Changelog headings (`Breaking`/`Added`/`Changed`/`Removed`/`Fixed`/`Security`), worded for operators and users, each version linking its `tag-changelog/vX.Y.Z.md`.
   An `s3db` repin alone is a `chore` and earns no version.
 
 ## Security
