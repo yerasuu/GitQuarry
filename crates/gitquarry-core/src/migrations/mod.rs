@@ -90,7 +90,7 @@ pub struct Migration {
 ///   `owners`/`teams` into its member map, converts a team scoped to some of
 ///   the group's repos into explicit per-repo grants, and fills the
 ///   `user-group` index.
-/// - `2` `repo-permission-index` (0.5.2): indexes every grant already held
+/// - `2` `repo-permission-index` (0.6.0): indexes every grant already held
 ///   in `User::repos`, which the admin user page and account creation used
 ///   to write without the index the repo's permission grid reads.
 pub const MIGRATIONS: &[Migration] = &[

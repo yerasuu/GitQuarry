@@ -282,7 +282,7 @@ async fn every_registered_migration_is_dispatchable() {
 }
 
 /// A grant held in `User::repos` with no repo permission index entry — what
-/// the admin user page wrote before 0.5.2 — must end up listed on the repo.
+/// the admin user page wrote before 0.6.0 — must end up listed on the repo.
 #[tokio::test]
 async fn an_unindexed_grant_is_indexed_and_a_second_run_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();

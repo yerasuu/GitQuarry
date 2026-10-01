@@ -1,7 +1,7 @@
 //! Data migration 2: fills the repo permission index for every grant a
 //! user already holds in [`User::repos`](crate::auth::entities::User::repos).
 //!
-//! Before 0.5.2, a grant made from the admin user page
+//! Before 0.6.0, a grant made from the admin user page
 //! (`auth::domain::user::set_repo_perm`) or at account creation wrote only
 //! the user's own `repos` map. Access was granted all the same, but the
 //! repo's permission grid lists grantees from the index, so those grants were
