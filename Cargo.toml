@@ -28,7 +28,7 @@ resolver = "2"
 # creates that many chances to disagree. `description` stays per-crate, being
 # the one field that genuinely differs.
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 # Raising this is a breaking change for anyone building from source, so it
 # moves deliberately and all at once -- never one crate at a time.
