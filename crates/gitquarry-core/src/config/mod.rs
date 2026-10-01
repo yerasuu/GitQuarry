@@ -257,13 +257,6 @@ fn write_new_private_file(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
-/// The config stores credentials in plain text. If anyone on the system can
-/// read it, we warn: we don't abort because it might be intentional (a
-/// single-user container), but total silence would be worse.
-///
-/// Only called by server startup, not `load_from`: the remote helper and the
-/// hook run one process per git command and would repeat the warning on
-/// every push.
 /// Where bucket `name`'s `resilience.local_dir` (s3db's write spool) really
 /// lives. Left at s3db's relative `./local` default it would resolve against
 /// each process's cwd — a git hook runs inside the mirror — and every bucket
@@ -286,6 +279,13 @@ pub fn resolve_local_dir(name: &str, local_dir: &Path, config_path: &Path) -> Pa
         .join(sanitized)
 }
 
+/// The config stores credentials in plain text. If anyone on the system can
+/// read it, we warn: we don't abort because it might be intentional (a
+/// single-user container), but total silence would be worse.
+///
+/// Only called by server startup, not `load_from`: the remote helper and the
+/// hook run one process per git command and would repeat the warning on
+/// every push.
 pub fn warn_if_world_readable(path: &Path) {
     #[cfg(unix)]
     {
