@@ -46,7 +46,7 @@ const FLOW_COOKIE: &str = "oidc-flow";
 const FLOW_TTL_SECS: i64 = 600;
 pub(crate) const SESSION_COOKIE: &str = "web-session";
 const SESSION_TTL: Duration = Duration::from_secs(7 * 86400);
-const PENDING_TOTP_COOKIE: &str = "pending-totp";
+pub(super) const PENDING_TOTP_COOKIE: &str = "pending-totp";
 /// Anchors the CSRF token on `/_login`'s own form. Everything else in this
 /// app double-submits against the session cookie, which by definition
 /// doesn't exist yet here — see [`crate::webui::require_csrf_for`].
@@ -108,9 +108,9 @@ struct SessionCookie {
 /// [`handler_login_totp_post`], which re-fetches the user fresh) plus where
 /// to send the browser once the code verifies too.
 #[derive(Serialize, Deserialize)]
-struct PendingTotpCookie {
-    username: String,
-    return_to: String,
+pub(super) struct PendingTotpCookie {
+    pub(super) username: String,
+    pub(super) return_to: String,
     /// The real deadline on the "password already matched" claim — see
     /// [`FlowCookie::exp`] for why `Max-Age` alone isn't one.
     #[serde(default)]
@@ -120,14 +120,14 @@ struct PendingTotpCookie {
 /// Rejects anything that isn't an in-app path, so a crafted `?return_to=`
 /// can't turn our own `/_login` into an open redirect to an attacker's site.
 /// See [`is_local_redirect`] for what counts as safe.
-fn safe_return_to(s: &str) -> &str {
+pub(super) fn safe_return_to(s: &str) -> &str {
     if is_local_redirect(s) { s } else { "/" }
 }
 
 /// Unix seconds `ttl_secs` from now — how every short-lived cookie here
 /// stamps its own deadline. `0` on a clock that can't produce one, which
 /// [`expired`] then treats as already past.
-fn deadline(ttl_secs: i64) -> u64 {
+pub(super) fn deadline(ttl_secs: i64) -> u64 {
     SystemTime::now()
         .checked_add(Duration::from_secs(ttl_secs.max(0) as u64))
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -137,7 +137,7 @@ fn deadline(ttl_secs: i64) -> u64 {
 
 /// `true` if `exp` is in the past. Used on the way *in*, so a cookie a
 /// client chose to keep past its `Max-Age` is rejected on its own terms.
-fn expired(exp: u64) -> bool {
+pub(super) fn expired(exp: u64) -> bool {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -167,6 +167,37 @@ fn build_session_cookie(
         &B64.encode(sealed),
         SESSION_TTL.as_secs() as i64,
     ))
+}
+
+/// Finishes a login that proved everything the account asks for: plants
+/// the session cookie on `response` (a redirect, or `passkey.js`'s JSON)
+/// and clears the `spent` flow cookies that got it there. The one place a
+/// username-subject session is issued, so the password, TOTP and passkey
+/// doors can't drift apart on its flags or its epoch.
+pub(super) fn issue_session(
+    headers: &HeaderMap,
+    cipher: &gitquarry_core::crypto::Cipher,
+    user: &User,
+    spent: &[&str],
+    mut response: Response,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Response, AppError> {
+    let session = build_session_cookie(
+        headers,
+        cipher,
+        SessionSubject::Username(user.username.clone()),
+        user.session_epoch,
+    )?;
+    let cleared = spent.iter().map(|name| set_cookie(headers, name, "", 0));
+    for (header, value) in std::iter::once(session).chain(cleared) {
+        response.headers_mut().append(
+            header,
+            value
+                .parse()
+                .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
+        );
+    }
+    Ok(response)
 }
 
 /// A fresh anchor value for [`LOGIN_CSRF_COOKIE`], plus the `Set-Cookie`
@@ -245,7 +276,9 @@ pub(crate) async fn handler_login(
         .map(|s| safe_return_to(s).to_string())
         .unwrap_or_else(|| "/".to_string());
 
-    if !password_login_available(&ctx).await {
+    let password_login = password_login_available(&ctx).await;
+    let passkey_login = super::passkey::sign_in_relying_party(&ctx).await.is_some();
+    if !password_login && !passkey_login {
         return handler_login_oidc(State(ctx), Query(params), headers).await;
     }
 
@@ -253,8 +286,19 @@ pub(crate) async fn handler_login(
     // already carried: this page is where the token is handed out, so
     // rotating it here keeps a stale one from staying valid indefinitely.
     let (anchor, (cookie_header, cookie_value)) = new_login_csrf(&headers, &ctx.cipher)?;
+    let csrf = crate::webui::csrf_token(&anchor);
     let body = html! {
-        (login_form(locale, &return_to, "", None, &crate::webui::csrf_token(&anchor)))
+        @if password_login {
+            (login_form(locale, &return_to, "", None, &csrf))
+        }
+        @if passkey_login {
+            (super::passkey::sign_in_control(
+                &gitquarry_i18n::web::auth::login::passkey_sign_in_button(locale),
+                "/_login/passkey",
+                &csrf,
+                &return_to,
+            ))
+        }
         @if ctx.oidc.is_some() {
             p { a href=(format!("/_login_oidc?return_to={}", url_encode(&return_to))) { (gitquarry_i18n::web::auth::login::log_in_with_oidc_link(locale)) } }
         }
@@ -422,20 +466,14 @@ pub(crate) async fn handler_login_local(
         return Ok(resp);
     }
 
-    let (header, value) = build_session_cookie(
+    issue_session(
         &headers,
         &ctx.cipher,
-        SessionSubject::Username(user.username.clone()),
-        user.session_epoch,
-    )?;
-    let mut resp = Redirect::to(&return_to).into_response();
-    resp.headers_mut().insert(
-        header,
-        value
-            .parse()
-            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
-    );
-    Ok(resp)
+        &user,
+        &[],
+        Redirect::to(&return_to).into_response(),
+        locale,
+    )
 }
 
 /// `GET /_login_totp`: the "enter your code" interstitial, only meaningful
@@ -460,6 +498,14 @@ pub(crate) async fn handler_login_totp_get(State(ctx): State_, headers: HeaderMa
             }
             p { button type="submit" { (gitquarry_i18n::web::auth::login::verify_button(locale)) } }
         }
+        @if super::passkey::second_factor_offered(&ctx, &headers, locale).await {
+            (super::passkey::sign_in_control(
+                &gitquarry_i18n::web::auth::login::use_passkey_instead_button(locale),
+                "/_login_totp/passkey",
+                &csrf,
+                "",
+            ))
+        }
     }
     .into_string();
     Ok(Html(layout(
@@ -481,6 +527,36 @@ pub(crate) struct TotpLoginForm {
     csrf: String,
 }
 
+/// The live pending-TOTP claim this request carries: the password matched
+/// for `username` less than [`PENDING_TOTP_TTL_SECS`] ago. Shared by the
+/// code step and the passkey second factor, which finish the same login.
+pub(super) fn open_pending_totp(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    locale: gitquarry_i18n::Locale,
+) -> Result<PendingTotpCookie, AppError> {
+    let raw = get_cookie(headers, PENDING_TOTP_COOKIE)
+        .context(gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale))
+        .map_err(AppError::bad_request)?;
+    let sealed = B64
+        .decode(raw)
+        .context(gitquarry_i18n::shared::auth::invalid_totp_cookie(locale))
+        .map_err(AppError::bad_request)?;
+    let plain = ctx
+        .cipher
+        .open(PENDING_TOTP_COOKIE, &sealed)
+        .map_err(AppError::bad_request)?;
+    let pending: PendingTotpCookie =
+        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::auth::corrupt_totp_cookie(locale))?;
+    if expired(pending.exp) {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "{}",
+            gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale)
+        )));
+    }
+    Ok(pending)
+}
+
 /// `POST /_login_totp`: verifies `code` against the pending cookie's
 /// username's stored secret. Rate-limited via the *same* [`gitquarry_core::app::LoginAttempts`]
 /// keyed by that username — a code-guessing attempt after a correct password
@@ -500,25 +576,7 @@ pub(crate) async fn handler_login_totp_post(
     // flow: a cross-site form that completes someone else's second factor
     // lands them inside an account they didn't choose.
     crate::webui::require_csrf_for(&headers, PENDING_TOTP_COOKIE, &form.csrf)?;
-    let raw = get_cookie(&headers, PENDING_TOTP_COOKIE)
-        .context(gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale))
-        .map_err(AppError::bad_request)?;
-    let sealed = B64
-        .decode(raw)
-        .context(gitquarry_i18n::shared::auth::invalid_totp_cookie(locale))
-        .map_err(AppError::bad_request)?;
-    let plain = ctx
-        .cipher
-        .open(PENDING_TOTP_COOKIE, &sealed)
-        .map_err(AppError::bad_request)?;
-    let pending: PendingTotpCookie =
-        serde_json::from_slice(&plain).context(gitquarry_i18n::shared::auth::corrupt_totp_cookie(locale))?;
-    if expired(pending.exp) {
-        return Err(AppError::bad_request(anyhow::anyhow!(
-            "{}",
-            gitquarry_i18n::shared::auth::no_totp_login_in_progress(locale)
-        )));
-    }
+    let pending = open_pending_totp(&ctx, &headers, locale)?;
 
     let penalty = ctx.login_attempts.penalty(&pending.username);
     if !penalty.is_zero() {
@@ -559,28 +617,14 @@ pub(crate) async fn handler_login_totp_post(
     };
     ctx.login_attempts.clear(&user.username);
 
-    let (session_header, session_value) = build_session_cookie(
+    issue_session(
         &headers,
         &ctx.cipher,
-        SessionSubject::Username(user.username),
-        user.session_epoch,
-    )?;
-    let (clear_header, clear_value) = set_cookie(&headers, PENDING_TOTP_COOKIE, "", 0);
-    let mut resp = Redirect::to(&pending.return_to).into_response();
-    let resp_headers = resp.headers_mut();
-    resp_headers.append(
-        session_header,
-        session_value
-            .parse()
-            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
-    );
-    resp_headers.append(
-        clear_header,
-        clear_value
-            .parse()
-            .context(gitquarry_i18n::shared::auth::building_set_cookie(locale))?,
-    );
-    Ok(resp)
+        &user,
+        &[PENDING_TOTP_COOKIE],
+        Redirect::to(&pending.return_to).into_response(),
+        locale,
+    )
 }
 
 /// `GET /_login_oidc`: starts the IdP round trip (was the whole body of

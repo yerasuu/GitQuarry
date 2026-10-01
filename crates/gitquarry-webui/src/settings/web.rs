@@ -17,6 +17,7 @@ use crate::webui::{
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
+use gitquarry_auth_crypto::webauthn::RelyingParty;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::backup::dest::Dest;
 use gitquarry_core::backup::inventory::Selection;
@@ -291,6 +292,8 @@ pub(crate) struct NetworkForm {
     #[serde(default)]
     ssh_bind: String,
     #[serde(default)]
+    public_url: String,
+    #[serde(default)]
     csrf: String,
 }
 
@@ -315,6 +318,12 @@ fn render_network_page(
                     div class="field" {
                         label { (t::settings_ssh_bind_label(locale)) }
                         input name="ssh_bind" value=(field(&settings.ssh_bind)) placeholder="127.0.0.1:2222";
+                    }
+                    div class="field" {
+                        label { (t::settings_public_url_label(locale)) }
+                        input name="public_url" value=(field(&settings.public_url))
+                            placeholder="https://git.example.com" size="50";
+                        span class="hint" { (t::settings_public_url_hint(locale)) }
                     }
                     p { button type="submit" { (t::settings_save_button(locale)) } }
                 }
@@ -344,17 +353,28 @@ pub(crate) async fn handler_settings_network_post(
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (current, etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+    let public_url = non_empty(form.public_url.trim().to_string());
+    // Checked here, once, so everything reading the stored value (the
+    // passkey routes) can take it as a valid relying party.
+    let public_url_ok = public_url
+        .as_deref()
+        .is_none_or(|url| RelyingParty::from_public_url(url).is_ok());
     let settings = ServerSettings {
         web_bind: non_empty(form.web_bind),
         ssh_bind: non_empty(form.ssh_bind),
+        public_url,
         ..current
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
-    let flash =
+    let invalid_public_url_msg = gitquarry_i18n::web::settings::settings_public_url_invalid(locale);
+    let flash = if !public_url_ok {
+        Flash::Err(&invalid_public_url_msg)
+    } else {
         match storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher).await? {
             Cas::Ok => Flash::Ok("saved to the bucket. Restart the server to apply."),
             Cas::Conflict => Flash::Err(&cas_conflict_msg),
-        };
+        }
+    };
     let content = render_network_page(&settings, &csrf_field(&headers), Some(flash), locale);
     if is_async(&headers) {
         return Ok(axum::response::Html(content.into_string()).into_response());

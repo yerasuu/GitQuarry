@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub(crate) async fn handler_pat_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/pat").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let tokens = access::list_tokens_for_owner(ctx.backend().as_ref(), &ctx.cipher, &user.uid).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &tokens).await;
@@ -144,7 +144,7 @@ pub(crate) async fn handler_pat_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/pat").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

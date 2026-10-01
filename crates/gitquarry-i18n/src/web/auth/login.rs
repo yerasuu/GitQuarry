@@ -10,3 +10,6 @@ msg!(verify_button() { Locale::Es => "verificar", Locale::En => "verify" });
 
 msg!(login_link() { Locale::Es => "iniciar sesion", Locale::En => "login" });
 msg!(logout_link() { Locale::Es => "cerrar sesion", Locale::En => "logout" });
+
+msg!(passkey_sign_in_button() { Locale::Es => "iniciar sesion con una passkey", Locale::En => "sign in with a passkey" });
+msg!(use_passkey_instead_button() { Locale::Es => "usar una passkey en su lugar", Locale::En => "use a passkey instead" });

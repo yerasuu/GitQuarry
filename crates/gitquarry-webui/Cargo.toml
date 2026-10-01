@@ -25,13 +25,13 @@ futures = { workspace = true }
 axum = { workspace = true, features = ["multipart"] }
 # Response compression only (`CompressionLayer`) -- the rest of tower-http
 # (tracing, CORS, ...) isn't needed, so no `full`/default features.
-tower-http = { version = "0.6.9", default-features = false, features = ["compression-gzip", "compression-br", "compression-zstd"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["compression-gzip", "compression-br", "compression-zstd"] }
 maud = { version = "0.27.0", features = ["axum"] }
 openidconnect = { workspace = true }
 pulldown-cmark = "0.13.4"
 # Outbound HTTP to gitquarry-federation's loopback API (peer browse
 # lookups, MR-proxy).
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["query"] }
 
 # Serialization
 serde = { workspace = true }
@@ -47,7 +47,7 @@ anyhow = { workspace = true }
 rand = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-lru = "0.18.2"
+lru = "0.18.5"
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }

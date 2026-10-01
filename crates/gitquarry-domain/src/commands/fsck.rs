@@ -64,7 +64,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
-    let backend = storage::build_backend(&bucket_cfg)?;
+    let backend = storage::build_backend(&bucket_cfg)?.backend;
 
     let repos = storage::remote::list_repo_paths(backend.as_ref()).await?;
     let mut markers = Vec::new();

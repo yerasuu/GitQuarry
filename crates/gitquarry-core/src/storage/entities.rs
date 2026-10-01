@@ -150,6 +150,13 @@ pub struct ServerSettings {
     /// varies too much per deployment to default to anything real.
     #[serde(default)]
     pub source_link: Option<String>,
+    /// The URL people reach this instance at (`https://git.example.com`).
+    /// Passkeys are bound to its host (the WebAuthn relying-party id) and
+    /// signed for its origin, so they stay off until this is set: deriving
+    /// either from a request's own `Host` header would let any name the
+    /// server answers to mint credentials for itself.
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
@@ -271,8 +278,8 @@ pub struct RepoConfig {
     #[serde(default)]
     pub last_push_commits: Option<u32>,
     /// Short name (`refs/heads/` stripped) of the branch [`Self::last_push`]
-    /// landed on — always the repo's default branch, since that's the only
-    /// branch this ever fires for, but stored rather than re-derived so the
+    /// landed on — any branch, not only the default one (the default wins
+    /// when one push moves several). Stored rather than re-derived so the
     /// home page's activity line doesn't need its own `Manifest` fetch just
     /// to name it.
     #[serde(default)]

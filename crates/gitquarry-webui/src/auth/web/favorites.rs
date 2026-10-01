@@ -185,7 +185,7 @@ pub(crate) async fn handler_account_favorites_get(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/favorites").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let starred = own_starred_with_counts(&ctx, &me.starred).await;
     let topnav = login::topnav(&ctx, &headers).await;
@@ -242,7 +242,7 @@ pub(crate) async fn handler_account_favorites_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/favorites").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

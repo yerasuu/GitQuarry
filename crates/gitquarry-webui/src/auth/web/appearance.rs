@@ -27,7 +27,7 @@ use maud::{Markup, PreEscaped, html};
 pub(crate) async fn handler_appearance_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/appearance").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
@@ -74,7 +74,7 @@ pub(crate) async fn handler_appearance_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/appearance").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

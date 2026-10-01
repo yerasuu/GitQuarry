@@ -167,7 +167,7 @@ fn relative_time_words(then: u64, now: u64) -> String {
 }
 
 /// One entry in the home page's "recent activity" sidebar — deliberately
-/// only these three: a push to a repo's default branch (`IndexRepo::last_push`
+/// only these three: a push to any of a repo's branches (`IndexRepo::last_push`
 /// et al, never `storage::audit`, see that field's own doc comment), a
 /// release, or a merged MR. All three read as "important code changed" the
 /// way GitHub's own dashboard activity does; everything else `storage::audit`

@@ -11,7 +11,8 @@
 //! `/_profile/<user>/favorites` — the one section reachable by someone
 //! other than the account owner, see that module's own doc comment.
 //! [`login`] (`/_login`, `/_login_oidc`, `/_callback`, `/_logout`, session
-//! cookies), [`profile`] (`/_profile/<username>`, public repo listing),
+//! cookies), [`passkey`] (`/_account/passkeys/*`, WebAuthn registration
+//! and removal), [`profile`] (`/_profile/<username>`, public repo listing),
 //! [`users`] (`/_users`, admin), [`groups`] (`/_groups`, shared namespaces),
 //! [`group`] (`/_group/<path>`, one group's own public page — repos,
 //! subgroups, members).
@@ -25,6 +26,7 @@ pub mod group;
 pub mod groups;
 pub mod keys;
 pub mod login;
+pub mod passkey;
 pub mod pat;
 pub mod profile;
 mod reauth;

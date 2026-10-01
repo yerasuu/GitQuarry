@@ -31,6 +31,7 @@ use gitquarry_core::config::{self, BackendConfig, BucketConfig, LocalEngine, Loc
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::{self, Backend};
 use gitquarry_webui::webui::{esc, layout, non_empty};
+use s3db::SpooledBackend;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -45,6 +46,7 @@ pub struct WizardOutcome {
     pub bucket: String,
     pub bucket_cfg: BucketConfig,
     pub backend: Arc<dyn Backend>,
+    pub spool: Option<Arc<SpooledBackend>>,
     pub cipher: Cipher,
 }
 
@@ -246,7 +248,14 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
         resilience: Default::default(),
     };
 
-    let backend = storage::build_backend(&bucket_cfg)?;
+    // Written to `gitquarry.toml` as-is, keeping its portable default; the
+    // live backend gets the resolved directory `Config::load_from` would give
+    // it on the next start.
+    let mut live_cfg = bucket_cfg.clone();
+    live_cfg.resilience.local_dir =
+        config::resolve_local_dir(&name, &live_cfg.resilience.local_dir, &state.config_path);
+    let built = storage::build_backend(&live_cfg)?;
+    let backend = built.backend;
     // The real round trip: wrong creds/endpoint/bucket, or a passphrase
     // that doesn't match a bucket already used before, all fail clearly
     // right here instead of writing a config that can't actually connect.
@@ -270,8 +279,9 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
 
     Ok(WizardOutcome {
         bucket: name,
-        bucket_cfg,
+        bucket_cfg: live_cfg,
         backend,
+        spool: built.spool,
         cipher,
     })
 }
@@ -300,8 +310,7 @@ fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> 
             !r.secret_access_key.to_string().is_empty(),
             "r2: secret access key is empty"
         ),
-        // Dropped from s3db; never built from this form.
-        BackendConfig::Azure(_) | BackendConfig::Gcs(_) | BackendConfig::Local(_) => {}
+        BackendConfig::Local(_) => {}
     }
     Ok(cfg)
 }
@@ -518,9 +527,6 @@ impl From<&Prefill> for FieldValues {
                 v.r2_account_id = r.account_id.clone();
                 v.r2_access_key_id = r.access_key_id.clone();
             }
-            // Dropped from s3db: nothing on this form can edit one, so it
-            // starts blank and the operator picks a driver still supported.
-            BackendConfig::Azure(_) | BackendConfig::Gcs(_) => {}
             BackendConfig::Local(l) => {
                 v.driver = "local";
                 v.local_bucket = l.bucket.clone();

@@ -28,7 +28,7 @@ const MAX_AVATAR_UPLOAD_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let topnav = super::login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
@@ -186,7 +186,7 @@ pub(crate) async fn handler_emails_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -320,7 +320,7 @@ pub(crate) async fn handler_avatar_upload_post(
     // multipart field and so can only be checked once the body is parsed.
     let me = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let mut csrf = String::new();
     let mut uploaded: Option<Vec<u8>> = None;
@@ -411,7 +411,7 @@ pub(crate) async fn handler_avatar_delete_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

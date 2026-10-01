@@ -145,6 +145,7 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
     }
     let _ = user.release_email(ctx.backend().as_ref()).await;
     access::release_namespace(ctx.backend().as_ref(), username).await;
+    super::passkey::remove_all(ctx, &user.uid).await;
     if user.password_hash.is_some() {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, -1).await;
     }

@@ -207,7 +207,8 @@ pub async fn resolve(dest: &Dest, source: &Source<'_>) -> Result<Resolved> {
                 passphrase: String::new(),
                 resilience: Default::default(),
             })
-            .with_context(|| format!("opening {} as a backup destination", path.display()))?;
+            .with_context(|| format!("opening {} as a backup destination", path.display()))?
+            .backend;
             Ok(Resolved {
                 backend,
                 cipher: Arc::clone(source.cipher),
@@ -220,7 +221,8 @@ pub async fn resolve(dest: &Dest, source: &Source<'_>) -> Result<Resolved> {
             dest.validate_against(&config, source.bucket_name)?;
             let bucket = config.bucket(name)?;
             let backend = crate::storage::build_backend(bucket)
-                .with_context(|| format!("opening bucket '{name}' as a backup destination"))?;
+                .with_context(|| format!("opening bucket '{name}' as a backup destination"))?
+                .backend;
             Ok(Resolved {
                 backend,
                 cipher: Arc::clone(source.cipher),

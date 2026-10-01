@@ -8,15 +8,25 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-argon2 = { version = "0.5.3", features = ["std"] }
+argon2 = "0.6.0"
 data-encoding = { workspace = true }
 hmac = { workspace = true }
 rand = { workspace = true }
 sha1 = { workspace = true }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 openidconnect = { workspace = true }
+# WebAuthn (src/webauthn.rs): CBOR for attestation objects and COSE keys,
+# and the two signature algorithms passkeys use.
+ciborium = { workspace = true }
+p256 = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+url = "2.5.8"
 
 [dev-dependencies]
+gitquarry-test-support = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints.rust]

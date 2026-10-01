@@ -50,8 +50,6 @@ pub fn bucket_label(cfg: &BackendConfig) -> &str {
     match cfg {
         BackendConfig::S3(p) => &p.bucket,
         BackendConfig::R2(p) => &p.bucket,
-        BackendConfig::Azure(p) => &p.bucket,
-        BackendConfig::Gcs(p) => &p.bucket,
         BackendConfig::Local(p) => &p.bucket,
     }
 }

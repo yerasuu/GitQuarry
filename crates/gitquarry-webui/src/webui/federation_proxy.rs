@@ -205,7 +205,7 @@ pub(crate) async fn proxy_tokens(State(ctx): State_, req: Request) -> Result<Res
     let headers = req.headers().clone();
     let user = match require_login(&ctx, &headers, "/_account/tokens").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let Some(federation) = &ctx.federation else {
         return Ok(federation_unavailable());
@@ -246,7 +246,7 @@ pub(crate) async fn proxy_remote_comment(
 ) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_peers").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let Some(federation) = &ctx.federation else {

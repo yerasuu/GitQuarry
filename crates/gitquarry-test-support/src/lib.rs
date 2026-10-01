@@ -1,8 +1,10 @@
 //! Fixtures every crate's `tests/` shares: a local redb bucket and the
-//! `AppContext` over it, real git history, and HTTP helpers for routers.
+//! `AppContext` over it, real git history, HTTP helpers for routers, and a
+//! software WebAuthn authenticator.
 //! Built only on the crates' public APIs, so a test using this still tests
 //! exactly the shipped surface. Never a dependency of anything but tests.
 
+pub mod authenticator;
 mod git;
 mod web;
 
