@@ -161,7 +161,7 @@ pub(crate) async fn handler_fork_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

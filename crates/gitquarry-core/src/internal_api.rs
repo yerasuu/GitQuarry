@@ -241,11 +241,11 @@ pub async fn handler_uid_for_name(
     }
 }
 
-async fn resolved_repo_or_404(ctx: &AppContext, repo: &str) -> Result<ResolvedRepo, Response> {
+async fn resolved_repo_or_404(ctx: &AppContext, repo: &str) -> Result<ResolvedRepo, Box<Response>> {
     match ctx.resolve_repo(repo).await {
         Ok(Some(resolved)) => Ok(resolved),
-        Ok(None) => Err(json_error(StatusCode::NOT_FOUND, "no such repo")),
-        Err(e) => Err(json_error(StatusCode::BAD_REQUEST, &e.to_string())),
+        Ok(None) => Err(Box::new(json_error(StatusCode::NOT_FOUND, "no such repo"))),
+        Err(e) => Err(Box::new(json_error(StatusCode::BAD_REQUEST, &e.to_string()))),
     }
 }
 
@@ -259,7 +259,7 @@ pub async fn handler_mr_list(
     };
     let target = match resolved_repo_or_404(&ctx, repo).await {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match merge_request::list(&ctx, &target, None).await {
         Ok(mrs) => json_response(StatusCode::OK, &mrs),
@@ -281,7 +281,7 @@ pub async fn handler_mr_detail(
     };
     let target = match resolved_repo_or_404(&ctx, repo).await {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let mr = match merge_request::get(&ctx, &target, number).await {
         Ok(Some(mr)) => mr,
@@ -320,7 +320,7 @@ pub async fn handler_mr_create(State(ctx): State<Arc<AppContext>>, body: Bytes) 
     };
     let target = match resolved_repo_or_404(&ctx, &req.repo).await {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let source_uid =
         match storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, &req.source_repo).await {
@@ -356,7 +356,7 @@ pub async fn handler_mr_comment(State(ctx): State<Arc<AppContext>>, body: Bytes)
     };
     let target = match resolved_repo_or_404(&ctx, &req.repo).await {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match merge_request::add_comment(&ctx, &target, req.number, &req.author, &req.body, Locale::DEFAULT).await {
         Ok(()) => json_response(StatusCode::OK, &serde_json::json!({ "ok": true })),
@@ -396,7 +396,7 @@ pub async fn handler_mr_merge(State(ctx): State<Arc<AppContext>>, body: Bytes) -
     };
     let target = match resolved_repo_or_404(&ctx, &req.repo).await {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match merge_request::merge(&ctx, &target, req.number, &req.merged_by, req.strategy, Locale::DEFAULT).await {
         Ok(merge_request::MergeOutcome::Merged(sha)) => {

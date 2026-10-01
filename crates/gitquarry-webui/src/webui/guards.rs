@@ -20,9 +20,11 @@ pub(crate) async fn require_login(
     ctx: &gitquarry_core::app::AppContext,
     headers: &HeaderMap,
     return_to_page: &str,
-) -> Result<gitquarry_core::auth::entities::User, Response> {
+) -> Result<gitquarry_core::auth::entities::User, Box<Response>> {
     match crate::auth::web::login::current_user(ctx, headers).await {
         Some(user) => Ok(user),
-        None => Err(Redirect::to(&format!("/_login?return_to={}", url_encode(return_to_page))).into_response()),
+        None => Err(Box::new(
+            Redirect::to(&format!("/_login?return_to={}", url_encode(return_to_page))).into_response(),
+        )),
     }
 }

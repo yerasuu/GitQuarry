@@ -61,37 +61,43 @@ async fn authorize(
     headers: &HeaderMap,
     repo: &str,
     required: Tier,
-) -> Result<String, Response> {
+) -> Result<String, Box<Response>> {
     let Some(secret) = bearer_token(headers) else {
-        return Err(json_error(StatusCode::UNAUTHORIZED, "missing or invalid bearer token"));
+        return Err(Box::new(json_error(
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid bearer token",
+        )));
     };
     let Ok(Some((owner, token))) = access::resolve_by_token(state.backend.as_ref(), &state.cipher, &secret).await
     else {
-        return Err(json_error(StatusCode::UNAUTHORIZED, "missing or invalid bearer token"));
+        return Err(Box::new(json_error(
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid bearer token",
+        )));
     };
     if !ceiling_covers(&token, required) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::FORBIDDEN,
             "token lacks sufficient access to this repo",
-        ));
+        )));
     }
     let uid = match state.core.uid_for_name(repo).await {
         Ok(Some(uid)) => uid,
-        _ => return Err(json_error(StatusCode::NOT_FOUND, "no such repo")),
+        _ => return Err(Box::new(json_error(StatusCode::NOT_FOUND, "no such repo"))),
     };
     if !token.repos.contains(&uid) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::FORBIDDEN,
             "token lacks sufficient access to this repo",
-        ));
+        )));
     }
     match state.core.authorize(&owner, repo, required.as_str()).await {
         Ok(true) => {}
         _ => {
-            return Err(json_error(
+            return Err(Box::new(json_error(
                 StatusCode::FORBIDDEN,
                 "token lacks sufficient access to this repo",
-            ));
+            )));
         }
     }
     access::touch_token_last_used(state.backend.as_ref(), &state.cipher, &token).await;
@@ -106,7 +112,7 @@ async fn authorize_read(
     state: &crate::state::FederationState,
     headers: &HeaderMap,
     repo: &str,
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     if state.core.public_repo(repo).await.ok().flatten().is_some() {
         return Ok(());
     }
@@ -136,7 +142,7 @@ pub(crate) async fn handler_list_get(
         return json_error(StatusCode::BAD_REQUEST, "missing ?repo=");
     };
     if let Err(resp) = authorize_read(&state, &headers, repo).await {
-        return resp;
+        return *resp;
     }
     match state.core.list_merge_requests(repo).await {
         Ok(prs) => json_response(StatusCode::OK, &prs),
@@ -156,7 +162,7 @@ pub(crate) async fn handler_detail_get(
         return json_error(StatusCode::BAD_REQUEST, "missing or invalid ?number=");
     };
     if let Err(resp) = authorize_read(&state, &headers, repo).await {
-        return resp;
+        return *resp;
     }
     match state.core.merge_request_detail(repo, number).await {
         Ok(Some(detail)) => json_response(StatusCode::OK, &detail),
@@ -184,7 +190,7 @@ pub(crate) async fn handler_create_post(State(state): State_, headers: HeaderMap
     };
     let owner = match authorize(&state, &headers, &form.repo, Tier::Reporter).await {
         Ok(owner) => owner,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let source_repo = if form.source_repo.trim().is_empty() {
         form.repo.clone()
@@ -223,7 +229,7 @@ pub(crate) async fn handler_comment_post(State(state): State_, headers: HeaderMa
     };
     let owner = match authorize(&state, &headers, &form.repo, Tier::Reporter).await {
         Ok(owner) => owner,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match state
         .core
@@ -249,7 +255,7 @@ pub(crate) async fn handler_merge_post(State(state): State_, headers: HeaderMap,
     };
     let owner = match authorize(&state, &headers, &form.repo, Tier::Developer).await {
         Ok(owner) => owner,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match state
         .core

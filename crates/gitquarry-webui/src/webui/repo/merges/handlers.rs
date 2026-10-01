@@ -186,7 +186,7 @@ pub(crate) async fn handler_create_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -352,7 +352,7 @@ pub(crate) async fn handler_close_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -392,7 +392,7 @@ pub(crate) async fn handler_reopen_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -474,7 +474,7 @@ pub(crate) async fn handler_comment_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -524,7 +524,7 @@ pub(crate) async fn handler_comment_edit_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -581,7 +581,7 @@ pub(crate) async fn handler_comment_delete_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -651,7 +651,7 @@ pub(crate) async fn handler_review_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -728,7 +728,7 @@ pub(crate) async fn handler_merge_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -817,7 +817,7 @@ pub(crate) async fn handler_edit_metadata_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -866,7 +866,7 @@ pub(crate) async fn handler_mark_draft_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -906,7 +906,7 @@ pub(crate) async fn handler_mark_ready_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -965,7 +965,7 @@ pub(crate) async fn handler_bulk_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

@@ -34,7 +34,7 @@ const ACTION_URL: &str = "/_account/keys";
 pub(crate) async fn handler_keys_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, ACTION_URL).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let csrf = csrf_field(&headers);
     let locale = effective_locale(&ctx, &headers).await;
@@ -96,7 +96,7 @@ pub(crate) async fn handler_keys_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, ACTION_URL).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

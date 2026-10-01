@@ -238,7 +238,7 @@ pub(crate) async fn handler_register_begin(
     let rp = require_rp(&ctx, locale).await?;
     let me = match require_login(&ctx, &headers, SECURITY_URL).await {
         Ok(user) => user,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let form: RegisterBegin = parse_json(&body, locale)?;
     require_csrf(&headers, &form.csrf)?;
@@ -299,7 +299,7 @@ async fn register_finish(ctx: &AppContext, headers: &HeaderMap, body: &[u8]) -> 
     let rp = require_rp(ctx, locale).await?;
     let me = match require_login(ctx, headers, SECURITY_URL).await {
         Ok(user) => user,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let form: RegisterFinish = parse_json(body, locale)?;
     require_csrf(headers, &form.csrf)?;
@@ -365,7 +365,7 @@ pub(crate) async fn handler_remove(
     require_rp(&ctx, locale).await?;
     let me = match require_login(&ctx, &headers, SECURITY_URL).await {
         Ok(user) => user,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let is_async = headers.contains_key(crate::webui::ASYNC_HEADER);

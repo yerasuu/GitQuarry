@@ -417,7 +417,7 @@ pub(crate) async fn handler_create_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -552,7 +552,7 @@ pub(crate) async fn handler_generate_notes_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -615,7 +615,7 @@ pub(crate) async fn handler_edit_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -668,7 +668,7 @@ pub(crate) async fn handler_delete_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -728,7 +728,7 @@ pub(crate) async fn handler_upload_asset_post(
     // uploaded bytes to disk.
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let mut tag = String::new();
     let mut csrf = String::new();
@@ -863,7 +863,7 @@ pub(crate) async fn handler_delete_asset_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
