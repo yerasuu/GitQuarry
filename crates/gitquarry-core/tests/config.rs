@@ -152,3 +152,39 @@ fn rejects_a_default_bucket_naming_nothing() {
     let err = Config::load_from(&path).unwrap_err().to_string();
     assert!(err.contains("default_bucket"), "unexpected error: {err}");
 }
+
+/// s3db's relative `./local` default would follow each process's cwd (a git
+/// hook runs inside the mirror) and be shared by every bucket in the file;
+/// each bucket must get its own fixed spool directory instead.
+#[test]
+fn each_bucket_gets_its_own_absolute_spool_dir_by_default() {
+    let toml = r#"
+        [buckets.main]
+        driver = "local"
+        bucket = "/srv/main"
+        passphrase = "hunter2"
+
+        [buckets.backup]
+        driver = "local"
+        bucket = "/srv/backup"
+        passphrase = "hunter2"
+    "#;
+    let config = load(toml).unwrap();
+    let main = &config.bucket("main").unwrap().resilience.local_dir;
+    let backup = &config.bucket("backup").unwrap().resilience.local_dir;
+    assert!(main.is_absolute(), "{}", main.display());
+    assert_ne!(main, backup);
+}
+
+#[test]
+fn a_relative_spool_dir_resolves_against_the_config_file() {
+    let config_path = std::path::Path::new("/etc/gitquarry/gitquarry.toml");
+    assert_eq!(
+        resolve_local_dir("main", std::path::Path::new("state"), config_path),
+        std::path::Path::new("/etc/gitquarry/state")
+    );
+    assert_eq!(
+        resolve_local_dir("main", std::path::Path::new("/var/lib/gq"), config_path),
+        std::path::Path::new("/var/lib/gq")
+    );
+}

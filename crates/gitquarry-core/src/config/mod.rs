@@ -133,14 +133,16 @@ impl Config {
                 path.display()
             )
         })?;
-        let raw: RawConfig = toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))?;
+        let mut raw: RawConfig =
+            toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))?;
         if raw.buckets.is_empty() {
             bail!(
                 "config {} has no buckets: add a [buckets.<name>] section",
                 path.display()
             );
         }
-        for (name, bucket) in &raw.buckets {
+        for (name, bucket) in &mut raw.buckets {
+            bucket.resilience.local_dir = resolve_local_dir(name, &bucket.resilience.local_dir, path);
             if bucket.passphrase.trim().is_empty() {
                 bail!(
                     "[buckets.{name}] in {} has no `passphrase` (mandatory: encrypts everything \
@@ -262,6 +264,28 @@ fn write_new_private_file(path: &Path, contents: &str) -> Result<()> {
 /// Only called by server startup, not `load_from`: the remote helper and the
 /// hook run one process per git command and would repeat the warning on
 /// every push.
+/// Where bucket `name`'s `resilience.local_dir` (s3db's write spool) really
+/// lives. Left at s3db's relative `./local` default it would resolve against
+/// each process's cwd — a git hook runs inside the mirror — and every bucket
+/// in the file would share one directory, which s3db forbids (recovery
+/// replays every orphaned spool file under it onto its own backend). So the
+/// default becomes a per-bucket directory under the user's data dir, and any
+/// other relative path is taken relative to `config_path`, not the cwd.
+pub fn resolve_local_dir(name: &str, local_dir: &Path, config_path: &Path) -> PathBuf {
+    let config_dir = config_path.parent().unwrap_or(Path::new(""));
+    if *local_dir != ResilienceConfig::default().local_dir {
+        return config_dir.join(local_dir);
+    }
+    let sanitized: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    dirs::data_local_dir()
+        .map(|dir| dir.join("gitquarry"))
+        .unwrap_or_else(|| config_dir.join("local"))
+        .join(sanitized)
+}
+
 pub fn warn_if_world_readable(path: &Path) {
     #[cfg(unix)]
     {

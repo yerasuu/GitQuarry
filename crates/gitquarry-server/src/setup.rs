@@ -246,7 +246,13 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
         resilience: Default::default(),
     };
 
-    let backend = storage::build_backend(&bucket_cfg)?;
+    // Written to `gitquarry.toml` as-is, keeping its portable default; the
+    // live backend gets the resolved directory `Config::load_from` would give
+    // it on the next start.
+    let mut live_cfg = bucket_cfg.clone();
+    live_cfg.resilience.local_dir =
+        config::resolve_local_dir(&name, &live_cfg.resilience.local_dir, &state.config_path);
+    let backend = storage::build_backend(&live_cfg)?;
     // The real round trip: wrong creds/endpoint/bucket, or a passphrase
     // that doesn't match a bucket already used before, all fail clearly
     // right here instead of writing a config that can't actually connect.
@@ -270,7 +276,7 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
 
     Ok(WizardOutcome {
         bucket: name,
-        bucket_cfg,
+        bucket_cfg: live_cfg,
         backend,
         cipher,
     })
