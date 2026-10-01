@@ -31,6 +31,7 @@ use gitquarry_core::config::{self, BackendConfig, BucketConfig, LocalEngine, Loc
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::{self, Backend};
 use gitquarry_webui::webui::{esc, layout, non_empty};
+use s3db::SpooledBackend;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -45,6 +46,7 @@ pub struct WizardOutcome {
     pub bucket: String,
     pub bucket_cfg: BucketConfig,
     pub backend: Arc<dyn Backend>,
+    pub spool: Option<Arc<SpooledBackend>>,
     pub cipher: Cipher,
 }
 
@@ -252,7 +254,8 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
     let mut live_cfg = bucket_cfg.clone();
     live_cfg.resilience.local_dir =
         config::resolve_local_dir(&name, &live_cfg.resilience.local_dir, &state.config_path);
-    let backend = storage::build_backend(&live_cfg)?;
+    let built = storage::build_backend(&live_cfg)?;
+    let backend = built.backend;
     // The real round trip: wrong creds/endpoint/bucket, or a passphrase
     // that doesn't match a bucket already used before, all fail clearly
     // right here instead of writing a config that can't actually connect.
@@ -278,6 +281,7 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
         bucket: name,
         bucket_cfg: live_cfg,
         backend,
+        spool: built.spool,
         cipher,
     })
 }

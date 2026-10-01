@@ -121,95 +121,99 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // verifies everything against S3 for real, writes the config, and
     // returns exactly what the branch below would've loaded from it — same
     // process, no restart needed to pick up what it just wrote.
-    let (bucket, _bucket_cfg, backend, cipher, federation_cfg, allow_push_create, trust_forwarded_for) = if config_path
-        .is_file()
-    {
-        let conf = config::Config::load_from(&config_path)?;
-        let federation_cfg = conf.federation().cloned();
-        let allow_push_create = conf.allow_push_create();
-        let trust_forwarded_for = conf.trust_forwarded_for();
-        config::warn_if_world_readable(&config_path);
-        // Without --bucket: whatever `default_bucket` names, or the single
-        // configured bucket. Buckets that exist only as a backup destination
-        // or a mirror target are never served, so a config with several is
-        // ordinary and the default has to be written down.
-        let bucket = match args.bucket {
-            Some(b) => b,
-            None => conf
-                .default_bucket_name()
-                .map(str::to_string)
-                .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
-        };
-        // Validates early, with a good error message, before binding ports.
-        let bucket_cfg = conf.bucket(&bucket)?.clone();
-        let backend = storage::build_backend(&bucket_cfg)?;
-        // Derives (or creates, if the bucket is new) this bucket's cipher.
-        // Fails hard if the passphrase doesn't match: starting with the
-        // wrong key would leave every operation failing to decrypt, better
-        // to cut it off here with a clear message than after binding any
-        // port.
-        let cipher = gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase)
-            .await
-            .context(
-                "couldn't reach the storage backend to read/create the bucket's encryption config \
+    let (bucket, _bucket_cfg, backend, spool, cipher, federation_cfg, allow_push_create, trust_forwarded_for) =
+        if config_path.is_file() {
+            let conf = config::Config::load_from(&config_path)?;
+            let federation_cfg = conf.federation().cloned();
+            let allow_push_create = conf.allow_push_create();
+            let trust_forwarded_for = conf.trust_forwarded_for();
+            config::warn_if_world_readable(&config_path);
+            // Without --bucket: whatever `default_bucket` names, or the single
+            // configured bucket. Buckets that exist only as a backup destination
+            // or a mirror target are never served, so a config with several is
+            // ordinary and the default has to be written down.
+            let bucket = match args.bucket {
+                Some(b) => b,
+                None => conf
+                    .default_bucket_name()
+                    .map(str::to_string)
+                    .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
+            };
+            // Validates early, with a good error message, before binding ports.
+            let bucket_cfg = conf.bucket(&bucket)?.clone();
+            let s3db::ResilientBackend { backend, spool } = storage::build_backend(&bucket_cfg)?;
+            // Derives (or creates, if the bucket is new) this bucket's cipher.
+            // Fails hard if the passphrase doesn't match: starting with the
+            // wrong key would leave every operation failing to decrypt, better
+            // to cut it off here with a clear message than after binding any
+            // port.
+            let cipher =
+                gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase)
+                    .await
+                    .context(
+                        "couldn't reach the storage backend to read/create the bucket's encryption config \
                  (retries already exhausted -- check the endpoint is up and reachable, not just this process)",
-            )?;
-        // Config exists and connects fine, but the bucket itself has never
-        // had an admin user created (infra-as-code wrote `gitquarry.toml`
-        // ahead of the first real deploy, or it points at a brand-new
-        // bucket) — same first-run wizard as a missing config, just
-        // pre-filled with what's already known instead of starting blank.
-        if access::list_usernames(backend.as_ref()).await?.is_empty() {
-            // The wizard opens the bucket itself for its round trip, and a
-            // local redb bucket admits one open handle per process.
-            drop(backend);
-            let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
-            let outcome = setup::run(
-                &config_path,
-                &web_bind,
-                Some(setup::Prefill {
-                    name: bucket,
+                    )?;
+            // Config exists and connects fine, but the bucket itself has never
+            // had an admin user created (infra-as-code wrote `gitquarry.toml`
+            // ahead of the first real deploy, or it points at a brand-new
+            // bucket) — same first-run wizard as a missing config, just
+            // pre-filled with what's already known instead of starting blank.
+            if access::list_usernames(backend.as_ref()).await?.is_empty() {
+                // The wizard opens the bucket itself for its round trip, and a
+                // local redb bucket admits one open handle per process.
+                drop(backend);
+                drop(spool);
+                let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
+                let outcome = setup::run(
+                    &config_path,
+                    &web_bind,
+                    Some(setup::Prefill {
+                        name: bucket,
+                        bucket_cfg,
+                    }),
+                )
+                .await?;
+                (
+                    outcome.bucket,
+                    outcome.bucket_cfg,
+                    outcome.backend,
+                    outcome.spool,
+                    outcome.cipher,
+                    federation_cfg,
+                    allow_push_create,
+                    trust_forwarded_for,
+                )
+            } else {
+                (
+                    bucket,
                     bucket_cfg,
-                }),
-            )
-            .await?;
+                    backend,
+                    spool,
+                    cipher,
+                    federation_cfg,
+                    allow_push_create,
+                    trust_forwarded_for,
+                )
+            }
+        } else {
+            // First run, no `gitquarry.toml` at all yet — `[federation]` can't
+            // exist either, and the setup wizard writes a bucket-only config, so
+            // `allow_push_create`/`trust_forwarded_for` are both off too until an
+            // operator opts in by hand.
+            let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
+            let outcome = setup::run(&config_path, &web_bind, None).await?;
             (
                 outcome.bucket,
                 outcome.bucket_cfg,
                 outcome.backend,
+                outcome.spool,
                 outcome.cipher,
-                federation_cfg,
-                allow_push_create,
-                trust_forwarded_for,
+                None,
+                false,
+                false,
             )
-        } else {
-            (
-                bucket,
-                bucket_cfg,
-                backend,
-                cipher,
-                federation_cfg,
-                allow_push_create,
-                trust_forwarded_for,
-            )
-        }
-    } else {
-        // First run, no `gitquarry.toml` at all yet — `[federation]` can't
-        // exist either, and the setup wizard writes a bucket-only config, so
-        // `allow_push_create`/`trust_forwarded_for` are both off too until an
-        // operator opts in by hand.
-        let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
-        let outcome = setup::run(&config_path, &web_bind, None).await?;
-        (
-            outcome.bucket,
-            outcome.bucket_cfg,
-            outcome.backend,
-            outcome.cipher,
-            None,
-            false,
-            false,
-        )
-    };
+        };
     let cipher = Arc::new(cipher);
 
     // Remote config (.conf/global.json in the bucket itself, editable from
@@ -305,6 +309,13 @@ pub async fn run(rest: &[String]) -> Result<()> {
         Ok(0) => {}
         Ok(n) => info!("recovered {n} stale transaction(s) left by a previous crash"),
         Err(e) => warn!("stale-transaction recovery sweep failed, continuing: {e:#}"),
+    }
+
+    // Replays writes a previous run of this server, a git hook or a CLI
+    // command recorded in s3db's local spool but never saw land. Not fatal,
+    // same treatment as the transaction sweep just above.
+    if let Some(spool) = &spool {
+        recover_spool(spool).await;
     }
 
     // Bucket data migrations, before either server accepts a connection:
@@ -439,6 +450,9 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // detached, log-and-retry treatment as every sweep around it.
     tokio::spawn(run_periodic_stale_transaction_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
+    if let Some(spool) = spool {
+        tokio::spawn(run_periodic_spool_recovery(spool));
+    }
     // `[federation]` absent (the common case today) means no
     // `gitquarry-federation` process will ever call in — don't bind a
     // second port nobody's using. A bind failure here is fatal (unlike the
@@ -504,6 +518,34 @@ async fn run_periodic_stale_transaction_sweep(ctx: Arc<AppContext>) {
             Ok(n) => info!("recovered {n} stale transaction(s)"),
             Err(e) => warn!("stale-transaction recovery sweep failed, continuing: {e:#}"),
         }
+    }
+}
+
+/// How often [`run_periodic_spool_recovery`] runs. Short, unlike the
+/// transaction sweep: a pending write is a change somebody already made, and
+/// each sweep is a directory listing plus a read of local files.
+const SPOOL_RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+async fn recover_spool(spool: &s3db::SpooledBackend) {
+    match spool.recover_pending().await {
+        Ok(report) if report == s3db::RecoveryReport::default() => {}
+        Ok(report) => info!(
+            resolved = report.resolved,
+            still_pending = report.still_pending,
+            "replayed spooled writes"
+        ),
+        Err(e) => warn!("spool recovery sweep failed, continuing: {e:#}"),
+    }
+}
+
+/// The periodic half of the startup [`recover_spool`] call: retries this
+/// process's own writes whose remote attempt failed, and adopts the spool
+/// files git hooks and CLI commands leave behind when they exit or crash.
+async fn run_periodic_spool_recovery(spool: Arc<s3db::SpooledBackend>) {
+    let mut ticker = tokio::time::interval(SPOOL_RECOVERY_INTERVAL);
+    loop {
+        ticker.tick().await;
+        recover_spool(&spool).await;
     }
 }
 

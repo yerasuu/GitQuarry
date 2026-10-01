@@ -10,7 +10,6 @@ pub mod thread;
 pub mod uid;
 
 use crate::config::BucketConfig;
-use std::sync::Arc;
 
 /// Every repo lives under this top-level S3 prefix — `repos/<owner>/<name>`,
 /// not `<owner>/<name>` at the bucket root — so a repo's namespace (a
@@ -45,9 +44,18 @@ pub use s3db::{Backend, Cas, get_json, list_all_keys, put_json};
 /// can't accidentally bypass it by calling `s3db::build_backend` directly.
 /// Metrics are a [`s3db::NoopMetrics`] sink for now — nothing in gitquarry
 /// reads `MeteredBackend`'s counters yet.
-pub fn build_backend(cfg: &BucketConfig) -> anyhow::Result<Arc<dyn Backend>> {
+///
+/// The returned `spool` is `Some` for a remote driver. Only the long-lived
+/// server drives its `recover_pending`; a short-lived process (a git hook, a
+/// CLI command) just writes through it, and the server's sweep adopts
+/// whatever such a process left behind.
+pub fn build_backend(cfg: &BucketConfig) -> anyhow::Result<s3db::ResilientBackend> {
     let raw = s3db::build_backend(&cfg.backend)?;
-    Ok(s3db::build_resilient_backend(raw, cfg.resilience.clone(), std::sync::Arc::new(s3db::NoopMetrics)).backend)
+    Ok(s3db::build_resilient_backend(
+        raw,
+        cfg.resilience.clone(),
+        std::sync::Arc::new(s3db::NoopMetrics),
+    ))
 }
 
 /// Delay before a CAS-conflict retry, exponential (capped) with a little
