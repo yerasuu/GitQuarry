@@ -33,54 +33,18 @@
 //! (assembles one section's sub-nav + markup, called by both that POST
 //! handler and `repo::handler_repo`'s own GET dispatch).
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod danger_zone;
-#[cfg(not(any(test, feature = "test-util")))]
 mod danger_zone;
-#[cfg(any(test, feature = "test-util"))]
-pub mod default_branch;
-#[cfg(not(any(test, feature = "test-util")))]
 mod default_branch;
-#[cfg(any(test, feature = "test-util"))]
-pub mod general;
-#[cfg(not(any(test, feature = "test-util")))]
 mod general;
-#[cfg(any(test, feature = "test-util"))]
-pub mod labels;
-#[cfg(not(any(test, feature = "test-util")))]
 mod labels;
-#[cfg(any(test, feature = "test-util"))]
-pub mod lfs_limit;
-#[cfg(not(any(test, feature = "test-util")))]
 mod lfs_limit;
-#[cfg(any(test, feature = "test-util"))]
-pub mod mirrors;
-#[cfg(not(any(test, feature = "test-util")))]
 mod mirrors;
-#[cfg(any(test, feature = "test-util"))]
-pub mod move_repo;
-#[cfg(not(any(test, feature = "test-util")))]
 mod move_repo;
-#[cfg(any(test, feature = "test-util"))]
-pub mod permissions;
-#[cfg(not(any(test, feature = "test-util")))]
 mod permissions;
-#[cfg(any(test, feature = "test-util"))]
-pub mod protected_branches;
-#[cfg(not(any(test, feature = "test-util")))]
 mod protected_branches;
 mod protected_tags;
-#[cfg(any(test, feature = "test-util"))]
-pub mod require_signed_commits;
-#[cfg(not(any(test, feature = "test-util")))]
 mod require_signed_commits;
-#[cfg(any(test, feature = "test-util"))]
-pub mod required_reviewers;
-#[cfg(not(any(test, feature = "test-util")))]
 mod required_reviewers;
-#[cfg(any(test, feature = "test-util"))]
-pub mod topics;
-#[cfg(not(any(test, feature = "test-util")))]
 mod topics;
 
 use super::{
@@ -478,13 +442,8 @@ pub(crate) async fn handler_repo_conf_post(
     .into_response())
 }
 
-// `pub`, not `pub(crate)`: now referenced (as `Option<&RepoConfForm>`, the
-// `retry` param) by every sub-form's render fn, several of which are `pub`
-// under `test`/`test-util` for their own integration tests — a private type
-// can't sit in a public fn's signature across that crate boundary (E0446),
-// same reason `Flash` (`flash.rs`) is already dual-gated pub/pub(crate).
 #[derive(serde::Deserialize)]
-pub struct RepoConfForm {
+pub(crate) struct RepoConfForm {
     /// `"save_conf"` (default — the description/visibility form below
     /// doesn't send this field at all) or one of `set_perm`/`set_topics`/
     /// `delete_repo`/... (every other sub-form on this page). One
@@ -589,17 +548,18 @@ pub struct RepoConfForm {
     /// only if checked. Track B opt-in, see `ExternalMirror::sync_merge_requests`.
     #[serde(default)]
     sync_merge_requests: String,
+    /// Only read by `add_mirror`/`edit_mirror` — comma-separated, same
+    /// convention as the repo-settings protected-branches field. See
+    /// `ExternalMirror::branch_patterns`.
+    #[serde(default)]
+    branch_patterns: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every
 /// namespace-picking form (owner transfer, move) offers both as options —
 /// bundled so [`render_settings_section`] doesn't carry two more positional
-/// slice params on top of everything else it already does. `pub`, not
-/// `pub(crate)`, for the same cross-crate-test reason as [`RepoConfForm`]:
-/// [`render_settings_section`] takes one by value and is itself `pub` so
-/// `tests/webui_repo_settings_sections.rs` can exercise the sub-nav/dispatch
-/// logic directly.
-pub struct Namespaces<'a> {
+/// slice params on top of everything else it already does.
+pub(crate) struct Namespaces<'a> {
     pub users: &'a [User],
     pub group_names: &'a [String],
 }
@@ -616,8 +576,7 @@ pub(crate) use mirrors::fetch_mr_links_by_mirror;
 /// too — this repo's own live branch list and its own permission grants —
 /// bundled for the same reason [`Namespaces`] is: one struct slot instead of
 /// two more positional params clippy's `too_many_arguments` would flag.
-/// `pub`, same cross-crate-test reason as [`Namespaces`].
-pub struct RepoState<'a> {
+pub(crate) struct RepoState<'a> {
     pub manifest: &'a Manifest,
     pub granted: &'a [(User, Permission)],
     /// Each mirror with its current etag — the edit form's CAS guard, see
@@ -632,14 +591,9 @@ pub struct RepoState<'a> {
 /// cross clippy's `too_many_arguments` now that `locale` (needed once its
 /// sub-forms became locale-aware) would have been the 8th positional param —
 /// same reasoning as [`Namespaces`]/[`RepoState`] and `groups::PageChrome`.
-/// `pub`, same cross-crate-test reason as [`Namespaces`].
-pub struct PageChrome<'a> {
+pub(crate) struct PageChrome<'a> {
     pub csrf: &'a str,
-    // `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash`
-    // goes `pub(crate)` outside that config, which is what makes plain
-    // `cargo check` flag this field as exposing a private type.
-    #[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-    pub message: Option<Flash<'a>>,
+    pub(crate) message: Option<Flash<'a>>,
     /// `Some((mirror_id, token))` for exactly one response: right after
     /// `add_mirror`/`edit_mirror` sets a token, never on a later page load
     /// (that would mean fetching a real, live, reversible secret back out
@@ -748,7 +702,7 @@ fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'sta
 /// trade a bigger diff across both call sites for a per-tab fetch saving
 /// neither caller asked for. Only the assembly changed — a sidebar row per
 /// [`settings_sections`] entry plus exactly one sub-form's markup instead
-/// of all 13 stacked. `pub`, same cross-crate-test reason as [`Namespaces`].
+/// of all 13 stacked.
 ///
 /// The whole thing (sidebar, flash, and the one active section) is wrapped
 /// in `#repo-settings-body` — every sub-form under `repo_settings/` other
@@ -757,7 +711,7 @@ fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'sta
 /// data-async-target="#repo-settings-body"`, so a save re-renders in
 /// place instead of leaving the browser's "confirm resubmission" dialog
 /// for a later F5.
-pub fn render_settings_section(
+pub(crate) fn render_settings_section(
     section: &str,
     repo_name: &str,
     config: &RepoConfig,

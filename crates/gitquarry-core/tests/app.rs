@@ -1,8 +1,14 @@
 use gitquarry_core::app::*;
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::Cas;
 use std::sync::Arc;
+
+/// `app::LOGIN_MAX_ATTEMPTS`: failures a username gets before any delay.
+const LOGIN_MAX_ATTEMPTS: usize = 5;
+/// `app::GIT_RATE_LIMIT_{ANONYMOUS,AUTHENTICATED}_MAX`: git requests per
+/// window for an IP, and for a signed-in username.
+const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
+const GIT_RATE_LIMIT_AUTHENTICATED_MAX: usize = 120;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
@@ -22,25 +28,15 @@ fn penalises_after_max_attempts_and_clear_resets_it() {
 }
 
 #[test]
-fn the_penalty_doubles_per_failure_and_stops_at_the_cap() {
-    assert!(LoginAttempts::penalty_for(0).is_zero());
-    assert!(LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS - 1).is_zero());
-    // The cap is where the delay starts, then doubles per further failure.
-    assert_eq!(
-        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS),
-        std::time::Duration::from_secs(1)
-    );
-    assert_eq!(
-        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS + 1),
-        std::time::Duration::from_secs(2)
-    );
-    assert_eq!(
-        LoginAttempts::penalty_for(LOGIN_MAX_ATTEMPTS + 2),
-        std::time::Duration::from_secs(4)
-    );
-    // However many attempts pile up, one request never stalls a worker for
-    // longer than the cap.
-    assert_eq!(LoginAttempts::penalty_for(500), LOGIN_MAX_PENALTY);
+fn the_penalty_doubles_per_failure_past_the_cap_and_stops_at_ten_seconds() {
+    let attempts = LoginAttempts::default();
+    let mut penalties = Vec::with_capacity(9);
+    for _ in 0..9 {
+        attempts.record_failure("alice");
+        penalties.push(attempts.penalty("alice").as_secs());
+    }
+    // Free up to the cap, 1s at it, then doubling until the 10s ceiling.
+    assert_eq!(penalties, [0, 0, 0, 0, 1, 2, 4, 8, 10]);
 }
 
 #[test]
@@ -113,7 +109,7 @@ fn limited_count_reflects_only_keys_actually_over_their_cap() {
 /// `request_cache.rs` tests use one for.
 #[derive(Debug)]
 struct CountingBackend {
-    inner: gitquarry_core::storage::local::LocalBackend,
+    inner: Arc<dyn Backend>,
     gets: AtomicUsize,
 }
 
@@ -149,35 +145,17 @@ impl Backend for CountingBackend {
     }
 }
 
+/// The shared fixture with its backend wrapped, so the test can count the
+/// reads that reach the bucket.
 fn test_ctx(root: &std::path::Path) -> (AppContext, Arc<CountingBackend>) {
-    let inner = gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: gitquarry_core::config::LocalEngine::Files,
-    });
+    let base = gitquarry_test_support::ctx(root);
     let counting = Arc::new(CountingBackend {
-        inner,
+        inner: Arc::clone(&base.backend),
         gets: AtomicUsize::new(0),
     });
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[4u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
     let ctx = AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
         backend: Arc::clone(&counting) as Arc<dyn Backend>,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+        ..base
     };
     (ctx, counting)
 }

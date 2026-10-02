@@ -1,3 +1,4 @@
+use gitquarry_core::app::AppContext;
 use gitquarry_core::mirror::gc::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,50 +30,42 @@ fn rejects_bad_units_and_numbers() {
     assert!(parse_size("").is_err());
 }
 
-/// Builds an `AppContext` good enough for `sweep_once`: it only ever
-/// touches `mirrors_root`/`mirror_max_age`/`mirror_max_size_bytes`/
-/// `locks` on this path, never `backend`/`cipher`, so both are built
-/// from local, no-network config just to satisfy the type.
-fn dummy_ctx(
-    mirrors_root: PathBuf,
+/// `mirror::gc`'s marker file name; hardcoded because it's private, and a
+/// wrong value here would fail every test below (an unmarked mirror reads as
+/// maximally stale), so the tests pin it too.
+const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
+
+/// The sweep only ever touches `mirrors_root`/`mirror_max_age`/
+/// `mirror_max_size_bytes`/`locks`, never the bucket, so the one `ctx` opens
+/// under `mirrors_root` holds no `HEAD` and is never mistaken for a mirror.
+fn sweep_ctx(
+    mirrors_root: &Path,
     mirror_max_age: Duration,
     mirror_max_size_bytes: u64,
-) -> gitquarry_core::app::AppContext {
-    let cfg = gitquarry_core::config::BucketConfig {
-        backend: gitquarry_core::config::BackendConfig::S3(gitquarry_core::config::S3Params {
-            bucket: "test".to_string(),
-            region: None,
-            endpoint_url: None,
-            access_key_id: "test".to_string(),
-            secret_access_key: "test".to_string().into(),
-            path_style: false,
-            allow_insecure_http: false,
-        }),
-        passphrase: "test".to_string(),
-        resilience: Default::default(),
-    };
-    gitquarry_core::app::AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root,
-        config_path: PathBuf::new(),
-        exe_path: PathBuf::new(),
-        backend: gitquarry_core::storage::build_backend(&cfg).expect("building the test backend"),
-        locks: gitquarry_core::app::Locks::default(),
-        cipher: Arc::new(
-            gitquarry_core::crypto::Cipher::derive("test", &[0u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
-        ),
+    mirror_large_repo_threshold_bytes: u64,
+) -> AppContext {
+    AppContext {
+        mirrors_root: mirrors_root.to_path_buf(),
         mirror_max_age,
         mirror_max_size_bytes,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+        mirror_large_repo_threshold_bytes,
+        ..gitquarry_test_support::ctx(mirrors_root)
     }
+}
+
+/// Runs the real periodic sweep, whose first tick fires immediately, until
+/// every path in `evicted` is gone, then stops it before the next tick (15
+/// minutes away), so once this returns exactly one sweep pass has run.
+async fn sweep_until_evicted(ctx: AppContext, evicted: &[PathBuf]) {
+    let sweep = tokio::spawn(run_periodic_sweep(Arc::new(ctx)));
+    let waited = tokio::time::timeout(Duration::from_secs(10), async {
+        while evicted.iter().any(|p| p.exists()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    sweep.abort();
+    waited.expect("the sweep never evicted the expected mirrors");
 }
 
 /// A fake bare-repo mirror: just enough for `list_mirrors` to recognize
@@ -98,10 +91,9 @@ async fn sweep_evicts_stale_mirror_but_keeps_fresh_one() {
     make_fake_mirror(root.path(), "old-repo", Duration::from_secs(2 * 3600), 0);
     make_fake_mirror(root.path(), "team/fresh-repo", Duration::from_secs(1), 0);
 
-    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), u64::MAX);
-    sweep_once(&ctx).await.unwrap();
+    let ctx = sweep_ctx(root.path(), Duration::from_secs(3600), u64::MAX, u64::MAX);
+    sweep_until_evicted(ctx, &[root.path().join("old-repo")]).await;
 
-    assert!(!root.path().join("old-repo").exists(), "stale mirror should be evicted");
     assert!(
         root.path().join("team/fresh-repo").exists(),
         "recently-queried mirror should survive"
@@ -119,12 +111,39 @@ async fn sweep_evicts_lru_when_over_size_cap() {
 
     // Cap fits only the newest one (~100 bytes + HEAD); the other two
     // must go.
-    let ctx = dummy_ctx(root.path().to_path_buf(), Duration::from_secs(3600), 150);
-    sweep_once(&ctx).await.unwrap();
+    let ctx = sweep_ctx(root.path(), Duration::from_secs(3600), 150, u64::MAX);
+    sweep_until_evicted(ctx, &[root.path().join("oldest"), root.path().join("middle")]).await;
 
-    assert!(!root.path().join("oldest").exists());
-    assert!(!root.path().join("middle").exists());
     assert!(root.path().join("newest").exists());
+}
+
+#[tokio::test]
+async fn a_large_mirror_survives_age_eviction_but_not_size_pressure() {
+    let root = tempfile::tempdir().unwrap();
+    // Well past max_age, and big enough to count as "large".
+    make_fake_mirror(root.path(), "big-old-repo", Duration::from_secs(2 * 3600), 1000);
+    make_fake_mirror(root.path(), "small-old-repo", Duration::from_secs(2 * 3600), 10);
+
+    let ctx = sweep_ctx(root.path(), Duration::from_secs(3600), u64::MAX, 500);
+    sweep_until_evicted(ctx, &[root.path().join("small-old-repo")]).await;
+
+    assert!(
+        root.path().join("big-old-repo").exists(),
+        "a large mirror is exempt from age-based eviction"
+    );
+}
+
+#[tokio::test]
+async fn a_large_mirror_still_gets_evicted_under_size_pressure() {
+    let root = tempfile::tempdir().unwrap();
+    // Within max_age, so only the size cap can evict it -- but it's still
+    // above the large-repo threshold, which must not exempt it here.
+    make_fake_mirror(root.path(), "big-repo", Duration::from_secs(10), 1000);
+
+    let ctx = sweep_ctx(root.path(), Duration::from_secs(3600), 100, 500);
+    // The large-repo exemption only applies to age eviction, never to the
+    // size cap, so the sweep must still remove it.
+    sweep_until_evicted(ctx, &[root.path().join("big-repo")]).await;
 }
 
 #[tokio::test]

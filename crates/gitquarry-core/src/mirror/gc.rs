@@ -21,9 +21,6 @@ use tracing::{info, warn};
 /// signal the sweep uses. A dedicated file instead of one of git's own
 /// (HEAD, refs, packs) because those only change when the mirror's
 /// *content* changes, not on every read-only request that uses it.
-#[cfg(any(test, feature = "test-util"))]
-pub const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
-#[cfg(not(any(test, feature = "test-util")))]
 const LAST_ACCESS_MARKER: &str = ".gitquarry-last-access";
 
 /// How often the sweep runs. Coarser than `mirror_max_age`'s granularity
@@ -198,23 +195,20 @@ pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
         .await;
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub async fn sweep_once(ctx: &AppContext) -> Result<()> {
-    sweep_once_impl(ctx).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn sweep_once(ctx: &AppContext) -> Result<()> {
-    sweep_once_impl(ctx).await
-}
-
-async fn sweep_once_impl(ctx: &AppContext) -> Result<()> {
     let mirrors = list_mirrors(&ctx.mirrors_root).await?;
     let now = SystemTime::now();
 
     let mut kept = Vec::new();
     for m in mirrors {
         let age = now.duration_since(m.last_access).unwrap_or_default();
-        if age > ctx.mirror_max_age {
+        // A large mirror going untouched for a while doesn't mean it's
+        // free to throw away: re-deriving it from the bucket is real
+        // decrypt-and-reconstruct work, unlike a small one. It still fully
+        // participates in the size-based pass below, so disk pressure
+        // still reclaims it once that's actually needed.
+        let large = m.size_bytes >= ctx.mirror_large_repo_threshold_bytes;
+        if age > ctx.mirror_max_age && !large {
             evict(ctx, &m).await;
         } else {
             kept.push(m);

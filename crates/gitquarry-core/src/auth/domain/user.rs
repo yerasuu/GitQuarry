@@ -92,6 +92,7 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         password_hash,
         session_epoch: 0,
         is_admin,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),
@@ -118,6 +119,9 @@ pub async fn create(ctx: &AppContext, new_user: NewUser<'_>) -> Result<Option<Ca
         return Ok(None);
     }
     let _ = user.claim_uid(ctx.backend().as_ref(), &ctx.cipher).await;
+    for repo_uid in user.repos.keys() {
+        access::add_repo_permission_index(ctx.backend().as_ref(), &ctx.cipher, repo_uid, &user.uid).await;
+    }
     if has_password {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, 1).await;
     }
@@ -141,6 +145,7 @@ pub async fn delete(ctx: &AppContext, username: &str) -> Result<()> {
     }
     let _ = user.release_email(ctx.backend().as_ref()).await;
     access::release_namespace(ctx.backend().as_ref(), username).await;
+    super::passkey::remove_all(ctx, &user.uid).await;
     if user.password_hash.is_some() {
         access::bump_password_login_count(ctx.backend().as_ref(), &ctx.cipher, -1).await;
     }
@@ -333,6 +338,19 @@ pub async fn toggle_admin(ctx: &AppContext, username: &str, locale: gitquarry_i1
     access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 
+/// Same shape as [`toggle_admin`] — a separate, narrower delegation (peer
+/// link/unlink/ban/access-level management, `/_peers`) rather than full
+/// `is_admin` (`docs/federation-binary-split-concept.md` section 6).
+pub async fn toggle_federation_moderator(
+    ctx: &AppContext,
+    username: &str,
+    locale: gitquarry_i18n::Locale,
+) -> Result<Cas> {
+    let (mut user, etag) = require_user(ctx, username, locale).await?;
+    user.is_federation_moderator = !user.is_federation_moderator;
+    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
+}
+
 /// `Err` if `pubkey` doesn't parse or is already claimed by a different
 /// user.
 pub async fn add_pubkey(ctx: &AppContext, username: &str, pubkey: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
@@ -412,31 +430,27 @@ pub async fn set_repo_perm(
     perm: Option<Permission>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
-    let (mut user, etag) = require_user(ctx, username, locale).await?;
     if repo == "*" {
+        let (mut user, etag) = require_user(ctx, username, locale).await?;
         user.default_permission = perm;
-    } else {
-        match perm {
-            Some(p) => {
-                let repo_uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo)
-                    .await?
-                    .with_context(|| gitquarry_i18n::shared::repo::repo_not_found(locale, repo))?;
-                user.repos.insert(repo_uid, p);
-            }
-            None => {
-                // No existence check to clear: if the repo was since
-                // renamed/deleted there's no uid left to look up by name,
-                // but that's harmless — an orphaned uid in `repos` never
-                // matches anyone's request (uids are never reused).
-                if let Some(repo_uid) =
-                    crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo).await?
-                {
-                    user.repos.remove(&repo_uid);
-                }
-            }
+        return access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await;
+    }
+    let repo_uid = crate::storage::settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo).await?;
+    match (repo_uid, perm) {
+        // Through the repo side so the repo permission index follows: the
+        // repo's own grid lists grantees from it, and a grant missing there
+        // is live but can't be seen or revoked from the repo.
+        (Some(repo_uid), perm) => crate::domain::repo::set_permission(ctx, &repo_uid, username, perm, locale).await,
+        (None, Some(_)) => bail!("{}", gitquarry_i18n::shared::repo::repo_not_found(locale, repo)),
+        // No existence check to clear: if the repo was since renamed/deleted
+        // there's no uid left to look up by name, but that's harmless — an
+        // orphaned uid in `repos` never matches anyone's request (uids are
+        // never reused).
+        (None, None) => {
+            require_user(ctx, username, locale).await?;
+            Ok(Cas::Ok)
         }
     }
-    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 
 /// Starts (or restarts) TOTP enrollment: generates a fresh secret, stores it

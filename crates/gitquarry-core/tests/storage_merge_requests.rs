@@ -1,19 +1,7 @@
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::storage::local::LocalBackend;
+use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::merge_requests::*;
 use gitquarry_core::storage::uid::Uid;
-use gitquarry_core::storage::{Backend, Cas};
-use std::sync::Arc;
-
-fn test_backend_and_cipher(root: &std::path::Path) -> (LocalBackend, Cipher) {
-    let backend = LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    });
-    let cipher = Cipher::derive("test passphrase", &[3u8; SALT_LEN]).unwrap();
-    (backend, cipher)
-}
+use gitquarry_test_support::{backend, cipher};
 
 fn sample(number: u64) -> MergeRequestMeta {
     MergeRequestMeta {
@@ -40,45 +28,52 @@ fn sample(number: u64) -> MergeRequestMeta {
 #[tokio::test]
 async fn next_mr_number_starts_at_one_and_increments() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
-    assert_eq!(next_mr_number(&backend, &cipher, &uid).await.unwrap(), 1);
-    assert_eq!(next_mr_number(&backend, &cipher, &uid).await.unwrap(), 2);
-    assert_eq!(next_mr_number(&backend, &cipher, &uid).await.unwrap(), 3);
+    assert_eq!(next_mr_number(backend.as_ref(), &cipher, &uid).await.unwrap(), 1);
+    assert_eq!(next_mr_number(backend.as_ref(), &cipher, &uid).await.unwrap(), 2);
+    assert_eq!(next_mr_number(backend.as_ref(), &cipher, &uid).await.unwrap(), 3);
 }
 
 #[tokio::test]
 async fn next_mr_number_is_scoped_per_repo_uid() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let a = Uid::from("team/a".to_string());
     let b = Uid::from("team/b".to_string());
 
-    assert_eq!(next_mr_number(&backend, &cipher, &a).await.unwrap(), 1);
-    assert_eq!(next_mr_number(&backend, &cipher, &a).await.unwrap(), 2);
+    assert_eq!(next_mr_number(backend.as_ref(), &cipher, &a).await.unwrap(), 1);
+    assert_eq!(next_mr_number(backend.as_ref(), &cipher, &a).await.unwrap(), 2);
     // A different repo's counter starts fresh, unaffected by `a`'s.
-    assert_eq!(next_mr_number(&backend, &cipher, &b).await.unwrap(), 1);
+    assert_eq!(next_mr_number(backend.as_ref(), &cipher, &b).await.unwrap(), 1);
 }
 
 #[tokio::test]
 async fn put_then_get_roundtrips_and_conflicts_on_a_stale_etag() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
     let mr = sample(1);
 
     assert_eq!(
-        put_merge_request(&backend, &cipher, &uid, &mr, None).await.unwrap(),
+        put_merge_request(backend.as_ref(), &cipher, &uid, &mr, None)
+            .await
+            .unwrap(),
         Cas::Ok
     );
-    let (fetched, etag) = get_merge_request(&backend, &cipher, &uid, 1).await.unwrap();
+    let (fetched, etag) = get_merge_request(backend.as_ref(), &cipher, &uid, 1).await.unwrap();
     assert_eq!(fetched.unwrap().title, "Add widget");
     assert!(etag.is_some());
 
     // Re-creating without the fresh etag must not silently overwrite.
     assert_eq!(
-        put_merge_request(&backend, &cipher, &uid, &mr, None).await.unwrap(),
+        put_merge_request(backend.as_ref(), &cipher, &uid, &mr, None)
+            .await
+            .unwrap(),
         Cas::Conflict
     );
 }
@@ -86,10 +81,11 @@ async fn put_then_get_roundtrips_and_conflicts_on_a_stale_etag() {
 #[tokio::test]
 async fn get_is_none_for_a_never_created_number() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
     assert!(
-        get_merge_request(&backend, &cipher, &uid, 99)
+        get_merge_request(backend.as_ref(), &cipher, &uid, 99)
             .await
             .unwrap()
             .0
@@ -100,9 +96,8 @@ async fn get_is_none_for_a_never_created_number() {
 #[tokio::test]
 async fn list_merge_requests_excludes_the_counter_and_sorts_newest_first() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     for number in [1, 2, 3] {
@@ -117,12 +112,47 @@ async fn list_merge_requests_excludes_the_counter_and_sorts_newest_first() {
     assert_eq!(mrs.iter().map(|mr| mr.number).collect::<Vec<_>>(), vec![3, 2, 1]);
 }
 
+/// Comments and reviews live under `merges/<n>/`, inside the collection the
+/// MRs themselves are listed from.
+#[tokio::test]
+async fn an_mrs_comments_and_reviews_are_never_listed_as_mrs() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let cipher = cipher();
+    let uid = Uid::from("team/proj".to_string());
+
+    let n = next_mr_number(backend.as_ref(), &cipher, &uid).await.unwrap();
+    put_merge_request(backend.as_ref(), &cipher, &uid, &sample(n), None)
+        .await
+        .unwrap();
+    let comment = MrComment {
+        author: "alice".to_string(),
+        body: "lgtm".to_string(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+        ..Default::default()
+    };
+    add_mr_comment(backend.as_ref(), &cipher, &uid, n, &comment)
+        .await
+        .unwrap();
+    let review = MrReview {
+        author: "bob".to_string(),
+        verdict: ReviewVerdict::Approved,
+        body: String::new(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+    };
+    add_mr_review(backend.as_ref(), &cipher, &uid, n, &review)
+        .await
+        .unwrap();
+
+    let mrs = list_merge_requests(&backend, &cipher, &uid).await.unwrap();
+    assert_eq!(mrs.iter().map(|mr| mr.number).collect::<Vec<_>>(), vec![n]);
+}
+
 #[tokio::test]
 async fn comments_list_empty_before_any_are_added() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
     assert_eq!(list_mr_comments(&backend, &cipher, &uid, 1).await.unwrap(), Vec::new());
 }
@@ -130,9 +160,8 @@ async fn comments_list_empty_before_any_are_added() {
 #[tokio::test]
 async fn comments_roundtrip_in_chronological_order() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     for (author, body) in [("alice", "first"), ("bob", "second"), ("alice", "third")] {
@@ -157,9 +186,8 @@ async fn comments_roundtrip_in_chronological_order() {
 #[tokio::test]
 async fn comments_are_scoped_per_mr_number() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     let comment = MrComment {
@@ -179,9 +207,8 @@ async fn comments_are_scoped_per_mr_number() {
 #[tokio::test]
 async fn list_with_keys_gives_every_comment_a_distinct_stable_key() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     for body in ["first", "second"] {
@@ -206,9 +233,8 @@ async fn list_with_keys_gives_every_comment_a_distinct_stable_key() {
 #[tokio::test]
 async fn reviews_roundtrip_in_chronological_order_scoped_per_mr() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     for (author, verdict) in [
@@ -238,9 +264,8 @@ async fn reviews_roundtrip_in_chronological_order_scoped_per_mr() {
 #[tokio::test]
 async fn reviews_and_comments_are_separate_threads() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     add_mr_comment(
@@ -279,9 +304,8 @@ async fn reviews_and_comments_are_separate_threads() {
 #[tokio::test]
 async fn origin_field_roundtrips_and_defaults_to_none() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     let local = MrComment {
@@ -313,9 +337,8 @@ async fn origin_field_roundtrips_and_defaults_to_none() {
 #[tokio::test]
 async fn an_anchor_roundtrips_alongside_plain_thread_comments() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let uid = Uid::from("team/proj".to_string());
 
     let plain = MrComment {

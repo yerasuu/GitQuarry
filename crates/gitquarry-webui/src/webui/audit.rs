@@ -3,7 +3,7 @@
 //! just the last [`gitquarry_core::storage::audit::LIST_LIMIT`], same "recent activity"
 //! scope as everything else this bucket-side trail is for.
 
-use super::{State_, admin_header, effective_density, effective_locale, effective_theme, layout};
+use super::{State_, admin_header, effective_density, effective_locale, effective_theme, federation_ui_active, layout};
 use crate::auth::web::login;
 use crate::settings::web::require_admin;
 use axum::extract::State;
@@ -24,7 +24,7 @@ pub(crate) async fn handler_audit_get(State(ctx): State_, headers: HeaderMap) ->
     let body = render_audit_page(&entries, locale).into_string();
     Ok(axum::response::Html(layout(
         "audit log",
-        &admin_header("audit", locale),
+        &admin_header("audit", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,

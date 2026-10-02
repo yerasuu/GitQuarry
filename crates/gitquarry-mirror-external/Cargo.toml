@@ -7,26 +7,23 @@ description = "External-forge ref/MR mirror sync (GitHub/GitLab/Codeberg) -- a l
 license.workspace = true
 
 [dependencies]
-gitquarry-core = { path = "../gitquarry-core" }
-gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
-gitquarry-i18n = { path = "../gitquarry-i18n" }
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
-anyhow = "1.0.104"
-futures = "0.3.33"
-rand = "0.10.2"
-serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
-tracing = "0.1.44"
-
-[features]
-# Un-gates otherwise-private items for this crate's own tests/*.rs — same
-# reasoning gitquarry-core's own `test-util` feature has.
-test-util = ["gitquarry-core/test-util"]
+gitquarry-core = { workspace = true }
+gitquarry-forge-clients = { workspace = true }
+gitquarry-i18n = { workspace = true }
+s3db = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
-gitquarry-mirror-external = { path = ".", features = ["test-util"] }
-async-trait = "0.1.91"
-tempfile = "3.27.0"
+gitquarry-test-support = { workspace = true }
+axum = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
 
 [lints.rust]
 unsafe_code = "forbid"

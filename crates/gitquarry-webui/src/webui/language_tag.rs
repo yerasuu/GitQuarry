@@ -25,20 +25,3 @@ pub fn language_tag(path: &str) -> String {
         .filter(|ext| !ext.is_empty())
         .unwrap_or_else(|| "plaintext".to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::language_tag;
-
-    #[test]
-    fn picks_the_lowercased_extension() {
-        assert_eq!(language_tag("src/main.rs"), "rs");
-        assert_eq!(language_tag("README.MD"), "md");
-    }
-
-    #[test]
-    fn falls_back_to_plaintext_without_an_extension() {
-        assert_eq!(language_tag("Dockerfile"), "plaintext");
-        assert_eq!(language_tag(""), "plaintext");
-    }
-}

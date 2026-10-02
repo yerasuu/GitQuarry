@@ -7,13 +7,13 @@ description = "OpenPGP key validation and detached-signature verification by she
 license.workspace = true
 
 [dependencies]
-anyhow = "1.0.104"
-tokio = { version = "1.53.1", features = ["process", "fs"] }
-tempfile = "3.27.0"
-tracing = "0.1.44"
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs"] }
+tempfile = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints.rust]
 unsafe_code = "forbid"

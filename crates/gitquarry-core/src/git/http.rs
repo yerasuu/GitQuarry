@@ -51,19 +51,6 @@ const MAX_LFS_BATCH_BYTES: usize = 8 * 1024 * 1024;
 /// ever sees a byte of it.
 const MAX_PACK_BODY_BYTES: usize = 16 * 1024 * 1024 * 1024;
 
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    InfoRefs,
-    UploadPack,
-    ReceivePack,
-    LfsBatch,
-    LfsObject,
-    LfsLocks,
-    LfsLocksVerify,
-    LfsLockUnlock,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     InfoRefs,
@@ -77,15 +64,7 @@ enum Kind {
 }
 
 impl Kind {
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn valid_method(self, method: &Method) -> bool {
-        Self::valid_method_impl(self, method)
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
     fn valid_method(self, method: &Method) -> bool {
-        Self::valid_method_impl(self, method)
-    }
-    fn valid_method_impl(self, method: &Method) -> bool {
         match self {
             Kind::InfoRefs => method == Method::GET,
             Kind::UploadPack | Kind::ReceivePack | Kind::LfsBatch => method == Method::POST,
@@ -103,16 +82,7 @@ const LFS_LOCKS_INFIX: &str = "/info/lfs/locks/";
 /// repo name (not yet sanitized), which endpoint it is, and (for
 /// [`Kind::LfsObject`] only) the requested oid — `None` for every other
 /// path, which the browsing UI handles as before.
-#[cfg(any(test, feature = "test-util"))]
-pub fn classify(path: &str) -> Option<(&str, Kind, Option<&str>)> {
-    classify_impl(path)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn classify(path: &str) -> Option<(&str, Kind, Option<&str>)> {
-    classify_impl(path)
-}
-
-fn classify_impl(path: &str) -> Option<(&str, Kind, Option<&str>)> {
     for (suffix, kind) in [
         ("/info/refs", Kind::InfoRefs),
         ("/git-upload-pack", Kind::UploadPack),
@@ -173,16 +143,7 @@ fn extract_variable_segment<'a>(path: &'a str, infix: &str, trailing: &str) -> O
 /// overwrites it is the opposite failure: each request picks its own
 /// bucket, and the limit stops existing. Neither is safe to guess, hence
 /// the setting.
-#[cfg(any(test, feature = "test-util"))]
-pub fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
-    client_key_impl(ctx, headers, socket_ip)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
-    client_key_impl(ctx, headers, socket_ip)
-}
-
-fn client_key_impl(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
     if !ctx.trust_forwarded_for {
         return socket_ip.to_string();
     }
@@ -499,13 +460,6 @@ async fn handle(
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-#[derive(Debug)]
-pub enum Authz {
-    Allowed(Option<String>),
-    Denied(Denial),
-}
-#[cfg(not(any(test, feature = "test-util")))]
 #[derive(Debug)]
 enum Authz {
     Allowed(Option<String>),
@@ -521,13 +475,6 @@ enum Authz {
 /// not just inside a 200 batch reply's per-object `error` fields — see
 /// [`super::lfs::denial_response`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(any(test, feature = "test-util"))]
-pub enum Denial {
-    Unauthorized,
-    Forbidden,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) enum Denial {
     Unauthorized,
     Forbidden,
@@ -550,32 +497,16 @@ impl Denial {
 /// (matching the web UI's anonymous browsing); everything else — any write
 /// (a push, or an LFS upload), or reading a `Limited`/`Private` repo — needs
 /// either a valid `username`/`password_hash` pair (the same credential the
-/// web login form uses) or a personal access token naming this exact repo —
-/// and at least `required` either way.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn authorize(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-    name: &str,
-    repo_uid: &crate::storage::uid::Uid,
-    visibility: Visibility,
-    required: Permission,
-) -> Result<Authz> {
-    authorize_impl(ctx, headers, name, repo_uid, visibility, required).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
+/// web login form uses) or a fine-grained token (federation layer 4,
+/// `docs/federation-concept.md`'s "Capa 4") naming this exact repo — and at
+/// least `required` either way.
+///
+/// The token path needs `ctx.federation` configured (`AccessToken` storage
+/// moved to `gitquarry-federation` — `docs/federation-binary-split-concept.md`
+/// section 2): without it, a token-shaped `username` just falls through to
+/// the password path and fails there, same as before federation existed at
+/// all.
 async fn authorize(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-    name: &str,
-    repo_uid: &crate::storage::uid::Uid,
-    visibility: Visibility,
-    required: Permission,
-) -> Result<Authz> {
-    authorize_impl(ctx, headers, name, repo_uid, visibility, required).await
-}
-
-async fn authorize_impl(
     ctx: &AppContext,
     headers: &HeaderMap,
     name: &str,
@@ -593,6 +524,24 @@ async fn authorize_impl(
         Credential::Password(user) => {
             let perm = access::effective_permission_for_user(ctx.backend().as_ref(), &ctx.cipher, &user, name).await?;
             (user.username, perm)
+        }
+        Credential::Token { username, write } => {
+            let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
+                .await?
+                .0
+            else {
+                return Ok(Authz::Denied(Denial::Forbidden));
+            };
+            let mut perm =
+                access::effective_permission_for_user(ctx.backend().as_ref(), &ctx.cipher, &user, name).await?;
+            // `write: false` caps at read-only regardless of the owner's
+            // real tier — never higher just because the token happens to
+            // belong to an admin. `write: true` is capped only at the
+            // owner's own real permission, never artificially raised.
+            if !write {
+                perm = perm.map(|p| p.min(Permission::Reporter));
+            }
+            (username, perm)
         }
         Credential::Pat { username, ceiling } => {
             let Some(user) = access::get_user(ctx.backend().as_ref(), &ctx.cipher, &username)
@@ -618,19 +567,11 @@ async fn authorize_impl(
 
 enum Credential {
     Password(Box<User>),
+    Token { username: String, write: bool },
     Pat { username: String, ceiling: Permission },
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
-    basic_credentials_impl(headers)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
-    basic_credentials_impl(headers)
-}
-
-fn basic_credentials_impl(headers: &HeaderMap) -> Option<(String, String)> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let encoded = value.strip_prefix("Basic ")?;
     let decoded = BASE64.decode(encoded).ok()?;
@@ -643,16 +584,18 @@ fn basic_credentials_impl(headers: &HeaderMap) -> Option<(String, String)> {
 /// The username field is tried as a token secret first (GitHub's own
 /// `https://<token>@host/...` convention — the password field is unused
 /// for that shape, often empty or a placeholder): a local personal access
-/// token (`gqpat_...`) is tried first; falling through to the plain
-/// username/password path covers every existing local-password client
-/// unchanged. That fallback is
+/// token (`gqpat_...`, resolved entirely within core, no federation
+/// dependency) is tried first, then a federation-issued fine-grained token
+/// via `POST /_internal-out/tokens/resolve` on `ctx.federation` if
+/// configured; falling through to the plain username/password path covers
+/// every existing local-password client unchanged. That fallback is
 /// rate-limited per submitted username via [`gitquarry_core::app::LoginAttempts`]
 /// — same gate `auth::web::login::handler_login_local` already applies to
 /// the web login form, just unapplied here until now: this endpoint let a
 /// `git clone`/`push` guess a password with no throttling at all. Checked
 /// before Argon2 even runs, same "a lockout costs nothing extra" reasoning.
-/// The token path never touches `login_attempts`: a wrong/expired/out-of-
-/// scope token is never a guessed password, so there's nothing to throttle.
+/// Neither token path touches `login_attempts`: a wrong/expired/out-of-scope
+/// token is never a guessed password, so there's nothing to throttle.
 async fn authenticate(
     ctx: &AppContext,
     headers: &HeaderMap,
@@ -663,6 +606,17 @@ async fn authenticate(
     };
     if let Some(cred) = resolve_local_pat(ctx, &username, repo_uid).await? {
         return Ok(Some(cred));
+    }
+    if let Some(federation) = &ctx.federation {
+        let outcome = crate::auth::federation_token::resolve_token(federation, &username, repo_uid).await;
+        if outcome.ok
+            && let Some(resolved_username) = outcome.username
+        {
+            return Ok(Some(Credential::Token {
+                username: resolved_username,
+                write: outcome.write.unwrap_or(false),
+            }));
+        }
     }
     // Repeated failures slow this name down instead of locking it — see
     // `LoginAttempts::penalty`.
@@ -691,8 +645,8 @@ async fn authenticate(
 }
 
 /// Tries the Basic-Auth username as a local personal access token secret —
-/// recognizable by its `gqpat_` prefix, so a real password never even
-/// reaches the hash lookup below. `None` on any
+/// recognizable by its `gqpat_` prefix, so a real password or a real
+/// federation token never even reaches the hash lookup below. `None` on any
 /// mismatch (wrong prefix, unknown/expired secret, or `repo_uid` outside
 /// the token's `scopes`) — deliberately not distinguished from "not a PAT
 /// at all", so a malformed token attempt just falls through to the next
@@ -738,16 +692,7 @@ fn too_many_requests() -> Response {
     (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded, slow down").into_response()
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query_param_impl(query, key)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query_param_impl(query, key)
-}
-
-fn query_param_impl<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     query.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
         (k == key).then_some(v)
@@ -757,16 +702,7 @@ fn query_param_impl<'a>(query: &'a str, key: &str) -> Option<&'a str> {
 /// One pkt-line: a 4-hex-digit length prefix (length of the whole line,
 /// header included) followed by the payload — the framing git's smart-HTTP
 /// advertisement needs around its `# service=...` preamble line.
-#[cfg(any(test, feature = "test-util"))]
-pub fn pkt_line(data: &[u8]) -> Vec<u8> {
-    pkt_line_impl(data)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn pkt_line(data: &[u8]) -> Vec<u8> {
-    pkt_line_impl(data)
-}
-
-fn pkt_line_impl(data: &[u8]) -> Vec<u8> {
     let len = data.len() + 4;
     let mut out = format!("{len:04x}").into_bytes();
     out.extend_from_slice(data);

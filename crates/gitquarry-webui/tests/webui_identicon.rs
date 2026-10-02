@@ -1,23 +1,72 @@
-use gitquarry_webui::webui::identicon::*;
+//! The generated avatar every account without an uploaded one gets: stable
+//! per username, distinct across usernames, and decorative.
 
-#[test]
-fn same_seed_produces_the_same_markup() {
-    assert_eq!(identicon("alice").into_string(), identicon("alice").into_string());
+use axum::Router;
+use axum::http::StatusCode;
+use gitquarry_test_support::{Session, account, ctx};
+use std::path::Path;
+use std::sync::Arc;
+
+/// A router over a bucket holding `usernames`, none with an uploaded
+/// avatar.
+async fn app_with_users(root: &Path, usernames: &[&str]) -> Router {
+    let ctx = Arc::new(ctx(root));
+    for username in usernames {
+        account(&ctx, username, None).await;
+    }
+    gitquarry_webui::webui::router(ctx)
 }
 
-#[test]
-fn different_seeds_produce_different_markup() {
-    assert_ne!(identicon("alice").into_string(), identicon("bob").into_string());
+/// The avatar markup heading `username`'s profile page.
+async fn profile_avatar(app: &Router, username: &str) -> String {
+    let page = Session::get_as(app, &format!("/_profile/{username}"), None).await;
+    let (status, html) = (page.status, page.body);
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let heading = &html[html.find("<h3>").unwrap()..];
+    let start = heading
+        .find("<svg")
+        .unwrap_or_else(|| panic!("no identicon on the profile: {heading}"));
+    let end = heading.find("</svg>").unwrap() + "</svg>".len();
+    heading[start..end].to_string()
+}
+
+#[tokio::test]
+async fn same_username_renders_the_same_avatar_on_every_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_users(dir.path(), &["alice"]).await;
+    assert_eq!(profile_avatar(&app, "alice").await, profile_avatar(&app, "alice").await);
+
+    // Computed from the username alone, so a second instance over another
+    // bucket draws the same one.
+    let other = tempfile::tempdir().unwrap();
+    let other_app = app_with_users(other.path(), &["alice"]).await;
+    assert_eq!(
+        profile_avatar(&app, "alice").await,
+        profile_avatar(&other_app, "alice").await
+    );
+}
+
+#[tokio::test]
+async fn different_usernames_render_different_avatars() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_users(dir.path(), &["alice", "bob"]).await;
+    assert_ne!(profile_avatar(&app, "alice").await, profile_avatar(&app, "bob").await);
 }
 
 /// Decorative (the username is always written out beside it, so a screen
 /// reader announcing the icon too would just repeat it), and carrying no
 /// pixel size of its own: `.avatar` sizes it off the surrounding text, so
 /// it keeps its proportion to the name under every density and text size.
-#[test]
-fn is_decorative_and_sized_by_the_stylesheet() {
-    let html = identicon("alice").into_string();
-    assert!(html.contains(r#"aria-hidden="true""#), "{html}");
-    assert!(html.contains(r#"class="avatar""#), "{html}");
-    assert!(!html.contains("width=\"4"), "a hardcoded pixel size came back: {html}");
+#[tokio::test]
+async fn is_decorative_and_sized_by_the_stylesheet() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_users(dir.path(), &["alice"]).await;
+    let svg = profile_avatar(&app, "alice").await;
+    assert!(svg.contains(r#"aria-hidden="true""#), "{svg}");
+    assert!(svg.contains(r#"class="avatar""#), "{svg}");
+    let open_tag = &svg[..svg.find('>').unwrap()];
+    assert!(
+        !open_tag.contains(" width="),
+        "a hardcoded pixel size came back: {open_tag}"
+    );
 }

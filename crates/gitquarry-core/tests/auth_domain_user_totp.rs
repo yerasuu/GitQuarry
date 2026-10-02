@@ -1,61 +1,11 @@
 //! `auth::domain::user`'s TOTP lifecycle: enroll/confirm/disable plus the
 //! recovery-code side of it (mint at confirm, one-time consume, regenerate).
 
-use gitquarry_auth_crypto::totp;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain::user;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_i18n::Locale;
-use std::sync::Arc;
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[11u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
-
-async fn make_user(ctx: &AppContext, username: &str) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: None,
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap()
-    .unwrap();
-}
+use gitquarry_test_support::account;
 
 async fn current_secret(ctx: &AppContext, username: &str) -> String {
     access::get_user(ctx.backend().as_ref(), &ctx.cipher, username)
@@ -70,8 +20,8 @@ async fn current_secret(ctx: &AppContext, username: &str) -> String {
 #[tokio::test]
 async fn confirm_totp_rejects_a_wrong_code_and_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     user::enable_totp(&ctx, "alice", Locale::En).await.unwrap();
 
     assert!(user::confirm_totp(&ctx, "alice", "000000", Locale::En).await.is_err());
@@ -86,8 +36,8 @@ async fn confirm_totp_rejects_a_wrong_code_and_changes_nothing() {
 #[tokio::test]
 async fn confirm_totp_mints_recovery_codes_only_on_success() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     user::enable_totp(&ctx, "alice", Locale::En).await.unwrap();
     let secret = current_secret(&ctx, "alice").await;
     let good_code = live_code(&secret);
@@ -109,8 +59,8 @@ async fn confirm_totp_mints_recovery_codes_only_on_success() {
 #[tokio::test]
 async fn consume_recovery_code_is_one_time_use() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     user::enable_totp(&ctx, "alice", Locale::En).await.unwrap();
     let secret = current_secret(&ctx, "alice").await;
     let (_cas, codes) = user::confirm_totp(&ctx, "alice", &live_code(&secret), Locale::En)
@@ -132,8 +82,8 @@ async fn consume_recovery_code_is_one_time_use() {
 #[tokio::test]
 async fn consume_recovery_code_rejects_garbage_and_disabled_2fa() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     // 2FA never even enabled.
     assert!(!user::consume_recovery_code(&ctx, "alice", "whatever").await.unwrap());
 
@@ -152,8 +102,8 @@ async fn consume_recovery_code_rejects_garbage_and_disabled_2fa() {
 #[tokio::test]
 async fn regenerate_recovery_codes_invalidates_the_old_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     user::enable_totp(&ctx, "alice", Locale::En).await.unwrap();
     let secret = current_secret(&ctx, "alice").await;
     let (_cas, old_codes) = user::confirm_totp(&ctx, "alice", &live_code(&secret), Locale::En)
@@ -175,8 +125,8 @@ async fn regenerate_recovery_codes_invalidates_the_old_batch() {
 #[tokio::test]
 async fn regenerate_recovery_codes_requires_2fa_already_enabled() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     assert!(
         user::regenerate_recovery_codes(&ctx, "alice", Locale::En)
             .await
@@ -187,8 +137,8 @@ async fn regenerate_recovery_codes_requires_2fa_already_enabled() {
 #[tokio::test]
 async fn disable_totp_clears_secret_and_every_recovery_code() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     user::enable_totp(&ctx, "alice", Locale::En).await.unwrap();
     let secret = current_secret(&ctx, "alice").await;
     user::confirm_totp(&ctx, "alice", &live_code(&secret), Locale::En)
@@ -205,7 +155,11 @@ async fn disable_totp_clears_secret_and_every_recovery_code() {
     assert!(u.totp_recovery_codes.is_empty());
 }
 
+/// RFC 4226/6238 code for the current step, derived here rather than through
+/// `gitquarry_auth_crypto::totp` so the domain layer is checked against the
+/// spec, not against the primitive it wraps.
 fn live_code(secret_b32: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
     let raw = data_encoding::BASE32_NOPAD
         .decode(secret_b32.trim_end_matches('=').as_bytes())
         .unwrap();
@@ -213,15 +167,25 @@ fn live_code(secret_b32: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        / totp::STEP_SECS;
-    format!("{:06}", totp::hotp(&raw, counter).unwrap())
+        / 30;
+    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(&raw).unwrap();
+    mac.update(&counter.to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+    let offset = (digest[19] & 0x0f) as usize;
+    let bin = u32::from_be_bytes([
+        digest[offset] & 0x7f,
+        digest[offset + 1],
+        digest[offset + 2],
+        digest[offset + 3],
+    ]);
+    format!("{:06}", bin % 1_000_000)
 }
 
 #[tokio::test]
 async fn record_totp_step_spends_a_step_exactly_once() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
 
     // First use of a step wins.
     assert!(user::record_totp_step(&ctx, "alice", 42).await.unwrap());
@@ -240,15 +204,15 @@ async fn record_totp_step_spends_a_step_exactly_once() {
 #[tokio::test]
 async fn record_totp_step_is_false_for_an_unknown_user() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = gitquarry_test_support::ctx(dir.path());
     assert!(!user::record_totp_step(&ctx, "nobody", 1).await.unwrap());
 }
 
 #[tokio::test]
 async fn enabling_and_disabling_2fa_both_revoke_existing_sessions() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
-    make_user(&ctx, "alice").await;
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    account(&ctx, "alice", None).await;
     let epoch_at_start = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
         .await
         .unwrap()

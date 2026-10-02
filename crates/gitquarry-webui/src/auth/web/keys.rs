@@ -18,7 +18,7 @@
 use super::{login, reauth};
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    field, layout, render_flash, require_csrf, require_login, settings_section,
+    federation_ui_active, field, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -34,12 +34,18 @@ const ACTION_URL: &str = "/_account/keys";
 pub(crate) async fn handler_keys_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, ACTION_URL).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let csrf = csrf_field(&headers);
     let locale = effective_locale(&ctx, &headers).await;
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = account_settings_page("keys", render_keys_page(&me, &csrf, None, locale), locale).into_string();
+    let body = account_settings_page(
+        "keys",
+        render_keys_page(&me, &csrf, None, locale),
+        federation_ui_active(&ctx),
+        locale,
+    )
+    .into_string();
     Ok(axum::response::Html(layout(
         "keys",
         "",
@@ -90,7 +96,7 @@ pub(crate) async fn handler_keys_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, ACTION_URL).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -121,6 +127,7 @@ pub(crate) async fn handler_keys_post(
                 &account_settings_page(
                     "keys",
                     render_keys_page(&me, &csrf, Some(Flash::Err(&$msg)), locale),
+                    federation_ui_active(&ctx),
                     locale,
                 )
                 .into_string(),
@@ -192,6 +199,7 @@ pub(crate) async fn handler_keys_post(
     let body = account_settings_page(
         "keys",
         render_keys_page(&me, &csrf, Some(Flash::Ok("saved.")), locale),
+        federation_ui_active(&ctx),
         locale,
     )
     .into_string();
@@ -268,16 +276,7 @@ fn render_gpg_keys_table(user: &User, csrf: &str, locale: gitquarry_i18n::Locale
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_keys_page(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
-    render_keys_page_impl(user, csrf, message, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_keys_page(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
-    render_keys_page_impl(user, csrf, message, locale)
-}
-
-fn render_keys_page_impl(user: &User, csrf: &str, message: Option<Flash>, locale: gitquarry_i18n::Locale) -> Markup {
     use gitquarry_i18n::web::auth::security as t;
     // Only asked for where there is something to re-prove: an account with
     // neither a password nor a TOTP secret has no second factor, and

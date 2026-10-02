@@ -23,9 +23,6 @@
 pub mod browse;
 pub mod codeowners;
 pub mod http;
-#[cfg(any(test, feature = "test-util"))]
-pub mod lfs;
-#[cfg(not(any(test, feature = "test-util")))]
 mod lfs;
 pub mod signing;
 pub mod ssh;
@@ -76,16 +73,7 @@ async fn run(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<Vec<u8>> {
 /// the archive straight to the client would remove that too, but not while
 /// zip repacking needs the whole tar in hand — see
 /// [`crate::git::browse::archive_one`].
-#[cfg(any(test, feature = "test-util"))]
-pub async fn run_capped(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
-    run_capped_impl(git_dir, args, max_bytes).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) async fn run_capped(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
-    run_capped_impl(git_dir, args, max_bytes).await
-}
-
-async fn run_capped_impl(git_dir: Option<&Path>, args: &[&OsStr], max_bytes: u64) -> Result<Vec<u8>> {
     let (out, truncated) = run_truncating(git_dir, args, max_bytes).await?;
     if truncated {
         bail!("git {} produced more than the {max_bytes}-byte limit", describe(args));
@@ -224,6 +212,67 @@ pub async fn fetch_local(dest_git_dir: &Path, src_git_dir: &Path, src_rev: &str,
     )
     .await?;
     Ok(())
+}
+
+/// Mirrors a linked peer's entire ref set into `bare_repo` via a real `git
+/// fetch` against its own `git://`/`ssh://` URL — federation layer 2's
+/// remote-content sync (`docs/federation-concept.md`), model on
+/// [`fetch_local`] above but against an actual network URL instead of
+/// another local mirror path. `--prune --prune-tags` makes local refs match
+/// the peer's exactly (added, moved, or removed), same "sync = full
+/// reconciliation, not just fast-forward" semantics
+/// `mirror::sync_bare_repo_from_s3` gets for free from its own
+/// manifest-diff loop.
+///
+/// `url` is peer-controlled (an admin-entered `Peer::git_base_url` plus a
+/// repo name, reachability verified at add time — see
+/// `federation::verify_instance` — but still external input reaching a git
+/// subprocess), so it goes after `--end-of-options` like every other
+/// untrusted arg this module passes to git.
+pub async fn fetch_remote_url(bare_repo: &Path, url: &str) -> Result<()> {
+    run(
+        Some(bare_repo),
+        &[
+            OsStr::new("fetch"),
+            OsStr::new("--prune"),
+            OsStr::new("--prune-tags"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(url),
+            OsStr::new("+refs/*:refs/*"),
+        ],
+    )
+    .await?;
+
+    if let Some(target) = remote_head_symref(url).await?
+        && list_refs(bare_repo).await?.iter().any(|r| r == &target)
+    {
+        set_head(bare_repo, &target).await?;
+    }
+    Ok(())
+}
+
+/// `git ls-remote --symref <url> HEAD`'s target ref, if the peer advertises
+/// one — `None` if it doesn't (a missing/unreadable HEAD symref just leaves
+/// `bare_repo`'s existing HEAD, whatever it already was, untouched), never
+/// an error over this alone: a peer not advertising a symref is a shrug, not
+/// a failed sync.
+async fn remote_head_symref(url: &str) -> Result<Option<String>> {
+    let out = run_text(
+        None,
+        &[
+            OsStr::new("ls-remote"),
+            OsStr::new("--symref"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(url),
+            OsStr::new("HEAD"),
+        ],
+    )
+    .await?;
+    Ok(out.lines().find_map(|line| {
+        line.strip_prefix("ref: ")
+            .and_then(|rest| rest.split('\t').next())
+            .map(str::to_string)
+    }))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -516,6 +565,17 @@ pub async fn pack_objects_for_push(
         OsStr::new(new_sha),
     ];
     rev_list_args.extend(exclusions.iter().map(OsStr::new));
+    pack_objects_from_rev_list(git_dir, &rev_list_args, out_dir).await
+}
+
+/// Packs every object reachable from any ref (`git rev-list --all
+/// --objects`) — federation layer 2's fork-from-peer seed
+/// (`domain::repo::fork_from_peer`): unlike [`pack_objects_for_push`]
+/// (one new tip, excluding what the other side already has), a freshly
+/// forked destination bucket has nothing yet, so this needs everything the
+/// synced peer mirror has, not just one branch's history.
+pub async fn pack_all_objects(git_dir: &Path, out_dir: &Path) -> Result<Option<PackFiles>> {
+    let rev_list_args: Vec<&OsStr> = vec![OsStr::new("rev-list"), OsStr::new("--all"), OsStr::new("--objects")];
     pack_objects_from_rev_list(git_dir, &rev_list_args, out_dir).await
 }
 
@@ -851,17 +911,29 @@ pub async fn set_head(git_dir: &Path, target_ref: &str) -> Result<()> {
     Ok(())
 }
 
-/// `git repack -a -d`: repacks every object reachable from any ref into one
-/// new pack and deletes the now-redundant old ones from the local
+/// Default cap on a single pack `repack` produces, unless the caller asks
+/// for a different one — 1 GiB. A repo whose whole history is smaller than
+/// this repacks into one pack same as always; the cap only bites once a
+/// repo actually has enough history to matter, which is exactly the case
+/// where a single unbounded pack becomes a problem (every download, every
+/// future repack, and any future lazy-fetch scheme all size themselves off
+/// the pack's own size, not the repo's).
+pub const DEFAULT_MAX_PACK_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// `git repack -a -d --max-pack-size=<max_pack_size_bytes>`: repacks every
+/// object reachable from any ref into as few new packs as fit under that
+/// cap, and deletes the now-redundant old ones from the local
 /// `objects/pack/` dir — used by `crate::repack` to consolidate a repo's
 /// accumulated small packs (one per push, see the "no repack remoto"
-/// limitation in the README) into fewer, larger ones before re-uploading.
+/// limitation in the README) into fewer ones before re-uploading, without
+/// ever collapsing a large repo's whole history into one unbounded pack.
 /// Only ever run against a throwaway mirror that's just been freshly synced
 /// from S3 (every object the repo actually has, nothing more): running it
 /// against a mirror with in-flight local changes would be pointless (there
 /// aren't any) and against one that's stale would produce a pack missing
 /// objects the bucket already has.
-pub async fn repack(git_dir: &Path) -> Result<()> {
+pub async fn repack(git_dir: &Path, max_pack_size_bytes: u64) -> Result<()> {
+    let max_pack_size_arg = format!("--max-pack-size={max_pack_size_bytes}");
     run(
         Some(git_dir),
         &[
@@ -869,6 +941,7 @@ pub async fn repack(git_dir: &Path) -> Result<()> {
             OsStr::new("-a"),
             OsStr::new("-d"),
             OsStr::new("--quiet"),
+            OsStr::new(&max_pack_size_arg),
         ],
     )
     .await?;

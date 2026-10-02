@@ -68,7 +68,7 @@ fn git_date_now() -> String {
 /// identity in a commit object is forever.
 async fn merger_identity(ctx: &AppContext, username: &str) -> Result<(String, String)> {
     // No local account is a legitimate case, not an error: a merge proxied
-    // in over the loopback API names whoever
+    // in over federation (`internal_api::handler_pr_merge`) names whoever
     // merged it on *their* instance, who by definition has no `User` here.
     // Same noreply treatment as a local account without an email — both are
     // "there is no address to use", which is exactly what that synthetic
@@ -1153,26 +1153,20 @@ pub async fn merge(
     if cas != Cas::Ok {
         bail!("{}", gitquarry_i18n::shared::cas_conflict(locale));
     }
-    // Same "default branch only" scoping `mirror::hook::run_pre_receive_hook`
-    // and the mirror-external sync engine both apply to their own
-    // `touch_last_push` call: a merge into any other branch isn't code on
-    // the repo's main line. A real ssh/http push never goes through this
-    // function at all, so without this call here the home page's "updated"
-    // stamp would silently miss every merge — the single most common way
-    // code actually lands on `main`.
-    if new_manifest.head.as_deref() == Some(target_ref.as_str()) {
-        let range = format!("{target_sha}..{merge_sha}");
-        let commits = git::rev_list_count(git_dir, &range).await.unwrap_or(0);
-        let branch = mr.target_branch.clone();
-        crate::storage::settings::touch_last_push(
-            backend.as_ref(),
-            &ctx.cipher,
-            &target.uid,
-            commits.try_into().unwrap_or(u32::MAX),
-            &branch,
-        )
-        .await;
-    }
+    // A real ssh/http push never goes through this function at all, so
+    // without this call here the home page's "updated" stamp would silently
+    // miss every merge — the single most common way code actually lands.
+    // Any target branch counts, same as `mirror::hook::run_pre_receive_hook`.
+    let range = format!("{target_sha}..{merge_sha}");
+    let commits = git::rev_list_count(git_dir, &range).await.unwrap_or(0);
+    crate::storage::settings::touch_last_push(
+        backend.as_ref(),
+        &ctx.cipher,
+        &target.uid,
+        commits.try_into().unwrap_or(u32::MAX),
+        &mr.target_branch,
+    )
+    .await;
     // Fired here, not after the metadata `put_merge_request` below: the
     // merge commit landing on the target branch is what "merged" means,
     // and that CAS above just confirmed it — a concurrent-edit conflict on

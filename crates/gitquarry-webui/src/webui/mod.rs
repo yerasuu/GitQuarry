@@ -45,11 +45,21 @@
 //!   section reachable by someone other than the account owner),
 //!   [`crate::auth::web::pat`][] (`/_account/pat` — local personal access
 //!   tokens for git-smart-HTTP clone/push, scoped by explicit repo +
-//!   [`gitquarry_core::auth::entities::Permission`] ceiling; lives entirely
-//!   in [`gitquarry_core::auth::domain::pat`]). All of these (plus their
+//!   [`gitquarry_core::auth::entities::Permission`] ceiling; separate from
+//!   federation's own fine-grained tokens at `/_account/tokens` below, this
+//!   one lives entirely in [`gitquarry_core::auth::domain::pat`], no
+//!   `[federation]` config needed). All of these (plus their
 //!   [`gitquarry_core::auth::domain`] CRUD and `gitquarry_i18n::web::auth::*`
 //!   copy) live under [`crate::auth`], not here, but are routed from this
 //!   same table.
+//! - `/_peers`, `/_account/tokens`, `/_remote_pulls/comment`, `/_api/*`,
+//!   `/_federation/gossip/*`: federation layers 1/4 (linked-instance
+//!   management, fine-grained tokens, PR-proxy, discovery) — all proxied to
+//!   the separate `gitquarry-federation` process via [`federation_proxy`]
+//!   (`docs/federation-binary-split-concept.md`), never handled in-process
+//!   here. Federation is an optional, separately deployed component;
+//!   without `[federation]` configured, every one of these routes just
+//!   answers 503.
 //! - [`fork`]: `POST /_fork`, copies a whole repo to a new one under the
 //!   caller's own namespace or a group they own — open to any logged-in
 //!   user, unlike [`repo_new`] which is admin-only.
@@ -94,82 +104,44 @@
 //! - [`identicon`]: deterministic per-username SVG avatar, computed on the
 //!   fly — no upload, no third-party fetch (see its own doc for why).
 
-pub mod audit;
+pub(crate) mod audit;
 pub mod bootstrap;
-pub mod changelog;
-pub mod export;
-pub mod fork;
-pub mod health;
-pub mod icons;
-pub mod identicon;
-pub mod language_tag;
-pub mod license;
-pub mod markdown;
-pub mod repo;
-pub mod repo_label;
-pub mod repo_new;
-pub mod repo_settings;
-pub mod repos;
-pub mod watch;
+pub(crate) mod changelog;
+pub(crate) mod export;
+pub(crate) mod fork;
+pub(crate) mod health;
+pub(crate) mod icons;
+pub(crate) mod identicon;
+pub(crate) mod language_tag;
+pub(crate) mod license;
+pub(crate) mod markdown;
+pub(crate) mod remote_pulls;
+pub(crate) mod remote_repo;
+pub(crate) mod repo;
+pub(crate) mod repo_label;
+pub(crate) mod repo_new;
+pub(crate) mod repo_settings;
+pub(crate) mod repos;
+pub(crate) mod watch;
 
 mod actions;
-#[cfg(any(test, feature = "test-util"))]
-pub mod compound_path;
-#[cfg(not(any(test, feature = "test-util")))]
 mod compound_path;
-#[cfg(any(test, feature = "test-util"))]
-pub mod cookies;
-#[cfg(not(any(test, feature = "test-util")))]
 mod cookies;
-#[cfg(any(test, feature = "test-util"))]
-pub mod csrf;
-#[cfg(not(any(test, feature = "test-util")))]
 mod csrf;
-#[cfg(any(test, feature = "test-util"))]
-pub mod density_pref;
-#[cfg(not(any(test, feature = "test-util")))]
 mod density_pref;
-#[cfg(any(test, feature = "test-util"))]
-pub mod diff_view;
-#[cfg(not(any(test, feature = "test-util")))]
 mod diff_view;
-#[cfg(any(test, feature = "test-util"))]
-pub mod error;
-#[cfg(not(any(test, feature = "test-util")))]
 mod error;
-pub mod escaping;
-#[cfg(any(test, feature = "test-util"))]
-pub mod flash;
-#[cfg(not(any(test, feature = "test-util")))]
+pub(crate) mod escaping;
+pub(crate) mod federation_client;
+mod federation_proxy;
 mod flash;
-#[cfg(any(test, feature = "test-util"))]
-pub mod guards;
-#[cfg(not(any(test, feature = "test-util")))]
 mod guards;
-#[cfg(any(test, feature = "test-util"))]
-pub mod locale_pref;
-#[cfg(not(any(test, feature = "test-util")))]
 mod locale_pref;
-#[cfg(any(test, feature = "test-util"))]
-pub mod page_chrome;
-#[cfg(not(any(test, feature = "test-util")))]
 mod page_chrome;
 pub(crate) mod raw;
-#[cfg(any(test, feature = "test-util"))]
-pub mod raw_link;
-#[cfg(not(any(test, feature = "test-util")))]
 mod raw_link;
-#[cfg(any(test, feature = "test-util"))]
-pub mod repo_link;
-#[cfg(not(any(test, feature = "test-util")))]
 mod repo_link;
-#[cfg(any(test, feature = "test-util"))]
-pub mod text_size;
-#[cfg(not(any(test, feature = "test-util")))]
 mod text_size;
-#[cfg(any(test, feature = "test-util"))]
-pub mod theme_pref;
-#[cfg(not(any(test, feature = "test-util")))]
 mod theme_pref;
 
 pub(crate) use actions::{render_repo_action_buttons, star_button_html, watch_button_html};
@@ -193,8 +165,8 @@ pub use page_chrome::layout;
 // same cross-crate reason as `layout` above: `gitquarry-server`'s `serve::run`
 // calls the former once at startup, right after resolving `ServerSettings`.
 pub(crate) use page_chrome::{
-    HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, field, header_bar,
-    permission_badge_class, permission_label, settings_section, tab_links, topic_badges,
+    HeaderExtras, account_settings_page, admin_header, breadcrumbs, copy_button, federation_ui_active, field,
+    header_bar, permission_badge_class, permission_label, settings_section, tab_links, topic_badges,
 };
 pub use page_chrome::{init_source_link, resolve_source_link_href};
 pub(crate) use raw_link::{github_raw_link, raw_link};
@@ -380,6 +352,22 @@ pub(crate) fn styler_js_url() -> &'static str {
     &URL
 }
 
+/// `GET /_assets/passkey.js` — the WebAuthn ceremonies (see that file's own
+/// comment). Its own file rather than part of `app.js` because only the
+/// pages with a passkey control load it.
+async fn handler_passkey_js(headers: axum::http::HeaderMap) -> Response {
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset_etag(PASSKEY_JS));
+    static_asset_response(&headers, "text/javascript; charset=utf-8", PASSKEY_JS, &ETAG, true)
+}
+const PASSKEY_JS: &str = include_str!("style/passkey.js");
+
+/// The `<script src>` for [`handler_passkey_js`] — see [`versioned_asset_url`].
+pub(crate) fn passkey_js_url() -> &'static str {
+    static URL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| versioned_asset_url("/_assets/passkey.js", PASSKEY_JS));
+    &URL
+}
+
 /// `GET /_assets/hljs.js` — `highlight.js`, vendored the same way
 /// [`handler_styler_js`] is (`scripts/vendor-hljs.sh` re-runs the fetch on a
 /// version bump). Client-side syntax highlighting for the blob view and
@@ -426,6 +414,21 @@ pub(crate) fn hljs_line_numbers_js_url() -> &'static str {
     &URL
 }
 
+/// `/_assets/*` alone: the stylesheet, scripts and icon every page's chrome
+/// ([`layout`]) links. Stateless, so any router can mount it — the one
+/// outside [`router`] being `gitquarry-server`'s setup wizard, a separate
+/// short-lived server whose page uses the same chrome.
+pub fn asset_routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
+    Router::new()
+        .route("/_assets/style.css", get(handler_style_css))
+        .route("/_assets/app.js", get(handler_app_js))
+        .route("/_assets/favicon.svg", get(handler_favicon_svg))
+        .route("/_assets/styler.js", get(handler_styler_js))
+        .route("/_assets/passkey.js", get(handler_passkey_js))
+        .route("/_assets/hljs.js", get(handler_hljs_js))
+        .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
+}
+
 /// The whole route table, layers included, with nothing bound yet.
 ///
 /// Split out of [`run_server`] so `tests/webui_routes.rs` can assert
@@ -434,12 +437,7 @@ pub(crate) fn hljs_line_numbers_js_url() -> &'static str {
 /// storage backend.
 pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
-        .route("/_assets/style.css", get(handler_style_css))
-        .route("/_assets/app.js", get(handler_app_js))
-        .route("/_assets/favicon.svg", get(handler_favicon_svg))
-        .route("/_assets/styler.js", get(handler_styler_js))
-        .route("/_assets/hljs.js", get(handler_hljs_js))
-        .route("/_assets/hljs-line-numbers.js", get(handler_hljs_line_numbers_js))
+        .merge(asset_routes())
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
         .route("/_metrics", get(health::handler_metrics))
@@ -514,6 +512,18 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
                 .post(crate::auth::web::security::handler_security_post),
         )
         .route(
+            "/_account/passkeys/begin",
+            post(crate::auth::web::passkey::handler_register_begin),
+        )
+        .route(
+            "/_account/passkeys/finish",
+            post(crate::auth::web::passkey::handler_register_finish),
+        )
+        .route(
+            "/_account/passkeys/remove",
+            post(crate::auth::web::passkey::handler_remove),
+        )
+        .route(
             "/_account/keys",
             get(crate::auth::web::keys::handler_keys_get).post(crate::auth::web::keys::handler_keys_post),
         )
@@ -554,8 +564,24 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             get(crate::auth::web::login::handler_login).post(crate::auth::web::login::handler_login_local),
         )
         .route(
+            "/_login/passkey/begin",
+            post(crate::auth::web::passkey::handler_login_begin),
+        )
+        .route(
+            "/_login/passkey/finish",
+            post(crate::auth::web::passkey::handler_login_finish),
+        )
+        .route(
             "/_login_totp",
             get(crate::auth::web::login::handler_login_totp_get).post(crate::auth::web::login::handler_login_totp_post),
+        )
+        .route(
+            "/_login_totp/passkey/begin",
+            post(crate::auth::web::passkey::handler_second_factor_begin),
+        )
+        .route(
+            "/_login_totp/passkey/finish",
+            post(crate::auth::web::passkey::handler_second_factor_finish),
         )
         .route(
             "/_releases/create/{*repo}",
@@ -645,6 +671,7 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         .route("/_login_oidc", get(crate::auth::web::login::handler_login_oidc))
         .route("/_callback", get(crate::auth::web::login::handler_callback))
         .route("/_logout", axum::routing::post(crate::auth::web::login::handler_logout))
+        .route("/_remote/{peer}/{*repo}", get(remote_repo::handler_remote_repo))
         // Raw-export views: their own route tree, deliberately not a
         // `?view=` query param on `/{*repo}` below — see `raw`'s module doc.
         .route("/_raw/plain/{*repo}", get(raw::handler_raw_plain))
@@ -656,7 +683,45 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         .route(
             "/{*repo}",
             get(repo::handler_repo).post(repo_settings::handler_repo_conf_post),
-        );
+        )
+        // Every route below only ever does anything if `[federation]` is
+        // configured (`ctx.federation.is_some()`) — each handler checks
+        // that itself and answers 503 otherwise (`federation_proxy`'s own
+        // `federation_unavailable()`). Federation is an optional, separately
+        // deployed component (`docs/federation-binary-split-concept.md`):
+        // without it, these routes simply don't do anything, same as any
+        // other feature this instance hasn't turned on.
+        .route(
+            "/_peers",
+            get(federation_proxy::proxy_peers).post(federation_proxy::proxy_peers),
+        )
+        .route(
+            "/_account/tokens",
+            get(federation_proxy::proxy_tokens).post(federation_proxy::proxy_tokens),
+        )
+        .route(
+            "/_remote_pulls/comment",
+            axum::routing::post(federation_proxy::proxy_remote_comment),
+        )
+        .route("/_api/instance", get(federation_proxy::proxy_public))
+        .route("/_api/repos", get(federation_proxy::proxy_public))
+        .route("/_api/repos/{*name}", get(federation_proxy::proxy_public))
+        .route(
+            "/_api/pulls",
+            get(federation_proxy::proxy_public).post(federation_proxy::proxy_public),
+        )
+        .route("/_api/pulls/detail", get(federation_proxy::proxy_public))
+        .route(
+            "/_api/pulls/comment",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route("/_api/pulls/merge", axum::routing::post(federation_proxy::proxy_public))
+        .route("/_api/banned-peers", get(federation_proxy::proxy_public))
+        .route(
+            "/_federation/gossip/announce",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route("/_federation/gossip/peers", get(federation_proxy::proxy_public));
 
     app
         // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
@@ -700,8 +765,12 @@ pub async fn run_server(bind_addr: &str, ctx: Arc<AppContext>) -> Result<()> {
         ctx.bucket,
         ctx.mirrors_root.display()
     );
-    // `with_connect_info` so `gitquarry_core::git::http`'s rate limiter can
-    // extract the real client `SocketAddr` (via `ConnectInfo`).
+    // `with_connect_info` so `federation_proxy`'s handlers can extract the
+    // real client `SocketAddr` (via `ConnectInfo`) and forward it to
+    // federation as `X-Forwarded-For` — federation's own loopback bind
+    // otherwise only ever sees *this* process's address, never the actual
+    // caller's, since it's never reachable except through this proxy (see
+    // `federation_proxy`'s own module doc comment).
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -787,13 +856,6 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// nonce either way, since CSP nonces cover `<style>` elements and never
 /// style attributes, so the class file is what keeps it tight —
 /// `tests/webui_csp.rs` fails if a view goes back to an attribute.
-/// The policy [`security_headers`] puts on every response. A constant so
-/// `tests/webui_csp.rs` can hold it next to the markup the views emit.
-#[cfg(any(test, feature = "test-util"))]
-pub const CONTENT_SECURITY_POLICY: &str = CSP;
-#[cfg(not(any(test, feature = "test-util")))]
-const CONTENT_SECURITY_POLICY: &str = CSP;
-
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
      img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
@@ -855,7 +917,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
             // images baked into that pinned, hand-vetted stylesheet, not
             // anything request- or user-influenced — same trust level as the
             // CSS file itself, which `style-src 'self'` already accepts.
-            CONTENT_SECURITY_POLICY,
+            CSP,
         ),
     );
     resp

@@ -24,7 +24,8 @@ use super::login;
 use crate::webui::repo::can_view_repo;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    is_local_redirect, layout, render_flash, require_csrf, require_login, settings_section, url_encode,
+    federation_ui_active, is_local_redirect, layout, render_flash, require_csrf, require_login, settings_section,
+    url_encode,
 };
 use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
@@ -184,13 +185,13 @@ pub(crate) async fn handler_account_favorites_get(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/favorites").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let starred = own_starred_with_counts(&ctx, &me.starred).await;
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_favorites_page(&me, &csrf_field(&headers), None, &starred, locale);
-    let body = account_settings_page("favorites", content, locale).into_string();
+    let body = account_settings_page("favorites", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "favorites",
         "",
@@ -241,7 +242,7 @@ pub(crate) async fn handler_account_favorites_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/favorites").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -266,7 +267,7 @@ pub(crate) async fn handler_account_favorites_post(
             return Ok(Html(content.into_string()).into_response());
         }
         let topnav = login::topnav(&ctx, &headers).await;
-        let body = account_settings_page("favorites", content, locale).into_string();
+        let body = account_settings_page("favorites", content, federation_ui_active(&ctx), locale).into_string();
         return Ok(Html(layout(
             "favorites",
             "",
@@ -394,7 +395,7 @@ pub(crate) async fn handler_account_favorites_post(
     let starred = own_starred_with_counts(&ctx, &me.starred).await;
     let topnav = login::topnav(&ctx, &headers).await;
     let content = render_favorites_page(&me, &csrf_field(&headers), Some(flash), &starred, locale);
-    let body = account_settings_page("favorites", content, locale).into_string();
+    let body = account_settings_page("favorites", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "favorites",
         "",
@@ -420,11 +421,7 @@ pub(crate) async fn handler_account_favorites_post(
 /// this page's `toggle_star` action but is a different, narrower `data-async`
 /// consumer of its own (see `handler_account_favorites_post`'s own doc
 /// comment on how the two are told apart).
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub fn render_favorites_page(
+pub(crate) fn render_favorites_page(
     user: &User,
     csrf: &str,
     message: Option<Flash>,

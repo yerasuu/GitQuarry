@@ -249,6 +249,14 @@ msg!(mirror_field_label_sync_merge_requests() {
     Locale::Es => "sincronizar merge requests",
     Locale::En => "sync merge requests",
 });
+msg!(mirror_field_label_branch_patterns() {
+    Locale::Es => "patrones de rama",
+    Locale::En => "branch patterns",
+});
+msg!(mirror_branch_patterns_placeholder() {
+    Locale::Es => "release/*, main (vacio = todas las ramas)",
+    Locale::En => "release/*, main (empty = every branch)",
+});
 msg!(linked_mrs_heading() { Locale::Es => "merge requests vinculados", Locale::En => "linked merge requests" });
 msg!(no_linked_mrs_hint() { Locale::Es => "(sin merge requests vinculados todavia)", Locale::En => "(no linked merge requests yet)" });
 msg!(mr_link_table_header_local() { Locale::Es => "local", Locale::En => "local" });

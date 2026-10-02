@@ -104,10 +104,9 @@ async fn load_or_create_host_key(backend: &dyn Backend, cipher: &Cipher) -> Resu
 
 /// `Some(io_err)` if `error` is `russh::Error::IO` wrapping one of the
 /// handful of `std::io::ErrorKind`s a client hanging up mid-connection
-/// actually produces — split out from [`SshServer::handle_session_error`]
-/// so the classification itself stays unit-testable without a live
-/// `russh` session.
-pub fn benign_disconnect_reason(error: &anyhow::Error) -> Option<&std::io::Error> {
+/// actually produces — the ones [`SshServer::handle_session_error`] logs
+/// quietly instead of as a server error.
+fn benign_disconnect_reason(error: &anyhow::Error) -> Option<&std::io::Error> {
     use std::io::ErrorKind;
     let russh::Error::IO(io_err) = error.downcast_ref::<russh::Error>()? else {
         return None;
@@ -456,7 +455,7 @@ async fn pump_extended_data(handle: &Handle, channel: ChannelId, mut r: impl Asy
 /// rights at all" per [`Permission`]'s own doc comment) could still clone
 /// over SSH, even though HTTP/web both require at least `Reporter` for the
 /// same repo.
-pub fn required_permission(git_subcmd: &str) -> Permission {
+fn required_permission(git_subcmd: &str) -> Permission {
     if git_subcmd == "receive-pack" {
         Permission::Developer
     } else {
@@ -469,7 +468,7 @@ pub fn required_permission(git_subcmd: &str) -> Permission {
 /// path usually comes in POSIX sh-style single quotes (mirroring the
 /// `shell_quote` `mirror/mod.rs` already uses for the hook); if it doesn't
 /// come quoted it's used as-is (`validate::sanitize_path` validates the result).
-pub fn parse_exec_command(raw: &[u8]) -> Result<(&'static str, String)> {
+fn parse_exec_command(raw: &[u8]) -> Result<(&'static str, String)> {
     let s = std::str::from_utf8(raw).context("ssh command isn't utf8")?.trim();
     let (cmd, rest) = s
         .split_once(' ')

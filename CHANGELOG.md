@@ -1,244 +1,446 @@
 # Changelog
 
-This changelog covers user-facing features added since the project's first
-commit. It does not attempt to enumerate every internal engineering step
-(refactors, renames, bug fixes, performance work, or test changes) — only
-functionality a repo admin or end user would notice. Entries are grouped by
-area rather than by date or version, since the project has not yet settled
-on a per-release versioning scheme.
+Every release of GitQuarry, newest first. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+SemVer as it reads below 1.0: in `0.y.z`, `y` is the breaking slot. For a
+server, "breaking" means CLI flags, `gitquarry.toml` keys, ssh/HTTP routes or
+the bucket layout.
 
-## Git hosting & transport
+Each entry says what an operator or user will notice. The technical record —
+modules, functions, constants, deploy steps — is in
+[`tag-changelog/vX.Y.Z.md`](tag-changelog/), which is also what `/_changelog`
+serves for the running version.
 
-- Commits this server builds for you — a merge request's merge, squash or
-  rebase commit — are signed with a key the instance generates and keeps for
-  itself. They show as verified, in a colour distinct from a signature made
-  by an account's own key: the instance can only attest that it built the
-  commit, never who wrote it.
+## [0.6.0] — 2026-10-01
 
-- Serve git repositories directly from S3-compatible object storage, with no
-  separate git server process required.
-- Embedded SSH server with public-key authentication, later reworked around
-  named user accounts with per-repo permissions.
-- Added git smart-HTTP as a supported transport. The earlier plaintext
-  `git://` daemon and the direct S3 remote-helper were both removed, leaving
-  `ssh://` and smart-HTTP as the only supported transports.
-- Git LFS support: batch API plus large-object storage and transfer.
+### Breaking
 
-## Web UI & browsing
+- The Azure Blob Storage and Google Cloud Storage drivers are gone:
+  `driver = "azure"` or `"gcs"` in `gitquarry.toml` no longer loads. Move
+  such a bucket to S3, R2 or the local driver with v0.5.1 before upgrading.
+- s3db's write spool no longer lives in `./local` under whatever directory a
+  process happened to start in: by default each bucket gets its own
+  directory under the user's data dir (`~/.local/share/gitquarry/<bucket>`
+  on Linux), and a relative `resilience.local_dir` resolves against the
+  directory holding `gitquarry.toml`. To keep writes still pending in the
+  old place, point `local_dir` at it.
+- A filesystem (`path:`) backup destination still in the old `files` format
+  must be converted with `s3db-local-migrate <dir>` before the next backup.
 
-- Every form target now carries the repo in its own URL
-  (`/_merges/merge/{repo}`, `/_releases/edit/{repo}`, `/_tags/delete/{repo}`,
-  ...), and answers a stray `GET` by sending the reader to that repo's page
-  instead of a blank 405. A rejected submit no longer strands the browser on
-  a URL that means nothing.
-- A rejected action explains itself on the page it sends you back to (the
-  merge request, the releases list) rather than on a bare error page — and a
-  merge request refused for a branch that isn't on the server re-offers the
-  branches that are.
+### Added
 
-- cgit-inspired browsing UI covering summary, refs, tree, blob, log, commit
-  diff, blame, and stats views.
-- Compare view between two arbitrary refs.
-- Commit signature verification badge. It now says only what this instance
-  can stand behind: verified by a registered account's key, verified as
-  built by this instance, or unverified. The old grades taken from git's own
-  check against the server's system keyring ("valid but untrusted",
-  "invalid", "revoked") are gone — this process never populates that
-  keyring, so they asserted more than had actually been checked. A verdict
-  not yet computed also shows as unverified until it is.
-- A commit whose diff runs past the page's ceiling renders the part that
-  fits and links to the raw patch for the rest.
-- Syntax highlighting (blob view, every diff view, and markdown fenced code
-  blocks) is client-side now, via a vendored `highlight.js` — covers far
-  more languages than the old server-side highlighter did, and a blob's
-  `#L42` line permalinks come from the same pass instead of a bespoke
-  per-line table.
-- Side-by-side diff view reworked to match GitHub's split layout:
-  independent line numbers on each side, a fixed 50/50 column split
-  regardless of content length, and a long line wraps instead of forcing a
-  horizontal scrollbar.
-- Create-tag form on the refs tab.
-- Markdown rendering gained syntax-highlighted fenced code blocks and
-  GitHub-style alert blockquotes (note/tip/important/warning/caution) in
-  READMEs and release notes.
-- Light/dark theme with a session toggle and a per-account default.
-- GitHub-style right sidebar on the repo summary page (about, community,
-  releases).
-- Local identicon avatars, an inline icon set, and a collapsible mobile
-  navigation.
-- Per-language byte-size bar on the repo summary page.
-- HTML rendering migrated from ad hoc string templates to a typed templating
-  engine (maud) across the entire UI.
-- Site footer carrying the copyright, the licence and the running version,
-  linking to the changelog the binary itself was built from (`/_changelog`).
-- Instance-level source-link setting shown in the footer.
-- Repo index page: a stats strip, an activity/clone sidebar with a
-  browse-by-topic list, a per-card ssh clone hint, and a card/compact-table
-  density toggle. New-repo button next to the search form; pickaxe logo mark
-  and a real groups link on the sticky topbar.
-- Home page's recent-activity rail now describes push/release/MR events
-  instead of raw repo names, and shows each repo's last-push time — a merge
-  landing on the default branch now counts as a push there too.
-- Settings, account, admin and destructive actions (deletes, MR close/merge)
-  ask for confirmation before submitting, and submit without a full page
-  reload.
+- Passkeys. Register them from `/_account/security` — a physical security
+  key, or this device, a password manager or wallet, or a phone — and sign
+  in with one alone from `/_login`, or use one instead of the TOTP code.
+  They turn on once the instance's public URL is set in
+  `/_settings/network`.
+- Federation is back as an optional module: a separate
+  `gitquarry-federation` process for peer discovery, browsing and forking
+  repos from other instances, cross-instance merge requests and
+  fine-grained tokens, enabled with a `[federation]` section in
+  `gitquarry.toml`.
+- External mirrors can sync only the branches matching a list of glob
+  patterns. Tags always sync.
+- `gitquarry repack --max-pack-size` caps each output pack, 1 GiB by default.
+- `gitquarry serve --mirrors-large-repo-threshold` (also an instance
+  setting, default 1G): local mirrors at least that large are never evicted
+  for age, only for the total size cap.
+- Writes that hooks and CLI commands leave spooled are replayed by the
+  server at startup and every minute; stale storage transactions are swept
+  every 10 minutes instead of only at startup.
 
-## Internationalization
+### Changed
 
-- Full English/Spanish bilingual UI, driven by a locale-aware message and
-  template catalog threaded through every page.
-- Per-account default language, set from account settings — the session-only
-  locale override still takes precedence when set, same precedence order as
-  theme/density.
+- The first-run setup wizard lives at `/_setup`; `/` redirects there.
+- Pushes, merges and mirror pulls to any branch count as repo activity, not
+  only those to the default branch.
 
-## Auth & permissions
+### Fixed
 
-- The admin pages are closed on a fresh instance too. Until a login method
-  exists there is no session to check, so opening them needs a token the
-  process prints at startup, exchanged once at `/_bootstrap`. It dies with
-  the process and stops working the moment the first account has a password.
-- Repeated wrong passwords slow an account's login attempts down rather than
-  locking it, so knowing a username isn't enough to keep its owner out.
-- Account settings reorganized into profile (avatar and email addresses),
-  security (password, two-factor, recovery codes) and keys (SSH and GPG),
-  instead of one flat page mixing all three. Every settings page now uses
-  the same card layout with labelled fields.
-- Changing your own password asks for it twice, so a typo can't lock you out
-  of an account with no other way in.
-- An account can change its own primary email, but only where OIDC isn't
-  configured — with OIDC that address decides which account a login lands
-  on, so it stays admin-managed.
+- A per-repo permission granted from the admin user page now shows on the
+  repo's permission grid, where it can be revoked. Grants made that way
+  before this release are indexed by a migration that runs at startup.
+- Merge request comments and reviews no longer show up as a phantom MR #0.
+- Release actions validate the tag before using it.
+- Logging in from a repo's settings returns you to those settings.
+- `/_peers` needs the bootstrap token on an instance with no login method
+  yet, like every other admin page.
+- A data migration with nothing to do says so.
+- The setup wizard loads its stylesheet and scripts, and works when re-run
+  against an existing local bucket.
 
-- OIDC login alongside local admin and local user accounts, with a unified
-  admin page design.
-- Self-service account page where users manage their own SSH keys and
-  password.
-- Per-repo SSH permission grid in repo settings, with per-user add/remove.
-- Five-tier permission ladder (guest/reporter/developer/maintainer/owner),
-  gating repo settings management to maintainers and owners.
-- Two-factor authentication (TOTP): enrollment/disable UI, login
-  enforcement, and an admin-initiated disable path for account recovery.
-- Security hardening: CSRF double-submit tokens on authenticated forms,
-  standard security response headers (CSP, X-Frame-Options, etc.), and
-  per-username login rate limiting.
-- Groups drop the old team abstraction for direct members with a role, and
-  can now nest as subgroups under an existing group. A permission granted on
-  a parent group reaches every subgroup and repo underneath it.
+### Security
 
-## Repos & organizations
+- The setup wizard no longer prints stored secrets (storage secret key,
+  passphrase) back into the page. A blank field keeps the stored value only
+  for the same destination.
+- Federation: a confirmed sister instance can't have its shared secret
+  replaced, and gossip announcements are capped and checked before any
+  address they name is contacted.
 
-- Create empty repositories from the web UI.
-- Per-repo public/private/limited visibility.
-- Groups: shared namespaces with inherited permissions, Forgejo-style group
-  owners/teams, and repo transfer between namespaces.
-- Editable group description page.
-- Default branch selector, backed by the repo's real HEAD.
-- Delete a repo from its settings tab, confirmed by typing its name.
-- Repo settings reorganized into separate tabs (general, default branch,
-  protected branches/tags, signed commits, topics, required reviewers,
-  labels, LFS limit, permissions, mirrors, move, danger zone) instead of one
-  long stacked page — same treatment account settings already had.
-- Move a repo to a new namespace or name.
-- Archive a repo: archived repos reject pushes and are badged throughout the
-  UI.
-- Protected branches and protected tags.
-- Starred repos, with a dedicated favorites page and an opt-in public
-  favorites list.
-- Repo forking, an activity feed, and star/fork counts.
-- Repo topics for discoverability.
-- Watched repos alongside starred repos, with a watch button.
-- Public user profile page listing a user's repos.
-- Merge requests can be merged by fast-forward, which creates no commit at
-  all: what lands is the author's own commits, carrying the author's own
-  signatures. Offered alongside merge, squash and rebase, and greyed out
-  once the branches have diverged.
-- A merge request that can't merge cleanly says so on its own page, listing
-  the conflicting files and the commands to resolve them locally, instead of
-  turning the merge button into an error page.
-- A merged MR still renders after its source branch is deleted.
-- Repos dashboard split into personal, group and granted-access sections.
-- A repo can carry a free-text display name alongside its URL slug, shown
-  everywhere a repo is listed or titled; existing repos get one backfilled
-  automatically the first time they're listed.
+## [0.5.1] — 2026-09-08
 
-## External mirroring
+### Added
 
-- Mirror a repo to GitHub, GitLab or Codeberg — push, pull or both — with
-  per-ref status on the repo's settings tab. Only real fast-forwards sync;
-  a genuine divergence is reported and never forced, and a branch deleted
-  on one side is not re-created from the other.
-- What a mirror pulls in passes the same checks a push does: protected
-  branches and tags, required signatures, the LFS blob ceiling and the
-  owner's storage quota.
-- Optional two-way merge request sync per mirror — title, description,
-  open/closed state, merges and comments — with the bookkeeping that keeps
-  a comment from echoing between the two sides.
-- An instance-wide host allowlist decides where a mirror may point. The
-  forges with a built-in client are always allowed; a self-hosted GitLab or
-  Gitea is added in the instance settings.
-- Configuring or hand-syncing a mirror needs the repo's owner tier and is
-  recorded in the audit log.
-
-## Releases & assets
-
-- The create-release form suggests the repo's own tags, minus the ones that
-  already have a release.
-- Releases: create, edit, and delete releases with notes; list/detail views;
-  and attach or download binary assets.
-
-## Storage & encryption
-
-- Everything stored in the bucket is encrypted at rest
-  (Argon2id-derived XChaCha20Poly1305) under a mandatory per-bucket
-  passphrase — there is no way to disable it.
-- Pluggable storage backends: S3, Cloudflare R2, a local filesystem driver,
-  Azure Blob Storage, and Google Cloud Storage.
-- First-run setup wizard, including storage-driver selection and a
-  double-entry admin password confirmation.
-
-## Backup & disaster recovery
-
-- Replicate the whole bucket to another bucket at the same keys, or snapshot
-  it as a versioned point-in-time copy — configurable per-instance and
-  scheduled, or triggered once by hand.
-- Retention pruning on the backup destination, so scheduled runs don't grow
-  it unbounded.
-- `gitquarry backup`/`gitquarry restore` operator commands, and a matching
-  backup settings section in the web UI to configure and trigger it.
+- Syntax highlighting runs in the browser now, through a vendored
+  `highlight.js`, in the blob view, every diff view and markdown fenced code
+  blocks. It covers far more languages than the old server-side highlighter,
+  and the blob view's `#L42` line permalinks come from the same pass.
+- The side-by-side diff matches GitHub's split layout: each side has its own
+  line numbers, the columns stay 50/50 whatever the content, and long lines
+  wrap instead of forcing a horizontal scrollbar.
+- `app.js`, `styler.js` and the highlighter scripts are served under
+  content-hashed URLs, so a changed asset gets a new URL instead of a stale
+  year-long cache.
 - `default_bucket` in `gitquarry.toml` names the bucket the instance serves,
   so extra `[buckets.*]` sections can exist purely as backup destinations or
   mirror targets without every command needing `--bucket`.
 
-## Search
+### Changed
 
-- Instance-wide search across filenames and commit messages.
+- Every form target carries the repo in its own URL (`/_merges/merge/{repo}`,
+  `/_releases/edit/{repo}`, `/_tags/delete/{repo}`, …), and a stray `GET`
+  sends the reader to that repo's page instead of a blank 405.
+- A rejected action explains itself on the page it returns you to (the merge
+  request, the releases list) instead of a bare error page. A merge request
+  refused for a branch that isn't on the server offers the branches that
+  are.
+- The commit signature badge says only what this instance can stand behind:
+  verified by a registered account's key, verified as built by this
+  instance, or unverified. The grades taken from git's own check against the
+  system keyring ("valid but untrusted", "invalid", "revoked") are gone —
+  that keyring is never populated, so they claimed more than was checked.
+- A commit whose diff runs past the page's ceiling renders the part that fits
+  and links to the raw patch for the rest.
 
-## Storage engine (s3db)
+### Removed
 
-- Typed `Collection`, `SecondaryIndex`, and `Singleton` primitives for
-  structured, queryable object storage.
-- Versioning and multi-key create-only transactions, backed by a
-  write-ahead log with crash recovery.
-- Caching, a resilience/retry decorator stack, and sharded indexes for
-  scale.
-- Logical backup/restore, background garbage collection, and point-in-time
-  reads.
-- `derive(Entity)` macro that generates Collection/index boilerplate from
-  struct definitions.
+- The server-side `syntect` highlighter.
 
-## Ops & admin tooling
+### Fixed
 
-- `trust_forwarded_for` in the config, for a deployment behind a reverse
-  proxy: the anonymous git rate limit keys on the forwarded client address
-  instead of the proxy's own. Off unless the proxy owns that header.
-- `gitquarry fsck` to detect stray objects in a repo.
-- `gitquarry repack` to consolidate a repo's packs.
-- `gitquarry migrate` to run pending bucket data-version migrations by hand;
-  the server applies the same migrations to itself automatically at startup.
-- Audit log of admin and repo actions, now including a `repo.push` entry for
-  every real git push, not just webui-driven actions.
-- Idle- and size-based eviction of local repo mirrors.
-- Graceful shutdown.
+- Creating a repo goes to the new repo's page instead of pasting that page's
+  HTML into the form.
+
+## [0.5.0] — 2026-08-23
+
+### Breaking
+
+- Building from source needs Rust 1.98 or newer.
+
+### Added
+
+- Groups have direct members with a role, replacing teams, and can nest as
+  subgroups. A permission on a parent group reaches every subgroup and repo
+  under it. Each group has its own page listing its repos, subgroups and
+  members.
+- Repos dashboard split into personal, group and granted-access sections.
+- A repo can carry a free-text display name alongside its URL slug, shown
+  wherever the repo is listed or titled. Existing repos get one backfilled
+  the first time they are listed.
+- Backups: replicate the whole bucket to another bucket at the same keys, or
+  write a versioned snapshot of the configuration, with retention pruning on
+  the destination. Scheduled from the `/_settings` backup section or run once
+  with the new `gitquarry backup` / `gitquarry restore` commands.
+- Bucket data migrations, applied automatically at startup or by hand with
+  `gitquarry migrate`. The first one moves existing groups from teams to
+  direct members.
+
+### Changed
+
+- Every error, warning and lifecycle message goes through structured
+  logging on stderr, filtered by `RUST_LOG` (default `info`), for the server,
+  the pre-receive hook and every maintenance command alike.
+
+### Fixed
+
+- A closed or merged merge request's title, description and labels can no
+  longer be edited.
+- A merge request form rejects a stale repo reference instead of acting on
+  the wrong repo.
+- Two repo cards on the same page no longer share the DOM id of their
+  star/watch counters.
+- Repo path segments reject unescaped URL characters instead of producing a
+  broken link.
+- The repos dashboard link moved out of the account dropdown to its own spot
+  in the navigation.
+
+## [0.4.5] — 2026-08-22
+
+### Added
+
+- Every real git push over ssh or HTTP is recorded in the audit log as
+  `repo.push`, not only actions taken from the web UI.
+- Repo index: a stats strip, a browse-by-topic sidebar, an ssh clone hint on
+  each card, and a card/compact-table density toggle. A new-repo button next
+  to the search form, a pickaxe logo and a groups link in the top bar.
+- An instance-level source-code link, shown in the footer.
+- Settings, account, admin and destructive actions (deletes, merge request
+  close/merge) ask for confirmation and submit without a full page reload —
+  `/_settings` included, which used to make F5 ask to resubmit.
+- The home page's recent-activity rail describes push, release and merge
+  request events, and repo cards show the last push time.
+
+### Changed
+
+- Repo settings sections and each `/_settings` section live behind a
+  sidebar, every section with its own page.
+- All UI text moved into the `gitquarry-i18n` crate.
+
+### Fixed
+
+- A merge landing on the default branch counts as a push for the last-push
+  time, like a real push.
+- A group's creator becomes its first owner, and a new group shows up
+  immediately.
+- The add-SSH-key form no longer corrupts the page on its error path.
+- Several style fixes on the index page and buttons.
+- The startup error for a failed cipher fetch says the fetch was already
+  retried.
+
+## [0.4.4] — 2026-08-22
+
+### Added
+
+- Per-account default language in `/_account/appearance`, alongside text
+  size, theme and density.
+- Repo settings split into one page per section with a sub-navigation,
+  instead of 13 forms stacked on one page.
+
+### Fixed
+
+- A failed async form submit rolls back what it had optimistically
+  repainted and shows a toast with the server's own error message.
+- An error inside the success handler no longer rolls back a change the
+  server had already applied.
+- Two forms repainting the same part of the page can no longer race each
+  other.
+- A failed copy to the clipboard shows a toast.
+- Error pages render in the visitor's language instead of the default one.
+
+## [0.4.3] — 2026-08-21
+
+### Security
+
+- Responses send `Strict-Transport-Security` and a `Permissions-Policy`
+  denying geolocation, camera, microphone, payment and USB.
+- Git pack request bodies over HTTP are capped at 16 GiB.
+
+### Performance
+
+- Web responses are compressed (gzip, brotli, zstd).
+- Static scripts are served with an `ETag` and a one-year cache.
+- Storage requests go through s3db's resilient backend: concurrency caps,
+  retry with backoff, a circuit breaker and a raw-bytes cache, tunable under
+  `[buckets.<name>.resilience]` in `gitquarry.toml`.
+- Fewer git subprocesses per repo summary page and per mirror sync; a mirror
+  whose manifest hasn't changed skips the sync entirely.
+- Highlighting and markdown rendering run off the async runtime.
+- Recently used mirrors are re-synced in the background at startup.
+- Visible-repo listing is cached for 10 seconds.
+- `TCP_NODELAY` on the ssh listener.
+
+## [0.4.2] — 2026-08-21
+
+### Added
+
+- The create-release form suggests the repo's tags that have no release
+  yet.
+
+### Fixed
+
+- A merged merge request whose source branch still existed showed an empty
+  diff, stat and commit list.
+
+## [0.4.1] — 2026-08-21
+
+### Changed
+
+- s3db pinned to `v0.4.3`, whose `s3db-inspect` gains `rebind` to re-seal an
+  object copied to a new key, and names chunk-sealed objects instead of
+  reporting them as decrypt failures.
+
+## [0.4.0] — 2026-08-21
+
+### Breaking
+
+- Pull requests are now merge requests everywhere: routes `/_pulls*` →
+  `/_merges*`, audit actions `pull_request.*` → `merge_request.*`, storage
+  `repos/<uid>/pulls/` → `repos/<uid>/merges/`.
+- The bucket encryption envelope changed. A bucket whose
+  `.conf/encryption.json` predates the wrapped data key needs
+  `s3db-inspect … migrate-bootstrap --apply` once; old and new binaries cannot
+  open each other's buckets.
+- The repo name index changed encoding. Run
+  `gitquarry backfill-repo-index --bucket <name> --apply` once, or existing
+  repos won't resolve by name.
+
+### Added
+
+- `trust_forwarded_for` in `gitquarry.toml` (default off): behind a reverse
+  proxy, the anonymous rate limit keys on the forwarded client address.
+
+### Changed
+
+- Repeated wrong passwords slow an account's logins down (doubling up to
+  10 s) instead of locking it, so knowing a username isn't enough to lock its
+  owner out.
+- Enabling or disabling two-factor ends existing sessions, as changing the
+  password already did.
+- New password hashes use Argon2id at 64 MiB, t=3, p=1.
+
+### Security
+
+- Admin pages and repo settings were open on an instance with no login
+  method yet. They now need a token printed at startup, exchanged once at
+  `/_bootstrap`, which stops working once a login method exists.
+- Release asset uploads check the session before reading the body.
+- OIDC login requires `email_verified` and honours two-factor.
+- Mirror tokens are no longer visible in `git`'s command line.
+- `/_login_totp` requires a CSRF token.
+- GPG signature checks reject expired, revoked and bad signatures that
+  `gpg`'s exit status reported as fine.
+- TOTP codes can't be replayed within their time window.
+- HTTP git auth no longer reveals through timing whether a username exists.
+- `/_metrics` no longer exposes the build version.
+- Forge clients don't follow redirects.
+- Download file names are sanitized in `Content-Disposition`.
+
+## [0.3.0] — 2026-08-21
+
+### Added
+
+- External mirrors to GitHub, GitLab or Codeberg — push, pull or both — with
+  per-ref status on the repo's settings tab. Only real fast-forwards sync; a
+  divergence is reported and never forced, and a branch deleted on one side
+  is not re-created from the other.
+- What a mirror pulls in passes the same checks as a push: protected
+  branches and tags, required signatures, the LFS ceiling and the owner's
+  quota.
+- Optional two-way merge request sync per mirror — title, description,
+  state, merges and comments — without comments echoing between sides.
+- An instance-wide host allowlist for mirror targets. The built-in forges
+  are always allowed; self-hosted GitLab or Gitea hosts are added in the
+  instance settings.
+- Mirror configuration and manual syncs are recorded in the audit log.
+
+### Changed
+
+- Forks and template copies no longer inherit merge requests, LFS locks or
+  mirrors.
+- Configuring a mirror needs the owner tier instead of maintainer.
+- Deleting a repo stops its outward mirroring.
+
+### Security
+
+- A fork carried away the original's mirror credential.
+
+## [0.2.0] — 2026-08-20
+
+### Added
+
+- Merge commits built by the server are signed with a key the instance keeps
+  for itself, shown as verified in a colour distinct from an account's own
+  signature.
+- Fast-forward merge, which creates no commit, so the author's own commits
+  and signatures land. Greyed out once the branches diverge.
+- A merge request that can't merge cleanly lists the conflicting files and
+  the commands to resolve them on its own page.
+- A footer with copyright, licence and running version, linking to
+  `/_changelog` (the release notes for the running version) and `/_license`.
+- An account can change its own primary email where OIDC isn't configured.
+
+### Changed
+
+- Account settings split into profile (avatar, emails), security (password,
+  two-factor, recovery codes) and keys (SSH, GPG). Keys moved to the new
+  `/_account/keys`.
+- Account, instance and repo settings pages share one card layout with
+  labelled fields.
+
+## [0.1.1] — 2026-08-19
+
+### Fixed
+
+- The container image failed to build: `deploy/Dockerfile` still copied a
+  directory that left with the optional CI module.
+
+## [0.1.0] — 2026-08-19
+
+First public release.
+
+### Git hosting
+
+- Git repositories served straight from S3-compatible object storage, with
+  no separate git server.
+- Embedded SSH server with public-key authentication against named accounts.
+- Git smart-HTTP. `ssh://` and smart-HTTP are the only transports.
+- Git LFS: batch API plus large-object storage and transfer.
+
+### Web UI
+
+- cgit-inspired browsing: summary, refs, tree, blob, log, commit diff, blame
+  and stats, plus a compare view between two refs.
+- Commit signature verification badge.
+- Create tags from the refs tab.
+- Markdown with highlighted fenced code and GitHub-style alert blockquotes
+  in READMEs and release notes.
+- Light/dark theme with a session toggle and a per-account default.
+- GitHub-style sidebar on the repo summary (about, community, releases) and
+  a per-language size bar.
+- Local identicon avatars, an inline icon set and collapsible mobile
+  navigation.
+- Full English/Spanish UI.
+
+### Auth & permissions
+
+- OIDC login alongside local admin and user accounts.
+- Self-service account page for SSH keys and password.
+- Five-tier permission ladder (guest, reporter, developer, maintainer,
+  owner) and a per-repo permission grid.
+- Two-factor authentication (TOTP) with enrollment, login enforcement and an
+  admin recovery path.
+- CSRF tokens on authenticated forms, standard security headers and
+  per-username login rate limiting.
+
+### Repos & groups
+
+- Create empty repos from the web UI; public, private or limited
+  visibility.
+- Groups as shared namespaces with inherited permissions, and repo transfer
+  between namespaces.
+- Default branch selector, protected branches and tags, archive, move and
+  delete.
+- Stars, watches, forks, topics, an activity feed and public profile pages.
+- Merge requests with merge, squash and rebase; a merged one still renders
+  after its source branch is deleted.
+- Releases with notes and binary assets.
+- Instance-wide search across file names and commit messages.
+
+### Storage & operations
+
+- Everything in the bucket is encrypted at rest (Argon2id-derived
+  XChaCha20Poly1305) under a mandatory per-bucket passphrase.
+- Storage backends: S3, Cloudflare R2, local filesystem, Azure Blob Storage
+  and Google Cloud Storage.
+- First-run setup wizard.
 - Server settings editable from the web UI and stored in the bucket, with
-  conflict detection to prevent concurrent overwrites.
-- Name filter on the admin users/groups pages.
+  conflict detection.
+- `gitquarry fsck` and `gitquarry repack`.
+- Audit log of admin and repo actions.
+- Idle- and size-based eviction of local repo mirrors, and graceful
+  shutdown.
+
+[0.6.0]: tag-changelog/v0.6.0.md
+[0.5.1]: tag-changelog/v0.5.1.md
+[0.5.0]: tag-changelog/v0.5.0.md
+[0.4.5]: tag-changelog/v0.4.5.md
+[0.4.4]: tag-changelog/v0.4.4.md
+[0.4.3]: tag-changelog/v0.4.3.md
+[0.4.2]: tag-changelog/v0.4.2.md
+[0.4.1]: tag-changelog/v0.4.1.md
+[0.4.0]: tag-changelog/v0.4.0.md
+[0.3.0]: tag-changelog/v0.3.0.md
+[0.2.0]: tag-changelog/v0.2.0.md
+[0.1.1]: tag-changelog/v0.1.1.md
+[0.1.0]: tag-changelog/v0.1.0.md

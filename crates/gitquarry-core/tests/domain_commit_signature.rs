@@ -9,46 +9,14 @@
 //! `PATH`, same as `git_browse_signature.rs`, whose fixture shape this
 //! reuses.
 
-use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::user;
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::Cipher;
 use gitquarry_core::domain::commit_signature::{CommitSigner, verified_signer};
 use gitquarry_core::storage::commit_sig::{bump_signing_epoch, signing_epoch};
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_i18n::Locale;
-use std::sync::Arc;
+use gitquarry_test_support::{account, ctx};
 
 fn gpg_available() -> bool {
     std::process::Command::new("gpg").arg("--version").output().is_ok()
-}
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[23u8; gitquarry_core::crypto::SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
 }
 
 struct SignedRepo {
@@ -151,27 +119,10 @@ Expire-Date: 0
     }
 }
 
-async fn make_user(ctx: &AppContext, username: &str, email: &str) {
-    user::create(
-        ctx,
-        user::NewUser {
-            username,
-            email: Some(email.to_string()),
-            pubkey: None,
-            password_plain: None,
-            is_admin: false,
-            repos_field: "",
-            locale: Locale::En,
-        },
-    )
-    .await
-    .unwrap();
-}
-
 #[tokio::test]
 async fn signing_epoch_starts_at_zero_and_every_bump_changes_it() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     let backend = ctx.backend();
 
     assert_eq!(signing_epoch(backend.as_ref(), &ctx.cipher).await.unwrap(), 0);
@@ -192,9 +143,9 @@ async fn registering_a_key_after_a_miss_makes_the_commit_verify() {
     }
     let repo = setup_signed_repo();
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     let backend = ctx.backend();
-    make_user(&ctx, "alice", "test@example.com").await;
+    account(&ctx, "alice", Some("test@example.com")).await;
 
     // Cold: the account exists and claims the email, but has no key yet.
     let before = verified_signer(
@@ -236,9 +187,9 @@ async fn removing_a_key_stops_it_vouching_for_an_already_verified_commit() {
     }
     let repo = setup_signed_repo();
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     let backend = ctx.backend();
-    make_user(&ctx, "alice", "test@example.com").await;
+    account(&ctx, "alice", Some("test@example.com")).await;
     user::add_gpg_key(&ctx, "alice", &repo.armored_public, Locale::En)
         .await
         .unwrap();
@@ -279,7 +230,7 @@ async fn removing_a_key_stops_it_vouching_for_an_already_verified_commit() {
 #[tokio::test]
 async fn an_unsigned_commit_short_circuits_without_touching_the_cache() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
     let backend = ctx.backend();
 
     let signer = verified_signer(

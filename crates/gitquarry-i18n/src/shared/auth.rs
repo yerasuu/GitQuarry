@@ -218,6 +218,16 @@ msg!(
 );
 
 msg!(
+    /// `settings::web::require_admin_or_federation_moderator`: a logged-in
+    /// user who is neither a global admin nor `User::is_federation_moderator`
+    /// hit a federation-moderation-only page.
+    account_is_not_admin_or_moderator() {
+        Locale::Es => "tu usuario no es admin ni moderador de federacion",
+        Locale::En => "your account is neither an admin nor a federation moderator",
+    }
+);
+
+msg!(
     /// `auth::domain::user::set_own_email` refusing while OIDC is
     /// configured — the address is a login identity there, so only an admin
     /// assigns it.
@@ -331,5 +341,66 @@ msg!(
     group_still_has_subgroups(count: usize) {
         Locale::Es => "el grupo todavia tiene {count} subgrupo(s) — eliminalos primero",
         Locale::En => "this group still has {count} subgroup(s) — delete those first",
+    }
+);
+
+msg!(
+    /// A passkey route reached while passkeys are off (no public URL) —
+    /// `auth::web::passkey` answers 404 with this.
+    passkeys_off() {
+        Locale::Es => "las passkeys no están activas en esta instancia",
+        Locale::En => "passkeys aren't enabled on this instance",
+    }
+);
+
+msg!(
+    /// A passkey finish step whose `passkey-challenge` cookie is missing,
+    /// expired, already spent, or issued for another ceremony or account.
+    no_passkey_ceremony_in_progress() {
+        Locale::Es => "no hay ninguna operación con passkey en curso; vuelve a empezar",
+        Locale::En => "no passkey operation in progress; start again",
+    }
+);
+
+msg!(
+    /// A passkey request body that isn't the JSON `style/passkey.js` sends.
+    malformed_passkey_request() {
+        Locale::Es => "petición de passkey mal formada",
+        Locale::En => "malformed passkey request",
+    }
+);
+
+msg!(
+    /// `webauthn::verify_registration` refused the browser's response; the
+    /// precise reason goes to the log, not to the page.
+    passkey_not_registered() {
+        Locale::Es => "no se pudo registrar la passkey",
+        Locale::En => "the passkey couldn't be registered",
+    }
+);
+
+msg!(
+    /// A passkey label `access::validate_passkey_label` refuses.
+    invalid_passkey_label() {
+        Locale::Es => "nombre de passkey vacío, demasiado largo (máximo 64) o con caracteres de control",
+        Locale::En => "empty, too long (max 64) or control-character passkey name",
+    }
+);
+
+msg!(
+    /// Removing a passkey that isn't the caller's (or no longer exists).
+    passkey_not_found() {
+        Locale::Es => "esa passkey no existe",
+        Locale::En => "that passkey doesn't exist",
+    }
+);
+
+msg!(
+    /// Any refused passkey sign-in or second factor. Deliberately one
+    /// sentence for every `PasskeyRefusal`: which check tripped is for the
+    /// log, not for whoever is trying keys.
+    passkey_did_not_work() {
+        Locale::Es => "esa passkey no ha funcionado",
+        Locale::En => "that passkey didn't work",
     }
 );

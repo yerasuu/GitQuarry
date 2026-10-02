@@ -77,40 +77,10 @@ pub async fn resolve_repo_name(backend: &dyn Backend, cipher: &Cipher, full_name
     Ok(pointer.map(|p| p.uid))
 }
 
-/// CAS-writes the `full_name -> uid` claim. `expected_etag = None` for a
-/// fresh claim (fails with `Cas::Conflict` if the name is already taken);
-/// `Some(etag)` from a prior [`resolve_repo_name`] to reclaim a name whose
-/// existing claim has been confirmed stale (its uid's own repo data no
-/// longer exists) — that confirmation needs a live `Remote`, which this
-/// module doesn't depend on, so it's the caller's job (see
-/// `AppContext::create_repo`), not this function's.
-///
-/// Test-only: real code always goes through [`claim_repo_name_self_healing`]
-/// (`AppContext::create_repo`'s only caller), which never falls back to this
-/// plain CAS-create directly.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn claim_repo_name(
-    backend: &dyn Backend,
-    cipher: &Cipher,
-    full_name: &str,
-    uid: &Uid,
-    expected_etag: Option<&str>,
-) -> Result<Cas> {
-    REPO_NAME_INDEX
-        .put_raw(
-            backend,
-            cipher,
-            full_name,
-            &RepoUidPointer { uid: uid.clone() },
-            expected_etag,
-        )
-        .await
-}
-
 /// Best-effort delete of a repo-name claim — call only after the repo
 /// itself is gone (`delete_repo`) or once a `move_repo` has finished
 /// pointing `full_name` at its new value. A failure here just leaves a
-/// stale hint the next [`claim_repo_name`] conflict self-heals through.
+/// stale hint the next [`claim_repo_name_self_healing`] conflict self-heals through.
 pub async fn release_repo_name(backend: &dyn Backend, full_name: &str) {
     let _ = REPO_NAME_INDEX.release(backend, full_name).await;
 }

@@ -293,31 +293,6 @@ fn render_reviews(
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub async fn render_merges_list(
-    ctx: &AppContext,
-    target: &ResolvedRepo,
-    repo_name: &str,
-    status: &str,
-    q: Option<&str>,
-    headers: &HeaderMap,
-    locale: Locale,
-) -> Result<String, AppError> {
-    render_merges_list_impl(ctx, target, repo_name, status, q, headers, locale).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(super) async fn render_merges_list(
-    ctx: &AppContext,
-    target: &ResolvedRepo,
-    repo_name: &str,
-    status: &str,
-    q: Option<&str>,
-    headers: &HeaderMap,
-    locale: Locale,
-) -> Result<String, AppError> {
-    render_merges_list_impl(ctx, target, repo_name, status, q, headers, locale).await
-}
-
 /// Same shape as `issues::status_tabs` — a "closed" tab intentionally
 /// includes `Merged` too (matches GitHub's own MR list: the "closed" tab
 /// shows merged MRs with a purple badge rather than splitting into a third
@@ -357,7 +332,7 @@ fn status_tabs(repo_name: &str, status: &str, q: Option<&str>, locale: Locale) -
 /// `q`, when given, further keeps only MRs whose title or description
 /// contains it (case-insensitive) — same substring-`retain()` shape
 /// `issues::render_issues_list`'s own `q` filter already uses.
-async fn render_merges_list_impl(
+pub(super) async fn render_merges_list(
     ctx: &AppContext,
     target: &ResolvedRepo,
     repo_name: &str,
@@ -598,36 +573,7 @@ async fn can_merge(ctx: &AppContext, headers: &HeaderMap, repo_name: &str) -> Re
 /// params are all genuinely independent request inputs, and bundling them
 /// into a struct only to unpack it at the single call site buys nothing.
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "test-util"))]
-pub async fn render_merge_detail(
-    ctx: &AppContext,
-    target: &ResolvedRepo,
-    repo_name: &str,
-    git_dir: &std::path::Path,
-    number: u64,
-    params: &std::collections::HashMap<String, String>,
-    headers: &HeaderMap,
-    locale: Locale,
-) -> Result<String, AppError> {
-    render_merge_detail_impl(ctx, target, repo_name, git_dir, number, params, headers, locale).await
-}
-#[allow(clippy::too_many_arguments)]
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn render_merge_detail(
-    ctx: &AppContext,
-    target: &ResolvedRepo,
-    repo_name: &str,
-    git_dir: &std::path::Path,
-    number: u64,
-    params: &std::collections::HashMap<String, String>,
-    headers: &HeaderMap,
-    locale: Locale,
-) -> Result<String, AppError> {
-    render_merge_detail_impl(ctx, target, repo_name, git_dir, number, params, headers, locale).await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn render_merge_detail_impl(
     ctx: &AppContext,
     target: &ResolvedRepo,
     repo_name: &str,
@@ -874,13 +820,7 @@ async fn render_merge_detail_impl(
     .into_string())
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod annotated_diff;
-#[cfg(not(any(test, feature = "test-util")))]
 mod annotated_diff;
-#[cfg(any(test, feature = "test-util"))]
-pub mod handlers;
-#[cfg(not(any(test, feature = "test-util")))]
 mod handlers;
 
 pub(crate) use handlers::{

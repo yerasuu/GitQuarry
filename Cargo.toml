@@ -8,8 +8,10 @@ members = [
     "crates/gitquarry-domain",
     "crates/gitquarry-webui",
     "crates/gitquarry-server",
+    "crates/gitquarry-federation",
     "crates/gitquarry-forge-clients",
     "crates/gitquarry-mirror-external",
+    "crates/gitquarry-test-support",
 ]
 # No root [package]: this manifest is workspace-only. `cargo build` from
 # here builds every member; `cargo build -p gitquarry` builds just the
@@ -19,16 +21,64 @@ members = [
 # lib-only, no bin target.
 resolver = "2"
 
-# Everything the ten members hold in common. Cargo can't read any of it
+# Everything the members hold in common. Cargo can't read any of it
 # from a file of its own -- manifests have no include -- so this table is
 # the `.version`, and the same argument covers the rest: each is a property
-# of the workspace, not of a crate, and repeating it ten times only
-# creates ten chances to disagree. `description` stays per-crate, being
+# of the workspace, not of a crate, and repeating it per member only
+# creates that many chances to disagree. `description` stays per-crate, being
 # the one field that genuinely differs.
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 # Raising this is a breaking change for anyone building from source, so it
 # moves deliberately and all at once -- never one crate at a time.
 rust-version = "1.98"
 license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+# Every dependency two or more members share, declared once so the
+# members can't drift apart on a version, a pin or a feature baseline.
+# A member adds only the features it needs on top (`{ workspace = true,
+# features = [..] }`). A dependency one member uses stays in that member.
+gitquarry-auth-crypto = { path = "crates/gitquarry-auth-crypto" }
+gitquarry-core = { path = "crates/gitquarry-core" }
+gitquarry-domain = { path = "crates/gitquarry-domain" }
+gitquarry-forge-clients = { path = "crates/gitquarry-forge-clients" }
+gitquarry-gpg = { path = "crates/gitquarry-gpg" }
+gitquarry-i18n = { path = "crates/gitquarry-i18n" }
+gitquarry-mirror-external = { path = "crates/gitquarry-mirror-external" }
+gitquarry-test-support = { path = "crates/gitquarry-test-support" }
+gitquarry-wire = { path = "crates/gitquarry-wire" }
+
+anyhow = "1.0.104"
+async-trait = "0.1.92"
+axum = "0.8.9"
+base64 = "0.23.1"
+ciborium = "0.2.2"
+data-encoding = "2.11.1"
+dirs = "7.0.0"
+# p256/ed25519-dalek at the versions russh already resolves, so no second
+# copy of either is built.
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
+form_urlencoded = "1.2.2"
+futures = "0.3.34"
+hmac = "0.13.0"
+openidconnect = { version = "4.0.1", features = ["reqwest"] }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
+rand = "0.10.3"
+# rustls-only so this never pulls in openssl. Features a member needs past
+# `json` (`query`, `form`) are its own to add: nothing else in the graph
+# enables them for us since s3db dropped its Azure/GCS drivers.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+# Its own project: pinned by tag, never a floating branch, so a rebuild
+# always resolves the exact same engine. Public repo over plain https.
+s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.6.1" }
+s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.6.1" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+tempfile = "3.27.0"
+tokio = "1.53.1"
+toml = "1.1.6"
+tracing = "0.1.44"

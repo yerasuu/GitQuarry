@@ -30,6 +30,7 @@
 //! entries left behind.
 
 pub mod group_members;
+pub mod repo_permission_index;
 
 use crate::crypto::Cipher;
 use crate::storage::{Backend, Cas};
@@ -40,7 +41,7 @@ use std::sync::Arc;
 
 /// The data revision this binary produces. Bump it in the same commit that
 /// adds a migration to [`MIGRATIONS`], never on its own.
-pub const CURRENT_DATA_VERSION: u32 = 1;
+pub const CURRENT_DATA_VERSION: u32 = 2;
 
 /// Deliberately not `.schema.json`, which is `s3db::migrate`'s own
 /// per-collection bookkeeping key — this is the bucket-wide counter, and two
@@ -89,10 +90,19 @@ pub struct Migration {
 ///   `owners`/`teams` into its member map, converts a team scoped to some of
 ///   the group's repos into explicit per-repo grants, and fills the
 ///   `user-group` index.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "group-members",
-}];
+/// - `2` `repo-permission-index` (0.6.0): indexes every grant already held
+///   in `User::repos`, which the admin user page and account creation used
+///   to write without the index the repo's permission grid reads.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "group-members",
+    },
+    Migration {
+        version: 2,
+        name: "repo-permission-index",
+    },
+];
 
 /// What one pass did (or, in [`Mode::Report`], would do). `incomplete` is the
 /// count of items the pass couldn't finish — a CAS conflict against a
@@ -181,6 +191,7 @@ async fn run_one(
 ) -> Result<Outcome> {
     match migration.version {
         1 => group_members::run(backend, cipher, mode).await,
+        2 => repo_permission_index::run(backend, cipher, mode).await,
         // Unreachable through `MIGRATIONS`, which is the only source of the
         // versions passed here — but a new entry added without a matching
         // arm would otherwise silently stamp itself as applied.

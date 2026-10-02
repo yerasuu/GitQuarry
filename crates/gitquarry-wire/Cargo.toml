@@ -7,11 +7,11 @@ description = "Plain serde DTOs shared across gitquarry-core/gitquarry-federatio
 license.workspace = true
 
 [dependencies]
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-rand = "0.10.2"
-axum = "0.8.9"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

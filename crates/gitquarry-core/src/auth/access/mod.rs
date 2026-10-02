@@ -35,35 +35,21 @@
 //! (per-repo permission-grant index), [`login_throttle`] (password-login
 //! counter). Every `pub` item each one declares is re-exported here so
 //! every existing `access::xxx` call site keeps working unchanged.
+//!
+//! Linked-peer CRUD, fine-grained personal access tokens, and peer
+//! credentials (federation layers 1/4) live in the separate
+//! `gitquarry-federation` process now, not this crate at all — see
+//! `docs/federation-binary-split-concept.md`.
 
 mod email;
 mod groups;
 mod login_throttle;
 mod namespace;
-// pub only for test/test-util builds, same reasoning as `permissions`/
-// `pubkey` just below.
-#[cfg(any(test, feature = "test-util"))]
-pub mod quota;
-#[cfg(not(any(test, feature = "test-util")))]
-mod quota;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::auth::access::permissions::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod permissions;
-#[cfg(not(any(test, feature = "test-util")))]
-mod permissions;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::auth::access::pubkey::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod pubkey;
-#[cfg(not(any(test, feature = "test-util")))]
-mod pubkey;
-// pub only for test/test-util builds so external `tests/*.rs` integration
-// tests can name `gitquarry_core::auth::access::pat::*` directly.
-#[cfg(any(test, feature = "test-util"))]
-pub mod pat;
-#[cfg(not(any(test, feature = "test-util")))]
+mod passkey;
 mod pat;
+mod permissions;
+mod pubkey;
+mod quota;
 mod repo_index;
 mod users;
 
@@ -71,6 +57,7 @@ pub use email::*;
 pub use groups::*;
 pub use login_throttle::*;
 pub use namespace::*;
+pub use passkey::*;
 pub use pat::*;
 pub use permissions::*;
 pub use pubkey::*;

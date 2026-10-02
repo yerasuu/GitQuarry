@@ -1,19 +1,7 @@
 use gitquarry_core::git::{list_refs, update_ref};
 use gitquarry_mirror_external::git_remote::*;
+use gitquarry_test_support::git;
 use std::path::Path;
-
-fn run_git(git_dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .env("GIT_DIR", git_dir)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
-}
 
 fn capture_git(git_dir: &Path, args: &[&str], stdin: &str) -> String {
     use std::io::Write;
@@ -57,7 +45,7 @@ async fn ls_remote_refs_lists_every_ref_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
     let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init");
     update_ref(&git_dir, "refs/heads/main", &sha).await.unwrap();
 
@@ -70,14 +58,14 @@ async fn fetch_ref_from_remote_url_brings_objects_without_moving_local_refs() {
     let remote_dir = tempfile::tempdir().unwrap();
     let remote_git_dir = remote_dir.path().join("remote.git");
     std::fs::create_dir_all(&remote_git_dir).unwrap();
-    run_git(&remote_git_dir, &["init", "--quiet", "--bare"]);
+    git(&remote_git_dir, &["init", "--quiet", "--bare"]).await;
     let sha = commit_with_files(&remote_git_dir, None, &[("f.txt", "hello\n")], "init");
     update_ref(&remote_git_dir, "refs/heads/main", &sha).await.unwrap();
 
     let local_dir = tempfile::tempdir().unwrap();
     let local_git_dir = local_dir.path().join("local.git");
     std::fs::create_dir_all(&local_git_dir).unwrap();
-    run_git(&local_git_dir, &["init", "--quiet", "--bare"]);
+    git(&local_git_dir, &["init", "--quiet", "--bare"]).await;
 
     fetch_ref_from_remote_url(&local_git_dir, &remote_git_dir.to_string_lossy(), "", "refs/heads/main")
         .await
@@ -95,7 +83,7 @@ async fn list_refs_with_sha_maps_every_ref_to_its_object() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
     let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init");
     update_ref(&git_dir, "refs/heads/main", &sha).await.unwrap();
     update_ref(&git_dir, "refs/tags/v1", &sha).await.unwrap();
@@ -125,10 +113,10 @@ async fn ls_remote_refs_skips_the_peeled_entry_of_an_annotated_tag() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
     let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init");
     update_ref(&git_dir, "refs/heads/main", &sha).await.unwrap();
-    run_git(&git_dir, &["tag", "-a", "v1", "-m", "release", &sha]);
+    git(&git_dir, &["tag", "-a", "v1", "-m", "release", &sha]).await;
 
     let refs = ls_remote_refs(&git_dir.to_string_lossy(), "").await.unwrap();
     // The tag itself is a real ref (pointing at the tag object, not the

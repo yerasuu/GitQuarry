@@ -185,6 +185,3 @@ fn status_says_good(status: &str) -> bool {
     }
     good
 }
-
-#[cfg(test)]
-mod tests;

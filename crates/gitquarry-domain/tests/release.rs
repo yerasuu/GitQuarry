@@ -1,56 +1,15 @@
 use gitquarry_core::app::{AppContext, ResolvedRepo};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
 use gitquarry_core::storage::Cas;
-use gitquarry_core::storage::local::LocalBackend;
 use gitquarry_core::storage::remote::{Manifest, Remote};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_domain::release::*;
+use gitquarry_test_support::ctx;
 use std::sync::Arc;
 
-fn test_resolved(root: &std::path::Path) -> ResolvedRepo {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[7u8; SALT_LEN]).unwrap());
-    let remote = Remote::new(backend, "repos/team/proj".to_string(), cipher);
+fn test_resolved(ctx: &AppContext) -> ResolvedRepo {
     ResolvedRepo {
         uid: Uid::from("team/proj".to_string()),
-        remote,
-    }
-}
-
-/// Minimal `AppContext` for [`generate_source_archives`] — only
-/// `mirrors_root`/`exe_path`/`locks` actually matter to it (via
-/// `open_mirror`); `backend`/`cipher` are never read on this path (the
-/// mirror sync reads/writes through `resolved.remote` directly), so an
-/// arbitrary throwaway pair is fine.
-fn test_ctx(mirrors_root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: mirrors_root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("test passphrase", &[19u8; SALT_LEN]).unwrap());
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: mirrors_root.to_path_buf(),
-        config_path: mirrors_root.join("gitquarry.toml"),
-        exe_path: mirrors_root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+        remote: Remote::new(ctx.backend(), "repos/team/proj".to_string(), Arc::clone(&ctx.cipher)),
     }
 }
 
@@ -63,8 +22,8 @@ async fn put_tag(resolved: &ResolvedRepo, tag: &str) {
 #[tokio::test]
 async fn create_rejects_a_nonexistent_tag() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     assert!(
         create(
             &ctx,
@@ -85,8 +44,8 @@ async fn create_rejects_a_nonexistent_tag() {
 #[tokio::test]
 async fn create_then_get_roundtrips_and_conflicts_on_a_second_create() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     put_tag(&resolved, "v1.0").await;
     assert_eq!(
         create(
@@ -130,8 +89,8 @@ async fn create_then_get_roundtrips_and_conflicts_on_a_second_create() {
 #[tokio::test]
 async fn edit_requires_an_existing_release() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     assert!(
         edit(
             &resolved,
@@ -181,8 +140,8 @@ async fn edit_requires_an_existing_release() {
 #[tokio::test]
 async fn create_and_edit_roundtrip_the_prerelease_flag() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     put_tag(&resolved, "v1.0").await;
     create(
         &ctx,
@@ -218,8 +177,8 @@ async fn create_and_edit_roundtrip_the_prerelease_flag() {
 #[tokio::test]
 async fn add_asset_then_remove_asset_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     put_tag(&resolved, "v1.0").await;
     create(
         &ctx,
@@ -299,8 +258,8 @@ async fn add_asset_then_remove_asset_roundtrips() {
 #[tokio::test]
 async fn delete_removes_the_release_and_its_assets() {
     let dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(dir.path());
-    let ctx = test_ctx(dir.path());
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
     put_tag(&resolved, "v1.0").await;
     create(
         &ctx,
@@ -327,12 +286,11 @@ async fn delete_removes_the_release_and_its_assets() {
 /// and a real release to attach the generated assets to.
 #[tokio::test]
 async fn generate_source_archives_uploads_both_as_real_release_assets() {
-    let bucket_dir = tempfile::tempdir().unwrap();
-    let mirrors_dir = tempfile::tempdir().unwrap();
-    let resolved = test_resolved(bucket_dir.path());
-    let ctx = test_ctx(mirrors_dir.path());
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
 
-    let git_dir = mirrors_dir.path().join("team/proj");
+    let git_dir = ctx.mirrors_root.join("team/proj");
     let run = |args: &[&str]| {
         let status = std::process::Command::new("git")
             .env("GIT_DIR", &git_dir)
@@ -457,15 +415,15 @@ fn git_commit(git_dir: &std::path::Path, tree_sha: &str, message: &str, seconds:
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-/// Sets up a real bare repo at `mirrors_dir/team/proj` (same path
+/// Sets up a real bare repo at `ctx.mirrors_root/team/proj` (same path
 /// `AppContext::open_mirror` would use, so it finds everything already
 /// local) with a 3-commit linear history and two tags: `v1.0` on the first
 /// commit, `v2.0` on the third — real git objects/tags, since
 /// [`generate_notes`] walks `git log` ranges, not the S3 manifest.
-async fn setup_two_tags(bucket_dir: &std::path::Path, mirrors_dir: &std::path::Path) -> (ResolvedRepo, AppContext) {
-    let resolved = test_resolved(bucket_dir);
-    let ctx = test_ctx(mirrors_dir);
-    let git_dir = mirrors_dir.join("team/proj");
+async fn setup_two_tags(root: &std::path::Path) -> (ResolvedRepo, AppContext) {
+    let ctx = ctx(root);
+    let resolved = test_resolved(&ctx);
+    let git_dir = ctx.mirrors_root.join("team/proj");
     std::fs::create_dir_all(&git_dir).unwrap();
     let status = std::process::Command::new("git")
         .env("GIT_DIR", &git_dir)
@@ -493,9 +451,8 @@ async fn setup_two_tags(bucket_dir: &std::path::Path, mirrors_dir: &std::path::P
 
 #[tokio::test]
 async fn generate_notes_rejects_a_nonexistent_tag() {
-    let bucket_dir = tempfile::tempdir().unwrap();
-    let mirrors_dir = tempfile::tempdir().unwrap();
-    let (resolved, ctx) = setup_two_tags(bucket_dir.path(), mirrors_dir.path()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (resolved, ctx) = setup_two_tags(dir.path()).await;
     assert!(
         generate_notes(&ctx, &resolved, "v9.9", gitquarry_i18n::Locale::En)
             .await
@@ -505,9 +462,8 @@ async fn generate_notes_rejects_a_nonexistent_tag() {
 
 #[tokio::test]
 async fn generate_notes_lists_only_commits_since_the_previous_tag() {
-    let bucket_dir = tempfile::tempdir().unwrap();
-    let mirrors_dir = tempfile::tempdir().unwrap();
-    let (resolved, ctx) = setup_two_tags(bucket_dir.path(), mirrors_dir.path()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (resolved, ctx) = setup_two_tags(dir.path()).await;
 
     let notes = generate_notes(&ctx, &resolved, "v2.0", gitquarry_i18n::Locale::En)
         .await
@@ -519,9 +475,8 @@ async fn generate_notes_lists_only_commits_since_the_previous_tag() {
 
 #[tokio::test]
 async fn generate_notes_on_the_first_tag_has_no_previous_tag_to_diff_against() {
-    let bucket_dir = tempfile::tempdir().unwrap();
-    let mirrors_dir = tempfile::tempdir().unwrap();
-    let (resolved, ctx) = setup_two_tags(bucket_dir.path(), mirrors_dir.path()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (resolved, ctx) = setup_two_tags(dir.path()).await;
 
     let notes = generate_notes(&ctx, &resolved, "v1.0", gitquarry_i18n::Locale::En)
         .await

@@ -35,10 +35,7 @@ use tracing::{info, warn};
 /// a path) but that round trip can't happen: an imported comment carries
 /// `origin`, and `origin.is_some()` is exactly what the export filter
 /// skips.
-///
-/// Not `#[cfg]`-gated: called unconditionally from [`sync_one_linked_mr`]'s
-/// production comment-export path, not just from tests.
-pub fn export_body(comment: &MrComment) -> String {
+fn export_body(comment: &MrComment) -> String {
     match &comment.anchor {
         Some(anchor) => format!("`{}:{}`\n\n{}", anchor.path, anchor.line, comment.body),
         None => comment.body.clone(),
@@ -82,18 +79,9 @@ pub async fn sync_merge_requests_once(
     sync_merge_requests_once_with(ctx, resolved, mirror, forge.as_ref()).await
 }
 
-/// [`sync_merge_requests_once`]'s real logic, taking `forge` directly rather
-/// than building it from `mirror.provider` — split out so tests can drive
-/// it with an in-memory fake forge instead of a real GitHub/GitLab/Codeberg
-/// account, per `docs/external-mirror-concept.md`'s own verification
-/// section ("el trait `ForgeApi` permite mockear GitHub... suficientemente
-/// pura para testear sin llamada real a la API").
-///
-/// Not `#[cfg]`-gated behind `test-util` like a true test-only item: this
-/// is also [`sync_merge_requests_once`]'s real production entry point, so it
-/// must stay compiled in every build — only its visibility is widened here,
-/// for the moved integration tests in `tests/mr_sync.rs`.
-pub async fn sync_merge_requests_once_with(
+/// Takes `forge` separately from `mirror` so the provider-specific client is
+/// built once per pass in [`sync_merge_requests_once`].
+async fn sync_merge_requests_once_with(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
     mirror: &ExternalMirror,
@@ -309,11 +297,7 @@ async fn record_synced_comment(
 /// endpoint, never a plain field patch), then — only if neither side just
 /// merged this tick — ordinary title/description/open-closed last-write-wins
 /// against the link's `remote_updated_cursor`, then comments both ways.
-///
-/// Not `#[cfg]`-gated: called unconditionally from
-/// [`sync_merge_requests_once_with`]'s production loop over linked MRs, not
-/// just from tests.
-pub async fn sync_one_linked_mr(
+async fn sync_one_linked_mr(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
     mirror: &ExternalMirror,

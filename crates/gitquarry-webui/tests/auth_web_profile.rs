@@ -1,109 +1,200 @@
-use gitquarry_core::storage::entities::{RepoConfig, Visibility};
-use gitquarry_webui::auth::web::profile::*;
+//! `/_profile/<name>`, driven through `webui::router`: users and repos are
+//! seeded through `gitquarry-core`'s own domain API, viewers log in with a
+//! real password.
 
-fn repo(name: &str, visibility: Visibility) -> (String, RepoConfig) {
-    (
-        name.to_string(),
-        RepoConfig {
-            uid: Default::default(),
-            full_name: name.to_string(),
-            display_name: None,
-            description: None,
-            owner: None,
+use axum::http::StatusCode;
+use gitquarry_core::app::AppContext;
+use gitquarry_core::auth::access;
+use gitquarry_core::storage::entities::{OwnerRef, Visibility};
+use gitquarry_core::storage::uid::Uid;
+use gitquarry_test_support::{Page, Session, ctx};
+use std::sync::Arc;
+
+/// The page's own content, without the topbar/footer every page shares
+/// — the topbar links `/_account/profile` for every logged-in viewer.
+fn content(page: &Page) -> &str {
+    let start = page.body.find("<main").expect("no <main>");
+    let end = page.body.find("</main>").expect("no </main>");
+    &page.body[start..end]
+}
+
+struct Instance {
+    _dir: tempfile::TempDir,
+    ctx: Arc<AppContext>,
+    app: axum::Router,
+}
+
+impl Instance {
+    async fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(ctx(dir.path()));
+        let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+        Self { _dir: dir, ctx, app }
+    }
+
+    async fn user(&self, username: &str, is_admin: bool) -> Uid {
+        gitquarry_test_support::user(&self.ctx, username, is_admin).await;
+        access::get_user(self.ctx.backend().as_ref(), &self.ctx.cipher, username)
+            .await
+            .unwrap()
+            .0
+            .unwrap()
+            .uid
+    }
+
+    async fn repo(&self, full_name: &str, owner: &Uid, display_name: Option<&str>, visibility: Visibility) -> Uid {
+        let owner = Some(OwnerRef::User(owner.clone()));
+        gitquarry_core::domain::repo::create(
+            &self.ctx,
+            full_name,
+            display_name.map(str::to_string),
+            owner,
+            None,
             visibility,
-            archived: false,
-            deleted_at: None,
-            last_push: None,
-            last_push_commits: None,
-            last_push_branch: None,
-            pack_bytes: 0,
-            lfs_bytes: 0,
-            required_reviewers: Default::default(),
-            is_template: false,
-            protected_branches: Default::default(),
-            protected_tags: Default::default(),
-            require_signed_commits: Default::default(),
-            lfs_max_blob_size: Default::default(),
-            topics: Default::default(),
-            forked_from: None,
-            fork_count: 0,
-            star_count: 0,
-            watcher_count: 0,
-            primary_language: None,
-            labels: Default::default(),
-        },
-    )
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .uid
+    }
+
+    /// What `/_account/favorites`' visibility toggle stores.
+    async fn publish_favorites(&self, username: &str) {
+        let (user, etag) = access::get_user(self.ctx.backend().as_ref(), &self.ctx.cipher, username)
+            .await
+            .unwrap();
+        let mut user = user.unwrap();
+        user.favorites_public = true;
+        access::put_user(self.ctx.backend().as_ref(), &self.ctx.cipher, &user, etag.as_deref())
+            .await
+            .unwrap();
+    }
+
+    async fn get(&self, path: &str, session: Option<&str>) -> Page {
+        let page = Session::get_as(&self.app, path, session).await;
+        assert_eq!(page.status, StatusCode::OK, "GET {path}: {}", page.body);
+        page
+    }
+
+    /// The `web-session` cookie of a real password login.
+    async fn login(&self, username: &str) -> String {
+        Session::login(&self.app, username).await.cookie
+    }
 }
 
-#[test]
-fn profile_row_shows_the_display_name_and_links_the_slug() {
-    let (name, mut config) = repo("alice/my-proj", Visibility::Public);
-    config.display_name = Some("My Proj!".to_string());
-    let html = render_profile(
-        "alice",
-        &[(name, config)],
-        true,
-        false,
-        None,
-        gitquarry_i18n::Locale::Es,
-    )
-    .into_string();
-    assert!(html.contains(r#"href="/alice/my-proj""#));
-    assert!(html.contains("alice/My Proj!"));
+#[tokio::test]
+async fn profile_row_shows_the_display_name_and_links_the_slug() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice", false).await;
+    // `My-Proj` is the slug `domain::repo::backfill_slug` derives from the
+    // display name; any other `full_name` gets rewritten to it on listing.
+    gq.repo("alice/My-Proj", &alice, Some("My Proj!"), Visibility::Public)
+        .await;
+
+    let page = gq.get("/_profile/alice", None).await;
+    assert!(content(&page).contains(r#"href="/alice/My-Proj""#), "{}", page.body);
+    assert!(content(&page).contains("alice/My Proj!"), "{}", page.body);
 }
 
-#[test]
-fn profile_marks_private_repos_and_lists_public_ones() {
-    let repos = vec![
-        repo("alice/public-one", Visibility::Public),
-        repo("alice/secret", Visibility::Private),
-    ];
-    let html = render_profile("alice", &repos, true, false, None, gitquarry_i18n::Locale::Es).into_string();
-    assert!(html.contains("public-one"));
-    assert!(html.contains("secret"));
-    let secret_row = html.split("<tr>").find(|r| r.contains("secret")).unwrap();
-    assert!(secret_row.contains("badge"));
-    let public_row = html.split("<tr>").find(|r| r.contains("public-one")).unwrap();
-    assert!(!public_row.contains("badge"));
+/// Only the owner's own session lists their private repos — not an admin,
+/// not an anonymous visitor.
+#[tokio::test]
+async fn profile_marks_private_repos_and_shows_them_only_to_their_owner() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice", false).await;
+    gq.user("root", true).await;
+    gq.repo("alice/public-one", &alice, None, Visibility::Public).await;
+    gq.repo("alice/secret", &alice, None, Visibility::Private).await;
+
+    let own = gq.login("alice").await;
+    let page = gq.get("/_profile/alice", Some(&own)).await;
+    let secret_row = content(&page)
+        .split("<tr>")
+        .find(|r| r.contains("alice/secret"))
+        .unwrap();
+    assert!(secret_row.contains("badge"), "{secret_row}");
+    let public_row = content(&page)
+        .split("<tr>")
+        .find(|r| r.contains("alice/public-one"))
+        .unwrap();
+    assert!(!public_row.contains("badge"), "{public_row}");
+
+    let root = gq.login("root").await;
+    for session in [None, Some(root.as_str())] {
+        let page = gq.get("/_profile/alice", session).await;
+        assert!(content(&page).contains("alice/public-one"), "{}", page.body);
+        assert!(!content(&page).contains("secret"), "{}", page.body);
+    }
 }
 
-#[test]
-fn profile_empty_hint_without_repos() {
+#[tokio::test]
+async fn profile_empty_hint_without_repos() {
+    let gq = Instance::new().await;
+    gq.user("bob", false).await;
+    let page = gq.get("/_profile/bob", None).await;
+    assert!(content(&page).contains("(no repos visible)"), "{}", page.body);
+}
+
+#[tokio::test]
+async fn profile_links_to_account_settings_only_for_the_owner() {
+    let gq = Instance::new().await;
+    gq.user("alice", false).await;
+    gq.user("bob", false).await;
+
+    let bob = gq.login("bob").await;
+    let someone_elses = gq.get("/_profile/alice", Some(&bob)).await;
     assert!(
-        render_profile("bob", &[], true, false, None, gitquarry_i18n::Locale::Es)
-            .into_string()
-            .contains("sin repos visibles")
+        !content(&someone_elses).contains("/_account/profile"),
+        "{}",
+        someone_elses.body
+    );
+
+    let alice = gq.login("alice").await;
+    let own = gq.get("/_profile/alice", Some(&alice)).await;
+    assert!(content(&own).contains(r#"href="/_account/profile""#), "{}", own.body);
+}
+
+#[tokio::test]
+async fn profile_links_to_favorites_only_when_public() {
+    let gq = Instance::new().await;
+    gq.user("alice", false).await;
+
+    let hidden = gq.get("/_profile/alice", None).await;
+    assert!(
+        !content(&hidden).contains("/_profile/alice/favorites"),
+        "{}",
+        hidden.body
+    );
+
+    gq.publish_favorites("alice").await;
+    let shown = gq.get("/_profile/alice", None).await;
+    assert!(
+        content(&shown).contains(r#"href="/_profile/alice/favorites""#),
+        "{}",
+        shown.body
     );
 }
 
-#[test]
-fn profile_links_to_account_settings_only_for_the_owner() {
-    let someone_elses = render_profile("alice", &[], false, false, None, gitquarry_i18n::Locale::Es).into_string();
-    assert!(!someone_elses.contains("/_account/profile"));
+#[tokio::test]
+async fn profile_shows_star_count_only_for_starred_repos() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice", false).await;
+    let starred = gq.repo("alice/starred", &alice, None, Visibility::Public).await;
+    gq.repo("alice/unstarred", &alice, None, Visibility::Public).await;
+    gitquarry_core::domain::repo::toggle_star(&gq.ctx, "alice", &starred)
+        .await
+        .unwrap()
+        .unwrap();
 
-    let own = render_profile("alice", &[], true, false, None, gitquarry_i18n::Locale::Es).into_string();
-    assert!(own.contains(r#"href="/_account/profile""#));
-}
-
-#[test]
-fn profile_links_to_favorites_only_when_public() {
-    let hidden = render_profile("alice", &[], true, false, None, gitquarry_i18n::Locale::Es).into_string();
-    assert!(!hidden.contains("/_profile/alice/favorites"));
-
-    let shown = render_profile("alice", &[], true, true, None, gitquarry_i18n::Locale::Es).into_string();
-    assert!(shown.contains(r#"href="/_profile/alice/favorites""#));
-}
-
-#[test]
-fn profile_shows_star_count_only_for_starred_repos() {
-    let mut starred = repo("alice/starred", Visibility::Public);
-    starred.1.star_count = 3;
-    let unstarred = repo("alice/unstarred", Visibility::Public);
-    let repos = vec![starred, unstarred];
-
-    let html = render_profile("alice", &repos, true, false, None, gitquarry_i18n::Locale::Es).into_string();
-    let starred_row = html.split("<tr>").find(|r| r.contains("alice/starred")).unwrap();
-    assert!(starred_row.contains('\u{2605}'));
-    let unstarred_row = html.split("<tr>").find(|r| r.contains("alice/unstarred")).unwrap();
-    assert!(!unstarred_row.contains('\u{2605}'));
+    let page = gq.get("/_profile/alice", None).await;
+    let starred_row = content(&page)
+        .split("<tr>")
+        .find(|r| r.contains("alice/starred"))
+        .unwrap();
+    assert!(starred_row.contains('\u{2605}'), "{starred_row}");
+    let unstarred_row = content(&page)
+        .split("<tr>")
+        .find(|r| r.contains("alice/unstarred"))
+        .unwrap();
+    assert!(!unstarred_row.contains('\u{2605}'), "{unstarred_row}");
 }

@@ -11,12 +11,13 @@
 use crate::auth::web::login;
 use crate::webui::repo::relative_time_ago;
 use crate::webui::{
-    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    non_empty, render_flash, require_csrf, settings_section,
+    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, layout, non_empty, render_flash, require_csrf, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
+use gitquarry_auth_crypto::webauthn::RelyingParty;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::backup::dest::Dest;
 use gitquarry_core::backup::inventory::Selection;
@@ -66,6 +67,36 @@ pub(crate) async fn require_admin(ctx: &AppContext, headers: &HeaderMap, return_
                 AppError::forbidden(anyhow::anyhow!(
                     "{}",
                     gitquarry_i18n::shared::auth::account_is_not_admin(locale)
+                ))
+                .into_response(),
+            )
+        }
+        None => Some(login_redirect(return_to)),
+    }
+}
+
+/// Same shape as [`require_admin`], but also lets a non-admin
+/// `is_federation_moderator` user through — the gate `/_peers` uses
+/// (`docs/federation-binary-split-concept.md` section 6: managing linked
+/// peers is a narrower delegation than full `is_admin`).
+pub(crate) async fn require_admin_or_federation_moderator(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    return_to: &str,
+) -> Option<Response> {
+    if !login::login_enforced(ctx).await {
+        // No moderator can exist before any login does, so first boot is
+        // exactly `require_admin`'s: the bootstrap grant or nothing.
+        return require_admin(ctx, headers, return_to).await;
+    }
+    match login::current_user(ctx, headers).await {
+        Some(user) if user.is_admin || user.is_federation_moderator => None,
+        Some(_) => {
+            let locale = effective_locale(ctx, headers).await;
+            Some(
+                AppError::forbidden(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::auth::account_is_not_admin_or_moderator(locale)
                 ))
                 .into_response(),
             )
@@ -160,7 +191,7 @@ async fn render_page(
     let body = settings_page(active, content, locale);
     axum::response::Html(layout(
         &format!("settings-{active}"),
-        &admin_header("settings", locale),
+        &admin_header("settings", federation_ui_active(ctx), locale),
         &body.into_string(),
         &topnav,
         effective_theme(ctx, headers).await,
@@ -261,6 +292,8 @@ pub(crate) struct NetworkForm {
     #[serde(default)]
     ssh_bind: String,
     #[serde(default)]
+    public_url: String,
+    #[serde(default)]
     csrf: String,
 }
 
@@ -285,6 +318,12 @@ fn render_network_page(
                     div class="field" {
                         label { (t::settings_ssh_bind_label(locale)) }
                         input name="ssh_bind" value=(field(&settings.ssh_bind)) placeholder="127.0.0.1:2222";
+                    }
+                    div class="field" {
+                        label { (t::settings_public_url_label(locale)) }
+                        input name="public_url" value=(field(&settings.public_url))
+                            placeholder="https://git.example.com" size="50";
+                        span class="hint" { (t::settings_public_url_hint(locale)) }
                     }
                     p { button type="submit" { (t::settings_save_button(locale)) } }
                 }
@@ -314,17 +353,28 @@ pub(crate) async fn handler_settings_network_post(
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (current, etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+    let public_url = non_empty(form.public_url.trim().to_string());
+    // Checked here, once, so everything reading the stored value (the
+    // passkey routes) can take it as a valid relying party.
+    let public_url_ok = public_url
+        .as_deref()
+        .is_none_or(|url| RelyingParty::from_public_url(url).is_ok());
     let settings = ServerSettings {
         web_bind: non_empty(form.web_bind),
         ssh_bind: non_empty(form.ssh_bind),
+        public_url,
         ..current
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
-    let flash =
+    let invalid_public_url_msg = gitquarry_i18n::web::settings::settings_public_url_invalid(locale);
+    let flash = if !public_url_ok {
+        Flash::Err(&invalid_public_url_msg)
+    } else {
         match storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher).await? {
             Cas::Ok => Flash::Ok("saved to the bucket. Restart the server to apply."),
             Cas::Conflict => Flash::Err(&cas_conflict_msg),
-        };
+        }
+    };
     let content = render_network_page(&settings, &csrf_field(&headers), Some(flash), locale);
     if is_async(&headers) {
         return Ok(axum::response::Html(content.into_string()).into_response());
@@ -342,6 +392,8 @@ pub(crate) struct MirrorsCacheForm {
     mirrors_max_age: String,
     #[serde(default)]
     mirrors_max_size: String,
+    #[serde(default)]
+    mirrors_large_repo_threshold: String,
     #[serde(default)]
     csrf: String,
 }
@@ -372,6 +424,11 @@ fn render_mirrors_cache_page(
                     div class="field" {
                         label { (t::settings_mirrors_max_size_label(locale)) }
                         input name="mirrors_max_size" value=(field(&settings.mirrors_max_size)) placeholder=(t::settings_mirrors_max_size_placeholder(locale));
+                    }
+                    div class="field" {
+                        label { (t::settings_mirrors_large_repo_threshold_label(locale)) }
+                        input name="mirrors_large_repo_threshold" value=(field(&settings.mirrors_large_repo_threshold))
+                            placeholder=(t::settings_mirrors_large_repo_threshold_placeholder(locale));
                     }
                     p { button type="submit" { (t::settings_save_button(locale)) } }
                 }
@@ -406,6 +463,7 @@ pub(crate) async fn handler_settings_mirrors_cache_post(
     let (current, etag) = storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
     let mirrors_max_age = non_empty(form.mirrors_max_age);
     let mirrors_max_size = non_empty(form.mirrors_max_size);
+    let mirrors_large_repo_threshold = non_empty(form.mirrors_large_repo_threshold);
     let validation_error = mirrors_max_age
         .as_deref()
         .and_then(|age| gitquarry_core::mirror::gc::parse_age(age).err())
@@ -414,11 +472,17 @@ pub(crate) async fn handler_settings_mirrors_cache_post(
                 .as_deref()
                 .and_then(|size| gitquarry_core::mirror::gc::parse_size(size).err())
         })
+        .or_else(|| {
+            mirrors_large_repo_threshold
+                .as_deref()
+                .and_then(|size| gitquarry_core::mirror::gc::parse_size(size).err())
+        })
         .map(|e| e.to_string());
     let settings = ServerSettings {
         mirrors_dir: non_empty(form.mirrors_dir),
         mirrors_max_age,
         mirrors_max_size,
+        mirrors_large_repo_threshold,
         ..current
     };
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
@@ -1090,74 +1154,4 @@ pub(crate) async fn handler_settings_backup_run_post(
         locale,
     );
     Ok(render_page(&ctx, &headers, "backup", content, locale).await)
-}
-
-// Only called by `settings_body`/`settings_full_page`, both test-only
-// helpers — dead outside `test-util`, which is what `cargo check` flags.
-#[cfg(any(test, feature = "test-util"))]
-fn render_section(
-    section: &str,
-    settings: &ServerSettings,
-    csrf: &str,
-    message: Option<Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    match section {
-        "footer" => render_footer_page(settings, csrf, message, locale),
-        "network" => render_network_page(settings, csrf, message, locale),
-        "mirrors-cache" => render_mirrors_cache_page(settings, csrf, message, locale),
-        "external-mirrors" => render_external_mirrors_page(settings, csrf, message, locale),
-        "oidc" => render_oidc_page(settings, csrf, message, locale),
-        // No run history in this test-only path: the recent-runs table is
-        // rendered from a separate read the real handler does, and a caller
-        // asking for "the backup section's markup" is asking about the form.
-        "backup" => render_backup_page(settings, &[], csrf, message, locale),
-        other => panic!("unknown settings section: {other}"),
-    }
-}
-
-/// Just the section's own `#<section>-body` fragment — what an async POST
-/// (see [`is_async`]) actually sends back, and what a stale bookmark on the
-/// old single-page `/_settings` would have shown as the whole form.
-#[cfg(any(test, feature = "test-util"))]
-pub fn settings_body(
-    section: &str,
-    settings: &ServerSettings,
-    csrf: &str,
-    message: Option<Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_section(section, settings, csrf, message, locale)
-}
-
-/// The backup section with a run history, which [`settings_body`] can't
-/// reach: that one dispatches on a section name and only has the settings
-/// object, while the recent-runs table comes from a separate read.
-#[cfg(any(test, feature = "test-util"))]
-pub fn settings_backup_body(
-    settings: &ServerSettings,
-    runs: &[BackupRun],
-    csrf: &str,
-    message: Option<Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_backup_page(settings, runs, csrf, message, locale)
-}
-
-/// The section's fragment wrapped in the sidebar shell [`settings_page`]
-/// gives every real GET — what a plain (non-JS) load of `/_settings/<section>`
-/// renders inside `layout`'s `<body>`.
-#[cfg(any(test, feature = "test-util"))]
-pub fn settings_full_page(
-    section: &str,
-    settings: &ServerSettings,
-    csrf: &str,
-    message: Option<Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    settings_page(
-        section,
-        render_section(section, settings, csrf, message, locale),
-        locale,
-    )
 }

@@ -1,78 +1,143 @@
-use axum::http::HeaderMap;
-use gitquarry_webui::webui::csrf::*;
+//! Double-submit CSRF as a browser meets it: the token a page embeds, the
+//! POST that has to echo it back, and every way of getting it wrong.
 
-#[test]
-fn csrf_field_empty_without_a_session_cookie() {
-    assert_eq!(csrf_field(&HeaderMap::new()), "");
+use axum::http::{StatusCode, header};
+use gitquarry_test_support::{PASSWORD, Page, Session, post_form};
+use std::sync::Arc;
+
+/// A password user is what makes `/_login` render its form at all.
+async fn app_with_user(root: &std::path::Path) -> axum::Router {
+    let ctx = Arc::new(gitquarry_test_support::ctx(root));
+    gitquarry_test_support::user(&ctx, "alice", false).await;
+    gitquarry_webui::webui::router(ctx)
+}
+
+/// Whether `page` plants a `name` cookie at all; `Page::cookie` panics
+/// when it doesn't.
+fn sets_cookie(page: &Page, name: &str) -> bool {
+    page.headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.starts_with(&format!("{name}=")))
+}
+
+/// `(login-csrf cookie pair, the token the form embeds)`.
+async fn login_page(app: &axum::Router) -> (String, String) {
+    let page = Session::get_as(app, "/_login", None).await;
+    assert_eq!(page.status, StatusCode::OK);
+    (page.cookie("login-csrf"), page.csrf())
+}
+
+#[tokio::test]
+async fn an_anonymous_page_embeds_no_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_user(dir.path()).await;
+    let page = Session::get_as(&app, "/_license", None).await;
+    assert!(
+        !page.body.contains(r#"name="csrf""#),
+        "anonymous page carries a csrf field"
+    );
 }
 
 /// The token in the markup must be *derived* from the session, never the
 /// session itself — every authenticated page carries this field, so
 /// embedding the cookie would put a live credential in the DOM and undo
 /// what `HttpOnly` is there for.
-#[test]
-fn csrf_field_embeds_a_token_and_never_the_session_cookie_itself() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::COOKIE, "web-session=sealed-abc".parse().unwrap());
-    let field = csrf_field(&headers);
-    assert!(field.contains(r#"name="csrf""#));
+#[tokio::test]
+async fn the_embedded_token_is_never_the_session_cookie_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_user(dir.path()).await;
+    let session = Session::login(&app, "alice").await;
+    let session_value = session.cookie.strip_prefix("web-session=").unwrap();
+    let page = session.get(&app, "/_account/security").await;
+    let token = page.csrf();
+    assert!(!token.is_empty());
+    assert_ne!(token, session_value);
     assert!(
-        !field.contains("sealed-abc"),
-        "session cookie leaked into the form: {field}"
+        !page.body.contains(session_value),
+        "session cookie leaked into the page"
     );
 }
 
-#[test]
-fn require_csrf_accepts_the_token_this_session_renders() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::COOKIE, "web-session=sealed-abc".parse().unwrap());
-    let field = csrf_field(&headers);
-    let token = field.split(r#"value=""#).nth(1).unwrap().split('"').next().unwrap();
-    assert!(require_csrf(&headers, token).is_ok());
+#[tokio::test]
+async fn a_post_carrying_this_sessions_token_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_user(dir.path()).await;
+    let session = Session::login(&app, "alice").await;
+    let response = session.post(&app, "/_logout", &[]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.location(), "/");
+    assert_eq!(response.cookie("web-session"), "web-session=");
 }
 
 /// A token minted under one session must not validate under another.
-#[test]
-fn require_csrf_rejects_another_sessions_token() {
-    let mut mine = HeaderMap::new();
-    mine.insert(axum::http::header::COOKIE, "web-session=sealed-abc".parse().unwrap());
-    let mut theirs = HeaderMap::new();
-    theirs.insert(axum::http::header::COOKIE, "web-session=sealed-xyz".parse().unwrap());
-    let their_field = csrf_field(&theirs);
-    let their_token = their_field
-        .split(r#"value=""#)
-        .nth(1)
-        .unwrap()
-        .split('"')
-        .next()
-        .unwrap();
-    assert!(require_csrf(&mine, their_token).is_err());
+#[tokio::test]
+async fn another_sessions_token_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_user(dir.path()).await;
+    let mine = Session::login(&app, "alice").await;
+    let theirs = Session::login(&app, "alice").await;
+    assert_ne!(mine.cookie, theirs.cookie, "two logins produced the same session");
+    let response = post_form(&app, "/_logout", Some(&mine.cookie), &[("csrf", &theirs.csrf)]).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(!sets_cookie(&response, "web-session"));
 }
 
-#[test]
-fn require_csrf_rejects_a_mismatched_or_missing_token() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::COOKIE, "web-session=sealed-abc".parse().unwrap());
-    assert!(require_csrf(&headers, "wrong").is_err());
-    assert!(require_csrf(&headers, "").is_err());
-    // The raw cookie value is not the token either.
-    assert!(require_csrf(&headers, "sealed-abc").is_err());
+#[tokio::test]
+async fn a_wrong_missing_or_raw_cookie_token_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_user(dir.path()).await;
+    let session = Session::login(&app, "alice").await;
+    let session_value = session.cookie.strip_prefix("web-session=").unwrap();
+    for token in ["wrong", "", session_value] {
+        let response = post_form(&app, "/_logout", Some(&session.cookie), &[("csrf", token)]).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "csrf={token:?}");
+    }
+    let response = post_form(&app, "/_logout", Some(&session.cookie), &[]).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST, "no csrf field at all");
     // No session cookie at all: nothing to compare against, always rejected.
-    assert!(require_csrf(&HeaderMap::new(), "sealed-abc").is_err());
+    let response = post_form(&app, "/_logout", None, &[("csrf", &session.csrf)]).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
 }
 
 /// `/_login` has no session to anchor on, so it carries its own cookie —
-/// `require_csrf_for` is the same double-submit check told which one.
-#[test]
-fn require_csrf_for_anchors_on_the_named_cookie() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::COOKIE, "login-csrf=anchor-abc".parse().unwrap());
-    let token = csrf_token("anchor-abc");
-    assert!(require_csrf_for(&headers, "login-csrf", &token).is_ok());
+/// the same double-submit check, anchored on that one instead.
+#[tokio::test]
+async fn the_login_form_is_anchored_on_its_own_cookie() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_user(dir.path()).await;
+    let (anchor, token) = login_page(&app).await;
+    let (other_anchor, other_token) = login_page(&app).await;
+    let anchor_value = anchor.strip_prefix("login-csrf=").unwrap();
+    let attempt = |cookie: Option<String>, csrf: String| {
+        let app = app.clone();
+        async move {
+            post_form(
+                &app,
+                "/_login",
+                cookie.as_deref(),
+                &[("username", "alice"), ("password", PASSWORD), ("csrf", &csrf)],
+            )
+            .await
+        }
+    };
+
     // The anchor value itself is not the token.
-    assert!(require_csrf_for(&headers, "login-csrf", "anchor-abc").is_err());
-    // Nor is a token derived from some other cookie.
-    assert!(require_csrf_for(&headers, "login-csrf", &csrf_token("other")).is_err());
+    let response = attempt(Some(anchor.clone()), anchor_value.to_string()).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    // Nor is a token derived from some other anchor.
+    let response = attempt(Some(anchor.clone()), other_token).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     // A missing anchor fails closed rather than accepting anything.
-    assert!(require_csrf_for(&HeaderMap::new(), "login-csrf", &token).is_err());
+    let response = attempt(None, token.clone()).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(!sets_cookie(&response, "web-session"));
+
+    let response = attempt(Some(other_anchor), token.clone()).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+
+    let response = attempt(Some(anchor), token).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(sets_cookie(&response, "web-session"));
 }

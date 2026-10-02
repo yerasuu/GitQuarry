@@ -2,7 +2,7 @@
 
 Git remote over S3, in Rust. Public surface: `ssh://` and git-smart-HTTP for push/pull, plus a read-only browsing UI on the same server. No `git://` daemon, no S3 remote helper — both were dropped, not kept opt-in.
 
-One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh, git-smart-HTTP, domain, storage), `gitquarry-webui` (browsing, login/settings/search) and `gitquarry-mirror-external`. `develop`/`master` carry that and nothing else; the optional modules sit on `feature/{cicd,federation,artifacts,tracker}`, each a snapshot of where that module last built, and the commit that removed one is the recipe for putting it back.
+One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh, git-smart-HTTP, domain, storage), `gitquarry-webui` (browsing, login/settings/search), `gitquarry-mirror-external` and the optional `gitquarry-federation` (its own binary, enabled by `[federation]`). `develop`/`master` carry that and nothing else; the other optional modules sit on `feature/{cicd,artifacts,tracker}`, each a snapshot of where that module last built, and the commit that removed one is the recipe for putting it back.
 
 ## Config
 
@@ -92,10 +92,13 @@ One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh,
 
 ## Tests
 
-- Unit tests live inline under the code as `#[cfg(test)] mod tests {}`
-  blocks, never in a separate `tests.rs` file unless the crate is very
-  large. Inline keeps the test close to the implementation. Only
-  integration tests (testing the public API) go in `tests/`.
+- Every test lives in the crate's `tests/` and exercises only the
+  public API — no inline `mod tests {}`, no sibling `tests.rs`. Never
+  widen visibility for a test (`#[cfg(any(test, feature = "test-util"))]
+  pub`, `test-util` features): security first, the tested surface is
+  the shipped one. A behaviour only reachable through a private item is
+  tested through the public path that reaches it (a route, a command),
+  or not at all.
 - Pragmatic tests: happy path, real cases that break in production,
   `#[should_panic]`, `#[ignore]` for integration. No theoretical
   tests covering variants nobody constructs.
@@ -138,7 +141,7 @@ the range, never by feel:
   notes doesn't compile — then the bump as its own commit, then
   tag `vX.Y.Z` annotated and signed on `master`, after the
   `develop` -> `master` PR.
-- `CHANGELOG.md` is the other half of the notes, grouped by area.
+- `CHANGELOG.md` is the other half of the notes: one section per release, newest first, Keep a Changelog headings (`Breaking`/`Added`/`Changed`/`Removed`/`Fixed`/`Security`), worded for operators and users, each version linking its `tag-changelog/vX.Y.Z.md`.
   An `s3db` repin alone is a `chore` and earns no version.
 
 ## Security

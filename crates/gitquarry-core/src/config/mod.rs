@@ -15,7 +15,7 @@ use tracing::warn;
 // `Backend` without depending on gitquarry) — re-exported here so
 // `gitquarry.toml` parsing and every existing call site keep working
 // unchanged.
-pub use s3db::{AzureParams, BackendConfig, GcsParams, LocalEngine, LocalParams, R2Params, ResilienceConfig, S3Params};
+pub use s3db::{BackendConfig, LocalEngine, LocalParams, R2Params, ResilienceConfig, S3Params};
 
 /// The main toml (buckets/credentials/passphrase) lives loose at the project
 /// root, NOT under `.conf/`: `.conf/` is for everything else (remote config
@@ -45,10 +45,37 @@ pub struct BucketConfig {
     pub resilience: ResilienceConfig,
 }
 
+/// `[federation]` in `gitquarry.toml` — optional. Absent means core runs
+/// standalone: no `/_internal/*` loopback server, no outbound proxy routes,
+/// no `/_remote/*` lookups registered. Same "`None` = feature fully off,
+/// never a half-wired no-op" pattern `oidc: Option<OidcClient>` already
+/// establishes (`docs/federation-binary-split-concept.md` section 4).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FederationSection {
+    /// Loopback address the `/_internal/*` API binds to — a
+    /// `gitquarry-federation` process calls in on this, never a public
+    /// listener of its own.
+    pub internal_bind: String,
+    /// Shared secret gating every `/_internal/*` request, manually kept
+    /// identical to `gitquarry-federation.toml`'s own `internal_token` — no
+    /// auto-generation, no filesystem coupling between the two configs.
+    pub internal_token: String,
+    /// `gitquarry-federation`'s own loopback address (its `listen`) —
+    /// where core forwards the outbound proxy routes (`/_peers`,
+    /// `/_profile/*/tokens`, `/_api/*`, ...) it registers on its public
+    /// router. Same shared secret (`internal_token`) authenticates this
+    /// direction too — federation's whole router requires it, not just its
+    /// own `/_internal-out/*` subset (see `gitquarry-federation`'s
+    /// `web` module doc comment for why).
+    pub federation_url: String,
+}
+
 #[derive(Debug, Deserialize)]
-pub struct RawConfig {
+struct RawConfig {
     #[serde(default)]
-    pub buckets: BTreeMap<String, BucketConfig>,
+    buckets: BTreeMap<String, BucketConfig>,
+    #[serde(default)]
+    federation: Option<FederationSection>,
     /// Which bucket this instance serves when no `--bucket` is passed. Only
     /// meaningful with several sections configured, which is the normal
     /// shape once a bucket exists purely as a backup destination
@@ -89,6 +116,7 @@ struct RawConfigOut<'a> {
 #[derive(Debug)]
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
+    federation: Option<FederationSection>,
     default_bucket: Option<String>,
     allow_push_create: bool,
     trust_forwarded_for: bool,
@@ -105,14 +133,16 @@ impl Config {
                 path.display()
             )
         })?;
-        let raw: RawConfig = toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))?;
+        let mut raw: RawConfig =
+            toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))?;
         if raw.buckets.is_empty() {
             bail!(
                 "config {} has no buckets: add a [buckets.<name>] section",
                 path.display()
             );
         }
-        for (name, bucket) in &raw.buckets {
+        for (name, bucket) in &mut raw.buckets {
+            bucket.resilience.local_dir = resolve_local_dir(name, &bucket.resilience.local_dir, path);
             if bucket.passphrase.trim().is_empty() {
                 bail!(
                     "[buckets.{name}] in {} has no `passphrase` (mandatory: encrypts everything \
@@ -132,6 +162,7 @@ impl Config {
         }
         Ok(Config {
             buckets: raw.buckets,
+            federation: raw.federation,
             default_bucket: raw.default_bucket,
             allow_push_create: raw.allow_push_create,
             trust_forwarded_for: raw.trust_forwarded_for,
@@ -139,12 +170,18 @@ impl Config {
         })
     }
 
-    /// See [`RawConfig::allow_push_create`]'s doc comment.
+    /// `None` unless `[federation]` is present in `gitquarry.toml` — see
+    /// [`FederationSection`]'s own doc comment.
+    pub fn federation(&self) -> Option<&FederationSection> {
+        self.federation.as_ref()
+    }
+
+    /// See `RawConfig::allow_push_create`'s doc comment.
     pub fn allow_push_create(&self) -> bool {
         self.allow_push_create
     }
 
-    /// See [`RawConfig::trust_forwarded_for`]'s doc comment.
+    /// See `RawConfig::trust_forwarded_for`'s doc comment.
     pub fn trust_forwarded_for(&self) -> bool {
         self.trust_forwarded_for
     }
@@ -218,6 +255,28 @@ fn write_new_private_file(path: &Path, contents: &str) -> Result<()> {
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+/// Where bucket `name`'s `resilience.local_dir` (s3db's write spool) really
+/// lives. Left at s3db's relative `./local` default it would resolve against
+/// each process's cwd — a git hook runs inside the mirror — and every bucket
+/// in the file would share one directory, which s3db forbids (recovery
+/// replays every orphaned spool file under it onto its own backend). So the
+/// default becomes a per-bucket directory under the user's data dir, and any
+/// other relative path is taken relative to `config_path`, not the cwd.
+pub fn resolve_local_dir(name: &str, local_dir: &Path, config_path: &Path) -> PathBuf {
+    let config_dir = config_path.parent().unwrap_or(Path::new(""));
+    if *local_dir != ResilienceConfig::default().local_dir {
+        return config_dir.join(local_dir);
+    }
+    let sanitized: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    dirs::data_local_dir()
+        .map(|dir| dir.join("gitquarry"))
+        .unwrap_or_else(|| config_dir.join("local"))
+        .join(sanitized)
 }
 
 /// The config stores credentials in plain text. If anyone on the system can

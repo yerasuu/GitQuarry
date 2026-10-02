@@ -14,7 +14,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, TextSize, account_settings_page, csrf_field, effective_density, effective_locale,
-    effective_theme, layout, render_flash, require_csrf, require_login, settings_section,
+    effective_theme, federation_ui_active, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -27,12 +27,12 @@ use maud::{Markup, PreEscaped, html};
 pub(crate) async fn handler_appearance_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/appearance").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_appearance_page(&user, &csrf_field(&headers), None, locale);
-    let body = account_settings_page("appearance", content, locale).into_string();
+    let body = account_settings_page("appearance", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "appearance",
         "",
@@ -74,7 +74,7 @@ pub(crate) async fn handler_appearance_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/appearance").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -149,7 +149,7 @@ pub(crate) async fn handler_appearance_post(
         return Ok(axum::response::Html(content.into_string()).into_response());
     }
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = account_settings_page("appearance", content, locale).into_string();
+    let body = account_settings_page("appearance", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "appearance",
         "",
@@ -168,11 +168,7 @@ pub(crate) async fn handler_appearance_post(
 /// for it to belong to individually), so any of the 4 submits has to
 /// refresh the whole wrapper to get a fresh banner, same reasoning
 /// `settings::web::settings_body`'s own doc comment gives for `/_settings`.
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub fn render_appearance_page(
+pub(crate) fn render_appearance_page(
     user: &User,
     csrf: &str,
     message: Option<Flash>,

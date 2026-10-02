@@ -78,28 +78,6 @@ impl GitLabForge {
 
 /// `https://gitlab.example.com/group/subgroup/project.git` ->
 /// `("https://gitlab.example.com/api/v4", "group%2Fsubgroup%2Fproject")`.
-#[cfg(any(test, feature = "test-util"))]
-pub fn parse_api_base_and_project(remote_url: &str) -> Result<(String, String)> {
-    let (scheme, rest) = remote_url
-        .split_once("://")
-        .with_context(|| format!("couldn't parse GitLab mirror url: {remote_url}"))?;
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    if host.is_empty() {
-        bail!("couldn't parse GitLab mirror url (no host): {remote_url}");
-    }
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    let path = path.trim_matches('/');
-    if path.is_empty() {
-        bail!("couldn't parse GitLab mirror url (no project path): {remote_url}");
-    }
-    let encoded = path
-        .split('/')
-        .map(|segment| segment.replace('%', "%25"))
-        .collect::<Vec<_>>()
-        .join("%2F");
-    Ok((format!("{scheme}://{host}/api/v4"), encoded))
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn parse_api_base_and_project(remote_url: &str) -> Result<(String, String)> {
     let (scheme, rest) = remote_url
         .split_once("://")
@@ -123,79 +101,32 @@ fn parse_api_base_and_project(remote_url: &str) -> Result<(String, String)> {
 
 #[derive(Debug, Deserialize)]
 pub struct GlUser {
-    #[cfg(any(test, feature = "test-util"))]
-    pub username: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     username: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GlMergeRequest {
-    #[cfg(any(test, feature = "test-util"))]
-    pub iid: u64,
-    #[cfg(not(any(test, feature = "test-util")))]
     iid: u64,
-    #[cfg(any(test, feature = "test-util"))]
-    pub title: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     title: String,
     #[serde(default)]
-    #[cfg(any(test, feature = "test-util"))]
-    pub description: Option<String>,
-    #[serde(default)]
-    #[cfg(not(any(test, feature = "test-util")))]
     description: Option<String>,
     /// `"opened"` | `"closed"` | `"merged"` | `"locked"` — `"locked"` never
     /// shows up for a plain unprotected project, folded into `Open` here if
     /// it ever does rather than adding a fourth [`RemoteMrState`] variant
     /// only GitLab has.
-    #[cfg(any(test, feature = "test-util"))]
-    pub state: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     state: String,
-    #[cfg(any(test, feature = "test-util"))]
-    pub author: GlUser,
-    #[cfg(not(any(test, feature = "test-util")))]
     author: GlUser,
-    #[cfg(any(test, feature = "test-util"))]
-    pub source_branch: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     source_branch: String,
-    #[cfg(any(test, feature = "test-util"))]
-    pub target_branch: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     target_branch: String,
-    #[cfg(any(test, feature = "test-util"))]
-    pub created_at: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     created_at: String,
-    #[cfg(any(test, feature = "test-util"))]
-    pub updated_at: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     updated_at: String,
     #[serde(default)]
-    #[cfg(any(test, feature = "test-util"))]
-    pub merged_at: Option<String>,
-    #[serde(default)]
-    #[cfg(not(any(test, feature = "test-util")))]
     merged_at: Option<String>,
     #[serde(default)]
-    #[cfg(any(test, feature = "test-util"))]
-    pub merged_by: Option<GlUser>,
-    #[serde(default)]
-    #[cfg(not(any(test, feature = "test-util")))]
     merged_by: Option<GlUser>,
     #[serde(default)]
-    #[cfg(any(test, feature = "test-util"))]
-    pub merge_commit_sha: Option<String>,
-    #[serde(default)]
-    #[cfg(not(any(test, feature = "test-util")))]
     merge_commit_sha: Option<String>,
     #[serde(default)]
-    #[cfg(any(test, feature = "test-util"))]
-    pub sha: Option<String>,
-    #[serde(default)]
-    #[cfg(not(any(test, feature = "test-util")))]
     sha: Option<String>,
 }
 
@@ -234,27 +165,11 @@ impl From<GlMergeRequest> for RemoteMr {
 
 #[derive(Debug, Deserialize)]
 pub struct GlNote {
-    #[cfg(any(test, feature = "test-util"))]
-    pub id: u64,
-    #[cfg(not(any(test, feature = "test-util")))]
     id: u64,
-    #[cfg(any(test, feature = "test-util"))]
-    pub author: GlUser,
-    #[cfg(not(any(test, feature = "test-util")))]
     author: GlUser,
-    #[cfg(any(test, feature = "test-util"))]
-    pub body: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     body: String,
-    #[cfg(any(test, feature = "test-util"))]
-    pub created_at: String,
-    #[cfg(not(any(test, feature = "test-util")))]
     created_at: String,
     #[serde(default)]
-    #[cfg(any(test, feature = "test-util"))]
-    pub system: bool,
-    #[serde(default)]
-    #[cfg(not(any(test, feature = "test-util")))]
     system: bool,
 }
 

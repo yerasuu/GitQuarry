@@ -12,7 +12,7 @@
 use super::login;
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, copy_button, csrf_field, effective_density, effective_locale,
-    effective_theme, field, layout, render_flash, require_csrf, require_login, settings_section,
+    effective_theme, federation_ui_active, field, layout, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -28,14 +28,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub(crate) async fn handler_pat_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/pat").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let tokens = access::list_tokens_for_owner(ctx.backend().as_ref(), &ctx.cipher, &user.uid).await?;
     let repo_names = repo_uid_to_name_map(&ctx, &tokens).await;
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_pat_page(&tokens, &repo_names, &csrf_field(&headers), None, None, locale);
-    let body = account_settings_page("pat", content, locale).into_string();
+    let body = account_settings_page("pat", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "pat",
         "",
@@ -144,7 +144,7 @@ pub(crate) async fn handler_pat_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/pat").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -183,7 +183,7 @@ pub(crate) async fn handler_pat_post(
         return Ok(axum::response::Html(content.into_string()).into_response());
     }
     let topnav = login::topnav(&ctx, &headers).await;
-    let body = account_settings_page("pat", content, locale).into_string();
+    let body = account_settings_page("pat", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "pat",
         "",
@@ -213,29 +213,7 @@ async fn create_token(ctx: &gitquarry_core::app::AppContext, me: &User, form: &P
 /// one-time secret banner above it — either way the whole thing has to
 /// refresh, not just the form that submitted, same reasoning
 /// `render_appearance_page`'s own doc comment gives.
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_pat_page(
-    tokens: &[PersonalAccessToken],
-    repo_names: &HashMap<Uid, String>,
-    csrf: &str,
-    message: Option<Flash>,
-    pending_secret: Option<&str>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_pat_page(
-    tokens: &[PersonalAccessToken],
-    repo_names: &HashMap<Uid, String>,
-    csrf: &str,
-    message: Option<Flash>,
-    pending_secret: Option<&str>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_pat_page_impl(tokens, repo_names, csrf, message, pending_secret, locale)
-}
-fn render_pat_page_impl(
     tokens: &[PersonalAccessToken],
     repo_names: &HashMap<Uid, String>,
     csrf: &str,

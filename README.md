@@ -29,21 +29,30 @@ unencrypted.
 - **Merge requests** — reviews, inline comments, required reviewers, merge /
   squash / rebase / fast-forward, and conflict reports that hand you the
   commands to resolve locally.
-- **Accounts and permissions** — SSH keys, password and OIDC login, TOTP
-  two-factor with recovery codes, personal access tokens, GPG keys, groups
-  with owners and teams, a five-tier permission ladder
+- **Accounts and permissions** — SSH keys, password and OIDC login, passkeys
+  (a physical security key, or the device, a password manager or wallet, or
+  a phone) to sign in alone or in place of the code, TOTP two-factor with
+  recovery codes, personal access tokens, GPG keys, groups with direct
+  members and nested subgroups, a five-tier permission ladder
   (guest/reporter/developer/maintainer/owner), and public/limited/private repo
   visibility.
 - **Repo management** — create, fork, star, watch, topics, archive, transfer
   between namespaces, protected branches and tags, signed-commit enforcement,
   default-branch selection, and instance-wide search over filenames and commit
   messages.
+- **External mirrors** — push to, pull from or sync both ways with GitHub,
+  GitLab or Codeberg, optionally limited to branches matching glob patterns,
+  with two-way merge request sync. Pulled refs pass the same checks as a
+  push.
+- **Federation (optional)** — a separate `gitquarry-federation` process for
+  peer discovery, browsing and forking repos from other instances,
+  cross-instance merge requests and fine-grained tokens.
 - **Ops** — audit log, `/_healthz` and `/_metrics`, server settings editable
-  from the UI with conflict detection, idle- and size-based mirror eviction,
-  graceful shutdown.
+  from the UI with conflict detection, scheduled backups (bucket replica plus
+  config snapshots), automatic data migrations, idle- and size-based mirror
+  eviction, graceful shutdown.
 
-Storage drivers: S3, Cloudflare R2, Azure Blob Storage, Google Cloud Storage,
-and a local filesystem directory.
+Storage drivers: S3, Cloudflare R2 and a local filesystem directory.
 
 ## Quick start
 
@@ -58,7 +67,7 @@ Ports: `8080` for the web UI and smart-HTTP, `2222` for SSH.
 
 ### From source
 
-Needs Rust 1.97+ and network access to the `s3db` dependency repo
+Needs Rust 1.98+ and network access to the `s3db` dependency repo
 (`.cargo/config.toml` already sets `net.git-fetch-with-cli`). At runtime the
 host also needs `git`, `ssh-keygen` and `gpg` on `PATH`.
 
@@ -68,7 +77,7 @@ cargo build --release -p gitquarry
 ```
 
 With no config file anywhere in the resolution order, the first run serves a
-setup wizard on `--web-bind`: pick a driver, enter credentials, and it
+setup wizard at `/_setup` on `--web-bind`: pick a driver, enter credentials, and it
 verifies them against the bucket, writes the config, and creates the admin
 account — no restart needed.
 
@@ -87,7 +96,7 @@ user-global path.
 
 ```toml
 [buckets.myrepo]
-driver = "s3"              # s3 | r2 | azure | gcs | local
+driver = "s3"              # s3 | r2 | local
 bucket = "myrepo"
 region = "eu-west-1"
 endpoint_url = "https://s3.example.com"
@@ -99,6 +108,21 @@ passphrase = "..."         # mandatory: encrypts everything uploaded
 # allow_push_create = true # off by default: pushing an unknown repo fails
 ```
 
+Writes that can't reach the bucket right away are spooled locally and replayed
+by the server, at startup and every minute. Each bucket's spool lives under the
+user's data dir (`~/.local/share/gitquarry/<bucket>` on Linux) unless
+`[buckets.<name>.resilience] local_dir` says otherwise; a relative path there
+resolves against the directory holding `gitquarry.toml`.
+
+To run federation alongside, add a `[federation]` section with
+`internal_bind`, `internal_token` and `federation_url` (see
+`deploy/gitquarry.minio-test.toml.example`); without it, the federation routes
+answer 503.
+
+Passkeys stay off until the instance's public URL is set in
+`/_settings/network`: they are bound to that origin, never to whatever `Host`
+a request carries.
+
 Users, groups, per-repo settings and the SSH host key are not local files:
 they live encrypted in the bucket under `.conf/`, so a fresh container keeps
 its identity.
@@ -108,16 +132,22 @@ its identity.
 ```
 gitquarry [--bucket NAME] [--web-bind 0.0.0.0:8080] [--ssh-bind 0.0.0.0:2222]
           [--mirrors-dir PATH] [--mirrors-max-age 3d] [--mirrors-max-size 5G]
+          [--mirrors-large-repo-threshold 1G]
 ```
 
-`--bucket` is optional when the config declares exactly one. The bare mirrors
-under `--mirrors-dir` are a cache: they are evicted by age and total size, and
-rebuilt from the bucket on the next request.
+`--bucket` is optional when the config declares exactly one, or names a
+`default_bucket`. The bare mirrors under `--mirrors-dir` are a cache: they are
+evicted by age and total size, and rebuilt from the bucket on the next
+request. Mirrors at least `--mirrors-large-repo-threshold` in size are never
+evicted for age, only for the total size cap.
 
 | Command | What it does |
 | --- | --- |
 | `gitquarry fsck [--apply]` | Report (or remove) objects gitquarry never wrote inside a repo prefix |
-| `gitquarry repack <repo> [--apply]` | Consolidate a repo's accumulated packs into one |
+| `gitquarry repack <repo> [--max-pack-size BYTES] [--apply]` | Consolidate a repo's accumulated packs into as few as fit under the cap (1 GiB by default) |
+| `gitquarry migrate [--apply]` | Report (or run) pending bucket data migrations; the server runs them itself at startup |
+| `gitquarry backup [--dest DEST] [--minimal \| --with-derived]` | Replicate the bucket and snapshot its config to the backup destination |
+| `gitquarry restore --list` / `restore <snapshot-id> [--apply]` | List snapshots, or write one back over the live config |
 | `gitquarry backfill-repo-index` | One-time backfill for repos predating the owner/visibility indexes |
 
 The web UI ships no TLS of its own. Put it behind a reverse proxy for anything
@@ -132,24 +162,28 @@ that is not localhost.
 | `gitquarry-domain` | Repo/user/group domain layer and maintenance commands |
 | `gitquarry-webui` | Browsing and management UI, login, settings, search |
 | `gitquarry-wire` | Shared wire types |
-| `gitquarry-auth-crypto` | Password hashing, TOTP, OIDC |
+| `gitquarry-auth-crypto` | Password hashing, TOTP, OIDC, WebAuthn (passkeys) |
 | `gitquarry-gpg` | GPG key handling and signature verification |
 | `gitquarry-i18n` | Locale catalog |
+| `gitquarry-mirror-external` | External mirror sync engine |
+| `gitquarry-forge-clients` | GitHub, GitLab and Codeberg API clients |
+| `gitquarry-federation` | The optional `gitquarry-federation` binary and its library |
+| `gitquarry-test-support` | Shared fixtures for the integration tests (dev-only) |
 
 The storage engine is [`s3db`](https://git.yerasuu.com/yerasuu/s3db), a
 separate project consumed as a tag-pinned git dependency.
 
-`develop` and `master` carry the core only. Optional modules live on their own
-branches, each a snapshot of the last state where the module built, to be
-reintegrated one at a time: `feature/cicd` (CI/CD runner and SDKs),
-`feature/federation` (peer discovery, remote browse/fork, MR proxy),
-`feature/artifacts` (package registry), `feature/tracker` (issues, boards,
-milestones), `feature/mirror` (GitHub/GitLab/Codeberg mirroring).
+`develop` and `master` carry the core, external mirroring and federation.
+The other optional modules live on their own branches, each a snapshot of the
+last state where the module built, to be reintegrated one at a time:
+`feature/cicd` (CI/CD runner and SDKs), `feature/artifacts` (package
+registry), `feature/tracker` (issues, boards, milestones).
 
 ## Learn more
 
-- [CHANGELOG.md](CHANGELOG.md) — user-facing feature history, also served at
-  `/_changelog`
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each release
+- [tag-changelog/](tag-changelog/) — the technical notes per release; the
+  running version's are served at `/_changelog`
 - [docs/](docs/) — design notes and roadmap
 - [CLAUDE.md](CLAUDE.md) — project conventions
 

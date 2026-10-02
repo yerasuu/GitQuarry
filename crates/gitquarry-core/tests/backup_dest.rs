@@ -1,9 +1,6 @@
 use gitquarry_core::backup::dest::{self, Dest, Source};
-use gitquarry_core::config::{Config, LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, SALT_LEN};
-use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
-use std::sync::Arc;
+use gitquarry_core::config::Config;
+use gitquarry_test_support::{backend, cipher};
 
 #[test]
 fn every_destination_form_round_trips() {
@@ -125,15 +122,6 @@ fn a_missing_directory_fails_validation() {
     );
 }
 
-fn source_parts(root: &std::path::Path) -> (Arc<dyn Backend>, Arc<Cipher>) {
-    let backend: Arc<dyn Backend> = Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }));
-    let cipher = Arc::new(Cipher::derive("live passphrase", &[3u8; SALT_LEN]).unwrap());
-    (backend, cipher)
-}
-
 #[tokio::test]
 async fn resolving_self_reuses_the_live_backend_and_rules_out_a_replica() {
     let dir = tempfile::tempdir().unwrap();
@@ -141,7 +129,8 @@ async fn resolving_self_reuses_the_live_backend_and_rules_out_a_replica() {
         dir.path(),
         "[buckets.live]\ndriver = \"local\"\nbucket = \"/tmp/live\"\npassphrase = \"pw\"\n",
     );
-    let (backend, cipher) = source_parts(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let source = Source {
         bucket_name: "live",
         backend: &backend,
@@ -163,7 +152,8 @@ async fn resolving_a_directory_gives_a_writable_replica_target() {
         dir.path(),
         "[buckets.live]\ndriver = \"local\"\nbucket = \"/tmp/live\"\npassphrase = \"pw\"\n",
     );
-    let (backend, cipher) = source_parts(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let source = Source {
         bucket_name: "live",
         backend: &backend,
@@ -194,7 +184,8 @@ async fn resolving_a_bucket_that_is_not_configured_fails() {
         dir.path(),
         "[buckets.live]\ndriver = \"local\"\nbucket = \"/tmp/live\"\npassphrase = \"pw\"\n",
     );
-    let (backend, cipher) = source_parts(dir.path());
+    let backend = backend(dir.path());
+    let cipher = cipher();
     let source = Source {
         bucket_name: "live",
         backend: &backend,
@@ -222,7 +213,8 @@ async fn a_destination_bucket_with_a_different_passphrase_is_reported() {
             offsite_dir.path().display()
         ),
     );
-    let (backend, cipher) = source_parts(live_dir.path());
+    let backend = backend(live_dir.path());
+    let cipher = cipher();
     let source = Source {
         bucket_name: "live",
         backend: &backend,
@@ -276,7 +268,8 @@ async fn a_destination_bucket_with_the_same_passphrase_verifies() {
             offsite_dir.path().display()
         ),
     );
-    let (backend, cipher) = source_parts(live_dir.path());
+    let backend = backend(live_dir.path());
+    let cipher = cipher();
     let source = Source {
         bucket_name: "live",
         backend: &backend,

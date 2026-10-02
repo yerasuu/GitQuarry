@@ -30,15 +30,6 @@ deleted -- they're 0 bytes, gitquarry never writes one. Anything else
 unexpected is only reported, never auto-deleted: it could be real data
 even if unusual, this tool doesn't get to decide to delete it.";
 
-#[cfg(any(test, feature = "test-util"))]
-pub enum Finding {
-    /// Zero-byte, key ends in `/` — safe to auto-delete with `--apply`.
-    EmptyFolderMarker,
-    /// Doesn't match any known shape — reported only.
-    Unexpected,
-}
-
-#[cfg(not(any(test, feature = "test-util")))]
 enum Finding {
     /// Zero-byte, key ends in `/` — safe to auto-delete with `--apply`.
     EmptyFolderMarker,
@@ -73,7 +64,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             .context("--bucket NAME required (config has more than one bucket and no default_bucket)")?,
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
-    let backend = storage::build_backend(&bucket_cfg)?;
+    let backend = storage::build_backend(&bucket_cfg)?.backend;
 
     let repos = storage::remote::list_repo_paths(backend.as_ref()).await?;
     let mut markers = Vec::new();
@@ -136,23 +127,6 @@ async fn scan_repo(backend: &dyn Backend, prefix: &str) -> Result<Vec<(String, F
 
 /// `None` for anything gitquarry itself would have written for a repo —
 /// `refs.json`, `.conf/config.json`, a pack pair under `objects/pack/`.
-#[cfg(any(test, feature = "test-util"))]
-pub fn classify(suffix: &str) -> Option<Finding> {
-    if suffix.is_empty() || suffix.ends_with('/') {
-        return Some(Finding::EmptyFolderMarker);
-    }
-    let is_config = suffix == MANIFEST_SUFFIX || suffix == ".conf/config.json";
-    let is_pack = suffix.starts_with("objects/pack/pack-") && (suffix.ends_with(".pack") || suffix.ends_with(".idx"));
-    if is_config || is_pack {
-        None
-    } else {
-        Some(Finding::Unexpected)
-    }
-}
-
-/// `None` for anything gitquarry itself would have written for a repo —
-/// `refs.json`, `.conf/config.json`, a pack pair under `objects/pack/`.
-#[cfg(not(any(test, feature = "test-util")))]
 fn classify(suffix: &str) -> Option<Finding> {
     if suffix.is_empty() || suffix.ends_with('/') {
         return Some(Finding::EmptyFolderMarker);

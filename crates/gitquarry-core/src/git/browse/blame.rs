@@ -38,9 +38,7 @@ pub async fn blame(git_dir: &Path, rev: &str, path: &str) -> Result<Vec<BlameLin
     Ok(parse_blame_porcelain(&out))
 }
 
-// Already reachable unconditionally from `blame()` above, so no test-only
-// cfg gate is needed here — just widen to `pub` for the integration test.
-pub fn parse_blame_porcelain(text: &str) -> Vec<BlameLine> {
+fn parse_blame_porcelain(text: &str) -> Vec<BlameLine> {
     let mut lines = Vec::new();
     let mut cur_sha = String::new();
     let mut cur_author = String::new();

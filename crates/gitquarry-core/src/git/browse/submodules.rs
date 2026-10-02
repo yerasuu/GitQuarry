@@ -24,10 +24,8 @@ pub async fn read_gitmodules(git_dir: &Path, rev: &str) -> Result<HashMap<String
 
 /// Minimal `.gitmodules` INI parser: only cares about `path` and `url` keys
 /// inside `[submodule "..."]` sections, matched up when a new section starts
-/// or the file ends. `pub` (not cfg-gated, unlike most test-only widenings
-/// here) because `read_gitmodules` below calls it unconditionally in
-/// production too — the moved integration tests just reach the same fn.
-pub fn parse_gitmodules(text: &str) -> HashMap<String, String> {
+/// or the file ends.
+fn parse_gitmodules(text: &str) -> HashMap<String, String> {
     let mut result = HashMap::new();
     let mut cur_path: Option<String> = None;
     let mut cur_url: Option<String> = None;

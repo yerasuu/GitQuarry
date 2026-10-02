@@ -80,10 +80,7 @@ pub(crate) async fn resolve_compound_path(
     }))
 }
 
-// `pub` (not `pub(crate)`) because the integration test in `tests/` needs to
-// reach it, even though this is only ever called from within the crate in
-// non-test builds.
-pub fn find_marker(segments: &[&str], marker: &[&str]) -> Option<usize> {
+fn find_marker(segments: &[&str], marker: &[&str]) -> Option<usize> {
     if marker.is_empty() || segments.len() <= marker.len() {
         return None;
     }
@@ -95,10 +92,7 @@ pub fn find_marker(segments: &[&str], marker: &[&str]) -> Option<usize> {
 /// has a slash in it. Resolved by trying real ref names shortest-prefix
 /// first, so a branch literally named "release" wins over treating it as
 /// the start of some longer, unrelated ref.
-// `pub` (not `pub(crate)`) because the integration test in `tests/` needs to
-// reach it, even though this is only ever called from within the crate in
-// non-test builds.
-pub async fn split_branch_and_path(git_dir: &Path, rest: &[&str]) -> Result<(String, String), AppError> {
+async fn split_branch_and_path(git_dir: &Path, rest: &[&str]) -> Result<(String, String), AppError> {
     let refs = git::browse::list_refs_detailed(git_dir, "refs/").await?;
     let short_names: Vec<&str> = refs
         .iter()

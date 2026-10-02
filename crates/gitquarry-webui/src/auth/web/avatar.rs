@@ -8,8 +8,8 @@
 
 use super::login;
 use crate::webui::{
-    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme, field,
-    layout, require_csrf, require_login, settings_section,
+    AppError, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, field, layout, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -28,12 +28,12 @@ const MAX_AVATAR_UPLOAD_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let topnav = super::login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
     let content = render_profile_section(&user, &csrf_field(&headers), ctx.oidc.is_none(), None, locale);
-    let body = account_settings_page("profile", content, locale).into_string();
+    let body = account_settings_page("profile", content, federation_ui_active(&ctx), locale).into_string();
     Ok(Html(layout(
         "profile",
         "",
@@ -55,27 +55,7 @@ pub(crate) async fn handler_account_profile_get(State(ctx): State_, headers: Hea
 /// `email_self_service` is [`gitquarry_core::app::AppContext::oidc`] being
 /// unset — see `domain::user::set_own_email` for why the primary address is
 /// admin-managed wherever OIDC can resolve a login by it.
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_profile_section(
-    user: &User,
-    csrf: &str,
-    email_self_service: bool,
-    message: Option<crate::webui::Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_profile_section_impl(user, csrf, email_self_service, message, locale)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_profile_section(
-    user: &User,
-    csrf: &str,
-    email_self_service: bool,
-    message: Option<crate::webui::Flash>,
-    locale: gitquarry_i18n::Locale,
-) -> Markup {
-    render_profile_section_impl(user, csrf, email_self_service, message, locale)
-}
-fn render_profile_section_impl(
     user: &User,
     csrf: &str,
     email_self_service: bool,
@@ -206,7 +186,7 @@ pub(crate) async fn handler_emails_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -234,6 +214,7 @@ pub(crate) async fn handler_emails_post(
                 &account_settings_page(
                     "profile",
                     render_profile_section(&me, &csrf, self_service, Some(crate::webui::Flash::Err(&$msg)), locale),
+                    federation_ui_active(&ctx),
                     locale,
                 )
                 .into_string(),
@@ -309,6 +290,7 @@ pub(crate) async fn handler_emails_post(
             Some(crate::webui::Flash::Ok("saved.")),
             locale,
         ),
+        federation_ui_active(&ctx),
         locale,
     )
     .into_string();
@@ -338,7 +320,7 @@ pub(crate) async fn handler_avatar_upload_post(
     // multipart field and so can only be checked once the body is parsed.
     let me = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let mut csrf = String::new();
     let mut uploaded: Option<Vec<u8>> = None;
@@ -429,7 +411,7 @@ pub(crate) async fn handler_avatar_delete_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/profile").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

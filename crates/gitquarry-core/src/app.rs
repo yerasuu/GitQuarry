@@ -69,6 +69,12 @@ pub struct AppContext {
     /// runs, least-recently-queried survivors get evicted until back under
     /// this, if still over it.
     pub mirror_max_size_bytes: u64,
+    /// A mirror at or above this size is exempt from age-based eviction —
+    /// it still fully participates in the size-based pass, so
+    /// `mirror_max_size_bytes` is never bypassed. Always has a value (no
+    /// external wiring needed to be safe, unlike `oidc`/`mirror_sync`): it
+    /// only ever makes eviction more conservative.
+    pub mirror_large_repo_threshold_bytes: u64,
     /// `None` unless all four `oidc_*` settings are configured — see
     /// [`gitquarry_auth_crypto::oidc::discover`]. Web UI admin pages and
     /// reading `private` repos over the web both stay exactly as open as
@@ -77,6 +83,14 @@ pub struct AppContext {
     /// Failed-password-login tracker for `auth::web::login`'s local password
     /// form — see [`LoginAttempts`].
     pub login_attempts: LoginAttempts,
+    /// `None` unless `[federation]` is configured — see
+    /// [`FederationLink`]. Every outbound proxy route in `webui` checks
+    /// this before forwarding anything; absent, those routes simply don't
+    /// exist (see `config::FederationSection`'s own doc comment on the
+    /// "`None` = feature fully off" pattern).
+    pub federation: Option<FederationLink>,
+    /// anything, same "`None` = feature fully off" pattern
+    /// `federation` already establishes:
     /// `config::Config::allow_push_create` — gates the ssh:// receive-pack
     /// handler's implicit "first push creates the repo" branch. `false` by
     /// default (see that field's doc comment for why).
@@ -99,6 +113,20 @@ pub struct AppContext {
     pub mirror_sync: Option<Arc<dyn crate::mirror::MirrorSyncHook>>,
     /// Short-TTL cache for [`Self::visible_repo_uids`] — see that method.
     pub visible_repo_uids_cache: VisibleRepoUidsCache,
+}
+
+/// What core needs to reach `gitquarry-federation`'s own loopback API —
+/// the *outbound* half of the IPC boundary (the *inbound* half,
+/// `gitquarry-core`'s own `/_internal/*` server, is [`crate::internal_api::run_server`]).
+#[derive(Debug, Clone)]
+pub struct FederationLink {
+    /// `gitquarry-federation.toml`'s `listen` address, as a full
+    /// `http://host:port` base URL — `config::FederationSection::federation_url`.
+    pub base_url: String,
+    /// Shared secret sent as `X-Internal-Token` on every proxied request —
+    /// must equal federation's own `internal_token`.
+    pub internal_token: String,
+    pub http: reqwest::Client,
 }
 
 /// Backs [`AppContext::visible_repo_uids`]: the anonymous repo index (the
@@ -128,6 +156,19 @@ pub struct Mirror {
     pub remote: Remote,
     pub path: PathBuf,
     _guard: MirrorGuard,
+}
+
+/// A linked peer's specific repo, synced via a real `git fetch` against the
+/// peer's own URL instead of S3 — federation layer 2
+/// (`docs/federation-concept.md`), [`AppContext::open_remote_mirror`]'s
+/// return type. No `remote: Remote` field like [`Mirror`] has: there's no
+/// local S3 storage for this content until someone forks it (not built
+/// yet) — only ever a disposable local git mirror, same as [`Mirror`]'s
+/// `path` but with nothing backing it in this bucket.
+#[derive(Debug)]
+pub struct PeerMirror {
+    pub path: PathBuf,
+    _guard: OwnedRwLockWriteGuard<()>,
 }
 
 /// Which half of [`Locks`] a live [`Mirror`] is holding. An enum rather than
@@ -203,17 +244,11 @@ pub struct LoginAttempts {
     inner: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub const LOGIN_MAX_ATTEMPTS: usize = 5;
-#[cfg(not(any(test, feature = "test-util")))]
 const LOGIN_MAX_ATTEMPTS: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// Ceiling on [`LoginAttempts::penalty`]. Long enough that guessing is
 /// hopeless, short enough that a pile of stalled attempts can't be turned
 /// into a connection-exhaustion attack of its own.
-#[cfg(any(test, feature = "test-util"))]
-pub const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
-#[cfg(not(any(test, feature = "test-util")))]
 const LOGIN_MAX_PENALTY: Duration = Duration::from_secs(10);
 
 impl LoginAttempts {
@@ -239,9 +274,7 @@ impl LoginAttempts {
         Self::penalty_for(recent)
     }
 
-    /// [`penalty`](Self::penalty)'s arithmetic on its own, so the curve is
-    /// testable without a live tracker.
-    pub fn penalty_for(recent_failures: usize) -> Duration {
+    fn penalty_for(recent_failures: usize) -> Duration {
         let Some(over) = recent_failures.checked_sub(LOGIN_MAX_ATTEMPTS) else {
             return Duration::ZERO;
         };
@@ -309,13 +342,7 @@ pub struct GitRateLimiter {
     by_user: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
-#[cfg(not(any(test, feature = "test-util")))]
 const GIT_RATE_LIMIT_ANONYMOUS_MAX: usize = 30;
-#[cfg(any(test, feature = "test-util"))]
-pub const GIT_RATE_LIMIT_AUTHENTICATED_MAX: usize = 120;
-#[cfg(not(any(test, feature = "test-util")))]
 const GIT_RATE_LIMIT_AUTHENTICATED_MAX: usize = 120;
 const GIT_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
@@ -473,6 +500,11 @@ impl AppContext {
     /// namespace: a repo at `acme/team` and a subgroup called `acme/team`
     /// would both answer to `/acme/team`, so whichever exists first wins
     /// (see `auth::access::namespace_reserved`).
+    ///
+    /// Only the identity: no `RepoConfig` is written, so until the caller
+    /// writes one the repo has no `full_name` and renders unlinked. Go
+    /// through `domain::repo::create` unless the caller builds its own
+    /// config (fork, template, remote fork).
     pub async fn create_repo(&self, full_name: &str) -> Result<Option<ResolvedRepo>> {
         if crate::auth::access::namespace_reserved(self.backend().as_ref(), &self.cipher, full_name).await? {
             return Ok(None);
@@ -511,10 +543,14 @@ impl AppContext {
         Ok(path)
     }
 
+    /// `sync` is the one seam between this and [`Self::open_remote_mirror_at`]
+    /// (otherwise identical: validate path, lock, [`crate::mirror::ensure_bare_repo`],
+    /// sync, `gc::touch_last_access`) — which of the two real sync mechanisms
+    /// this codebase has applies, see [`crate::mirror::SyncStrategy`].
     async fn open_mirror_common(
         &self,
         key: &str,
-        remote: &crate::storage::remote::Remote,
+        sync: impl crate::mirror::SyncStrategy,
         access: Access,
     ) -> Result<(PathBuf, OwnedRwLockWriteGuard<()>)> {
         let path = self.mirror_path(key)?;
@@ -526,7 +562,7 @@ impl AppContext {
         if let Err(e) = install_instance_allowed_signers(self, &path).await {
             warn!(error = %e, "couldn't teach the mirror this instance's signing key");
         }
-        crate::mirror::sync_bare_repo_from_s3(remote, &path).await?;
+        sync.sync(&path).await?;
         // Marks this mirror as just-queried so the periodic sweep
         // (`crate::mirror::gc`) doesn't evict it as stale. Best-effort: a failure
         // here would just make this mirror a slightly earlier eviction
@@ -573,7 +609,8 @@ impl AppContext {
     /// marker nor re-records the repo as recently used.
     pub async fn warm_mirror(&self, uid: &Uid) -> Result<()> {
         let remote = self.remote_for_uid(uid);
-        self.open_mirror_common(uid.as_str(), &remote, Access::Warm).await?;
+        let sync = crate::mirror::FromBucket { remote: &remote };
+        self.open_mirror_common(uid.as_str(), sync, Access::Warm).await?;
         Ok(())
     }
 
@@ -583,14 +620,48 @@ impl AppContext {
     /// mirror just sat there until `mirror::gc` aged it out; now there's
     /// nothing to orphan).
     pub async fn open_mirror(&self, resolved: &ResolvedRepo) -> Result<Mirror> {
+        let sync = crate::mirror::FromBucket {
+            remote: &resolved.remote,
+        };
         let (path, guard) = self
-            .open_mirror_common(resolved.uid.as_str(), &resolved.remote, Access::Query)
+            .open_mirror_common(resolved.uid.as_str(), sync, Access::Query)
             .await?;
         Ok(Mirror {
             remote: resolved.remote.clone(),
             path,
             _guard: MirrorGuard::Exclusive(guard),
         })
+    }
+
+    /// Same lock/ensure/sync/touch shape as [`Self::open_mirror`], but for a
+    /// linked peer's repo instead of one in this bucket — federation layer 2
+    /// (`docs/federation-concept.md`). Keyed by `_remote/<peer_label>/<repo>`
+    /// (both already validated: `peer_label` via `access::validate_peer_name`
+    /// at add time, `repo_name` by the caller's own
+    /// `validate::sanitize_path` before this is ever called), so it can
+    /// never collide with a local mirror's own uid-keyed path or lock —
+    /// uids are opaque hex, never containing `/`. Synced unconditionally on
+    /// every call, same as `sync_bare_repo_from_s3` — no separate
+    /// staleness check, `git fetch --prune` is already a cheap no-op when
+    /// nothing changed on the peer's side.
+    ///
+    /// Takes a bare `(peer_label, git_base_url)` pair rather than a
+    /// `crate::federation::entities::Peer` — after the core/federation
+    /// binary split (`docs/federation-binary-split-concept.md` section 14)
+    /// core no longer keeps that type around just to call this; every
+    /// caller that still has an old `Peer` value passes its two fields
+    /// explicitly instead.
+    pub async fn open_remote_mirror_at(
+        &self,
+        peer_label: &str,
+        git_base_url: &str,
+        repo_name: &str,
+    ) -> Result<PeerMirror> {
+        let rel = format!("_remote/{peer_label}/{repo_name}");
+        let url = format!("{}/{repo_name}", git_base_url.trim_end_matches('/'));
+        let sync = crate::mirror::FromRemoteUrl { url: &url };
+        let (path, guard) = self.open_mirror_common(&rel, sync, Access::Query).await?;
+        Ok(PeerMirror { path, _guard: guard })
     }
 
     /// [`Self::open_mirror`] for a request that only reads the mirror — a

@@ -8,92 +8,65 @@ license.workspace = true
 
 [dependencies]
 # Async runtime
-futures = "0.3.33"
-tokio = { version = "1.53.1", features = [
-    "rt-multi-thread",
-    "macros",
-    "io-std",
-    "io-util",
-    "process",
-    "fs",
-    "net",
-    "signal",
-    "sync",
-    "time",
-] }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "process", "fs", "net", "signal", "sync", "time"] }
 
 # Database over S3-compatible storage (backends, encryption at rest, CAS).
-# Its own project now -- pinned by tag, never a floating branch, so
-# a rebuild always resolves the exact same engine. Public repo, fetched
-# over plain https, no credentials needed.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
-s3db-crypto = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6" }
+s3db = { workspace = true, features = ["streaming"] }
+s3db-crypto = { workspace = true }
 
 # Plain DTOs shared with the gitquarry-federation binary
-gitquarry-wire = { path = "../gitquarry-wire" }
+gitquarry-wire = { workspace = true }
 
 # git-smart-HTTP
-axum = { version = "0.8.9", features = ["multipart"] }
-# Outbound HTTP for federation's peer round-trip (src/federation.rs) --
-# pinned to the version google-cloud-auth/typespec_client_core already
-# resolve (see Cargo.lock), rustls-only so this never pulls in openssl.
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+axum = { workspace = true, features = ["multipart"] }
+# Outbound HTTP for federation's peer round-trip (src/federation.rs).
+reqwest = { workspace = true }
 
 # git/ssh
-russh = "0.62.5"
+russh = "0.63.3"
 
 # Crypto (encryption-at-rest lives in s3db; password/TOTP/OIDC live in
 # gitquarry-auth-crypto)
-rand = "0.10.2"
-sha2 = "0.11.0"
+rand = { workspace = true }
+sha2 = { workspace = true }
 
 # dyn-dispatch for MirrorSyncHook (mirror/mod.rs) -- gitquarry-server wires
 # gitquarry-mirror-external's real implementation in at startup, since core
 # can't depend on that crate directly without a cycle.
-async-trait = "0.1.91"
+async-trait = { workspace = true }
 
 # Serialization / config
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-toml = "1.1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
 
 # General utilities
-anyhow = "1.0.104"
-base64 = "0.23.1"
+anyhow = { workspace = true }
+base64 = { workspace = true }
 bytes = "1.12.1"
-dirs = "6.0.0"
-tempfile = "3.27.0"
-gitquarry-gpg = { path = "../gitquarry-gpg" }
-gitquarry-i18n = { path = "../gitquarry-i18n" }
-gitquarry-forge-clients = { path = "../gitquarry-forge-clients" }
-gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
+dirs = { workspace = true }
+tempfile = { workspace = true }
+gitquarry-gpg = { workspace = true }
+gitquarry-i18n = { workspace = true }
+gitquarry-forge-clients = { workspace = true }
+gitquarry-auth-crypto = { workspace = true }
 
 # Release source-archive generation: one `git archive --format=tar` decode,
 # re-emitted as both .tar.gz and .zip in-process (see git::browse::archive_pair)
 # instead of decoding the tree from git twice.
-flate2 = "1.1.5"
+flate2 = "1.1.10"
 tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
-tracing = "0.1.44"
-
-[features]
-# Un-gates anything normally #[cfg(test)] (which only applies to this
-# crate's own unit-test build, not the separate lib build that external
-# `tests/*.rs` integration tests link against) for gitquarry-webui's tests
-# and for this crate's own tests/, which now hold every unit test.
-test-util = []
+tracing = { workspace = true }
 
 [dev-dependencies]
-# Self-dependency so `cargo test` enables `test-util` automatically for
-# this crate's own tests/*.rs — see the [features] comment above.
-gitquarry-core = { path = ".", features = ["test-util"] }
-# tests/auth_domain_user_totp.rs needs `totp::STEP_SECS`/`totp::hotp`
-# (test-util-gated there too) to derive a code independently of the
-# production `verify_code` path it's testing against.
-gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto", features = ["test-util"] }
-# Only for tests/auth_domain_user_totp.rs's own TOTP-code derivation helper —
-# gitquarry-auth-crypto (a real dependency) owns this for production code.
-data-encoding = "2.11.1"
+gitquarry-test-support = { workspace = true }
+# tests/auth_domain_user_totp.rs derives TOTP codes on its own, independent
+# of gitquarry-auth-crypto (a real dependency that owns this in production).
+data-encoding = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

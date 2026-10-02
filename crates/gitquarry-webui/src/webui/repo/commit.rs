@@ -107,16 +107,6 @@ pub async fn render_commit(
 /// a `gpg` fork per commit (see `git::browse::CommitInfo::signature_status`),
 /// so the letter is now just signed/unsigned and the only real verdict is
 /// the one above it.
-#[cfg(any(test, feature = "test-util"))]
-pub fn signature_badge(status: char) -> Markup {
-    html! {
-        @match status {
-            'N' => {} // unsigned, no badge
-            _ => { " " span class="muted" { "unverified signature (missing key)" } }
-        }
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn signature_badge(status: char) -> Markup {
     html! {
         @match status {

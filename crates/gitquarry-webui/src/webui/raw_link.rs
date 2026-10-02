@@ -7,17 +7,6 @@
 
 use super::escaping::url_encode;
 
-#[cfg(any(test, feature = "test-util"))]
-pub struct RawLink<'a> {
-    kind: &'a str,
-    repo: &'a str,
-    rev: &'a str,
-    sha: Option<&'a str>,
-    fmt: Option<&'a str>,
-    tag: Option<&'a str>,
-    filename: Option<&'a str>,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) struct RawLink<'a> {
     kind: &'a str,
     repo: &'a str,
@@ -28,19 +17,6 @@ pub(crate) struct RawLink<'a> {
     filename: Option<&'a str>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn raw_link<'a>(kind: &'a str, repo: &'a str, rev: &'a str) -> RawLink<'a> {
-    RawLink {
-        kind,
-        repo,
-        rev,
-        sha: None,
-        fmt: None,
-        tag: None,
-        filename: None,
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn raw_link<'a>(kind: &'a str, repo: &'a str, rev: &'a str) -> RawLink<'a> {
     RawLink {
         kind,
@@ -64,23 +40,11 @@ impl<'a> RawLink<'a> {
         self
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn tag(mut self, tag: &'a str) -> Self {
-        self.tag = Some(tag);
-        self
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
     pub(crate) fn tag(mut self, tag: &'a str) -> Self {
         self.tag = Some(tag);
         self
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn filename(mut self, filename: &'a str) -> Self {
-        self.filename = Some(filename);
-        self
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
     pub(crate) fn filename(mut self, filename: &'a str) -> Self {
         self.filename = Some(filename);
         self
@@ -123,16 +87,6 @@ impl std::fmt::Display for RawLink<'_> {
 /// equivalent to mirror. `handler_raw_plain` resolves this form by
 /// checking real ref names (see `compound_path`), so `branch` itself may
 /// contain `/` without breaking the split.
-#[cfg(any(test, feature = "test-util"))]
-pub fn github_raw_link(repo: &str, branch: &str, path: &str) -> String {
-    format!(
-        "/_raw/plain/{}/refs/heads/{}/{}",
-        url_encode(repo),
-        url_encode(branch),
-        url_encode(path)
-    )
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn github_raw_link(repo: &str, branch: &str, path: &str) -> String {
     format!(
         "/_raw/plain/{}/refs/heads/{}/{}",

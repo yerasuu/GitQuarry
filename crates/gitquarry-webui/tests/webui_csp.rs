@@ -13,8 +13,9 @@
 //! next month has to be covered without anyone remembering this file
 //! exists.
 
-use gitquarry_webui::webui::CONTENT_SECURITY_POLICY;
+use gitquarry_test_support::Session;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Every `.rs` file in the crate, path and contents.
 fn crate_sources() -> Vec<(String, String)> {
@@ -118,23 +119,50 @@ fn no_view_links_to_a_javascript_url() {
     assert!(found.is_empty(), "{found:?} link to a javascript: URL");
 }
 
-#[test]
-fn the_policy_allows_no_inline_style_or_script() {
+/// The policy as `security_headers` sends it — read off real responses, so a
+/// route that bypassed the middleware (or a directive relaxed there) shows up
+/// here rather than only in a browser console.
+async fn served_policy(path: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let app = gitquarry_webui::webui::router(Arc::new(gitquarry_test_support::ctx(dir.path())));
+    Session::get_as(&app, path, None)
+        .await
+        .headers
+        .get("content-security-policy")
+        .unwrap_or_else(|| panic!("GET {path} carries no Content-Security-Policy"))
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn every_kind_of_response_carries_the_policy() {
+    // A page, a static asset, a plain-text raw error and an HTML 404: the
+    // header comes from one layer, so none of them may be missing it.
+    for path in [
+        "/_license",
+        "/_assets/app.js",
+        "/_raw/plain/acme/missing",
+        "/acme/missing",
+    ] {
+        assert_eq!(
+            served_policy(path).await,
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+             frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "GET {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_policy_allows_no_inline_style_or_script() {
+    let policy = served_policy("/_license").await;
+    assert!(policy.contains("style-src 'self';"), "{policy}");
+    assert!(policy.contains("script-src 'self';"), "{policy}");
+    assert!(!policy.contains("'unsafe-inline'"), "{policy}");
     assert!(
-        CONTENT_SECURITY_POLICY.contains("style-src 'self';"),
-        "{CONTENT_SECURITY_POLICY}"
-    );
-    assert!(
-        CONTENT_SECURITY_POLICY.contains("script-src 'self';"),
-        "{CONTENT_SECURITY_POLICY}"
-    );
-    assert!(
-        !CONTENT_SECURITY_POLICY.contains("'unsafe-inline'"),
-        "{CONTENT_SECURITY_POLICY}"
-    );
-    assert!(
-        !CONTENT_SECURITY_POLICY.contains("'unsafe-hashes'") && !CONTENT_SECURITY_POLICY.contains("'unsafe-eval'"),
-        "{CONTENT_SECURITY_POLICY}"
+        !policy.contains("'unsafe-hashes'") && !policy.contains("'unsafe-eval'"),
+        "{policy}"
     );
 }
 

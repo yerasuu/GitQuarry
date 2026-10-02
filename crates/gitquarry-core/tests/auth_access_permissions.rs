@@ -1,10 +1,14 @@
-use gitquarry_core::auth::access::permissions::*;
+use gitquarry_core::auth::access::*;
 use gitquarry_core::auth::entities::{Group, Permission, Team, User};
+use gitquarry_core::crypto::Cipher;
+use gitquarry_core::storage::Backend;
+use gitquarry_core::storage::settings::claim_repo_name_self_healing;
 use gitquarry_core::storage::uid::Uid;
+use std::sync::Arc;
 
 /// `repos` labels double as deterministic test uids via `Uid`'s
-/// `From<String>` — the same label passed to a test's `effective_permission`
-/// call (wrapped the same way) matches the key stored here.
+/// `From<String>` — [`Bucket::permission`] claims each repo label under that
+/// same uid, so the grant stored here matches the repo it resolves to.
 fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
     User {
         uid: Uid::new(),
@@ -17,6 +21,7 @@ fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
         password_hash: None,
         is_admin: false,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),
@@ -55,7 +60,7 @@ fn team(name: &str, members: &[&User], permission: Permission, repos: Option<&[&
 
 fn group(name: &str, members: &[(&User, Permission)]) -> Group {
     Group {
-        uid: Default::default(),
+        uid: Uid::new(),
         name: name.to_string(),
         description: None,
         members: members.iter().map(|(u, p)| (u.uid.clone(), *p)).collect(),
@@ -71,7 +76,7 @@ fn group(name: &str, members: &[(&User, Permission)]) -> Group {
 /// this is asserting that the upgrade doesn't silently revoke access.
 fn legacy_group(name: &str, owners: &[&User], teams: Vec<Team>) -> Group {
     Group {
-        uid: Default::default(),
+        uid: Uid::new(),
         name: name.to_string(),
         description: None,
         members: Default::default(),
@@ -82,80 +87,117 @@ fn legacy_group(name: &str, owners: &[&User], teams: Vec<Team>) -> Group {
     }
 }
 
-#[test]
-fn effective_permission_prefers_explicit_repo_grant_over_group() {
+/// A real local bucket: `effective_permission_for_user` resolves the repo's
+/// uid through the repo-name index and the group chain through stored
+/// `Group` records, so both have to exist for the decision to see them.
+struct Bucket {
+    _dir: tempfile::TempDir,
+    backend: Arc<dyn Backend>,
+    cipher: Arc<Cipher>,
+}
+
+impl Bucket {
+    async fn with_groups(groups: &[Group]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = gitquarry_test_support::backend(dir.path());
+        let cipher = gitquarry_test_support::cipher();
+        for group in groups {
+            put_group(&*backend, &cipher, group, None).await.unwrap();
+            let _ = group.claim_uid(&*backend, &cipher).await;
+        }
+        Self {
+            _dir: dir,
+            backend,
+            cipher,
+        }
+    }
+
+    /// Claims `repo` under [`ruid`]`(repo)` first (a no-op when an earlier
+    /// call already did), so explicit grants and scoped legacy teams keyed by
+    /// that uid apply to it.
+    async fn permission(&self, user: &User, repo: &str) -> Option<Permission> {
+        claim_repo_name_self_healing(&*self.backend, &self.cipher, repo, &ruid(repo), |_| async { Ok(true) })
+            .await
+            .unwrap();
+        effective_permission_for_user(&*self.backend, &self.cipher, user, repo)
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn effective_permission_prefers_explicit_repo_grant_over_group() {
     let alice = user_with_repos("alice", &[("acme/proj", Permission::Developer)]);
-    let acme = group("acme", &[(&alice, Permission::Reporter)]);
+    let bucket = Bucket::with_groups(&[group("acme", &[(&alice, Permission::Reporter)])]).await;
     assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
+        bucket.permission(&alice, "acme/proj").await,
         Some(Permission::Developer)
     );
 }
 
-#[test]
-fn effective_permission_own_namespace_gets_implicit_owner() {
+#[tokio::test]
+async fn effective_permission_own_namespace_gets_implicit_owner() {
     // No explicit grant, no group named "alice" — just a personal repo
     // under alice's own username, same as `/_new` creates by default.
     let alice = user_with_repos("alice", &[]);
     let bob = user_with_repos("bob", &[]);
-    assert_eq!(
-        effective_permission(&alice, &[], "alice/proj", &ruid("alice/proj")),
-        Some(Permission::Owner)
-    );
+    let bucket = Bucket::with_groups(&[]).await;
+    assert_eq!(bucket.permission(&alice, "alice/proj").await, Some(Permission::Owner));
     // Someone else's personal namespace grants nothing.
-    assert_eq!(effective_permission(&bob, &[], "alice/proj", &ruid("alice/proj")), None);
+    assert_eq!(bucket.permission(&bob, "alice/proj").await, None);
 }
 
 /// The whole point of the direct-membership model: one entry on the group,
 /// no per-repo grant, and it covers every repo in the group.
-#[test]
-fn effective_permission_applies_a_group_role_to_every_repo_in_the_group() {
+#[tokio::test]
+async fn effective_permission_applies_a_group_role_to_every_repo_in_the_group() {
     let alice = user_with_repos("alice", &[]);
-    let acme = group("acme", &[(&alice, Permission::Developer)]);
-    assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/web", &ruid("acme/web")),
-        Some(Permission::Developer)
-    );
-    assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/api", &ruid("acme/api")),
-        Some(Permission::Developer)
-    );
+    let bucket = Bucket::with_groups(&[group("acme", &[(&alice, Permission::Developer)])]).await;
+    assert_eq!(bucket.permission(&alice, "acme/web").await, Some(Permission::Developer));
+    assert_eq!(bucket.permission(&alice, "acme/api").await, Some(Permission::Developer));
 }
 
-#[test]
-fn effective_permission_grants_nothing_to_a_non_member() {
+#[tokio::test]
+async fn effective_permission_grants_nothing_to_a_non_member() {
     let alice = user_with_repos("alice", &[]);
     let bob = user_with_repos("bob", &[]);
-    let acme = group("acme", &[(&alice, Permission::Developer)]);
-    assert_eq!(
-        effective_permission(&bob, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
-        None
-    );
+    let bucket = Bucket::with_groups(&[group("acme", &[(&alice, Permission::Developer)])]).await;
+    assert_eq!(bucket.permission(&bob, "acme/proj").await, None);
+}
+
+/// A repo that was never created still resolves: namespace and group grants
+/// don't depend on the repo existing (that's the "can I push to create this"
+/// answer), while explicit grants keyed by a repo uid can't match anything.
+#[tokio::test]
+async fn effective_permission_resolves_a_repo_that_does_not_exist_yet() {
+    let alice = user_with_repos("alice", &[("acme/ghost", Permission::Maintainer)]);
+    let bucket = Bucket::with_groups(&[group("acme", &[(&alice, Permission::Reporter)])]).await;
+    let unclaimed = |repo| effective_permission_for_user(&*bucket.backend, &bucket.cipher, &alice, repo);
+    assert_eq!(unclaimed("acme/ghost").await.unwrap(), Some(Permission::Reporter));
+    assert_eq!(unclaimed("alice/ghost").await.unwrap(), Some(Permission::Owner));
 }
 
 /// Regression: a bucket upgraded before the `group-members` data migration runs still
 /// has its membership in `owners`/`teams`, and those must keep granting —
 /// reading only `members` there would revoke everyone at once.
-#[test]
-fn effective_permission_still_honors_a_legacy_owner() {
+#[tokio::test]
+async fn effective_permission_still_honors_a_legacy_owner() {
     let alice = user_with_repos("alice", &[]);
-    let acme = legacy_group("acme", &[&alice], vec![]);
-    assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
-        Some(Permission::Owner)
-    );
+    let bucket = Bucket::with_groups(&[legacy_group("acme", &[&alice], vec![])]).await;
+    assert_eq!(bucket.permission(&alice, "acme/proj").await, Some(Permission::Owner));
 }
 
-#[test]
-fn effective_permission_still_honors_an_unscoped_legacy_team() {
+#[tokio::test]
+async fn effective_permission_still_honors_an_unscoped_legacy_team() {
     let alice = user_with_repos("alice", &[]);
     let acme = legacy_group(
         "acme",
         &[],
         vec![team("everyone", &[&alice], Permission::Developer, None)],
     );
+    let bucket = Bucket::with_groups(&[acme]).await;
     assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
+        bucket.permission(&alice, "acme/proj").await,
         Some(Permission::Developer)
     );
 }
@@ -163,42 +205,33 @@ fn effective_permission_still_honors_an_unscoped_legacy_team() {
 /// A legacy team scoped to a subset of the group's repos must not read as a
 /// group-wide role — folding it into one would silently escalate its members
 /// on every other repo in the group.
-#[test]
-fn effective_permission_keeps_a_scoped_legacy_team_scoped() {
+#[tokio::test]
+async fn effective_permission_keeps_a_scoped_legacy_team_scoped() {
     let alice = user_with_repos("alice", &[]);
     let acme = legacy_group(
         "acme",
         &[],
         vec![team("frontend", &[&alice], Permission::Developer, Some(&["acme/web"]))],
     );
-    assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/web", &ruid("acme/web")),
-        Some(Permission::Developer)
-    );
-    assert_eq!(
-        effective_permission(
-            &alice,
-            std::slice::from_ref(&acme),
-            "acme/backend",
-            &ruid("acme/backend")
-        ),
-        None
-    );
+    let bucket = Bucket::with_groups(&[acme]).await;
+    assert_eq!(bucket.permission(&alice, "acme/web").await, Some(Permission::Developer));
+    assert_eq!(bucket.permission(&alice, "acme/backend").await, None);
 }
 
-#[test]
-fn effective_permission_picks_the_highest_of_the_role_and_the_legacy_grants() {
+#[tokio::test]
+async fn effective_permission_picks_the_highest_of_the_role_and_the_legacy_grants() {
     let alice = user_with_repos("alice", &[]);
     let mut acme = group("acme", &[(&alice, Permission::Reporter)]);
     acme.legacy_teams = vec![team("writers", &[&alice], Permission::Developer, Some(&["acme/proj"]))];
+    let bucket = Bucket::with_groups(&[acme]).await;
     assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/proj", &ruid("acme/proj")),
+        bucket.permission(&alice, "acme/proj").await,
         Some(Permission::Developer)
     );
     // Outside the scoped team's repo list, the group-wide role is all
     // that's left.
     assert_eq!(
-        effective_permission(&alice, std::slice::from_ref(&acme), "acme/other", &ruid("acme/other")),
+        bucket.permission(&alice, "acme/other").await,
         Some(Permission::Reporter)
     );
 }
@@ -206,13 +239,14 @@ fn effective_permission_picks_the_highest_of_the_role_and_the_legacy_grants() {
 /// A repo inside a subgroup: membership in the outer group carries down, so
 /// `acme`'s developers can push `acme/team/web` without being listed on the
 /// subgroup at all — that inheritance is the whole reason subgroups exist.
-#[test]
-fn effective_permission_inherits_a_role_from_an_ancestor_group() {
+#[tokio::test]
+async fn effective_permission_inherits_a_role_from_an_ancestor_group() {
     let alice = user_with_repos("alice", &[]);
     let acme = group("acme", &[(&alice, Permission::Developer)]);
     let team = group("acme/team", &[]);
+    let bucket = Bucket::with_groups(&[acme, team]).await;
     assert_eq!(
-        effective_permission(&alice, &[acme, team], "acme/team/web", &ruid("acme/team/web")),
+        bucket.permission(&alice, "acme/team/web").await,
         Some(Permission::Developer)
     );
 }
@@ -220,13 +254,14 @@ fn effective_permission_inherits_a_role_from_an_ancestor_group() {
 /// The innermost group wins when it grants more — a subgroup can raise a
 /// member above what they hold in the parent, never lower it (the chain is
 /// a `.max()`, same as every other grant source here).
-#[test]
-fn effective_permission_takes_the_highest_tier_in_the_chain() {
+#[tokio::test]
+async fn effective_permission_takes_the_highest_tier_in_the_chain() {
     let alice = user_with_repos("alice", &[]);
     let acme = group("acme", &[(&alice, Permission::Reporter)]);
     let team = group("acme/team", &[(&alice, Permission::Maintainer)]);
+    let bucket = Bucket::with_groups(&[acme, team]).await;
     assert_eq!(
-        effective_permission(&alice, &[acme, team], "acme/team/web", &ruid("acme/team/web")),
+        bucket.permission(&alice, "acme/team/web").await,
         Some(Permission::Maintainer)
     );
 }
@@ -235,25 +270,21 @@ fn effective_permission_takes_the_highest_tier_in_the_chain() {
 /// on the first one instead and `acme/team/web` resolves against a namespace
 /// of `acme`, which for a personal path (`alice/team/web`) would hand out
 /// implicit `Owner` to whoever happens to be named `alice`.
-#[test]
-fn effective_permission_reads_the_namespace_up_to_the_last_slash() {
+#[tokio::test]
+async fn effective_permission_reads_the_namespace_up_to_the_last_slash() {
     let alice = user_with_repos("alice", &[]);
-    assert_eq!(
-        effective_permission(&alice, &[], "alice/proj", &ruid("alice/proj")),
-        Some(Permission::Owner)
-    );
-    assert_eq!(
-        effective_permission(&alice, &[], "alice/team/proj", &ruid("alice/team/proj")),
-        None
-    );
+    let bucket = Bucket::with_groups(&[]).await;
+    assert_eq!(bucket.permission(&alice, "alice/proj").await, Some(Permission::Owner));
+    assert_eq!(bucket.permission(&alice, "alice/team/proj").await, None);
 }
 
-#[test]
-fn effective_permission_falls_back_to_default_permission_when_no_group_matches() {
+#[tokio::test]
+async fn effective_permission_falls_back_to_default_permission_when_no_group_matches() {
     let mut alice = user_with_repos("alice", &[]);
     alice.default_permission = Some(Permission::Reporter);
+    let bucket = Bucket::with_groups(&[]).await;
     assert_eq!(
-        effective_permission(&alice, &[], "someone/proj", &ruid("someone/proj")),
+        bucket.permission(&alice, "someone/proj").await,
         Some(Permission::Reporter)
     );
 }

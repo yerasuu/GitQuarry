@@ -4,7 +4,7 @@
 //! already-written config — infra-as-code, a config copied ahead of the
 //! first real deploy, ...) — see `crate::serve::run` for both checks. One
 //! form, served on the same `--web-bind` the real web UI will use once
-//! configured: a storage driver (s3/r2/azure/gcs/local) + its credentials +
+//! configured: a storage driver (s3/r2/local) + its credentials +
 //! encryption passphrase, plus an initial admin user for the web UI. On the
 //! second path every field above the admin user is pre-filled from the
 //! config already on disk (still editable — this is the one screen, not a
@@ -22,17 +22,16 @@ use anyhow::{Context, Result, bail, ensure};
 use axum::Router;
 use axum::extract::{Form, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use gitquarry_auth_crypto::password as pw;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::entities::User;
-use gitquarry_core::config::{
-    self, AzureParams, BackendConfig, BucketConfig, GcsParams, LocalEngine, LocalParams, R2Params, S3Params,
-};
+use gitquarry_core::config::{self, BackendConfig, BucketConfig, LocalEngine, LocalParams, R2Params, S3Params};
 use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::{self, Backend};
 use gitquarry_webui::webui::{esc, layout, non_empty};
+use s3db::SpooledBackend;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -47,6 +46,7 @@ pub struct WizardOutcome {
     pub bucket: String,
     pub bucket_cfg: BucketConfig,
     pub backend: Arc<dyn Backend>,
+    pub spool: Option<Arc<SpooledBackend>>,
     pub cipher: Cipher,
 }
 
@@ -72,6 +72,10 @@ struct WizardState {
 
 type State_ = axum::extract::State<Arc<WizardState>>;
 
+/// The wizard's own path, under the `/_` prefix every non-repo route uses,
+/// so the page it serves reads as setup and not as some repository.
+const SETUP_PATH: &str = "/_setup";
+
 pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -> Result<WizardOutcome> {
     let is_prefilled = prefill.is_some();
     let (result_tx, result_rx) = oneshot::channel();
@@ -84,14 +88,16 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
     });
 
     let app = Router::new()
-        .route("/", get(handler_get).post(handler_post))
+        .route("/", get(|| async { Redirect::to(SETUP_PATH) }))
+        .route(SETUP_PATH, get(handler_get).post(handler_post))
+        .merge(gitquarry_webui::webui::asset_routes())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(web_bind)
         .await
         .with_context(|| format!("couldn't listen on {web_bind} for the setup wizard"))?;
     info!(
-        "{} — open http://{web_bind} to {}",
+        "{} — open http://{web_bind}{SETUP_PATH} to {}",
         if is_prefilled {
             format!("{} connects but has no admin user yet", config_path.display())
         } else {
@@ -124,72 +130,13 @@ async fn handler_get(State(state): State_) -> Html<String> {
 /// [`build_backend_config`] — no field is shared across two driver sections
 /// (there used to be one `bucket`/`access_key_id`/`secret_access_key` each,
 /// reused by whichever driver was picked; confusing to fill out since
-/// nothing on the page said which of the five sections a given value
+/// nothing on the page said which of the sections a given value
 /// actually belonged to once submitted).
-// `pub`/field visibility only widened under `test`/`test-util` (see
-// gitquarry-core's `mirror::hook::RefUpdate` for the same dual-definition
-// pattern): `tests/setup.rs` constructs this struct via literal, touching
-// every field, but it must stay crate-private in a normal build.
-#[cfg(any(test, feature = "test-util"))]
 #[derive(Deserialize)]
-pub struct WizardForm {
+struct WizardForm {
     /// `[buckets.<name>]` section key / `--bucket` value — a separate,
     /// purely local concept from any driver's own physical storage-target
     /// identifier (see `S3Params::bucket`'s doc comment).
-    pub name: String,
-    pub driver: String,
-    #[serde(default)]
-    pub s3_bucket: String,
-    #[serde(default)]
-    pub s3_region: String,
-    #[serde(default)]
-    pub s3_endpoint_url: String,
-    #[serde(default)]
-    pub s3_access_key_id: String,
-    #[serde(default)]
-    pub s3_secret_access_key: String,
-    #[serde(default)]
-    pub s3_path_style: String,
-    #[serde(default)]
-    pub r2_bucket: String,
-    #[serde(default)]
-    pub r2_account_id: String,
-    #[serde(default)]
-    pub r2_access_key_id: String,
-    #[serde(default)]
-    pub r2_secret_access_key: String,
-    #[serde(default)]
-    pub azure_bucket: String,
-    #[serde(default)]
-    pub azure_account_name: String,
-    #[serde(default)]
-    pub azure_tenant_id: String,
-    #[serde(default)]
-    pub azure_client_id: String,
-    #[serde(default)]
-    pub azure_client_secret: String,
-    #[serde(default)]
-    pub gcs_bucket: String,
-    #[serde(default)]
-    pub gcs_service_account_json_path: String,
-    #[serde(default)]
-    pub local_bucket: String,
-    pub passphrase: String,
-    pub admin_username: String,
-    /// Optional, but the only chance to set one at creation: `User::email`
-    /// can be changed afterward only by an admin through `/_users`
-    /// (`auth::domain::user::set_email`), and this account *is* the first
-    /// admin. Left blank, every merge commit it stamps carries the
-    /// synthetic `<username>@users.noreply.gitquarry` address instead
-    /// (`domain::merge_request::merger_identity`).
-    #[serde(default)]
-    pub admin_email: String,
-    pub admin_password: String,
-    pub admin_password_confirm: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
-#[derive(Deserialize)]
-struct WizardForm {
     name: String,
     driver: String,
     #[serde(default)]
@@ -213,21 +160,10 @@ struct WizardForm {
     #[serde(default)]
     r2_secret_access_key: String,
     #[serde(default)]
-    azure_bucket: String,
-    #[serde(default)]
-    azure_account_name: String,
-    #[serde(default)]
-    azure_tenant_id: String,
-    #[serde(default)]
-    azure_client_id: String,
-    #[serde(default)]
-    azure_client_secret: String,
-    #[serde(default)]
-    gcs_bucket: String,
-    #[serde(default)]
-    gcs_service_account_json_path: String,
-    #[serde(default)]
     local_bucket: String,
+    /// Blank on a pre-filled run keeps the stored passphrase — see
+    /// `try_setup`.
+    #[serde(default)]
     passphrase: String,
     admin_username: String,
     /// Optional, but the only chance to set one: `User::email` can be
@@ -293,19 +229,33 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
         form.admin_password == form.admin_password_confirm,
         "admin password and confirmation don't match"
     );
+    let backend_cfg = build_backend_config(form, state.prefill.as_ref().map(|p| &p.bucket_cfg.backend))?;
+    // Blank keeps the stored passphrase, under the same "same destination"
+    // rule as a blank secret (see `same_destination`).
+    let passphrase = match &state.prefill {
+        Some(p) if form.passphrase.trim().is_empty() && same_destination(&backend_cfg, &p.bucket_cfg.backend) => {
+            p.bucket_cfg.passphrase.clone()
+        }
+        _ => form.passphrase.clone(),
+    };
     // Same rule `config::Config::load_from` enforces for an existing file —
     // checked here too so a typo shows up as a form error instead of a
     // config file that's already unusable the moment it's written.
-    ensure!(!form.passphrase.trim().is_empty(), "passphrase can't be empty");
-
-    let backend_cfg = build_backend_config(form, state.prefill.as_ref().map(|p| &p.bucket_cfg.backend))?;
+    ensure!(!passphrase.trim().is_empty(), "passphrase can't be empty");
     let bucket_cfg = BucketConfig {
         backend: backend_cfg,
-        passphrase: form.passphrase.clone(),
+        passphrase,
         resilience: Default::default(),
     };
 
-    let backend = storage::build_backend(&bucket_cfg)?;
+    // Written to `gitquarry.toml` as-is, keeping its portable default; the
+    // live backend gets the resolved directory `Config::load_from` would give
+    // it on the next start.
+    let mut live_cfg = bucket_cfg.clone();
+    live_cfg.resilience.local_dir =
+        config::resolve_local_dir(&name, &live_cfg.resilience.local_dir, &state.config_path);
+    let built = storage::build_backend(&live_cfg)?;
+    let backend = built.backend;
     // The real round trip: wrong creds/endpoint/bucket, or a passphrase
     // that doesn't match a bucket already used before, all fail clearly
     // right here instead of writing a config that can't actually connect.
@@ -329,8 +279,9 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
 
     Ok(WizardOutcome {
         bucket: name,
-        bucket_cfg,
+        bucket_cfg: live_cfg,
         backend,
+        spool: built.spool,
         cipher,
     })
 }
@@ -345,16 +296,63 @@ async fn try_setup(state: &WizardState, form: &WizardForm) -> Result<WizardOutco
 /// `existing` is the prefilled run's already-on-disk backend config, if
 /// any (see [`Prefill`]) — only consulted by the `"local"` arm, to decide
 /// [`LocalParams::engine`] (see there for why).
-#[cfg(any(test, feature = "test-util"))]
-pub fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
-    build_backend_config_impl(form, existing)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn build_backend_config(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
-    build_backend_config_impl(form, existing)
+    let mut cfg = backend_config_from_form(form, existing)?;
+    if let Some(existing) = existing.filter(|existing| same_destination(&cfg, existing)) {
+        keep_blank_secrets(&mut cfg, existing);
+    }
+    match &cfg {
+        BackendConfig::S3(s) => ensure!(
+            !s.secret_access_key.to_string().is_empty(),
+            "s3: secret access key is empty"
+        ),
+        BackendConfig::R2(r) => ensure!(
+            !r.secret_access_key.to_string().is_empty(),
+            "r2: secret access key is empty"
+        ),
+        BackendConfig::Local(_) => {}
+    }
+    Ok(cfg)
 }
 
-fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
+/// Whether `new` points at exactly what `stored` does, secrets aside — the
+/// condition for letting a blank secret field mean "keep the stored one".
+/// The wizard answers anyone who reaches the port before an admin exists,
+/// so a stored secret must never follow a changed endpoint, bucket or key
+/// id to a destination it wasn't configured for.
+fn same_destination(new: &BackendConfig, stored: &BackendConfig) -> bool {
+    match (new, stored) {
+        (BackendConfig::S3(n), BackendConfig::S3(s)) => {
+            n.bucket == s.bucket
+                && n.region == s.region
+                && n.endpoint_url == s.endpoint_url
+                && n.access_key_id == s.access_key_id
+                && n.path_style == s.path_style
+                && n.allow_insecure_http == s.allow_insecure_http
+        }
+        (BackendConfig::R2(n), BackendConfig::R2(s)) => {
+            n.bucket == s.bucket && n.account_id == s.account_id && n.access_key_id == s.access_key_id
+        }
+        (BackendConfig::Local(n), BackendConfig::Local(s)) => n.bucket == s.bucket,
+        _ => false,
+    }
+}
+
+/// Fills each secret the form left blank from `stored`; only called once
+/// [`same_destination`] holds.
+fn keep_blank_secrets(cfg: &mut BackendConfig, stored: &BackendConfig) {
+    match (cfg, stored) {
+        (BackendConfig::S3(n), BackendConfig::S3(s)) if n.secret_access_key.to_string().is_empty() => {
+            n.secret_access_key = s.secret_access_key.clone();
+        }
+        (BackendConfig::R2(n), BackendConfig::R2(s)) if n.secret_access_key.to_string().is_empty() => {
+            n.secret_access_key = s.secret_access_key.clone();
+        }
+        _ => {}
+    }
+}
+
+fn backend_config_from_form(form: &WizardForm, existing: Option<&BackendConfig>) -> Result<BackendConfig> {
     match form.driver.as_str() {
         "s3" => {
             let bucket = form.s3_bucket.trim().to_string();
@@ -362,7 +360,6 @@ fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>
             let access_key_id = form.s3_access_key_id.trim().to_string();
             let secret_access_key = form.s3_secret_access_key.trim().to_string();
             ensure!(!access_key_id.is_empty(), "s3: access key id is empty");
-            ensure!(!secret_access_key.is_empty(), "s3: secret access key is empty");
             Ok(BackendConfig::S3(S3Params {
                 bucket,
                 region: non_empty(form.s3_region.clone()),
@@ -385,44 +382,11 @@ fn build_backend_config_impl(form: &WizardForm, existing: Option<&BackendConfig>
             let access_key_id = form.r2_access_key_id.trim().to_string();
             let secret_access_key = form.r2_secret_access_key.trim().to_string();
             ensure!(!access_key_id.is_empty(), "r2: access key id is empty");
-            ensure!(!secret_access_key.is_empty(), "r2: secret access key is empty");
             Ok(BackendConfig::R2(R2Params {
                 bucket,
                 account_id,
                 access_key_id,
                 secret_access_key: secret_access_key.into(),
-            }))
-        }
-        "azure" => {
-            let bucket = form.azure_bucket.trim().to_string();
-            ensure!(!bucket.is_empty(), "azure: container name can't be empty");
-            let account_name = form.azure_account_name.trim().to_string();
-            let tenant_id = form.azure_tenant_id.trim().to_string();
-            let client_id = form.azure_client_id.trim().to_string();
-            let client_secret = form.azure_client_secret.trim().to_string();
-            ensure!(!account_name.is_empty(), "azure: account name is empty");
-            ensure!(!tenant_id.is_empty(), "azure: tenant id is empty");
-            ensure!(!client_id.is_empty(), "azure: client id is empty");
-            ensure!(!client_secret.is_empty(), "azure: client secret is empty");
-            Ok(BackendConfig::Azure(AzureParams {
-                bucket,
-                account_name,
-                tenant_id,
-                client_id,
-                client_secret: client_secret.into(),
-            }))
-        }
-        "gcs" => {
-            let bucket = form.gcs_bucket.trim().to_string();
-            ensure!(!bucket.is_empty(), "gcs: bucket name can't be empty");
-            let service_account_json_path = form.gcs_service_account_json_path.trim().to_string();
-            ensure!(
-                !service_account_json_path.is_empty(),
-                "gcs: service account JSON path is empty"
-            );
-            Ok(BackendConfig::Gcs(GcsParams {
-                bucket,
-                service_account_json_path,
             }))
         }
         "local" => {
@@ -478,6 +442,7 @@ async fn seed_admin_user(
         password_hash: Some(password_hash),
         session_epoch: 0,
         is_admin: true,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),
@@ -511,34 +476,6 @@ async fn seed_admin_user(
 /// pre-filled: seeding one is the entire reason this run of the wizard
 /// exists). [`Self::blank`] for the no-config-at-all path; [`Self::from`] for
 /// the existing-but-fresh-bucket one.
-// `pub`/field visibility only widened under `test`/`test-util` — see
-// `WizardForm`'s dual-definition note above; `tests/setup.rs` reads a
-// subset of these fields off the value `FieldValues::from` returns.
-#[cfg(any(test, feature = "test-util"))]
-pub struct FieldValues {
-    pub name: String,
-    pub driver: &'static str,
-    pub s3_bucket: String,
-    pub s3_region: String,
-    s3_endpoint_url: String,
-    pub s3_access_key_id: String,
-    pub s3_secret_access_key: String,
-    pub s3_path_style: bool,
-    r2_bucket: String,
-    pub r2_account_id: String,
-    r2_access_key_id: String,
-    r2_secret_access_key: String,
-    azure_bucket: String,
-    azure_account_name: String,
-    pub azure_tenant_id: String,
-    azure_client_id: String,
-    azure_client_secret: String,
-    gcs_bucket: String,
-    gcs_service_account_json_path: String,
-    local_bucket: String,
-    pub passphrase: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 struct FieldValues {
     name: String,
     driver: &'static str,
@@ -546,21 +483,11 @@ struct FieldValues {
     s3_region: String,
     s3_endpoint_url: String,
     s3_access_key_id: String,
-    s3_secret_access_key: String,
     s3_path_style: bool,
     r2_bucket: String,
     r2_account_id: String,
     r2_access_key_id: String,
-    r2_secret_access_key: String,
-    azure_bucket: String,
-    azure_account_name: String,
-    azure_tenant_id: String,
-    azure_client_id: String,
-    azure_client_secret: String,
-    gcs_bucket: String,
-    gcs_service_account_json_path: String,
     local_bucket: String,
-    passphrase: String,
 }
 
 impl FieldValues {
@@ -572,21 +499,11 @@ impl FieldValues {
             s3_region: String::new(),
             s3_endpoint_url: String::new(),
             s3_access_key_id: String::new(),
-            s3_secret_access_key: String::new(),
             s3_path_style: false,
             r2_bucket: String::new(),
             r2_account_id: String::new(),
             r2_access_key_id: String::new(),
-            r2_secret_access_key: String::new(),
-            azure_bucket: String::new(),
-            azure_account_name: String::new(),
-            azure_tenant_id: String::new(),
-            azure_client_id: String::new(),
-            azure_client_secret: String::new(),
-            gcs_bucket: String::new(),
-            gcs_service_account_json_path: String::new(),
             local_bucket: String::new(),
-            passphrase: String::new(),
         }
     }
 }
@@ -595,7 +512,6 @@ impl From<&Prefill> for FieldValues {
     fn from(prefill: &Prefill) -> Self {
         let mut v = FieldValues::blank();
         v.name = prefill.name.clone();
-        v.passphrase = prefill.bucket_cfg.passphrase.clone();
         match &prefill.bucket_cfg.backend {
             BackendConfig::S3(s) => {
                 v.driver = "s3";
@@ -603,7 +519,6 @@ impl From<&Prefill> for FieldValues {
                 v.s3_region = s.region.clone().unwrap_or_default();
                 v.s3_endpoint_url = s.endpoint_url.clone().unwrap_or_default();
                 v.s3_access_key_id = s.access_key_id.clone();
-                v.s3_secret_access_key = s.secret_access_key.to_string();
                 v.s3_path_style = s.path_style;
             }
             BackendConfig::R2(r) => {
@@ -611,20 +526,6 @@ impl From<&Prefill> for FieldValues {
                 v.r2_bucket = r.bucket.clone();
                 v.r2_account_id = r.account_id.clone();
                 v.r2_access_key_id = r.access_key_id.clone();
-                v.r2_secret_access_key = r.secret_access_key.to_string();
-            }
-            BackendConfig::Azure(a) => {
-                v.driver = "azure";
-                v.azure_bucket = a.bucket.clone();
-                v.azure_account_name = a.account_name.clone();
-                v.azure_tenant_id = a.tenant_id.clone();
-                v.azure_client_id = a.client_id.clone();
-                v.azure_client_secret = a.client_secret.to_string();
-            }
-            BackendConfig::Gcs(g) => {
-                v.driver = "gcs";
-                v.gcs_bucket = g.bucket.clone();
-                v.gcs_service_account_json_path = g.service_account_json_path.clone();
             }
             BackendConfig::Local(l) => {
                 v.driver = "local";
@@ -635,23 +536,15 @@ impl From<&Prefill> for FieldValues {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_form(error: Option<&str>, prefill: Option<&Prefill>) -> String {
-    render_form_impl(error, prefill)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn render_form(error: Option<&str>, prefill: Option<&Prefill>) -> String {
-    render_form_impl(error, prefill)
-}
-
-fn render_form_impl(error: Option<&str>, prefill: Option<&Prefill>) -> String {
     let flash = error
         .map(|e| format!("<p class=\"flash flash-err\">{}</p>", esc(e)))
         .unwrap_or_default();
     let intro = if prefill.is_some() {
         r#"<p class="muted">This bucket's config already connects fine, but nobody has created an
 admin user for the web UI yet — everything below is filled in from <code>gitquarry.toml</code>,
-edit anything that needs it. Only the admin user at the bottom is new.</p>"#
+edit anything that needs it. Secrets are never shown: leave them blank to keep the stored ones.
+Only the admin user at the bottom is new.</p>"#
     } else {
         r#"<p class="muted">Couldn't find a config. Fill this out once: the entry name, the
 storage driver and its credentials, the passphrase that encrypts everything that gets uploaded,
@@ -662,14 +555,22 @@ bucket itself.</p>"#
     let selected = |driver: &str| if v.driver == driver { "selected" } else { "" };
     let checked = |flag: bool| if flag { "checked" } else { "" };
     let val = esc; // same escaping an attribute value needs as a text node
+    // Secrets are never rendered back: this page is served to whoever
+    // reaches the port before an admin exists. Blank keeps the stored one.
+    let keep_hint = if prefill.is_some() {
+        r#" placeholder="(stored — leave blank to keep)""#
+    } else {
+        ""
+    };
+    let passphrase_attrs = if prefill.is_some() { keep_hint } else { " required" };
     let body = format!(
         r#"{intro}
-<p class="muted">This page doesn't use JavaScript, so it shows all five drivers' fields together
+<p class="muted">This page doesn't use JavaScript, so it shows all three drivers' fields together
 instead of showing/hiding based on what you pick in "driver" — only the section for the driver you
-picked is read, the other four are ignored. Each driver has its own fields below, nothing is
+picked is read, the other two are ignored. Each driver has its own fields below, nothing is
 shared between sections.</p>
 {flash}
-<form method="post" action="/">
+<form method="post" action="{SETUP_PATH}">
 <h4>entry</h4>
 <table class="commit-meta">
 <tr><td>name</td><td><input name="name" size="40" required autofocus value="{name}" placeholder="how you'll refer to this (--bucket, [buckets.&lt;name&gt;])"></td></tr>
@@ -677,8 +578,6 @@ shared between sections.</p>
 <select name="driver">
 <option value="s3" {s3_sel}>s3 (AWS S3 or compatible: MinIO, etc.)</option>
 <option value="r2" {r2_sel}>r2 (Cloudflare R2)</option>
-<option value="azure" {azure_sel}>azure (Azure Blob Storage)</option>
-<option value="gcs" {gcs_sel}>gcs (Google Cloud Storage)</option>
 <option value="local" {local_sel}>local (directory on this filesystem)</option>
 </select>
 </td></tr>
@@ -690,7 +589,7 @@ shared between sections.</p>
 <tr><td>region</td><td><input name="s3_region" size="40" value="{s3_region}" placeholder="us-east-1"></td></tr>
 <tr><td>endpoint url</td><td><input name="s3_endpoint_url" size="40" value="{s3_endpoint_url}" placeholder="(empty = AWS S3; for MinIO/etc)"></td></tr>
 <tr><td>access key id</td><td><input name="s3_access_key_id" size="40" value="{s3_access_key_id}"></td></tr>
-<tr><td>secret access key</td><td><input type="password" name="s3_secret_access_key" size="40" value="{s3_secret_access_key}"></td></tr>
+<tr><td>secret access key</td><td><input type="password" name="s3_secret_access_key" size="40"{keep_hint}></td></tr>
 <tr><td>path-style</td><td><label><input type="checkbox" name="s3_path_style" value="1" {s3_path_style_checked}> needed for some S3-compatible providers</label></td></tr>
 </table>
 
@@ -699,23 +598,7 @@ shared between sections.</p>
 <tr><td>bucket</td><td><input name="r2_bucket" size="40" value="{r2_bucket}"></td></tr>
 <tr><td>account id</td><td><input name="r2_account_id" size="40" value="{r2_account_id}"></td></tr>
 <tr><td>access key id</td><td><input name="r2_access_key_id" size="40" value="{r2_access_key_id}"></td></tr>
-<tr><td>secret access key</td><td><input type="password" name="r2_secret_access_key" size="40" value="{r2_secret_access_key}"></td></tr>
-</table>
-
-<h4>driver: azure</h4>
-<p class="muted">Auth is Entra ID (an app registration's client secret), not a storage account key.</p>
-<table class="commit-meta">
-<tr><td>container</td><td><input name="azure_bucket" size="40" value="{azure_bucket}"></td></tr>
-<tr><td>account name</td><td><input name="azure_account_name" size="40" value="{azure_account_name}"></td></tr>
-<tr><td>tenant id</td><td><input name="azure_tenant_id" size="40" value="{azure_tenant_id}"></td></tr>
-<tr><td>client id</td><td><input name="azure_client_id" size="40" value="{azure_client_id}"></td></tr>
-<tr><td>client secret</td><td><input type="password" name="azure_client_secret" size="40" value="{azure_client_secret}"></td></tr>
-</table>
-
-<h4>driver: gcs</h4>
-<table class="commit-meta">
-<tr><td>bucket</td><td><input name="gcs_bucket" size="40" value="{gcs_bucket}"></td></tr>
-<tr><td>service account json path</td><td><input name="gcs_service_account_json_path" size="40" value="{gcs_service_account_json_path}" placeholder="/etc/gitquarry/gcs-key.json"></td></tr>
+<tr><td>secret access key</td><td><input type="password" name="r2_secret_access_key" size="40"{keep_hint}></td></tr>
 </table>
 
 <h4>driver: local</h4>
@@ -725,7 +608,7 @@ shared between sections.</p>
 
 <h4>encryption</h4>
 <table class="commit-meta">
-<tr><td>passphrase</td><td><input type="password" name="passphrase" size="40" required value="{passphrase}"></td></tr>
+<tr><td>passphrase</td><td><input type="password" name="passphrase" size="40"{passphrase_attrs}></td></tr>
 </table>
 <h4>admin user (web UI)</h4>
 <table class="commit-meta">
@@ -738,28 +621,16 @@ shared between sections.</p>
         name = val(&v.name),
         s3_sel = selected("s3"),
         r2_sel = selected("r2"),
-        azure_sel = selected("azure"),
-        gcs_sel = selected("gcs"),
         local_sel = selected("local"),
         s3_bucket = val(&v.s3_bucket),
         s3_region = val(&v.s3_region),
         s3_endpoint_url = val(&v.s3_endpoint_url),
         s3_access_key_id = val(&v.s3_access_key_id),
-        s3_secret_access_key = val(&v.s3_secret_access_key),
         s3_path_style_checked = checked(v.s3_path_style),
         r2_bucket = val(&v.r2_bucket),
         r2_account_id = val(&v.r2_account_id),
         r2_access_key_id = val(&v.r2_access_key_id),
-        r2_secret_access_key = val(&v.r2_secret_access_key),
-        azure_bucket = val(&v.azure_bucket),
-        azure_account_name = val(&v.azure_account_name),
-        azure_tenant_id = val(&v.azure_tenant_id),
-        azure_client_id = val(&v.azure_client_id),
-        azure_client_secret = val(&v.azure_client_secret),
-        gcs_bucket = val(&v.gcs_bucket),
-        gcs_service_account_json_path = val(&v.gcs_service_account_json_path),
         local_bucket = val(&v.local_bucket),
-        passphrase = val(&v.passphrase),
     );
     layout("setup", "", &body, "", "", "", gitquarry_i18n::Locale::DEFAULT)
 }

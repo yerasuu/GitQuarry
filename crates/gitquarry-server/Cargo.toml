@@ -7,56 +7,38 @@ description = "Git remote backed by S3: ssh:// and git-smart-HTTP servers plus a
 license.workspace = true
 
 [dependencies]
-gitquarry-core = { path = "../gitquarry-core" }
-gitquarry-i18n = { path = "../gitquarry-i18n" }
-gitquarry-auth-crypto = { path = "../gitquarry-auth-crypto" }
-gitquarry-domain = { path = "../gitquarry-domain" }
-gitquarry-mirror-external = { path = "../gitquarry-mirror-external" }
+gitquarry-core = { workspace = true }
+gitquarry-i18n = { workspace = true }
+gitquarry-auth-crypto = { workspace = true }
+gitquarry-domain = { workspace = true }
+gitquarry-mirror-external = { workspace = true }
 gitquarry-webui = { path = "../gitquarry-webui" }
 
 # dyn-dispatch for gitquarry_core::mirror::MirrorSyncHook (mirror_sync.rs)
-async-trait = "0.1.91"
+async-trait = { workspace = true }
 
 # Storage engine, direct dep only for the stale-transaction recovery sweep
-# in serve.rs (`s3db::txn::recover_stale`) -- see gitquarry-core/Cargo.toml
-# for why this is a git dependency pinned by tag.
-s3db = { git = "https://git.yerasuu.com/yerasuu/s3db", tag = "v0.4.6", features = ["streaming"] }
+# in serve.rs (`s3db::txn::recover_stale`).
+s3db = { workspace = true, features = ["streaming"] }
 
-tokio = { version = "1.53.1", features = [
-    "rt-multi-thread",
-    "macros",
-    "io-std",
-    "io-util",
-    "process",
-    "fs",
-    "net",
-    "signal",
-    "sync",
-    "time",
-] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "process", "fs", "net", "signal", "sync", "time"] }
 
 # The setup wizard's own tiny axum server (serve.rs hands off to normal
 # startup once it succeeds).
-axum = { version = "0.8.9", features = ["multipart"] }
+axum = { workspace = true, features = ["multipart"] }
 
 # Outbound HTTP for FederationLink's peer round-trip.
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+reqwest = { workspace = true }
 
-serde = { version = "1.0.229", features = ["derive"] }
-anyhow = "1.0.104"
-tracing = "0.1.44"
+serde = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
-[features]
-# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
-# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
-# across the crate boundary that external integration tests are.
-test-util = []
-
 [dev-dependencies]
-# Self-dependency so `cargo test` enables this crate's own `test-util`
-# automatically for its tests/*.rs.
-gitquarry = { path = ".", features = ["test-util"] }
+gitquarry-test-support = { workspace = true }
+reqwest = { workspace = true, features = ["form"] }
+tempfile = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

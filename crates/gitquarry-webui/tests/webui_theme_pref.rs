@@ -1,122 +1,99 @@
-use axum::extract::{Form, State};
-use axum::http::HeaderMap;
-use axum::http::StatusCode;
-use gitquarry_core::app::AppContext;
-use gitquarry_webui::webui::theme_pref::*;
+//! The topbar's light/dark toggle and `/_prefs/theme`, driven through
+//! `webui::router` the way a browser reaches them.
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
+use gitquarry_test_support::{Page, Session, ctx, send};
 use std::sync::Arc;
 
-/// Same shape as `webui_repo.rs`'s own `test_ctx`, duplicated for the same
-/// reason (sibling test modules, no natural common parent).
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(
-        gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Files,
-        }),
-    );
-    let cipher = Arc::new(
-        gitquarry_core::crypto::Cipher::derive("test passphrase", &[11u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
-    );
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(1),
-        mirror_max_size_bytes: 0,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
+/// A router over a fresh bucket holding one empty `acme/proj`: its about
+/// tab is a real page rendered through `layout`'s topbar.
+async fn app_with_repo(root: &std::path::Path) -> axum::Router {
+    let ctx = ctx(root);
+    ctx.create_repo("acme/proj").await.unwrap().unwrap();
+    gitquarry_webui::webui::router(Arc::new(ctx))
+}
+
+async fn about_page(app: &axum::Router, cookie: Option<&str>) -> String {
+    let page = Session::get_as(app, "/acme/proj?view=about", cookie).await;
+    assert_eq!(page.status, StatusCode::OK);
+    page.body
+}
+
+async fn toggle(app: &axum::Router, referer: Option<&str>) -> Page {
+    let mut request = Request::post("/_prefs/theme")
+        .header(header::HOST, "gitquarry.example")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(referer) = referer {
+        request = request.header(header::REFERER, referer);
     }
-}
-
-#[test]
-fn cookie_theme_reads_explicit_overrides_only() {
-    let mut dark = HeaderMap::new();
-    dark.insert(axum::http::header::COOKIE, "theme=dark".parse().unwrap());
-    assert_eq!(cookie_theme(&dark), Some("dark"));
-
-    let mut light = HeaderMap::new();
-    light.insert(axum::http::header::COOKIE, "theme=light".parse().unwrap());
-    assert_eq!(cookie_theme(&light), Some("light"));
-
-    // No cookie, or a garbage value: `None`, same as an absent
-    // `text-size` cookie — callers fall back to the account default.
-    assert_eq!(cookie_theme(&HeaderMap::new()), None);
-    let mut garbage = HeaderMap::new();
-    garbage.insert(axum::http::header::COOKIE, "theme=purple".parse().unwrap());
-    assert_eq!(cookie_theme(&garbage), None);
-}
-
-#[test]
-fn referer_path_accepts_same_host_paths_only() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::HOST, "gitquarry.example".parse().unwrap());
-    headers.insert(
-        axum::http::header::REFERER,
-        "https://gitquarry.example/acme/proj?view=log".parse().unwrap(),
-    );
-    assert_eq!(referer_path(&headers), "/acme/proj?view=log");
-
-    // Different host in the Referer: exactly the open-redirect
-    // `safe_return_to` already guards against for `return_to` fields.
-    let mut cross_host = HeaderMap::new();
-    cross_host.insert(axum::http::header::HOST, "gitquarry.example".parse().unwrap());
-    cross_host.insert(
-        axum::http::header::REFERER,
-        "https://evil.example/acme/proj".parse().unwrap(),
-    );
-    assert_eq!(referer_path(&cross_host), "/");
-
-    // No Referer at all (stripped by browser/extension, or a raw client):
-    // falls back to `/` rather than erroring.
-    let mut none = HeaderMap::new();
-    none.insert(axum::http::header::HOST, "gitquarry.example".parse().unwrap());
-    assert_eq!(referer_path(&none), "/");
+    send(app, request.body(Body::from("theme=dark")).unwrap()).await
 }
 
 #[tokio::test]
-async fn toggle_theme_sets_the_explicit_pick_and_redirects_to_referer() {
-    let mut headers = HeaderMap::new();
-    headers.insert(axum::http::header::HOST, "gitquarry.example".parse().unwrap());
-    headers.insert(
-        axum::http::header::REFERER,
-        "https://gitquarry.example/acme/proj".parse().unwrap(),
-    );
+async fn html_data_theme_follows_the_explicit_cookie_only() {
     let dir = tempfile::tempdir().unwrap();
-    let resp = handler_toggle_theme(
-        State(Arc::new(test_ctx(dir.path()))),
-        headers,
-        Form(ThemeForm {
-            theme: "dark".to_string(),
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let location = resp.headers().get(axum::http::header::LOCATION).unwrap();
-    assert_eq!(location, "/acme/proj");
-    let set_cookie = resp
-        .headers()
-        .get(axum::http::header::SET_COOKIE)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(set_cookie.contains("theme=dark"));
+    let app = app_with_repo(dir.path()).await;
+
+    assert!(
+        about_page(&app, Some("theme=dark"))
+            .await
+            .contains(r#"data-theme="dark""#)
+    );
+    assert!(
+        about_page(&app, Some("theme=light"))
+            .await
+            .contains(r#"data-theme="light""#)
+    );
+    // No cookie, or a garbage value: no attribute at all, so
+    // `prefers-color-scheme` still decides.
+    assert!(!about_page(&app, None).await.contains(r#"data-theme=""#));
+    assert!(!about_page(&app, Some("theme=purple")).await.contains(r#"data-theme=""#));
 }
 
-#[test]
-fn theme_toggle_marks_the_current_pick_active() {
-    let html = render_theme_toggle("dark").into_string();
+#[tokio::test]
+async fn toggle_marks_the_current_pick_active() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    let html = about_page(&app, Some("theme=dark")).await;
     assert_eq!(html.matches("theme-btn active").count(), 1);
-    let dark_button = html.split("value=\"dark\"").nth(1).unwrap();
-    assert!(dark_button.starts_with(" class=\"theme-btn active\""));
+    assert!(html.contains(r#"value="dark" class="theme-btn active""#));
+
+    // No explicit pick yet: neither button, since following the OS is a real
+    // state of its own.
+    assert_eq!(about_page(&app, None).await.matches("theme-btn active").count(), 0);
+}
+
+#[tokio::test]
+async fn toggle_sets_the_explicit_pick_and_redirects_to_a_same_host_referer() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    let response = toggle(&app, Some("https://gitquarry.example/acme/proj?view=log")).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.headers[header::LOCATION], "/acme/proj?view=log");
+    let set_cookie = response.headers[header::SET_COOKIE].to_str().unwrap();
+    assert!(set_cookie.starts_with("theme=dark;"), "{set_cookie}");
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+}
+
+#[tokio::test]
+async fn toggle_never_follows_a_foreign_or_missing_referer() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_repo(dir.path()).await;
+
+    // A cross-host Referer is exactly the open redirect `return_to` fields
+    // are already guarded against; the host-prefix and `//` cases are the
+    // two ways a naive prefix match would still let one through.
+    for referer in [
+        Some("https://evil.example/acme/proj"),
+        Some("https://gitquarry.example.evil.example/acme/proj"),
+        Some("https://gitquarry.example//evil.example"),
+        None,
+    ] {
+        let response = toggle(&app, referer).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER);
+        assert_eq!(response.headers[header::LOCATION], "/", "referer={referer:?}");
+    }
 }

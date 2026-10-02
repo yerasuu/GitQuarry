@@ -68,7 +68,6 @@ pub struct ReleaseFormPrefill {
 /// unassisted text field asks the operator to remember exact tag spelling.
 /// And a tag that already has a release is not a candidate: offering it
 /// would only lead to the "this tag already has a release" rejection.
-#[cfg_attr(not(any(test, feature = "test-util")), doc(hidden))]
 pub fn taggable_tags<'a>(refs: impl Iterator<Item = &'a String>, released: &[String]) -> Vec<String> {
     let mut names: Vec<String> = refs
         .filter_map(|r| r.strip_prefix("refs/tags/"))
@@ -418,7 +417,7 @@ pub(crate) async fn handler_create_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -553,16 +552,19 @@ pub(crate) async fn handler_generate_notes_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim().to_string();
-    let (notes, error) = match release::generate_notes(&ctx, &resolved, &tag, locale).await {
-        Ok(notes) => (notes, None),
+    let (notes, error) = match validate::validate_rev(&tag) {
         Err(e) => (form.notes.clone(), Some(e.to_string())),
+        Ok(()) => match release::generate_notes(&ctx, &resolved, &tag, locale).await {
+            Ok(notes) => (notes, None),
+            Err(e) => (form.notes.clone(), Some(e.to_string())),
+        },
     };
     let prefill = ReleaseFormPrefill {
         tag,
@@ -613,13 +615,14 @@ pub(crate) async fn handler_edit_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     let cas = release::edit(
         &resolved,
         tag,
@@ -665,13 +668,14 @@ pub(crate) async fn handler_delete_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     release::delete(&resolved, tag).await?;
 
     gitquarry_core::storage::audit::record(
@@ -724,7 +728,7 @@ pub(crate) async fn handler_upload_asset_post(
     // uploaded bytes to disk.
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let mut tag = String::new();
     let mut csrf = String::new();
@@ -806,6 +810,7 @@ pub(crate) async fn handler_upload_asset_post(
         ))
     })?;
     let tag = tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     let signature = non_empty(signature);
     let cas = release::add_asset(
         &ctx,
@@ -858,13 +863,14 @@ pub(crate) async fn handler_delete_asset_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = require_write_target(&ctx, &me, &repo, locale).await?;
 
     let tag = form.tag.trim();
+    validate::validate_rev(tag).map_err(AppError::bad_request)?;
     let filename = validate::validate_asset_filename(&form.filename).map_err(AppError::bad_request)?;
     let cas = release::remove_asset(&resolved, tag, &filename, locale)
         .await

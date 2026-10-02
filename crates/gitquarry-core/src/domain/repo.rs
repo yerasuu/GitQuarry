@@ -348,7 +348,10 @@ async fn strip_uninheritable(dest: &ResolvedRepo) -> Result<()> {
 /// a fork of an archived repo isn't itself read-only, and branch/tag
 /// protection is the new owner's own call to make). Bumps the source's own
 /// `fork_count`. `None` if `dest_full_name` is already claimed by a live
-/// repo. Same-bucket only.
+/// repo. Same-bucket only — federation layer 2's cross-instance equivalent
+/// is [`crate::domain::remote_fork::seed_from_remote`], kept in its own
+/// module rather than here since it seeds from a peer-synced mirror instead
+/// of this bucket's own `Remote::copy_all_to`.
 pub async fn fork(
     ctx: &AppContext,
     source: &ResolvedRepo,
@@ -399,6 +402,7 @@ pub async fn fork(
         lfs_max_blob_size: Default::default(),
         topics: source_config.topics.clone(),
         forked_from: Some(source.uid.clone()),
+        forked_from_peer: None,
         fork_count: 0,
         star_count: 0,
         watcher_count: 0,
@@ -524,6 +528,7 @@ pub async fn create_from_template(
         lfs_max_blob_size: Default::default(),
         topics: source_config.topics.clone(),
         forked_from: None,
+        forked_from_peer: None,
         fork_count: 0,
         star_count: 0,
         watcher_count: 0,
@@ -695,10 +700,6 @@ pub async fn delete_branch(resolved: &ResolvedRepo, branch: &str, locale: gitqua
     resolved.remote.put_manifest(&manifest, etag.as_deref()).await
 }
 
-// pub (not cfg-gated): also called unconditionally by
-// `set_protected_branches`/`set_protected_tags` below, not just by the
-// integration tests in `tests/domain_repo.rs` — gating it to test-only would
-// break the normal (non-test) build.
 pub fn parse_csv_field(s: &str) -> BTreeSet<String> {
     s.split(',')
         .map(|b| b.trim().to_string())
@@ -814,10 +815,7 @@ pub async fn set_protected_tags(
     Ok((cas, requested))
 }
 
-// pub (not cfg-gated): also called unconditionally by `set_topics` below,
-// not just by the integration tests in `tests/domain_repo.rs` — gating it
-// to test-only would break the normal (non-test) build.
-pub fn normalize_topic(raw: &str) -> Option<String> {
+fn normalize_topic(raw: &str) -> Option<String> {
     let normalized: String = raw
         .trim()
         .to_ascii_lowercase()
@@ -1018,10 +1016,7 @@ pub async fn set_required_reviewers(
 /// pill's rendering outright. A duplicate name (case-sensitive) just keeps
 /// the last one, same "last write wins" a plain form re-submit would give
 /// either way.
-// pub (not cfg-gated): also called unconditionally by `set_labels` below,
-// not just by the integration tests in `tests/domain_repo.rs` — gating it
-// to test-only would break the normal (non-test) build.
-pub fn parse_labels_csv(raw_csv: &str) -> Result<Vec<Label>> {
+fn parse_labels_csv(raw_csv: &str) -> Result<Vec<Label>> {
     let mut by_name: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for entry in raw_csv.split(',').map(str::trim).filter(|e| !e.is_empty()) {
         let Some((name, color)) = entry.rsplit_once(':') else {

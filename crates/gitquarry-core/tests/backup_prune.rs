@@ -3,25 +3,13 @@ use gitquarry_core::backup::prune;
 use gitquarry_core::backup::replica;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
 use gitquarry_core::backup::snapshot::{self, DEFAULT_CLASSES};
-use gitquarry_core::config::{LocalEngine, LocalParams};
-use gitquarry_core::crypto::{Cipher, CompressionStrategy, SALT_LEN};
+use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::Backend;
-use gitquarry_core::storage::local::LocalBackend;
+use gitquarry_test_support::{backend, cipher};
 use std::sync::Arc;
 
 const ENCRYPTION_KEY: &str = ".conf/encryption.json";
 const DAY: u64 = 86400;
-
-fn backend(root: &std::path::Path) -> Arc<dyn Backend> {
-    Arc::new(LocalBackend::new(&LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: LocalEngine::Files,
-    }))
-}
-
-fn cipher() -> Arc<Cipher> {
-    Arc::new(Cipher::derive("test passphrase", &[11u8; SALT_LEN]).unwrap())
-}
 
 async fn put(b: &Arc<dyn Backend>, key: &str, body: &[u8]) {
     let (_, etag) = b.get(key).await.unwrap();

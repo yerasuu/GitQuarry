@@ -22,53 +22,21 @@ use tracing::warn;
 /// or "doesn't exist anymore" (deletion).
 const ZERO_SHA_LEN: [usize; 2] = [40, 64];
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn is_zero_sha(s: &str) -> bool {
-    ZERO_SHA_LEN.contains(&s.len()) && s.bytes().all(|b| b == b'0')
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn is_zero_sha(s: &str) -> bool {
     ZERO_SHA_LEN.contains(&s.len()) && s.bytes().all(|b| b == b'0')
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn zero_sha_like(sample: &str) -> String {
-    "0".repeat(if sample.len() == 64 { 64 } else { 40 })
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn zero_sha_like(sample: &str) -> String {
     "0".repeat(if sample.len() == 64 { 64 } else { 40 })
 }
 
 /// One line of the hook's stdin: `<old-sha> <new-sha> <refname>`.
-#[cfg(any(test, feature = "test-util"))]
-pub struct RefUpdate {
-    pub refname: String,
-    old: String,
-    pub new: String,
-}
-#[cfg(not(any(test, feature = "test-util")))]
 struct RefUpdate {
     refname: String,
     old: String,
     new: String,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn parse_hook_input(input: &str) -> Vec<RefUpdate> {
-    input
-        .lines()
-        .filter_map(|line| {
-            let mut it = line.split_whitespace();
-            Some(RefUpdate {
-                old: it.next()?.to_string(),
-                new: it.next()?.to_string(),
-                refname: it.next()?.to_string(),
-            })
-        })
-        .collect()
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn parse_hook_input(input: &str) -> Vec<RefUpdate> {
     input
         .lines()
@@ -96,7 +64,7 @@ struct HookCtx {
 async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> Result<HookCtx> {
     let cfg = config::Config::load_from(config_path)?;
     let bucket_cfg = cfg.bucket(bucket)?;
-    let backend = crate::storage::build_backend(bucket_cfg)?;
+    let backend = crate::storage::build_backend(bucket_cfg)?.backend;
     let cipher =
         Arc::new(crate::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?);
     let remote = Remote::new(Arc::clone(&backend), repo_prefix, Arc::clone(&cipher));
@@ -113,9 +81,8 @@ async fn build_remote(bucket: &str, repo_prefix: String, config_path: &Path) -> 
 /// `auth::web::groups`/`webui::repo_settings` already use, never just plain
 /// `Permission::Developer` (which most group members have). Fetches only the
 /// actor's own record, plus (if the owner names a group) that one group's,
-/// never the rest of the bucket's users/groups. Split from
-/// [`can_push_protected_decision`] so the actual decision logic stays
-/// unit-testable without a live per-entity fetch.
+/// never the rest of the bucket's users/groups. The decision itself is
+/// [`can_push_protected_decision`], over the records fetched here.
 async fn can_push_protected(
     backend: &dyn Backend,
     cipher: &Cipher,
@@ -131,25 +98,6 @@ async fn can_push_protected(
     Ok(can_push_protected_decision(user.as_ref(), owner, owner_group.as_ref()))
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn can_push_protected_decision(
-    user: Option<&crate::auth::entities::User>,
-    owner: Option<&crate::storage::entities::OwnerRef>,
-    owner_group: Option<&crate::auth::entities::Group>,
-) -> bool {
-    use crate::storage::entities::OwnerRef;
-    if user.is_some_and(|u| u.is_admin) {
-        return true;
-    }
-    match owner {
-        Some(OwnerRef::User(owner_uid)) => user.is_some_and(|u| &u.uid == owner_uid),
-        Some(OwnerRef::Group(_)) => user.is_some_and(|u| {
-            owner_group.is_some_and(|g| g.role_of(&u.uid) >= Some(crate::auth::entities::Permission::Owner))
-        }),
-        None => false,
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn can_push_protected_decision(
     user: Option<&crate::auth::entities::User>,
     owner: Option<&crate::storage::entities::OwnerRef>,
@@ -168,22 +116,6 @@ fn can_push_protected_decision(
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn touched_refs<'a>(
-    updates: &'a [RefUpdate],
-    ref_prefix: &str,
-    protected: &std::collections::BTreeSet<String>,
-) -> Vec<&'a RefUpdate> {
-    updates
-        .iter()
-        .filter(|u| {
-            u.refname
-                .strip_prefix(ref_prefix)
-                .is_some_and(|short| protected.contains(short))
-        })
-        .collect()
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn touched_refs<'a>(
     updates: &'a [RefUpdate],
     ref_prefix: &str,
@@ -205,39 +137,6 @@ fn touched_refs<'a>(
 /// (`is_ancestor` check); tags never move at all once protected, so any
 /// change to an existing one is rejected outright, not just a non-ancestor
 /// one. Returns the first rejection reason, if any.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn check_protected(
-    git_dir: &Path,
-    touched: &[&RefUpdate],
-    allowed: bool,
-    allow_fast_forward: bool,
-    kind_label: &str,
-) -> Result<Option<String>> {
-    for update in touched {
-        let short = update.refname.rsplit('/').next().unwrap_or(&update.refname);
-        if !allowed {
-            return Ok(Some(format!(
-                "{kind_label} '{short}': only an owner may push directly."
-            )));
-        }
-        if is_zero_sha(&update.new) {
-            return Ok(Some(format!("{kind_label} '{short}': can't be deleted.")));
-        }
-        if is_zero_sha(&update.old) {
-            continue; // creation, not a move — nothing to protect against yet
-        }
-        let rejected = if allow_fast_forward {
-            !git::is_ancestor(git_dir, &update.old, &update.new).await?
-        } else {
-            update.new != update.old
-        };
-        if rejected {
-            return Ok(Some(format!("{kind_label} '{short}': can't be moved/force-pushed.")));
-        }
-    }
-    Ok(None)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn check_protected(
     git_dir: &Path,
     touched: &[&RefUpdate],
@@ -501,26 +400,30 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
                 )
                 .await;
             }
-            // Only the default branch moves the "last updated" stamp: a
-            // push that only touches a feature branch or a tag isn't code
-            // landing on the repo's main line, which is what the home
-            // page's "updated X ago" is meant to answer.
-            if let Some(default_update) = updates
+            // Any branch moves the "last updated" stamp, so work on a
+            // feature branch shows up on the home page too. Tags don't:
+            // those already surface as releases. When one push moves
+            // several branches, the default one names the activity line.
+            let is_branch_push = |u: &&RefUpdate| u.refname.starts_with("refs/heads/") && !is_zero_sha(&u.new);
+            let stamped_update = updates
                 .iter()
+                .filter(is_branch_push)
                 .find(|u| new_manifest.head.as_deref() == Some(u.refname.as_str()))
-            {
-                // A brand-new default branch has no `old` to range from —
-                // every commit reachable from `new` is new to this repo.
-                let range = if is_zero_sha(&default_update.old) {
-                    default_update.new.clone()
+                .or_else(|| updates.iter().find(is_branch_push));
+            if let Some(stamped_update) = stamped_update {
+                // A brand-new branch has no `old` to range from — every
+                // commit reachable from `new` counts, same as git's own
+                // "new branch" push summary.
+                let range = if is_zero_sha(&stamped_update.old) {
+                    stamped_update.new.clone()
                 } else {
-                    format!("{}..{}", default_update.old, default_update.new)
+                    format!("{}..{}", stamped_update.old, stamped_update.new)
                 };
                 let commits = git::rev_list_count(Path::new(&git_dir), &range).await.unwrap_or(0);
-                let branch = default_update
+                let branch = stamped_update
                     .refname
                     .strip_prefix("refs/heads/")
-                    .unwrap_or(&default_update.refname);
+                    .unwrap_or(&stamped_update.refname);
                 crate::storage::settings::touch_last_push(
                     hook_ctx.backend.as_ref(),
                     &hook_ctx.cipher,

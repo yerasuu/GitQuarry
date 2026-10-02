@@ -11,46 +11,11 @@
 //! file exists.
 
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
-use gitquarry_core::app::AppContext;
-use std::net::SocketAddr;
+use gitquarry_test_support::{ctx, send};
 use std::sync::Arc;
-use tower::ServiceExt;
 
 const ROUTES_SOURCE: &str = include_str!("../src/webui/mod.rs");
-
-fn test_ctx(root: &std::path::Path) -> AppContext {
-    let backend: Arc<dyn gitquarry_core::storage::Backend> = Arc::new(
-        gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
-            bucket: root.to_string_lossy().to_string(),
-            engine: gitquarry_core::config::LocalEngine::Files,
-        }),
-    );
-    let cipher = Arc::new(
-        gitquarry_core::crypto::Cipher::derive("test passphrase", &[7u8; gitquarry_core::crypto::SALT_LEN]).unwrap(),
-    );
-    AppContext {
-        bucket: "test".to_string(),
-        ssh_bind: "127.0.0.1:2222".to_string(),
-        mirrors_root: root.to_path_buf(),
-        config_path: root.join("gitquarry.toml"),
-        exe_path: root.join("gitquarry"),
-        backend,
-        locks: Default::default(),
-        cipher,
-        mirror_max_age: std::time::Duration::from_secs(60),
-        mirror_max_size_bytes: 0,
-        oidc: None,
-        login_attempts: Default::default(),
-        git_rate_limiter: Default::default(),
-        allow_push_create: false,
-        trust_forwarded_for: false,
-        events: Default::default(),
-        mirror_sync: None,
-        visible_repo_uids_cache: Default::default(),
-    }
-}
 
 /// Every `.route("<path>", ...)` in `webui/mod.rs`, with the methods that
 /// registration names. Deliberately a source scan and not a list kept by
@@ -113,7 +78,7 @@ fn the_source_scan_finds_the_route_table() {
 #[tokio::test]
 async fn no_post_only_route_answers_a_stray_get_with_405() {
     let dir = tempfile::tempdir().unwrap();
-    let app = gitquarry_webui::webui::router(Arc::new(test_ctx(dir.path())));
+    let app = gitquarry_webui::webui::router(Arc::new(ctx(dir.path())));
 
     let post_only: Vec<String> = registered_routes()
         .into_iter()
@@ -123,20 +88,9 @@ async fn no_post_only_route_answers_a_stray_get_with_405() {
     assert!(!post_only.is_empty(), "expected the form targets to be POST-only");
 
     for path in post_only {
-        let mut request = Request::builder()
-            .method("GET")
-            .uri(concrete(&path))
-            .body(Body::empty())
-            .unwrap();
-        // `run_server` serves with `into_make_service_with_connect_info`, so
-        // the git-smart-HTTP layer's rate limiter always finds this; a bare
-        // `oneshot` doesn't add it, and its absence 500s before routing.
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
-        let response = app.clone().oneshot(request).await.unwrap();
+        let request = Request::get(concrete(&path)).body(Body::empty()).unwrap();
         assert_ne!(
-            response.status(),
+            send(&app, request).await.status,
             StatusCode::METHOD_NOT_ALLOWED,
             "GET {path} is a dead end: a reload after a rejected submit lands here"
         );

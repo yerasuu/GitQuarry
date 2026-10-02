@@ -141,7 +141,8 @@ pub struct MrComment {
     pub origin: Option<String>,
     /// `None` for a plain thread comment; `Some(_)` for one left on a
     /// specific diff line. `#[serde(default)]` so every comment stored
-    /// before line comments existed reads back as a plain thread comment.
+    /// before line comments existed (and every federation peer, which may
+    /// not send this) reads back as a plain thread comment.
     #[serde(default)]
     pub anchor: Option<CommentAnchor>,
 }
@@ -174,4 +175,20 @@ pub struct MrReview {
     pub body: String,
     #[serde(default)]
     pub created_at: String,
+}
+
+/// One MR plus its comments, bundled — the wire shape both core's own
+/// `/_api/pulls/detail` and (after the binary split) federation's
+/// `/_internal/merge-requests` proxy serialize, since both sides of the
+/// same cross-instance call need the identical shape.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MrDetail {
+    #[serde(default)]
+    pub mr: MergeRequestMeta,
+    #[serde(default)]
+    pub comments: Vec<MrComment>,
+    /// `#[serde(default)]` so a peer running a build from before reviews
+    /// existed still deserializes — it just reports none.
+    #[serde(default)]
+    pub reviews: Vec<MrReview>,
 }
