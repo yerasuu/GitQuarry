@@ -100,12 +100,15 @@ async fn sync_merge_requests_once_with(
     let uid = &resolved.uid;
 
     let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id).await?;
-    let cursor = links
-        .iter()
-        .map(|l| l.remote_updated_cursor.as_str())
-        .filter(|c| !c.is_empty())
-        .reduce(crate::stamp::max)
-        .map(str::to_string);
+    let cursor = match mirror.mr_discovery_cursor.as_str() {
+        "" => links
+            .iter()
+            .map(|l| l.remote_updated_cursor.as_str())
+            .filter(|c| !c.is_empty())
+            .reduce(crate::stamp::max)
+            .map(str::to_string),
+        stored => Some(stored.to_string()),
+    };
 
     let mut linked_by_external: HashMap<u64, u64> = links.iter().map(|l| (l.external_number, l.local_number)).collect();
     // `BTreeSet`, not `HashSet`: the per-MR pass below walks this, and a
@@ -123,6 +126,7 @@ async fn sync_merge_requests_once_with(
     let (manifest, _etag) = resolved.remote.get_manifest().await?;
     let mirrored_branch = |branch: &str| manifest.refs.contains_key(&format!("refs/heads/{branch}"));
     let mut unmirrored_branches = 0usize;
+    let mut oldest_failed: Option<&str> = None;
     for remote_mr in &remote_mrs {
         if linked_by_external.contains_key(&remote_mr.number) || !mirror.direction.allows_pull() {
             continue;
@@ -136,10 +140,31 @@ async fn sync_merge_requests_once_with(
                 linked_by_external.insert(remote_mr.number, local_number);
                 linked_locals.insert(local_number);
             }
-            Err(e) => warn!(
-                "couldn't mirror external MR #{} (mirror '{}') locally: {e:#}",
-                remote_mr.number, mirror.label
-            ),
+            Err(e) => {
+                warn!(
+                    "couldn't mirror external MR #{} (mirror '{}') locally: {e:#}",
+                    remote_mr.number, mirror.label
+                );
+                let updated = remote_mr.updated_at.as_str();
+                oldest_failed =
+                    Some(oldest_failed.map_or(updated, |o| if crate::stamp::later(o, updated) { updated } else { o }));
+            }
+        }
+    }
+    if mirror.direction.allows_pull() {
+        let newest = remote_mrs
+            .iter()
+            .map(|m| m.updated_at.as_str())
+            .reduce(crate::stamp::max);
+        let next = oldest_failed.or(newest.map(|n| cursor.as_deref().map_or(n, |c| crate::stamp::max(c, n))));
+        if let Some(next) = next.filter(|n| *n != mirror.mr_discovery_cursor)
+            && let Err(e) =
+                access::set_mr_discovery_cursor(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, next).await
+        {
+            warn!(
+                "couldn't record the MR discovery cursor (mirror '{}'): {e:#}",
+                mirror.label
+            );
         }
     }
 

@@ -1,4 +1,4 @@
-use gitquarry_mirror_external::stamp::{later, max, to_unix};
+use gitquarry_forge_clients::stamp::{later, max, to_unix};
 
 #[test]
 fn reads_every_shape_the_three_providers_and_this_codebase_produce() {

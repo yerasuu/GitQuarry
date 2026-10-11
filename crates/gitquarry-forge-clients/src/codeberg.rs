@@ -236,7 +236,7 @@ impl ForgeApi for CodebergForge {
             out.extend(
                 mrs.into_iter()
                     .map(RemoteMr::from)
-                    .take_while(|mr| since.is_none_or(|since| mr.updated_at.as_str() > since)),
+                    .take_while(|mr| since.is_none_or(|since| !crate::stamp::later(since, &mr.updated_at))),
             );
             let crossed_cursor = out.len() - before < PER_PAGE;
             if last_page || crossed_cursor {

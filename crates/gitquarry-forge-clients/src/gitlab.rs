@@ -213,8 +213,8 @@ impl ForgeApi for GitLabForge {
         // Same "no server-side `since`, sort newest-updated-first and cut
         // client-side" shape as `github.rs` — GitLab's `updated_after`
         // filter exists but its semantics (inclusive/exclusive, timezone
-        // handling) aren't worth trusting over a plain string comparison
-        // this codebase already controls end to end.
+        // handling) aren't worth trusting over a `stamp` comparison this
+        // codebase already controls end to end.
         let mut out = Vec::new();
         for page in 1..=MAX_PAGES {
             let url = self.mrs_url(&format!(
@@ -231,7 +231,7 @@ impl ForgeApi for GitLabForge {
             out.extend(
                 mrs.into_iter()
                     .map(RemoteMr::from)
-                    .take_while(|mr| since.is_none_or(|since| mr.updated_at.as_str() > since)),
+                    .take_while(|mr| since.is_none_or(|since| !crate::stamp::later(since, &mr.updated_at))),
             );
             let crossed_cursor = out.len() - before < PER_PAGE;
             if last_page || crossed_cursor {

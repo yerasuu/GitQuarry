@@ -643,6 +643,30 @@ async fn a_rejected_export_stops_being_retried() {
     assert_eq!(w.gitlab.read().unwrap().create_attempts, access::MAX_MR_EXPORT_ATTEMPTS);
 }
 
+/// The second import fails (its link slot is already taken), the first
+/// succeeds with a newer `updated_at`. A cursor taken from the links alone
+/// would jump past the failed one and never list it again.
+#[tokio::test]
+async fn an_mr_whose_import_failed_is_listed_again_next_tick() {
+    let w = world(
+        SyncDirection::Bidirectional,
+        FakeGitLab {
+            mrs: vec![
+                FakeMr::open(2, "feature", "newer", "alice", T1),
+                FakeMr::open(1, "feature", "older", "alice", T0),
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+    w.link(2, 999).await;
+    w.sweep().await;
+    assert!(!w.links().await.iter().any(|l| l.external_number == 1));
+
+    w.sweep().await;
+    assert!(w.links().await.iter().any(|l| l.external_number == 1));
+}
+
 /// An MR opened from a fork carries a head branch that lives in that fork,
 /// which Track A never mirrors — so it can never be imported, and must be
 /// skipped instead of failing `create` again on every tick.

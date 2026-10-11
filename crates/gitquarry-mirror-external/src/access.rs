@@ -153,6 +153,12 @@ pub struct ExternalMirror {
     /// stops costing a forge request every tick, forever.
     #[serde(default)]
     pub mr_export_failures: BTreeMap<u64, u32>,
+    /// `since` for the next MR discovery listing: held at the oldest MR
+    /// whose import failed, so a retry still sees it. Derived from the MR
+    /// links' own cursors while empty (a mirror stored before this field),
+    /// which alone let a failed MR fall behind a newer linked one forever.
+    #[serde(default)]
+    pub mr_discovery_cursor: String,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -456,6 +462,20 @@ pub async fn record_mr_export_failure(
             *mirror.mr_export_failures.entry(local_number).or_default() += 1;
         },
     )
+    .await
+}
+
+/// See [`ExternalMirror::mr_discovery_cursor`].
+pub async fn set_mr_discovery_cursor(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    mirror_id: &str,
+    cursor: &str,
+) -> Result<()> {
+    update_mirror(backend, cipher, uid, mirror_id, "MR discovery cursor", |mirror| {
+        mirror.mr_discovery_cursor = cursor.to_string();
+    })
     .await
 }
 
