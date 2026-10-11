@@ -498,21 +498,22 @@ async fn the_rate_limit_ignores_a_forwarded_header_by_default() {
 }
 
 #[tokio::test]
-async fn a_trusted_forwarded_header_keys_the_rate_limit_on_its_first_hop() {
+async fn a_trusted_forwarded_header_keys_the_rate_limit_on_its_last_hop() {
     let dir = tempfile::tempdir().unwrap();
     let base = serve_public_repo(dir.path(), true).await;
     let client = reqwest::Client::new();
     let forwarded = |value: String| upload_pack_refs(&client, &base, "acme/demo").header("x-forwarded-for", value);
 
-    // Only the proxy hops vary, so every request shares 9.9.9.9's bucket.
-    spend_anonymous_budget(|i| forwarded(format!("9.9.9.9, 10.0.0.{i}"))).await;
-    let exhausted = forwarded("9.9.9.9, 10.0.0.250".to_string())
+    // The proxy appends the address it saw; whatever the client prepends
+    // varies freely and must not buy it a fresh bucket.
+    spend_anonymous_budget(|i| forwarded(format!("10.0.0.{i}, 9.9.9.9"))).await;
+    let exhausted = forwarded("10.0.0.250, 9.9.9.9".to_string())
         .send()
         .await
         .unwrap()
         .status();
     assert_eq!(exhausted, StatusCode::TOO_MANY_REQUESTS);
-    let other_client = forwarded("8.8.8.8".to_string()).send().await.unwrap().status();
+    let other_client = forwarded("9.9.9.9, 8.8.8.8".to_string()).send().await.unwrap().status();
     assert_eq!(other_client, StatusCode::OK);
 }
 

@@ -135,7 +135,7 @@ fn extract_variable_segment<'a>(path: &'a str, infix: &str, trailing: &str) -> O
 
 /// What the anonymous rate limiter counts against: the socket address, or
 /// — only when the instance says a proxy owns the header
-/// ([`AppContext::trust_forwarded_for`]) — the first `X-Forwarded-For` hop.
+/// ([`AppContext::trust_forwarded_for`]) — the last `X-Forwarded-For` hop.
 ///
 /// Behind a reverse proxy the socket address is the proxy's, so every
 /// anonymous client in the world shares one bucket and one of them can
@@ -150,10 +150,10 @@ fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        // `client, proxy1, proxy2` — the first entry is the hop that faced
-        // the client, same reading `webui::cookies::is_https` gives
-        // `X-Forwarded-Proto`.
-        .and_then(|v| v.split(',').next())
+        // The last entry, because it is the one the trusted proxy appended
+        // from its own socket; everything before it arrived in the client's
+        // request and is whatever the client chose to send.
+        .and_then(|v| v.rsplit(',').next())
         .map(str::trim)
         .filter(|hop| !hop.is_empty())
         .map_or_else(|| socket_ip.to_string(), str::to_string)
