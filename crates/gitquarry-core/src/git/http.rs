@@ -329,14 +329,15 @@ async fn handle(
                     info_refs_response(ctx, name, &resolved.uid, &mirror, git_subcmd, actor.as_deref()).await
                 }
                 Kind::UploadPack => {
+                    let body = PackBody::from_request(req)?;
                     let mirror = ctx.open_mirror_read(&resolved).await?;
-                    upload_pack_response(ctx, name, &resolved.uid, mirror, req.into_body(), actor.as_deref())
+                    upload_pack_response(ctx, name, &resolved.uid, mirror, body, actor.as_deref())
                 }
                 Kind::ReceivePack => {
                     // Spooled before the exclusive lock is taken, so a slow
                     // uploader holds up nobody else's push, fetch or page
                     // view of this repo while its pack trickles in.
-                    let pack = spool_body(ctx, req.into_body()).await?;
+                    let pack = spool_body(ctx, PackBody::from_request(req)?).await?;
                     let mirror = ctx.open_mirror(&resolved).await?;
                     // Snapshot before the push so the post-push block can
                     // diff against it — see `events::diff_refs`'s own doc
@@ -821,7 +822,7 @@ fn upload_pack_response(
     name: &str,
     repo_uid: &crate::storage::uid::Uid,
     mirror: Mirror,
-    body: Body,
+    body: PackBody,
     actor: Option<&str>,
 ) -> Result<Response> {
     let mut child = mirror::spawn_git_subcommand_http(
@@ -839,7 +840,7 @@ fn upload_pack_response(
         let mut err_buf = Vec::new();
         let (fed, _) = tokio::join!(feed_stdin(body, stdin), stderr.read_to_end(&mut err_buf));
         if let Err(e) = fed {
-            debug!(error = %e, "http: upload-pack request body ended early");
+            debug!(error = %e, "http: couldn't feed upload-pack its request");
         }
         match child.wait().await {
             Ok(status) if status.success() => {}
@@ -888,15 +889,59 @@ async fn receive_pack_response(
         .into_response())
 }
 
+/// A pack request body with its `Content-Encoding` undone as it streams in:
+/// git's HTTP client gzips any upload-pack request over 1 KiB (a clone of a
+/// repo with many refs, a fetch with many haves), while `git upload-pack`
+/// itself only reads the raw protocol.
+struct PackBody {
+    chunks: axum::body::BodyDataStream,
+    gzip: Option<flate2::write::GzDecoder<Vec<u8>>>,
+}
+
+impl PackBody {
+    fn from_request(req: Request) -> Result<Self, ClientError> {
+        let gzip = match req.headers().get(header::CONTENT_ENCODING).map(|v| v.as_bytes()) {
+            None | Some(b"identity") => None,
+            Some(b"gzip" | b"x-gzip") => Some(flate2::write::GzDecoder::new(Vec::new())),
+            Some(_) => return Err(ClientError::BadRequest("unsupported Content-Encoding")),
+        };
+        Ok(PackBody {
+            chunks: req.into_body().into_data_stream(),
+            gzip,
+        })
+    }
+
+    /// The next run of decoded bytes; `None` once the body and the decoder
+    /// are both drained. Callers stop at the first `Err`.
+    async fn next(&mut self) -> Option<Result<Bytes>> {
+        const MALFORMED: ClientError = ClientError::BadRequest("malformed gzip request body");
+        loop {
+            let Some(chunk) = self.chunks.next().await else {
+                let tail = self.gzip.take()?.finish();
+                return Some(tail.map(Bytes::from).map_err(|_| MALFORMED.into()));
+            };
+            let Ok(chunk) = chunk else {
+                return Some(Err(ClientError::BadRequest("request body ended early").into()));
+            };
+            let Some(gzip) = &mut self.gzip else {
+                return Some(Ok(chunk));
+            };
+            if std::io::Write::write_all(gzip, &chunk).is_err() {
+                return Some(Err(MALFORMED.into()));
+            }
+            let decoded = std::mem::take(gzip.get_mut());
+            if !decoded.is_empty() {
+                return Some(Ok(Bytes::from(decoded)));
+            }
+        }
+    }
+}
+
 /// Copies the request body into git's stdin chunk by chunk, closing stdin
 /// at the end so git sees EOF.
-async fn feed_stdin(body: Body, mut stdin: ChildStdin) -> Result<()> {
-    let mut chunks = body.into_data_stream();
-    while let Some(chunk) = chunks.next().await {
-        stdin
-            .write_all(&chunk.context("reading request body")?)
-            .await
-            .context("writing git stdin")?;
+async fn feed_stdin(mut body: PackBody, mut stdin: ChildStdin) -> Result<()> {
+    while let Some(chunk) = body.next().await {
+        stdin.write_all(&chunk?).await.context("writing git stdin")?;
     }
     Ok(())
 }
@@ -925,7 +970,7 @@ fn stdout_chunks(stdout: ChildStdout) -> impl futures::Stream<Item = std::io::Re
 /// may be a tmpfs and put the pack straight back in RAM — and rewinds it
 /// for reading. Capped at [`MAX_PACK_BODY_BYTES`] (413 past it) so a
 /// runaway client can't fill the disk either.
-async fn spool_body(ctx: &AppContext, body: Body) -> Result<tokio::fs::File> {
+async fn spool_body(ctx: &AppContext, mut body: PackBody) -> Result<tokio::fs::File> {
     tokio::fs::create_dir_all(&ctx.mirrors_root)
         .await
         .with_context(|| format!("creating {}", ctx.mirrors_root.display()))?;
@@ -936,9 +981,8 @@ async fn spool_body(ctx: &AppContext, body: Body) -> Result<tokio::fs::File> {
         .context("creating the push spool file")?;
     let mut file = tokio::fs::File::from_std(file);
     let mut written = 0;
-    let mut chunks = body.into_data_stream();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(|_| ClientError::BadRequest("request body ended early"))?;
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk?;
         written += chunk.len();
         if written > MAX_PACK_BODY_BYTES {
             return Err(ClientError::TooLarge.into());

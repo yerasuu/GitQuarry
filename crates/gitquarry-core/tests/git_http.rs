@@ -631,6 +631,30 @@ async fn a_clone_over_http_gets_the_whole_history() {
 }
 
 #[tokio::test]
+async fn a_clone_whose_request_git_gzips_still_works() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let resolved = ctx.resolve_repo("acme/demo").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    // One distinct commit per branch: git sends a `want` line per distinct
+    // oid, and past 1 KiB of them it gzips the upload-pack request.
+    const BRANCHES: usize = 40;
+    for i in 0..BRANCHES {
+        work.commit(&[("n.txt", &i.to_string())], &format!("commit {i}")).await;
+        gitquarry_test_support::git(work.path(), &["branch", &format!("b{i}")]).await;
+    }
+    work.push(&resolved, "refs/heads/main").await;
+    let base = serve(Arc::new(ctx)).await;
+
+    let into = tempfile::tempdir().unwrap();
+    let url = format!("{base}/acme/demo");
+    gitquarry_test_support::git(into.path(), &["clone", "-q", "--mirror", &url, "c"]).await;
+    let branches = gitquarry_test_support::git(&into.path().join("c"), &["branch", "--list", "b*"]).await;
+    assert_eq!(branches.lines().count(), BRANCHES);
+}
+
+#[tokio::test]
 async fn a_push_still_uploading_does_not_lock_readers_out_of_the_repo() {
     use tokio::io::AsyncWriteExt;
 
