@@ -23,10 +23,25 @@ async fn page(app: &axum::Router, session: &Session, uri: &str) -> String {
 
 async fn save_pref(app: &axum::Router, session: &Session, action: &str, field: &str, value: &str) -> String {
     let page = session
-        .post(app, "/_account/appearance", &[("action", action), (field, value)])
+        .post(
+            app,
+            "/_account/appearance",
+            &[("appearance_action", action), (field, value)],
+        )
         .await;
     assert_eq!(page.status, StatusCode::OK);
     page.body
+}
+
+/// A control named `action` shadows its form's `.action` property, which
+/// `style/app.js` posts every `data-async` form to.
+#[tokio::test]
+async fn no_form_control_shadows_the_form_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, session) = app_with_alice(dir.path()).await;
+    let html = page(&app, &session, "/_account/appearance").await;
+    assert!(html.contains("data-async"), "{html}");
+    assert!(!html.contains(r#"name="action""#), "{html}");
 }
 
 #[tokio::test]
@@ -46,7 +61,11 @@ async fn a_pref_post_without_the_session_csrf_token_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let (app, session) = app_with_alice(dir.path()).await;
 
-    let fields = [("csrf", "forged"), ("action", "set_theme_pref"), ("theme", "dark")];
+    let fields = [
+        ("csrf", "forged"),
+        ("appearance_action", "set_theme_pref"),
+        ("theme", "dark"),
+    ];
     let body = form_urlencoded::Serializer::new(String::new())
         .extend_pairs(fields)
         .finish();
@@ -117,7 +136,7 @@ async fn an_unknown_pref_value_is_rejected_and_not_saved() {
     let dir = tempfile::tempdir().unwrap();
     let (app, session) = app_with_alice(dir.path()).await;
 
-    let fields = [("action", "set_theme_pref"), ("theme", "neon")];
+    let fields = [("appearance_action", "set_theme_pref"), ("theme", "neon")];
     let response = session.post(&app, "/_account/appearance", &fields).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     let html = page(&app, &session, "/_account/appearance").await;
@@ -143,7 +162,7 @@ async fn every_pref_form_shares_one_async_target_and_gets_it_back() {
 
     let fields = [
         ("csrf", session.csrf.as_str()),
-        ("action", "set_density_pref"),
+        ("appearance_action", "set_density_pref"),
         ("density", "airy"),
     ];
     let body = form_urlencoded::Serializer::new(String::new())

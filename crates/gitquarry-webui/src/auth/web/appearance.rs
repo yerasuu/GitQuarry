@@ -47,6 +47,10 @@ pub(crate) async fn handler_appearance_get(State(ctx): State_, headers: HeaderMa
 
 #[derive(serde::Deserialize)]
 pub(crate) struct AppearanceForm {
+    /// Not `action` on the wire: a control named `action` shadows the
+    /// `data-async` form's own `.action` property, so `style/app.js` would
+    /// post to `[object HTMLInputElement]` (see `webui::actions`).
+    #[serde(rename = "appearance_action")]
     action: String,
     #[serde(default)]
     csrf: String,
@@ -183,7 +187,7 @@ pub(crate) fn render_appearance_page(
         (settings_section(&gitquarry_i18n::web::auth::appearance::text_size_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::text_size_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
-                input type="hidden" name="action" value="set_text_size_pref";
+                input type="hidden" name="appearance_action" value="set_text_size_pref";
                 select name="text_size" {
                     option value="sm" selected[current == Some(TextSize::Sm)] { (gitquarry_i18n::web::auth::appearance::text_size_small(locale)) }
                     option value="md" selected[current == Some(TextSize::Md)] { (gitquarry_i18n::web::auth::appearance::text_size_medium(locale)) }
@@ -196,7 +200,7 @@ pub(crate) fn render_appearance_page(
         (settings_section(&gitquarry_i18n::web::auth::appearance::theme_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::theme_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
-                input type="hidden" name="action" value="set_theme_pref";
+                input type="hidden" name="appearance_action" value="set_theme_pref";
                 select name="theme" {
                     option value="" selected[user.theme_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::theme_automatic(locale)) }
                     option value="light" selected[user.theme_default == "light"] { (gitquarry_i18n::web::auth::appearance::theme_light(locale)) }
@@ -209,7 +213,7 @@ pub(crate) fn render_appearance_page(
         (settings_section(&gitquarry_i18n::web::auth::appearance::density_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::density_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
-                input type="hidden" name="action" value="set_density_pref";
+                input type="hidden" name="appearance_action" value="set_density_pref";
                 select name="density" {
                     option value="" selected[user.density_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::density_default_label(locale)) }
                     option value="dense" selected[user.density_default == "dense"] { (gitquarry_i18n::web::auth::appearance::density_dense_label(locale)) }
@@ -222,7 +226,7 @@ pub(crate) fn render_appearance_page(
         (settings_section(&gitquarry_i18n::web::auth::appearance::locale_heading(locale), Some(&gitquarry_i18n::web::auth::appearance::locale_description(locale)), html! {
             form method="post" action=(action_url) data-async data-async-target="#appearance-body" {
                 (PreEscaped(csrf))
-                input type="hidden" name="action" value="set_locale_pref";
+                input type="hidden" name="appearance_action" value="set_locale_pref";
                 select name="locale" {
                     option value="" selected[user.locale_default.is_empty()] { (gitquarry_i18n::web::auth::appearance::locale_automatic(locale)) }
                     option value="es" selected[user.locale_default == "es"] { (gitquarry_i18n::web::auth::appearance::locale_es(locale)) }
