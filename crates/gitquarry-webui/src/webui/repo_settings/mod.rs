@@ -93,6 +93,21 @@ fn needs_owner_tier(form: &RepoConfForm) -> bool {
     }
 }
 
+/// Whether a `set_perm` targets someone who already holds `Maintainer`+ on
+/// `repo`. [`needs_owner_tier`] only sees the *new* tier, so without this a
+/// `Maintainer` could demote or strip an `Owner` by submitting a lower one.
+async fn touches_privileged_member(
+    ctx: &gitquarry_core::app::AppContext,
+    repo: &str,
+    form: &RepoConfForm,
+) -> Result<bool, AppError> {
+    if form.action != "set_perm" {
+        return Ok(false);
+    }
+    let current = access::effective_permission_for(ctx.backend().as_ref(), &ctx.cipher, &form.username, repo).await?;
+    Ok(matches!(current, Some(Permission::Maintainer | Permission::Owner)))
+}
+
 /// `None` if this request may proceed with the authority `form`'s action
 /// needs on `repo` ([`access::can_manage_repo_members_for`] or
 /// [`access::can_manage_repo_settings_for`], per [`needs_owner_tier`]);
@@ -136,7 +151,7 @@ async fn require_repo_authority(
         // entirely is an instance-admin call, not something a repo's own
         // Owner tier grants — see `domain::repo::purge`'s doc comment.
         user.is_admin
-    } else if needs_owner_tier(form) {
+    } else if needs_owner_tier(form) || touches_privileged_member(ctx, repo, form).await? {
         access::can_manage_repo_members_for(ctx.backend().as_ref(), &ctx.cipher, &user.username, repo).await?
     } else {
         access::can_manage_repo_settings_for(ctx.backend().as_ref(), &ctx.cipher, &user.username, repo).await?
