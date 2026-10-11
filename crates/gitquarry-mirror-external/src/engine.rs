@@ -498,9 +498,12 @@ pub async fn sync_mirror_once(
                 .iter()
                 .any(|p| gitquarry_core::git::codeowners::segments_match(p, branch))
     };
+    // `last_synced` too, so a ref gone from both sides still gets a pass
+    // and its stale entry is dropped instead of lingering forever.
     let ref_names: BTreeSet<String> = local_refs
         .keys()
         .chain(remote_refs.keys())
+        .chain(mirror.last_synced.keys())
         .filter(is_branch_or_tag)
         .filter(|name| match name.strip_prefix("refs/heads/") {
             Some(branch) => branch_in_scope(branch),
@@ -513,6 +516,24 @@ pub async fn sync_mirror_once(
         let local_sha = local_refs.get(&ref_name).map(String::as_str);
         let remote_sha = remote_refs.get(&ref_name).map(String::as_str);
         let last_synced = mirror.last_synced.get(&ref_name).map(String::as_str);
+
+        if local_sha.is_none() && remote_sha.is_none() {
+            if let Err(e) = access::forget_ref(
+                ctx.backend().as_ref(),
+                &ctx.cipher,
+                &resolved.uid,
+                &mirror.id,
+                &ref_name,
+            )
+            .await
+            {
+                warn!(
+                    "couldn't forget '{ref_name}' gone from both sides of mirror {}: {e:#}",
+                    mirror.id
+                );
+            }
+            continue;
+        }
 
         // `plan_ref_sync` resolves the remote sha locally in every branch
         // where the two sides differ — `is_ancestor` has to walk both, in

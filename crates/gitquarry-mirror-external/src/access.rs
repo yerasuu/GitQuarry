@@ -378,9 +378,27 @@ pub async fn update_last_synced(
     ref_name: &str,
     sha: &str,
 ) -> Result<()> {
-    update_ref_status(backend, cipher, uid, mirror_id, ref_name, |status, last_synced| {
-        *status = RefSyncStatus::InSync;
-        last_synced.insert(ref_name.to_string(), sha.to_string());
+    update_ref_status(backend, cipher, uid, mirror_id, ref_name, |mirror| {
+        mirror.ref_status.insert(ref_name.to_string(), RefSyncStatus::InSync);
+        mirror.last_synced.insert(ref_name.to_string(), sha.to_string());
+    })
+    .await
+}
+
+/// Drops `ref_name` from both `last_synced` and `ref_status`, for a ref now
+/// gone from both sides. Otherwise the stale `last_synced` sha outlives the
+/// ref, and a later ref of the same name is mistaken for one side of a
+/// deletion and never synced.
+pub async fn forget_ref(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    mirror_id: &str,
+    ref_name: &str,
+) -> Result<()> {
+    update_ref_status(backend, cipher, uid, mirror_id, ref_name, |mirror| {
+        mirror.last_synced.remove(ref_name);
+        mirror.ref_status.remove(ref_name);
     })
     .await
 }
@@ -403,8 +421,8 @@ pub async fn set_ref_status(
         RefSyncStatus::Error(msg) => RefSyncStatus::Error(cap_error(&crate::git_remote::redact_url(&msg))),
         other => other,
     };
-    update_ref_status(backend, cipher, uid, mirror_id, ref_name, move |s, _| {
-        *s = status.clone();
+    update_ref_status(backend, cipher, uid, mirror_id, ref_name, move |mirror| {
+        mirror.ref_status.insert(ref_name.to_string(), status.clone());
     })
     .await
 }
@@ -459,7 +477,7 @@ async fn update_ref_status(
     uid: &Uid,
     mirror_id: &str,
     ref_name: &str,
-    apply: impl Fn(&mut RefSyncStatus, &mut BTreeMap<String, String>),
+    apply: impl Fn(&mut ExternalMirror),
 ) -> Result<()> {
     let collection = mirrors_collection(uid);
     for attempt in 1..=UPDATE_MAX_RETRIES {
@@ -467,9 +485,7 @@ async fn update_ref_status(
         let Some(mut mirror) = mirror else {
             bail!("no such external mirror: {mirror_id}");
         };
-        let mut status = mirror.ref_status.get(ref_name).cloned().unwrap_or_default();
-        apply(&mut status, &mut mirror.last_synced);
-        mirror.ref_status.insert(ref_name.to_string(), status);
+        apply(&mut mirror);
         match collection
             .put(backend, cipher, mirror_id, &mirror, etag.as_deref())
             .await?
