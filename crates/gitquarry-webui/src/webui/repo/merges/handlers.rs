@@ -771,7 +771,18 @@ pub(crate) async fn handler_merge_post(
                 let _ = domain::repo::delete_branch(&resolved, &branch, locale).await;
             }
         }
-        domain::merge_request::MergeOutcome::Conflict(_) => {
+        domain::merge_request::MergeOutcome::Conflict(paths) => {
+            // An async submit swaps `#mr-actions` with whatever comes back,
+            // so a redirect's full page would land inside it; a real error
+            // status instead reaches `style/app.js`'s toast, and the notice
+            // with the paths renders on the next load of the MR page.
+            if headers.contains_key(ASYNC_HEADER) {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}: {}",
+                    gitquarry_i18n::web::repo::merges::conflicts_heading(locale),
+                    paths.join(", ")
+                )));
+            }
             // Back to the MR, which now renders the conflicting files and
             // how to resolve them (`merges::render_conflict_notice`) — the
             // `400` this used to return put that same list on a page the
