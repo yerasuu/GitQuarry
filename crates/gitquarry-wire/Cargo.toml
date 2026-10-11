@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 rand = { workspace = true }
 axum = { workspace = true }
 reqwest = { workspace = true }
+subtle = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

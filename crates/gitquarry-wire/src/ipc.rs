@@ -12,16 +12,18 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use subtle::ConstantTimeEq;
 
 /// Header carrying the shared secret every loopback call authenticates
 /// with — same value every existing copy already used.
 pub const INTERNAL_TOKEN_HEADER: &str = "x-internal-token";
 
+/// Constant-time over the token bytes, so a caller probing the loopback
+/// port can't recover the shared secret byte by byte from response timing.
 pub fn token_matches(headers: &HeaderMap, expected: &str) -> bool {
     headers
         .get(INTERNAL_TOKEN_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|got| got == expected)
+        .is_some_and(|got| bool::from(got.as_bytes().ct_eq(expected.as_bytes())))
 }
 
 /// `true` unless the caller's `gitquarry-wire` build doesn't match this
