@@ -282,7 +282,7 @@ async fn render_remote_summary(
 fn render_remote_fork_form(peer_name: &str, repo_name: &str, viewer: &User, headers: &HeaderMap) -> maud::Markup {
     let default_name = repo_name.rsplit('/').next().unwrap_or(repo_name);
     maud::html! {
-        form method="post" action="/_fork" class="fork-form" {
+        form method="post" action=(format!("/_fork/{}", webui::url_encode(repo_name))) class="fork-form" {
             (maud::PreEscaped(webui::csrf_field(headers)))
             input type="hidden" name="peer" value=(peer_name);
             input type="hidden" name="source" value=(repo_name);

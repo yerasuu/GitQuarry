@@ -35,11 +35,11 @@ use maud::html;
 #[derive(serde::Deserialize)]
 pub(crate) struct ForkForm {
     /// Full name (`owner/name`) of the repo being forked *on the peer*
-    /// (`peer` non-empty) — only used by the fork-from-peer branch, since
-    /// that request posts to bare `/_fork` with nothing in the URL path for
-    /// [`Path`] to extract (there's no local repo yet to name). The
-    /// same-bucket fork instead takes its source from the URL path (see
-    /// `handler_fork_post`'s own `Path(source)` param).
+    /// (`peer` non-empty) — only used by the fork-from-peer branch. That
+    /// form posts to `/_fork/{repo}` too (the only route there is), but the
+    /// path there names no local repo, so this field stays the source of
+    /// truth for it. The same-bucket fork takes its source from the URL path
+    /// (see `handler_fork_post`'s own `Path(source)` param).
     #[serde(default)]
     source: String,
     /// Linked peer's `Peer::name`, or empty for a same-bucket fork — the
@@ -89,6 +89,16 @@ async fn resolve_dest_owner(
         )));
     };
     Ok(OwnerRef::Group(group.uid))
+}
+
+/// The typed name as a display name plus the slug the destination path is
+/// built from, or the reason it can't be one. Shared by both branches so a
+/// fork from a peer can't produce a repo name the local path would refuse.
+fn dest_name(name: &str) -> Result<(String, String), String> {
+    let display = validate::validate_repo_display_name(name).map_err(|e| e.to_string())?;
+    let slug = domain::repo::slugify_repo_name(&display)
+        .ok_or_else(|| "name must contain at least one letter or digit.".to_string())?;
+    Ok((display, slug))
 }
 
 /// A rejected local fork (bad name, destination already exists, ...)
@@ -177,7 +187,8 @@ pub(crate) async fn handler_fork_post(
             )));
         };
         let dest_owner = resolve_dest_owner(&ctx, &me, namespace, locale).await?;
-        let dest = validate::sanitize_path(&format!("{namespace}/{}", form.name)).map_err(AppError::bad_request)?;
+        let (_, slug) = dest_name(&form.name).map_err(|msg| AppError::bad_request(anyhow::anyhow!("{msg}")))?;
+        let dest = validate::sanitize_path(&format!("{namespace}/{slug}")).map_err(AppError::bad_request)?;
         let (dest_owner_kind, dest_owner_uid) = match &dest_owner {
             OwnerRef::User(uid) => ("user", uid),
             OwnerRef::Group(uid) => ("group", uid),
@@ -249,13 +260,9 @@ pub(crate) async fn handler_fork_post(
             return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
         }
     };
-    let dest_display_name = match validate::validate_repo_display_name(&form.name) {
-        Ok(n) => n,
-        Err(e) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &e.to_string()).await,
-    };
-    let Some(slug) = domain::repo::slugify_repo_name(&dest_display_name) else {
-        let msg = "name must contain at least one letter or digit.";
-        return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, msg).await;
+    let (dest_display_name, slug) = match dest_name(&form.name) {
+        Ok(names) => names,
+        Err(msg) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await,
     };
     let dest = match validate::sanitize_path(&format!("{namespace}/{slug}")) {
         Ok(dest) => dest,
