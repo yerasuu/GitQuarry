@@ -226,22 +226,7 @@ pub async fn rename(
 /// irreversible wipe is [`purge`], run only after `DELETE_GRACE_SECS` has
 /// elapsed.
 pub async fn delete(ctx: &AppContext, resolved: &ResolvedRepo, _full_name: &str) -> Result<()> {
-    let (current, etag) = resolved.remote.get_repo_config().await?;
-    if current.deleted_at.is_some() {
-        bail!("repo already deleted");
-    }
-    let config = RepoConfig {
-        deleted_at: Some(now_secs()),
-        ..current
-    };
-    storage::settings::put_repo_config(
-        ctx.backend().as_ref(),
-        resolved.uid.as_str(),
-        &config,
-        etag.as_deref(),
-        &ctx.cipher,
-    )
-    .await?;
+    set_deleted_at(ctx, resolved, true).await?;
     storage::settings::set_visible_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     storage::settings::set_deleted_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, true).await;
     Ok(())
@@ -252,22 +237,7 @@ pub async fn delete(ctx: &AppContext, resolved: &ResolvedRepo, _full_name: &str)
 /// `.conf/index/repo-visible` to whatever `visibility` already says (same
 /// rule [`create`]/[`fork`] use, not unconditionally visible again).
 pub async fn restore(ctx: &AppContext, resolved: &ResolvedRepo) -> Result<()> {
-    let (current, etag) = resolved.remote.get_repo_config().await?;
-    if current.deleted_at.is_none() {
-        bail!("repo isn't deleted");
-    }
-    let config = RepoConfig {
-        deleted_at: None,
-        ..current
-    };
-    storage::settings::put_repo_config(
-        ctx.backend().as_ref(),
-        resolved.uid.as_str(),
-        &config,
-        etag.as_deref(),
-        &ctx.cipher,
-    )
-    .await?;
+    let config = set_deleted_at(ctx, resolved, false).await?;
     storage::settings::set_deleted_index(ctx.backend().as_ref(), &ctx.cipher, &resolved.uid, false).await;
     storage::settings::set_visible_index(
         ctx.backend().as_ref(),
@@ -277,6 +247,43 @@ pub async fn restore(ctx: &AppContext, resolved: &ResolvedRepo) -> Result<()> {
     )
     .await;
     Ok(())
+}
+
+/// Flips `deleted_at` with a fresh read per attempt and returns the config
+/// that actually landed. `Err` if the repo is already in the requested
+/// state or every attempt lost its CAS race — either way before
+/// [`delete`]/[`restore`] touch an index, since an index updated for a
+/// config write that never happened leaves the repo hidden but not deleted
+/// (or out of the sweep's index while `deleted_at` stays set).
+async fn set_deleted_at(ctx: &AppContext, resolved: &ResolvedRepo, deleted: bool) -> Result<RepoConfig> {
+    const MAX_ATTEMPTS: u32 = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        // A `Conflict` drops the cached copy, so this re-read sees the
+        // writer that beat us rather than the same stale etag again.
+        let (current, etag) = resolved.remote.get_repo_config().await?;
+        match (deleted, current.deleted_at.is_some()) {
+            (true, true) => bail!("repo already deleted"),
+            (false, false) => bail!("repo isn't deleted"),
+            _ => {}
+        }
+        let config = RepoConfig {
+            deleted_at: deleted.then(now_secs),
+            ..current
+        };
+        match storage::settings::put_repo_config(
+            ctx.backend().as_ref(),
+            resolved.uid.as_str(),
+            &config,
+            etag.as_deref(),
+            &ctx.cipher,
+        )
+        .await?
+        {
+            Cas::Ok => return Ok(config),
+            Cas::Conflict => storage::cas_retry_backoff(attempt).await,
+        }
+    }
+    bail!("repo config kept changing concurrently; deletion state left unchanged")
 }
 
 /// Irreversible: wipes every object under the repo's uid prefix and
