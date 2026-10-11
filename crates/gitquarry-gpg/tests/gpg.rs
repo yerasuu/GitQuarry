@@ -135,6 +135,17 @@ async fn fingerprint_rejects_garbage() {
 }
 
 #[tokio::test]
+async fn fingerprint_rejects_a_blob_carrying_two_primary_keys() {
+    if !gpg_available() {
+        return;
+    }
+    let mallory = generate_key();
+    let alice = generate_key();
+    let blob = format!("{}\n{}", mallory.armored_public, alice.armored_public);
+    assert!(gitquarry_gpg::fingerprint(&blob).await.is_err());
+}
+
+#[tokio::test]
 async fn verify_detached_signature_accepts_a_real_signature_by_a_known_key() {
     if !gpg_available() {
         return;

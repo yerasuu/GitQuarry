@@ -90,7 +90,8 @@ async fn import(homedir: &Path, armored_key: &str) -> Result<()> {
 
 /// Imports `armored_key` into a scratch keyring and returns its primary
 /// key's fingerprint (40 hex chars) — `Err` if it isn't a well-formed
-/// OpenPGP public key block. Used both to validate a key at add-time
+/// OpenPGP public key block, or if it holds more than one primary key.
+/// Used both to validate a key at add-time
 /// (`auth::domain::user::add_gpg_key`) and to show/remove-by-fingerprint
 /// the same way SSH pubkeys already work (`auth::access::key_fingerprint`,
 /// a pure function — unlike that one, this needs `gpg` itself: there's no
@@ -112,6 +113,13 @@ pub async fn fingerprint(armored_key: &str) -> Result<String> {
         );
     }
     let text = String::from_utf8_lossy(&out.stdout);
+    // The whole blob is what gets stored and later imported to verify, so a
+    // second primary key riding along would verify its signatures under the
+    // one fingerprint recorded here — reject it rather than record only one.
+    let primaries = text.lines().filter(|l| l.starts_with("pub:")).count();
+    if primaries != 1 {
+        bail!("expected exactly one OpenPGP public key, found {primaries}; add each key separately");
+    }
     // `fpr:::::::::<fingerprint>:` — the first `fpr` record belongs to the
     // primary key just imported (a fresh homedir has nothing else in it).
     text.lines()
