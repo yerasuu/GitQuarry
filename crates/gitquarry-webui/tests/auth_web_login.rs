@@ -168,8 +168,18 @@ async fn a_foreign_return_to_falls_back_to_root() {
     let (_ctx, app) = app_with_alice(dir.path()).await;
 
     // Protocol-relative `//evil.com` resolves as `https://evil.com`, and
-    // WHATWG URL parsing turns `/\evil.com` into the same thing for http(s).
-    for hostile in ["https://evil.com", "evil.com", "//evil.com", "/\\evil.com", ""] {
+    // WHATWG URL parsing turns `/\evil.com` into the same thing for http(s),
+    // and strips tab/CR/LF so `/\t/evil.com` lands there too.
+    let hostile_paths = [
+        "https://evil.com",
+        "evil.com",
+        "//evil.com",
+        "/\\evil.com",
+        "/\t/evil.com",
+        "/\r\n/evil.com",
+        "",
+    ];
+    for hostile in hostile_paths {
         let response = submit_login(&app, "alice", PASSWORD, hostile).await;
         assert_eq!(response.status, StatusCode::SEE_OTHER, "{hostile}");
         assert_eq!(response.location(), "/", "{hostile}");
