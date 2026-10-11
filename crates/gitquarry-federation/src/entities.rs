@@ -41,7 +41,7 @@ pub struct Peer {
     /// `https://otherhost:8080` — for linking to the peer's own web UI and
     /// for the `/_api/instance`/`/_api/repos` round-trip.
     pub web_base_url: String,
-    /// `git://otherhost:9418` or `ssh://otherhost:2222` — for fetching a
+    /// `https://otherhost` or `ssh://otherhost:2222` — for fetching a
     /// specific repo's content (federation layer 2), never used for the
     /// discovery API itself.
     pub git_base_url: String,

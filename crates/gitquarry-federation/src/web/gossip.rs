@@ -12,7 +12,7 @@
 
 use crate::gossip::{AnnounceRequest, AnnounceResponse, GossipCandidateWire};
 use crate::state::State_;
-use crate::validate::validate_instance_url;
+use crate::validate::{validate_git_base_url, validate_web_base_url};
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
@@ -35,8 +35,8 @@ fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response {
 /// — a `None` verification (unreachable, or not a real gitquarry instance)
 /// means it's silently dropped, never stored as a hint to try again later
 /// (the announcer, or another peer, will just re-offer it on a future
-/// tick if it's real). `validate_instance_url` first, same check
-/// `access::peers::add` applies to an admin-supplied peer URL — a gossiped
+/// tick if it's real). Both URLs are validated first, exactly as an
+/// admin-supplied peer's are — a gossiped
 /// candidate is a claim from an unauthenticated caller and must clear the
 /// same bar before this instance ever dials it.
 async fn verify_and_report(
@@ -44,7 +44,9 @@ async fn verify_and_report(
     candidate: &GossipCandidateWire,
     reporter: Option<&str>,
 ) {
-    if validate_instance_url(&candidate.web_base_url).is_err() {
+    if validate_web_base_url(&candidate.web_base_url).is_err()
+        || validate_git_base_url(&candidate.git_base_url).is_err()
+    {
         return;
     }
     if crate::instance_client::verify_instance(&candidate.web_base_url)
