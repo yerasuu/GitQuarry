@@ -316,11 +316,9 @@ document.addEventListener("submit", (event) => {
     },
     // A failed request otherwise leaves every optimistic paint above
     // (label, count, html/class attribute) stuck in the guessed state with
-    // no visible error. Unlike the drag-and-drop handler below (whose
-    // failure fallback is a full reload -- a moved DOM card has no cheap
-    // undo), every optimistic branch here recorded its own prior value, so
-    // the honest fix is to put each one back and surface the failure in
-    // place, not to bounce the user off the page they were just on.
+    // no visible error. Every optimistic branch here recorded its own prior
+    // value, so the honest fix is to put each one back and surface the
+    // failure in place, not to bounce the user off the page they were just on.
     (message) => {
       unlock();
       if (htmlAttr) {
@@ -407,68 +405,6 @@ document.addEventListener("click", (event) => {
     row.hidden = expanded;
   });
   btn.setAttribute("aria-expanded", String(!expanded));
-});
-
-// Kanban cross-column drag (`board/mod.rs`'s `[draggable]`/`[data-column-index]`).
-// Within-column reordering stays button-driven (up/down) -- the backend has
-// no "move to this exact position" call to drive anything richer, only
-// move-to-column. A drop moves the card in the DOM immediately (always to
-// the top of the target column) and fires the same `/_board/move_to_column`
-// form every card already carries -- via fetch() instead of a real submit --
-// to persist it; a failed request just reloads the page to resync instead
-// of trying to hand-roll an undo of the optimistic move.
-let draggedCard = null;
-
-document.addEventListener("dragstart", (event) => {
-  const card = event.target.closest('[draggable="true"]');
-  if (!card) {
-    return;
-  }
-  draggedCard = card;
-  card.classList.add("dragging");
-});
-
-document.addEventListener("dragend", () => {
-  if (draggedCard) {
-    draggedCard.classList.remove("dragging");
-  }
-  draggedCard = null;
-});
-
-document.addEventListener("dragover", (event) => {
-  if (draggedCard && event.target.closest("[data-column-index]")) {
-    event.preventDefault(); // required for `drop` to fire at all
-  }
-});
-
-document.addEventListener("drop", (event) => {
-  const column = event.target.closest("[data-column-index]");
-  const card = draggedCard;
-  if (!column || !card) {
-    return;
-  }
-  event.preventDefault();
-  const sourceColumn = card.closest("[data-column-index]");
-  if (sourceColumn === column) {
-    return;
-  }
-  const form = card.querySelector('form[action$="/_board/move_to_column"]');
-  if (!form) {
-    return; // single-column board: no such form exists at all
-  }
-  const heading = column.querySelector("h4");
-  if (heading) {
-    heading.after(card);
-  } else {
-    column.prepend(card);
-  }
-  const body = new FormData(form);
-  body.set("to_column", column.dataset.columnIndex);
-  fetch(form.action, { method: "POST", body, headers: { "X-GQ-Async": "1" } }).then((resp) => {
-    if (!resp.ok) {
-      window.location.reload();
-    }
-  }).catch(() => window.location.reload());
 });
 
 // Label pills (`components::label_pill`, the repo settings' label preview)
