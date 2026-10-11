@@ -229,9 +229,11 @@ pub async fn push_ban_event(backend: &dyn Backend, cipher: &Cipher, event: &BanE
             continue;
         };
         if let Err(e) = crate::instance_client::send_sister_ban_event(&sister.web_base_url, &secret, event).await {
-            eprintln!(
-                "gitquarry-federation: warning: sister ban-event push to '{}' failed: {e:#}",
-                sister.name
+            tracing::warn!(
+                target: "gitquarry_federation::sister",
+                sister = %sister.name,
+                error = %format!("{e:#}"),
+                "sister ban-event push failed"
             );
         }
     }
@@ -306,7 +308,7 @@ pub async fn run_periodic_reconcile_tick(
         let sisters = match access::list_all_peers(backend.as_ref(), &cipher).await {
             Ok(peers) => peers.into_iter().filter(|p| p.sister_confirmed).collect::<Vec<_>>(),
             Err(e) => {
-                eprintln!("gitquarry-federation: warning: sister reconcile tick couldn't list peers: {e:#}");
+                tracing::warn!(target: "gitquarry_federation::sister", error = %format!("{e:#}"), "sister reconcile tick couldn't list peers");
                 continue;
             }
         };
@@ -316,9 +318,11 @@ pub async fn run_periodic_reconcile_tick(
                 _ => continue,
             };
             if let Err(e) = reconcile_with_sister(backend.as_ref(), &cipher, &sister, &secret).await {
-                eprintln!(
-                    "gitquarry-federation: warning: sister reconciliation with '{}' failed: {e:#}",
-                    sister.name
+                tracing::warn!(
+                    target: "gitquarry_federation::sister",
+                    sister = %sister.name,
+                    error = %format!("{e:#}"),
+                    "sister reconciliation failed"
                 );
             }
         }
