@@ -90,8 +90,16 @@ impl GossipTable {
             last_seen: now,
             reported_by: BTreeSet::new(),
         });
-        entry.web_base_url = web_base_url.to_string();
-        entry.git_base_url = git_base_url.to_string();
+        // The name is self-chosen, so corroboration only ever vouches for the
+        // URLs it was gathered against — otherwise anyone could announce a
+        // well-corroborated candidate's name with their own URL and inherit
+        // its sources and age straight into an auto-link.
+        if entry.web_base_url != web_base_url || entry.git_base_url != git_base_url {
+            entry.web_base_url = web_base_url.to_string();
+            entry.git_base_url = git_base_url.to_string();
+            entry.first_seen = now;
+            entry.reported_by.clear();
+        }
         entry.last_seen = now;
         if let Some(reporter) = reporter {
             entry.reported_by.insert(reporter.to_string());
