@@ -157,9 +157,30 @@ async fn ban_event_applies_and_bans_get_reflects_it() {
         StatusCode::OK
     );
 
+    let stranger = access::get_peer(state.backend.as_ref(), &state.cipher, "stranger")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stranger.banned);
+
+    let local = Peer {
+        name: "spammer".to_string(),
+        web_base_url: "https://spammer.example".to_string(),
+        git_base_url: "https://spammer.example".to_string(),
+        ..Default::default()
+    };
+    access::put_peer(state.backend.as_ref(), &state.cipher, &local, None)
+        .await
+        .unwrap();
+    gitquarry_federation::domain::peer::ban(state.backend.as_ref(), &state.cipher, "spammer", "spam", "admin")
+        .await
+        .unwrap();
+
+    // "stranger" is acme's own ban, so acme never gets it handed back —
+    // only what this instance decided itself.
     let Page { status, body, .. } = send(&router(Arc::clone(&state)), bans(Some("shared-secret"))).await;
     assert_eq!(status, StatusCode::OK);
     let list: Vec<SisterBanEntry> = serde_json::from_str(&body).unwrap();
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0].peer_name, "stranger");
+    assert_eq!(list[0].peer_name, "spammer");
 }

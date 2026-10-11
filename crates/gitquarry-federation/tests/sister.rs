@@ -231,3 +231,29 @@ async fn apply_ban_event_unban_clears_the_ban_and_provenance() {
     assert_eq!(peer.synced_from_sister, None);
     assert_eq!(peer.access_level, PeerAccessLevel::BrowseOnly);
 }
+
+#[tokio::test]
+async fn a_local_ban_echoed_back_by_a_sister_stays_this_instances_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
+    seed_peer(backend, &cipher, "acme", false).await;
+    gitquarry_federation::domain::peer::ban(backend, &cipher, "acme", "local decision", "admin")
+        .await
+        .unwrap();
+
+    apply_ban_event(
+        backend,
+        &cipher,
+        "sis",
+        &event("acme", "https://acme.example", BanAction::Ban),
+    )
+    .await
+    .unwrap();
+
+    let peer = access::get_peer(backend, &cipher, "acme").await.unwrap().unwrap();
+    assert_eq!(peer.synced_from_sister, None);
+    assert_eq!(peer.ban_reason.as_deref(), Some("local decision"));
+    assert_eq!(peer.banned_by, "admin");
+}

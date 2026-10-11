@@ -202,6 +202,14 @@ pub async fn apply_ban_event(
     access::validate_peer_name(&event.peer_name)?;
     let (existing, etag) = Peer::get(backend, cipher, &event.peer_name).await?;
     let peer = match (event.action, existing) {
+        // Already banned here on someone else's word — most often this
+        // instance's own ban echoing back through the sister's list.
+        // Re-attributing it would stop a later local unban from reaching
+        // the sisters (`domain::peer::unban` propagates only this
+        // instance's own bans) and drop it from `total_bans_issued`.
+        (BanAction::Ban, Some(peer)) if peer.banned && peer.synced_from_sister.as_deref() != Some(sister_name) => {
+            return Ok(());
+        }
         (BanAction::Ban, existing) => {
             validate_git_base_url(&event.git_base_url)?;
             let mut peer = existing.unwrap_or_else(|| Peer {

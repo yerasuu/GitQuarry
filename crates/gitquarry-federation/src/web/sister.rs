@@ -76,20 +76,18 @@ pub(crate) async fn handler_bans_get(State(state): State_, headers: HeaderMap) -
     let Some(secret) = bearer_token(&headers) else {
         return json_error(StatusCode::UNAUTHORIZED, "missing bearer token");
     };
-    if sister::sister_by_secret(state.backend.as_ref(), &state.cipher, &secret)
-        .await
-        .ok()
-        .flatten()
-        .is_none()
-    {
+    let Ok(Some(caller)) = sister::sister_by_secret(state.backend.as_ref(), &state.cipher, &secret).await else {
         return json_error(StatusCode::UNAUTHORIZED, "unknown sister credential");
-    }
+    };
     let peers = access::list_all_peers(state.backend.as_ref(), &state.cipher)
         .await
         .unwrap_or_default();
+    // Bans learned from the caller are its own decisions; handing them back
+    // would let a ban it has since lifted (and whose unban push got lost)
+    // come straight back to it on its next pull.
     let out: Vec<SisterBanEntry> = peers
         .into_iter()
-        .filter(|p| p.banned)
+        .filter(|p| p.banned && p.synced_from_sister.as_deref() != Some(caller.name.as_str()))
         .map(|p| SisterBanEntry {
             peer_name: p.name,
             git_base_url: p.git_base_url,
