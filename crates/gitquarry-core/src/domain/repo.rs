@@ -331,10 +331,10 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
 /// host they control, which needs no token to do since a blank token field
 /// means "keep the stored one" — the credential itself.
 ///
-/// `merges/` and `lfs-locks/` aren't credentials, just wrong: a fork
+/// `merges/`, `lfs-locks/` and `lfs-lock-paths/` aren't credentials, just wrong: a fork
 /// starting life with the upstream's merge requests, review threads and
 /// held LFS locks isn't what a fork is, and no forge behaves that way.
-const NOT_INHERITED_BY_A_COPY: [&str; 3] = ["mirrors/", "merges/", "lfs-locks/"];
+const NOT_INHERITED_BY_A_COPY: [&str; 4] = ["mirrors/", "merges/", "lfs-locks/", "lfs-lock-paths/"];
 
 /// Strips [`NOT_INHERITED_BY_A_COPY`] from a freshly copied repo. Runs
 /// *after* the copy rather than filtering inside `copy_all_to`: that

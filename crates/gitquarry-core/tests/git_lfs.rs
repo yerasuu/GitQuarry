@@ -557,6 +557,46 @@ async fn create_lock_then_list_then_conflict_on_the_same_path() {
     assert_eq!(lock_count(&server).await, 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_creates_on_one_path_grant_exactly_one_lock() {
+    let server = start().await;
+    let attempts =
+        ["alice", "bob", "alice", "bob", "alice", "bob"].map(|who| server.create_lock(PRIVATE, who, "art/a.psd"));
+    let statuses: Vec<_> = futures::future::join_all(attempts)
+        .await
+        .iter()
+        .map(reqwest::Response::status)
+        .collect();
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::CREATED).count(), 1);
+    assert!(
+        statuses
+            .iter()
+            .all(|s| *s == StatusCode::CREATED || *s == StatusCode::CONFLICT)
+    );
+    assert_eq!(lock_count(&server).await, 1);
+
+    // Unlocking frees the path for the next claim.
+    let id = json(server.list_locks(PRIVATE, Some("alice"), "").await).await["locks"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let resp = server
+        .post(
+            PRIVATE,
+            &format!("locks/{id}/unlock"),
+            Some("alice"),
+            r#"{"force":true}"#,
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        server.create_lock(PRIVATE, "bob", "art/a.psd").await.status(),
+        StatusCode::CREATED
+    );
+}
+
 #[tokio::test]
 async fn list_locks_filters_by_path_and_id() {
     let server = start().await;

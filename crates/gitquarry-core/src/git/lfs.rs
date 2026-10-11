@@ -16,7 +16,7 @@
 
 use crate::crypto::Cipher;
 use crate::storage::Backend;
-use crate::storage::lfs_locks::{self, LfsLock};
+use crate::storage::lfs_locks::{self, CreatedLock, LfsLock};
 use crate::storage::remote::Remote;
 use crate::storage::uid::Uid;
 use crate::validate;
@@ -481,35 +481,42 @@ pub(super) async fn create_lock_response(
         return Ok(error_response(StatusCode::UNPROCESSABLE_ENTITY, "invalid path"));
     }
 
+    // Still checked by listing, not only by the path claim, because locks
+    // taken before path claims existed have no claim to collide with.
     let existing = lfs_locks::list_locks(backend, cipher, uid).await?;
-    if let Some(conflict) = existing.iter().find(|l| l.path == req.path) {
-        let body = serde_json::to_vec(&LockConflictResponse {
-            lock: LockJson::from(conflict),
-            message: "already locked".to_string(),
-        })
-        .context("serializing lock conflict response")?;
-        return Ok((StatusCode::CONFLICT, [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)], body).into_response());
-    }
-
-    let id = lfs_locks::next_lock_id(backend.as_ref(), cipher.as_ref(), uid).await?;
-    let lock = LfsLock {
-        id,
-        path: req.path,
-        owner: owner.to_string(),
-        locked_at: crate::storage::audit::format_unix_secs(now_secs()),
+    let held = match existing.into_iter().find(|l| l.path == req.path) {
+        Some(held) => held,
+        None => match lfs_locks::create_lock(
+            backend.as_ref(),
+            cipher.as_ref(),
+            uid,
+            req.path,
+            owner.to_string(),
+            crate::storage::audit::format_unix_secs(now_secs()),
+        )
+        .await?
+        {
+            CreatedLock::Held(held) => held,
+            CreatedLock::Created(lock) => {
+                let resp_body = serde_json::to_vec(&LockResponse {
+                    lock: LockJson::from(&lock),
+                })
+                .context("serializing lock response")?;
+                return Ok((
+                    StatusCode::CREATED,
+                    [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)],
+                    resp_body,
+                )
+                    .into_response());
+            }
+        },
     };
-    lfs_locks::put_lock(backend.as_ref(), cipher.as_ref(), uid, &lock).await?;
-
-    let resp_body = serde_json::to_vec(&LockResponse {
-        lock: LockJson::from(&lock),
+    let body = serde_json::to_vec(&LockConflictResponse {
+        lock: LockJson::from(&held),
+        message: "already locked".to_string(),
     })
-    .context("serializing lock response")?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)],
-        resp_body,
-    )
-        .into_response())
+    .context("serializing lock conflict response")?;
+    Ok((StatusCode::CONFLICT, [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)], body).into_response())
 }
 
 /// `POST .../info/lfs/locks/verify`: every current lock split into `ours`
@@ -567,7 +574,7 @@ pub(super) async fn unlock_response(
     if lock.owner != requester && !req.force {
         return Ok(error_response(StatusCode::FORBIDDEN, "locked by another user"));
     }
-    lfs_locks::delete_lock(backend.as_ref(), cipher.as_ref(), uid, id).await?;
+    lfs_locks::delete_lock(backend.as_ref(), cipher.as_ref(), uid, &lock).await?;
 
     let resp_body = serde_json::to_vec(&LockResponse {
         lock: LockJson::from(&lock),
