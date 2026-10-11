@@ -214,11 +214,17 @@ async fn handle(
                 Authz::Allowed(actor) => actor,
                 Authz::Denied(reason) => return Ok(reason.into_git_response()),
             };
+            // A push opens with `GET info/refs?service=git-receive-pack`, so
+            // that advertisement belongs to the push as much as the POST
+            // after it does and gets the same treatment below.
+            let is_push = kind == Kind::ReceivePack
+                || (kind == Kind::InfoRefs
+                    && query_param(req.uri().query().unwrap_or(""), "service") == Some("git-receive-pack"));
             // Clone/fetch flood + scraping guard (`GitRateLimiter`'s own doc
-            // comment) — `ReceivePack` (push) is deliberately not covered,
-            // same "read-heavy scraping is the actual threat model here"
-            // scoping that doc comment describes.
-            if kind != Kind::ReceivePack {
+            // comment) — a push is deliberately not covered, same
+            // "read-heavy scraping is the actual threat model here" scoping
+            // that doc comment describes.
+            if !is_push {
                 let under_limit = match &actor {
                     Some(username) => ctx.git_rate_limiter.check_authenticated(username),
                     None => ctx.git_rate_limiter.check_anonymous(&client_key),
@@ -233,7 +239,7 @@ async fn handle(
             // S3 since the last fetch") — a sync nobody asked for turning a
             // valid push into a failure. The push's own refs reach the
             // external side on the next sweep either way.
-            if kind != Kind::ReceivePack {
+            if !is_push {
                 crate::mirror::sync_external_before_serving(ctx, &resolved).await;
             }
             // A fetch only reads the mirror, so it takes the repo's lock

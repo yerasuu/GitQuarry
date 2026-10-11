@@ -480,6 +480,18 @@ async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
 }
 
 #[tokio::test]
+async fn a_push_advertisement_is_not_counted_against_the_clone_rate_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = serve_public_repo(dir.path(), false).await;
+    let client = reqwest::Client::new();
+    let push_refs = || client.get(format!("{base}/acme/demo/info/refs?service=git-receive-pack"));
+    spend_anonymous_budget(|_| push_refs()).await;
+    assert_eq!(push_refs().send().await.unwrap().status(), StatusCode::OK);
+    // The fetch budget is still whole.
+    spend_anonymous_budget(|_| upload_pack_refs(&client, &base, "acme/demo")).await;
+}
+
+#[tokio::test]
 async fn the_rate_limit_ignores_a_forwarded_header_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let base = serve_public_repo(dir.path(), false).await;
