@@ -479,3 +479,17 @@ async fn a_remote_comment_is_csrf_checked_here_and_re_encoded_without_the_token(
 fn url_encode(value: &str) -> String {
     form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
+
+#[tokio::test]
+async fn an_oversized_public_api_body_is_refused_before_reaching_federation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/_api/pulls")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(vec![b'x'; 3 * 1024 * 1024]))
+        .unwrap();
+    assert_eq!(send(&app, request).await.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_nothing_forwarded(&mut rx, "an oversized body");
+}
