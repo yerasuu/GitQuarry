@@ -14,14 +14,21 @@
 //! as plain unhighlighted text, same graceful fallback as no extension at
 //! all (`"plaintext"`, one of `highlight.js`'s own built-in language names).
 
-/// `path`'s extension, lowercased, or `"plaintext"` if it has none — always
-/// a valid CSS class fragment (`Path::extension` never returns anything
-/// with a space or a quote).
+/// `path`'s extension, lowercased, or `"plaintext"` if it has none or it
+/// isn't plain `[a-z0-9_+-]`. Callers splice the result into a `class`
+/// attribute unescaped, and a file name is attacker-controlled (a pushed
+/// `x."onmouseover=…` would otherwise break out of the attribute), so the
+/// charset is the guarantee — no real language alias needs anything else.
 pub fn language_tag(path: &str) -> String {
     std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
-        .filter(|ext| !ext.is_empty())
+        .filter(|ext| {
+            !ext.is_empty()
+                && ext
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'+' | b'-'))
+        })
         .unwrap_or_else(|| "plaintext".to_string())
 }
