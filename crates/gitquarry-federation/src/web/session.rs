@@ -30,8 +30,15 @@ pub(crate) fn forwarded_user(headers: &HeaderMap) -> Option<String> {
 /// The session user's own uid — needed for `domain::peer_credential::*`,
 /// which is keyed by uid rather than username (see that module's own doc
 /// comment on why).
+///
+/// An empty uid is refused rather than trusted: a user record stored before
+/// uids existed deserializes to `Uid::default()`, the very key the
+/// instance's own sister handshake secrets live under
+/// (`.conf/peer-tokens//<peer>`), so that user could read or overwrite them.
 pub(crate) fn forwarded_user_uid(headers: &HeaderMap) -> Option<Uid> {
-    header_str(headers, USER_UID_HEADER).map(|s| Uid::from(s.to_string()))
+    header_str(headers, USER_UID_HEADER)
+        .filter(|s| !s.is_empty())
+        .map(|s| Uid::from(s.to_string()))
 }
 
 /// Opaque CSRF token value to embed verbatim in a rendered form's hidden

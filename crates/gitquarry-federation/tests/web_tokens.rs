@@ -102,6 +102,22 @@ async fn revoking_reports_whether_a_token_was_actually_revoked() {
 }
 
 #[tokio::test]
+async fn an_empty_forwarded_uid_is_refused_so_it_never_reaches_the_instance_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = federation_state(dir.path(), &fake_core().await);
+    let req = Request::post("/_account/tokens")
+        .header("x-gitquarry-user", "legacy")
+        .header("x-gitquarry-user-uid", "")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("action=unlink_peer&peer=acme"))
+        .unwrap();
+    assert_eq!(
+        send(&router(Arc::clone(&state)), req).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
 async fn is_refused_without_the_user_and_uid_core_forwards() {
     let dir = tempfile::tempdir().unwrap();
     let state = federation_state(dir.path(), &fake_core().await);
