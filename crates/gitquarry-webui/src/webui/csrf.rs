@@ -23,17 +23,29 @@ use sha2::{Digest, Sha256};
 /// here: an attacker who can't read the cookie can't compute the token,
 /// and one who *can* read it doesn't need the token.
 ///
-/// Empty string with no session: only logged-in-required actions get this
+/// Empty string with no session: only logged-in-required actions carry it
 /// (see [`require_csrf`]) — there's nothing meaningful to protect on an
 /// anonymous POST like the text-size toggle.
 pub(crate) fn csrf_field(headers: &HeaderMap) -> String {
-    match get_cookie(headers, crate::auth::web::login::SESSION_COOKIE) {
-        Some(session) => {
-            let token = csrf_token(&session);
+    match anchor_cookie(headers) {
+        Some(anchor) => {
+            let token = csrf_token(&anchor);
             maud::html! { input type="hidden" name="csrf" value=(token); }.into_string()
         }
         None => String::new(),
     }
+}
+
+/// The cookie [`csrf_field`] and [`require_csrf`] derive their token from:
+/// the session, else the bootstrap grant. During the bootstrap window the
+/// admin gates accept the grant in place of a session, so without this
+/// fallback every admin form there (creating the first admin included)
+/// would render no token and fail verification. The grant is `HttpOnly` and
+/// sealed just like the session, so it anchors the double-submit equally
+/// well; whether it is *live* is for the gates to decide, not this one.
+fn anchor_cookie(headers: &HeaderMap) -> Option<String> {
+    get_cookie(headers, crate::auth::web::login::SESSION_COOKIE)
+        .or_else(|| get_cookie(headers, super::bootstrap::BOOTSTRAP_COOKIE))
 }
 
 /// The CSRF token for a given session-cookie value: a plain SHA256 of it,
@@ -51,7 +63,7 @@ pub(crate) fn csrf_token(cookie_value: &str) -> String {
 ///
 /// `/_login` needs exactly this protection before any session exists — a
 /// cross-site form that logs someone into an account the attacker controls
-/// still gets that person working inside it — but has no session cookie to
+/// still leaves that person working inside it — but has no session cookie to
 /// derive a token from, so it carries its own short-lived one
 /// (`crate::auth::web::login::LOGIN_CSRF_COOKIE`). Same double-submit shape
 /// either way, just told which cookie is the anchor.
@@ -90,8 +102,8 @@ fn ct_eq(a: &str, b: &str) -> bool {
 /// otherwise) on every handler that mutates something on behalf of a
 /// logged-in user.
 pub(crate) fn require_csrf(headers: &HeaderMap, submitted: &str) -> Result<(), AppError> {
-    let expected = get_cookie(headers, crate::auth::web::login::SESSION_COOKIE)
-        .map(|session| csrf_token(&session))
+    let expected = anchor_cookie(headers)
+        .map(|anchor| csrf_token(&anchor))
         .unwrap_or_default();
     if expected.is_empty() || !ct_eq(submitted, &expected) {
         // Sync-only fallback (no `ctx`, so no `effective_locale`'s

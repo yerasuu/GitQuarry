@@ -4,7 +4,7 @@
 
 use axum::http::{StatusCode, header};
 use base64::Engine;
-use gitquarry_test_support::{Page, Session};
+use gitquarry_test_support::{Page, Session, post_form};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
@@ -172,4 +172,30 @@ async fn the_token_is_long_random_hex() {
     let token = printed_token(&ctx).await;
     assert_eq!(token.len(), 48, "{token}");
     assert!(token.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')), "{token}");
+}
+
+/// The grant is the only credential a fresh instance has, so the admin
+/// forms it opens must carry a CSRF token anchored to it — otherwise the
+/// first admin account can't be created from the web at all.
+#[tokio::test]
+async fn the_grant_can_create_the_first_admin() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    let cookie = exchange_token(&ctx).await;
+    let csrf = get(&ctx, "/_users", Some(&cookie)).await.csrf();
+    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+    let fields = [
+        ("csrf", csrf.as_str()),
+        ("user_action", "add_user"),
+        ("username", "root"),
+        ("password", gitquarry_test_support::PASSWORD),
+        ("is_admin", "1"),
+    ];
+    let response = post_form(&app, "/_users", Some(&cookie), &fields).await;
+    assert!(
+        response.status.is_redirection() || response.status.is_success(),
+        "{}",
+        response.body
+    );
+    Session::login(&app, "root").await;
 }
