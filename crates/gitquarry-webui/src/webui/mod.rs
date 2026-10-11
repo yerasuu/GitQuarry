@@ -601,7 +601,11 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         )
         .route(
             "/_releases/asset_upload/{*repo}",
-            get(repo::releases::handler_mutation_get).post(repo::releases::handler_upload_asset_post),
+            get(repo::releases::handler_mutation_get)
+                .post(repo::releases::handler_upload_asset_post)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    repo::releases::MAX_ASSET_UPLOAD_BODY_BYTES,
+                )),
         )
         .route(
             "/_releases/asset_delete/{*repo}",
