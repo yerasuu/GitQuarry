@@ -340,9 +340,12 @@ async fn handle(
                     // diff against it — see `events::diff_refs`'s own doc
                     // comment for why this process has no other way to
                     // learn which refs a push touched.
-                    let before_refs = resolved.remote.get_manifest().await.ok().map(|(m, _)| m.refs);
+                    let before_refs = crate::events::mirror_refs(&mirror.path).await;
                     let resp =
                         pack_response(ctx, "receive-pack", name, &resolved.uid, &mirror, req, actor.as_deref()).await?;
+                    // Taken before the re-sync below, which reads the same
+                    // possibly-stale manifest and could only blur the diff.
+                    let after_refs = crate::events::mirror_refs(&mirror.path).await;
                     // The pre-receive hook already pushed to the bucket; this just
                     // refreshes the local mirror for the next reader, same as
                     // `ssh.rs` does after a push.
@@ -366,26 +369,17 @@ async fn handle(
                     // Detached, same reasoning as the language/search-index
                     // updates above: webhook/CI delivery must never make
                     // the pusher wait.
-                    if let Some(before_refs) = before_refs {
-                        let event_ctx = Arc::clone(ctx);
-                        let event_uid = resolved.uid.clone();
-                        let event_remote = resolved.remote.clone();
-                        let pusher = actor.clone();
-                        tokio::spawn(async move {
-                            if let Ok((after, _etag)) = event_remote.get_manifest().await {
-                                let refs = crate::events::diff_refs(&before_refs, &after.refs);
-                                if !refs.is_empty() {
-                                    crate::events::emit(
-                                        &event_ctx,
-                                        crate::events::RepoEvent::Push {
-                                            repo_uid: event_uid,
-                                            refs,
-                                            pusher,
-                                        },
-                                    );
-                                }
-                            }
-                        });
+                    if let (Some(before_refs), Some(after_refs)) = (before_refs, after_refs) {
+                        let refs = crate::events::diff_refs(&before_refs, &after_refs);
+                        if !refs.is_empty() {
+                            let event_ctx = Arc::clone(ctx);
+                            let event = crate::events::RepoEvent::Push {
+                                repo_uid: resolved.uid.clone(),
+                                refs,
+                                pusher: actor.clone(),
+                            };
+                            tokio::spawn(async move { crate::events::emit(&event_ctx, event) });
+                        }
                     }
                     Ok(resp)
                 }

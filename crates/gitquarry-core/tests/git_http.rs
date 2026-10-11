@@ -554,3 +554,55 @@ async fn without_the_forwarded_header_a_trusting_server_keys_the_rate_limit_on_t
         .status();
     assert_eq!(status, StatusCode::OK);
 }
+
+/// The real `pre-receive` hook needs the `gitquarry` binary; this stand-in
+/// accepts every push and, like the real one, never tells this process
+/// what it did.
+fn accept_every_push(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = dir.join("accepting-hook");
+    std::fs::write(&exe, "#!/bin/sh\ncat >/dev/null\nexit 0\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    exe
+}
+
+/// `base` with alice's Basic credentials in it, the way a git remote URL
+/// carries them.
+fn as_alice(base: &str) -> String {
+    base.replace("http://", &format!("http://alice:{}@", PASSWORD.replace(' ', "%20")))
+}
+
+#[tokio::test]
+async fn a_push_over_http_emits_the_refs_it_moved() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = AppContext {
+        exe_path: accept_every_push(dir.path()),
+        ..gitquarry_test_support::ctx(dir.path())
+    };
+    gitquarry_test_support::user(&ctx, "alice", false).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let resolved = ctx.resolve_repo("alice/proj").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let first = work.commit(&[("a.txt", "one\n")], "first").await;
+    work.push(&resolved, "refs/heads/main").await;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    ctx.events.register(Arc::new(move |event| {
+        let _ = tx.lock().unwrap().send(event);
+    }));
+    let base = serve(Arc::new(ctx)).await;
+    let second = work.commit(&[("a.txt", "two\n")], "second").await;
+    let remote = format!("{}/alice/proj", as_alice(&base));
+    gitquarry_test_support::git(work.path(), &["push", "-q", &remote, "main"]).await;
+
+    let event = rx.recv_timeout(Duration::from_secs(10)).expect("no push event");
+    let gitquarry_core::events::RepoEvent::Push { refs, pusher, .. } = event else {
+        panic!("not a push event: {event:?}");
+    };
+    assert_eq!(pusher.as_deref(), Some("alice"));
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].refname, "refs/heads/main");
+    assert_eq!(refs[0].old.as_deref(), Some(first.as_str()));
+    assert_eq!(refs[0].new.as_deref(), Some(second.as_str()));
+}
