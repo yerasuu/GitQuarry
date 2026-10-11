@@ -949,7 +949,9 @@ async fn feed_stdin(mut body: PackBody, mut stdin: ChildStdin) -> Result<()> {
 const STDOUT_CHUNK_BYTES: usize = 64 * 1024;
 
 /// git's stdout as a response body stream. Ends at the first read error
-/// rather than retrying a pipe that already failed.
+/// rather than retrying a pipe that already failed. Fused, because a body
+/// adapter in front of this layer (the web UI's compression) may poll once
+/// more after the end, and a bare `unfold` panics on that.
 fn stdout_chunks(stdout: ChildStdout) -> impl futures::Stream<Item = std::io::Result<Bytes>> {
     futures::stream::unfold(Some(stdout), |state| async move {
         let mut stdout = state?;
@@ -963,6 +965,7 @@ fn stdout_chunks(stdout: ChildStdout) -> impl futures::Stream<Item = std::io::Re
             Err(e) => Some((Err(e), None)),
         }
     })
+    .fuse()
 }
 
 /// Writes a push's request body to an already-unlinked temp file under

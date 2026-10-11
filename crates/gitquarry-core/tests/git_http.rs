@@ -630,6 +630,66 @@ async fn a_clone_over_http_gets_the_whole_history() {
     );
 }
 
+/// Re-wraps every response body so it is polled once more after it ends,
+/// which body adapters in front of the git layer may do (the web UI's
+/// compression layer does).
+async fn poll_body_past_its_end(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    use http_body_util::BodyExt;
+    let (parts, body) = next.run(req).await.into_parts();
+    let frames = futures::stream::unfold(Some(body), |state| async move {
+        let mut body = state?;
+        match body.frame().await {
+            Some(Ok(frame)) => Some((Ok(frame.into_data().unwrap_or_default()), Some(body))),
+            Some(Err(e)) => Some((Err(e), None)),
+            None => {
+                let _ = body.frame().await;
+                None
+            }
+        }
+    });
+    Response::from_parts(parts, axum::body::Body::from_stream(frames))
+}
+
+#[tokio::test]
+async fn a_fetch_survives_its_body_being_polled_past_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let resolved = ctx.resolve_repo("acme/demo").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let head = work.commit(&[("a.txt", "one\n")], "first").await;
+    work.push(&resolved, "refs/heads/main").await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new()
+        .fallback(|| async { PASSTHROUGH })
+        .layer(axum::middleware::from_fn_with_state(
+            ctx,
+            gitquarry_core::git::http::middleware,
+        ))
+        .layer(axum::middleware::from_fn(poll_body_past_its_end));
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let into = tempfile::tempdir().unwrap();
+    gitquarry_test_support::git(into.path(), &["init", "-q", "--bare", "m"]).await;
+    let mirror = into.path().join("m");
+    let url = format!("http://{addr}/acme/demo");
+    gitquarry_test_support::git(
+        &mirror,
+        &["fetch", "-q", "--prune", "--prune-tags", &url, "+refs/*:refs/*"],
+    )
+    .await;
+    assert_eq!(
+        gitquarry_test_support::git(&mirror, &["rev-parse", "refs/heads/main"]).await,
+        head
+    );
+}
+
 #[tokio::test]
 async fn a_clone_whose_request_git_gzips_still_works() {
     let dir = tempfile::tempdir().unwrap();
