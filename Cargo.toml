@@ -84,3 +84,6 @@ tokio = "1.53.2"
 toml = "1.1.8+spec-1.1.0"
 tracing = "0.1.44"
 
+[profile.release]
+debug = false        # o simplemente strip = "symbols"
+incremental = false
