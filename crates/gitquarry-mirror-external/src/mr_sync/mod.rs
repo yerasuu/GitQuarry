@@ -145,6 +145,15 @@ async fn sync_merge_requests_once_with(
         if linked_locals.contains(&mr.number) || !mirror.direction.allows_push() {
             continue;
         }
+        // Only open MRs between this repo's own branches: a fork MR's head
+        // lives in a repo the external side never sees, and a closed or
+        // merged one would be opened there as if it were live.
+        if mr.status != MrStatus::Open || mr.source_repo != *uid {
+            continue;
+        }
+        if mirror.mr_export_failures.get(&mr.number).copied().unwrap_or(0) >= access::MAX_MR_EXPORT_ATTEMPTS {
+            continue;
+        }
         match forge
             .create_merge_request(NewRemoteMr {
                 title: mr.title.clone(),
@@ -180,10 +189,21 @@ async fn sync_merge_requests_once_with(
                 linked_by_external.insert(created.number, mr.number);
                 linked_locals.insert(mr.number);
             }
-            Err(e) => warn!(
-                "couldn't create MR #{} (mirror '{}') on the external side: {e:#}",
-                mr.number, mirror.label
-            ),
+            Err(e) => {
+                warn!(
+                    "couldn't create MR #{} (mirror '{}') on the external side: {e:#}",
+                    mr.number, mirror.label
+                );
+                if let Err(e) =
+                    access::record_mr_export_failure(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, mr.number)
+                        .await
+                {
+                    warn!(
+                        "couldn't record the failed export of MR #{} (mirror '{}'): {e:#}",
+                        mr.number, mirror.label
+                    );
+                }
+            }
         }
     }
 
