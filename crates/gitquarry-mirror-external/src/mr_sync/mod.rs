@@ -42,6 +42,16 @@ fn export_body(comment: &MrComment) -> String {
     }
 }
 
+/// How an external forge login is stored as a local MR/comment author:
+/// `host/login`. Local usernames can't contain `/`
+/// (`auth::access::validate_username`), so an imported author can never
+/// equal a local one — otherwise a same-named local user would get author
+/// rights over the imported MR and be barred from reviewing it.
+fn imported_author(mirror: &ExternalMirror, login: &str) -> String {
+    let host = crate::validate::mirror_host(&mirror.remote_url).unwrap_or_else(|| "external".to_string());
+    format!("{host}/{login}")
+}
+
 /// `Other` is the only provider tag with no real [`ForgeApi`] impl — it's a
 /// UI label for "some other git host", not a specific REST API this trait
 /// could target, so enabling `sync_merge_requests` on one fails loudly here
@@ -121,7 +131,7 @@ async fn sync_merge_requests_once_with(
             unmirrored_branches += 1;
             continue;
         }
-        match create_local_mr_from_remote(ctx, resolved, &mirror.id, remote_mr).await {
+        match create_local_mr_from_remote(ctx, resolved, mirror, remote_mr).await {
             Ok(local_number) => {
                 linked_by_external.insert(remote_mr.number, local_number);
                 linked_locals.insert(local_number);
@@ -227,9 +237,10 @@ async fn sync_merge_requests_once_with(
 async fn create_local_mr_from_remote(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
-    mirror_id: &str,
+    mirror: &ExternalMirror,
     remote_mr: &RemoteMr,
 ) -> Result<u64> {
+    let author = imported_author(mirror, &remote_mr.author);
     let mr = merge_request::create(
         ctx,
         resolved,
@@ -239,7 +250,7 @@ async fn create_local_mr_from_remote(
             target_branch: &remote_mr.target_branch,
             title: &remote_mr.title,
             description: &remote_mr.body,
-            author: &remote_mr.author,
+            author: &author,
         },
         gitquarry_i18n::Locale::DEFAULT,
     )
@@ -262,7 +273,7 @@ async fn create_local_mr_from_remote(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &resolved.uid,
-        mirror_id,
+        &mirror.id,
         &link,
         None,
     )
@@ -462,7 +473,7 @@ async fn sync_one_linked_mr(
         // No anchor: the forge APIs this imports from expose issue-style
         // comments, which carry no diff position of their own.
         let comment = MrComment {
-            author: rc.author.clone(),
+            author: imported_author(mirror, &rc.author),
             body: rc.body.clone(),
             created_at: rc.created_at.clone(),
             origin: Some(mirror.id.clone()),

@@ -370,6 +370,8 @@ async fn discovers_a_new_remote_mr_and_links_it() {
     let local = w.local_mrs().await;
     assert_eq!(local.len(), 1);
     assert_eq!(local[0].title, "external title");
+    // Never plain "alice": that would hand a local alice this MR.
+    assert_eq!(local[0].author, "127.0.0.1/alice");
     let links = w.links().await;
     assert_eq!(links.len(), 1);
     assert_eq!((links[0].external_number, links[0].local_number), (7, local[0].number));
@@ -427,6 +429,11 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
         .await
         .unwrap();
     assert_eq!(imported.iter().filter(|c| c.body == "from gitlab").count(), 1);
+    assert!(
+        imported
+            .iter()
+            .any(|c| c.body == "from gitlab" && c.author == "127.0.0.1/dave")
+    );
 
     w.sweep().await;
     assert_eq!(
