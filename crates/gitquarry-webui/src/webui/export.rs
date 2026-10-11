@@ -220,16 +220,17 @@ pub(crate) async fn release_asset(
 ) -> Result<Response, AppError> {
     let filename = validate::validate_asset_filename(filename).map_err(AppError::bad_request)?;
     let (release, etag) = remote.get_release(tag).await?;
-    if etag.is_none() || !release.assets.iter().any(|a| a.filename == filename) {
+    let asset = release.assets.iter().find(|a| a.filename == filename);
+    let Some(asset) = asset.filter(|_| etag.is_some()) else {
         return Err(AppError::not_found(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::release::no_asset_on_release(locale, &filename, tag)
         )));
-    }
+    };
 
     let tmp_dir = tempfile::tempdir().context(gitquarry_i18n::shared::release::creating_temp_dir_for_asset(locale))?;
     let tmp_path = tmp_dir.path().join(&filename);
-    remote.download_asset(tag, &filename, &tmp_path).await?;
+    remote.download_asset(tag, asset.object_name(), &tmp_path).await?;
 
     let len = tokio::fs::metadata(&tmp_path).await?.len();
     let file = tokio::fs::File::open(&tmp_path).await?;

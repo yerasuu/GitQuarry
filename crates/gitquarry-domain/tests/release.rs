@@ -255,6 +255,81 @@ async fn add_asset_then_remove_asset_roundtrips() {
     );
 }
 
+/// Both uploads pass the duplicate check before either CAS lands; whichever
+/// wins, the bytes served must be the ones its own metadata describes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_uploads_of_one_filename_never_pair_bytes_with_the_other_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path());
+    let resolved = test_resolved(&ctx);
+    let src_dir = tempfile::tempdir().unwrap();
+    let path_a = src_dir.path().join("a");
+    let path_b = src_dir.path().join("b");
+    tokio::fs::write(&path_a, b"bytes of upload a").await.unwrap();
+    tokio::fs::write(&path_b, b"bytes of upload b").await.unwrap();
+
+    let mut manifest = Manifest::default();
+    for round in 0..8 {
+        manifest.refs.insert(format!("refs/tags/v{round}"), "a".repeat(40));
+    }
+    resolved.remote.put_manifest(&manifest, None).await.unwrap();
+
+    for round in 0..8 {
+        let tag = format!("v{round}");
+        create(
+            &ctx,
+            &resolved,
+            &tag,
+            "t",
+            "",
+            false,
+            false,
+            "alice",
+            gitquarry_i18n::Locale::Es,
+        )
+        .await
+        .unwrap();
+        let upload = |source: &'static str, sha256: &'static str| {
+            let source = src_dir.path().join(source);
+            let (ctx, resolved, tag) = (&ctx, &resolved, &tag);
+            async move {
+                add_asset(
+                    ctx,
+                    resolved,
+                    NewAsset {
+                        tag,
+                        filename: "app.bin",
+                        source: &source,
+                        size: 17,
+                        sha256,
+                        uploaded_by: "alice",
+                        signature: None,
+                        locale: gitquarry_i18n::Locale::Es,
+                    },
+                )
+                .await
+            }
+        };
+        let (a, b) = tokio::join!(upload("a", "a"), upload("b", "b"));
+        assert!(
+            matches!(a, Ok(Cas::Ok)) || matches!(b, Ok(Cas::Ok)),
+            "neither upload landed: {a:?} / {b:?}"
+        );
+
+        let (release, _etag) = resolved.remote.get_release(&tag).await.unwrap();
+        assert_eq!(release.assets.len(), 1);
+        let asset = &release.assets[0];
+        let dest = src_dir.path().join(format!("out-{round}"));
+        resolved
+            .remote
+            .download_asset(&tag, asset.object_name(), &dest)
+            .await
+            .unwrap();
+        let expected = format!("bytes of upload {}", asset.sha256);
+        assert_eq!(tokio::fs::read(&dest).await.unwrap(), expected.as_bytes());
+    }
+}
+
 #[tokio::test]
 async fn delete_removes_the_release_and_its_assets() {
     let dir = tempfile::tempdir().unwrap();

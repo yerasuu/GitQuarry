@@ -44,6 +44,30 @@ pub struct AssetMeta {
     /// `signature` is `None`.
     #[serde(default)]
     pub signature_verified: bool,
+    /// Object name under `releases/<tag>/assets/` holding this asset's
+    /// bytes, from [`unique_asset_object`] — unique per upload so two
+    /// concurrent uploads of one filename can never overwrite each other's
+    /// bytes after one of them already won the metadata CAS. `None` for an
+    /// asset stored before this field existed, whose object is named after
+    /// `filename` itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+}
+
+impl AssetMeta {
+    /// What [`Remote::download_asset`]/[`Remote::delete_asset`] must be
+    /// given for this asset — never `filename` directly, which only names
+    /// the object for assets uploaded before [`Self::object`] existed.
+    pub fn object_name(&self) -> &str {
+        self.object.as_deref().unwrap_or(&self.filename)
+    }
+}
+
+/// A fresh object name for an upload of `filename`. Random rather than
+/// content-addressed so the loser of a metadata CAS can delete its own
+/// object without any chance of removing bytes another asset references.
+pub fn unique_asset_object(filename: &str) -> String {
+    format!("{:032x}-{filename}", rand::random::<u128>())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -480,25 +504,29 @@ impl Remote {
         Ok(tags.into_iter().collect())
     }
 
-    /// Uploads one release asset (streaming — same primitive
-    /// [`Self::upload_pack`]/[`Self::upload_lfs_object`] use).
-    pub async fn upload_asset(&self, tag: &str, filename: &str, source: &Path) -> Result<()> {
-        self.upload_file(&format!("{RELEASES_PREFIX}/{tag}/assets/{filename}"), source)
+    /// Uploads one release asset's bytes as `object` (streaming — same
+    /// primitive [`Self::upload_pack`]/[`Self::upload_lfs_object`] use).
+    /// `object` must come from [`unique_asset_object`] for a new upload,
+    /// so it never overwrites bytes an existing asset still references.
+    pub async fn upload_asset(&self, tag: &str, object: &str, source: &Path) -> Result<()> {
+        self.upload_file(&format!("{RELEASES_PREFIX}/{tag}/assets/{object}"), source)
             .await
     }
 
-    /// Downloads one release asset to `dest` (streaming).
-    pub async fn download_asset(&self, tag: &str, filename: &str, dest: &Path) -> Result<()> {
-        self.download_file(&format!("{RELEASES_PREFIX}/{tag}/assets/{filename}"), dest)
+    /// Downloads one release asset to `dest` (streaming); `object` is
+    /// [`AssetMeta::object_name`].
+    pub async fn download_asset(&self, tag: &str, object: &str, dest: &Path) -> Result<()> {
+        self.download_file(&format!("{RELEASES_PREFIX}/{tag}/assets/{object}"), dest)
             .await
     }
 
     /// Best-effort, like [`Self::delete_pack`] — call only after the
     /// release's own metadata has already been CAS-updated to no longer
-    /// list this asset, so a lost race here never deletes bytes a
-    /// concurrently-still-live release version still references.
-    pub async fn delete_asset(&self, tag: &str, filename: &str) {
-        let key = self.key(&format!("{RELEASES_PREFIX}/{tag}/assets/{filename}"));
+    /// list this asset (or, for an upload whose CAS lost, never listed it),
+    /// so a lost race here never deletes bytes a concurrently-still-live
+    /// release version still references.
+    pub async fn delete_asset(&self, tag: &str, object: &str) {
+        let key = self.key(&format!("{RELEASES_PREFIX}/{tag}/assets/{object}"));
         let _ = self.backend.delete(&key).await;
     }
 

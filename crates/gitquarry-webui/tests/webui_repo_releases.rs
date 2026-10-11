@@ -58,6 +58,7 @@ fn asset(filename: &str, sha_char: &str, signature: Option<bool>) -> AssetMeta {
         uploaded_by: "alice".to_string(),
         signature: signature.map(|_| "-----BEGIN PGP SIGNATURE-----...".to_string()),
         signature_verified: signature.unwrap_or(false),
+        object: None,
     }
 }
 
