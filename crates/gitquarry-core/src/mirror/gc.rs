@@ -166,6 +166,13 @@ pub async fn prewarm_recent_mirrors(ctx: Arc<AppContext>) {
                 if now.duration_since(m.last_access).unwrap_or_default() > ctx.mirror_max_age {
                     continue;
                 }
+                // A local mirror sits directly under its `/`-free uid; a
+                // nested one is a peer mirror (`_remote/<peer>/<repo>`),
+                // which has no manifest in this bucket, so syncing it
+                // "from the bucket" would delete every ref it has.
+                if m.repo_name.contains('/') {
+                    continue;
+                }
                 let uid = Uid::from(m.repo_name);
                 if !uids.contains(&uid) {
                     uids.push(uid);
