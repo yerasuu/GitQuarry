@@ -131,6 +131,27 @@ async fn an_unknown_token_is_still_unauthorized() {
 }
 
 #[tokio::test]
+async fn a_merge_request_from_a_private_fork_the_token_owner_cannot_read_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let created = Arc::new(AtomicU32::new(0));
+    let state = federation_state(dir.path(), &fake_core(Arc::clone(&created)).await);
+    let secret = alice_token(&state).await;
+    let create = post_json(
+        "/_api/pulls",
+        &secret,
+        serde_json::json!({
+            "repo": "alice/demo", "source_repo": "bob/secret",
+            "source_branch": "main", "target_branch": "main"
+        }),
+    );
+    assert_eq!(
+        send(&router(Arc::clone(&state)), create).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(created.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn a_reporter_opens_a_same_repo_merge_request() {
     let dir = tempfile::tempdir().unwrap();
     let created = Arc::new(AtomicU32::new(0));
