@@ -11,7 +11,7 @@
 use super::uid::Uid;
 use super::{Backend, Cas, REPOS_PREFIX};
 use crate::crypto::Cipher;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use s3db::Collection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -95,12 +95,13 @@ pub async fn put_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, lock: &
         .await
 }
 
-pub async fn delete_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, id: u64) {
-    let _ = lfs_locks_collection(uid).delete(backend, cipher, &id.to_string()).await;
+pub async fn delete_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, id: u64) -> Result<()> {
+    lfs_locks_collection(uid).delete(backend, cipher, &id.to_string()).await
 }
 
 /// Every lock currently held on this repo. Skips [`COUNTER_KEY`], same
-/// reasoning as `issues::list_issues`.
+/// reasoning as `issues::list_issues`. `Err` if any lock fails to load:
+/// leaving one out would tell a client its path is free when it isn't.
 pub async fn list_locks(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, uid: &Uid) -> Result<Vec<LfsLock>> {
     let collection = lfs_locks_collection(uid);
     let names: Vec<String> = collection
@@ -119,7 +120,8 @@ pub async fn list_locks(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, uid: &
     }
     let mut locks = Vec::new();
     while let Some(result) = set.join_next().await {
-        if let Ok(Ok((Some(lock), _etag))) = result {
+        // `None` is a lock unlocked between the listing and this read.
+        if let (Some(lock), _etag) = result.context("lock read task failed")?? {
             locks.push(lock);
         }
     }

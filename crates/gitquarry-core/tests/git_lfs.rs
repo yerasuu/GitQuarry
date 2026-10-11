@@ -656,3 +656,22 @@ async fn a_malformed_oid_or_an_oversize_body_is_the_clients_error() {
         .unwrap();
     assert_lfs_error(resp, StatusCode::PAYLOAD_TOO_LARGE).await;
 }
+
+#[tokio::test]
+async fn a_lock_that_fails_to_decrypt_fails_the_listing_instead_of_vanishing() {
+    let server = start().await;
+    json(server.create_lock(PRIVATE, "alice", "a.psd").await).await;
+    let uid = server.ctx.resolve_repo(PRIVATE).await.unwrap().unwrap().uid;
+    let key = gitquarry_core::storage::lfs_locks::lfs_locks_collection(&uid)
+        .key("1")
+        .unwrap();
+    let backend = server.ctx.backend();
+    let (_bytes, etag) = backend.get(&key).await.unwrap();
+    backend
+        .put_cas(&key, b"not a sealed object".to_vec(), etag.as_deref())
+        .await
+        .unwrap();
+
+    let resp = server.list_locks(PRIVATE, Some("alice"), "").await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

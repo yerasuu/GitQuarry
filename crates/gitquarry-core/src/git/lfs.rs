@@ -567,7 +567,7 @@ pub(super) async fn unlock_response(
     if lock.owner != requester && !req.force {
         return Ok(error_response(StatusCode::FORBIDDEN, "locked by another user"));
     }
-    lfs_locks::delete_lock(backend.as_ref(), cipher.as_ref(), uid, id).await;
+    lfs_locks::delete_lock(backend.as_ref(), cipher.as_ref(), uid, id).await?;
 
     let resp_body = serde_json::to_vec(&LockResponse {
         lock: LockJson::from(&lock),
