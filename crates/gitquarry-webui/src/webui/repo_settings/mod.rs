@@ -143,7 +143,7 @@ async fn require_repo_authority(
     }
     let Some(user) = login::current_user(ctx, headers).await else {
         return Ok(Some(
-            Redirect::to(&format!("/_login?return_to={}", url_encode(repo))).into_response(),
+            Redirect::to(&format!("/_login?return_to={}", url_encode(&format!("/{repo}")))).into_response(),
         ));
     };
     let allowed = if form.action == "purge_repo" {

@@ -102,3 +102,24 @@ async fn a_maintainer_cannot_demote_or_remove_an_owner() {
         .await;
     assert_eq!(granted.status, StatusCode::OK, "{}", granted.body);
 }
+
+/// A session whose account is gone is bounced to the login page, which has
+/// to accept the repo as the place to come back to.
+#[tokio::test]
+async fn a_dead_session_logs_in_again_and_returns_to_the_repo() {
+    let gq = Instance::new().await;
+    gq.user("bob", false).await;
+    let bob = gq.login("bob").await;
+    gitquarry_core::auth::domain::user::delete(&gq.ctx, "bob")
+        .await
+        .unwrap();
+
+    let bounced = gq.save(&bob, &[("conf_action", "set_description")]).await;
+    assert_eq!(bounced.status, StatusCode::SEE_OTHER, "{}", bounced.body);
+    let login = gq.get(bounced.location(), None).await;
+    assert!(
+        login.body.contains(&format!(r#"name="return_to" value="/{REPO}""#)),
+        "{}",
+        login.body
+    );
+}
