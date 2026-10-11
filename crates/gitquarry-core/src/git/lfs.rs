@@ -121,7 +121,7 @@ struct TopLevelError {
     message: String,
 }
 
-fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
+pub(super) fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
     let body = TopLevelError {
         message: message.into(),
     };

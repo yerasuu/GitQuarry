@@ -1762,6 +1762,7 @@ dependencies = [
  "gitquarry-test-support",
  "gitquarry-wire",
  "hmac 0.13.0",
+ "http-body-util",
  "rand 0.10.3",
  "reqwest 0.13.5",
  "russh",

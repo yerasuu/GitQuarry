@@ -218,7 +218,7 @@ async fn info_refs_advertises_the_service_named_anywhere_in_the_query() {
         format!("{base}/acme/demo/info/refs?service=git-evil"),
     ] {
         let status = client.get(&url).send().await.unwrap().status();
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{url}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{url}");
     }
 }
 

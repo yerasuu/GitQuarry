@@ -190,10 +190,73 @@ pub async fn middleware(
     let client = client_key(&ctx, req.headers(), addr.ip());
     match handle(&ctx, &name, resolved, kind, oid.as_deref(), client, req).await {
         Ok(resp) => resp,
-        Err(e) => {
-            error!(error = %e, "git-http request failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        Err(e) => match e.downcast_ref::<ClientError>() {
+            Some(client_error) => client_error.response(kind),
+            None => {
+                error!(error = %e, "git-http request failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+            }
+        },
+    }
+}
+
+/// A request the client got wrong, kept apart from server failures so it
+/// is answered with its own 4xx instead of a 500 and an error log line
+/// nobody on the server side can act on.
+#[derive(Debug)]
+enum ClientError {
+    BadRequest(&'static str),
+    TooLarge,
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientError::BadRequest(reason) => f.write_str(reason),
+            ClientError::TooLarge => f.write_str("request body too large"),
         }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+impl ClientError {
+    /// LFS clients parse the error body, git only displays it, hence the
+    /// two shapes.
+    fn response(&self, kind: Kind) -> Response {
+        let status = match self {
+            ClientError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ClientError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        };
+        match kind {
+            Kind::InfoRefs | Kind::UploadPack | Kind::ReceivePack => (status, self.to_string()).into_response(),
+            Kind::LfsBatch | Kind::LfsObject | Kind::LfsLocks | Kind::LfsLocksVerify | Kind::LfsLockUnlock => {
+                crate::git::lfs::error_response(status, self.to_string())
+            }
+        }
+    }
+}
+
+/// Buffers a request body up to `limit`, answering 413 past it.
+async fn read_capped(body: axum::body::Body, limit: usize, what: &'static str) -> Result<Bytes> {
+    axum::body::to_bytes(body, limit).await.map_err(|e| {
+        let over_limit = std::iter::successors(Some(&e as &(dyn std::error::Error + 'static)), |err| err.source())
+            .any(|err| err.is::<http_body_util::LengthLimitError>());
+        if over_limit {
+            ClientError::TooLarge.into()
+        } else {
+            anyhow::Error::new(e).context(what)
+        }
+    })
+}
+
+/// The `git <subcommand>` an `info/refs?service=` query asks to advertise.
+fn advertised_subcommand(query: Option<&str>) -> Result<&'static str, ClientError> {
+    match query_param(query.unwrap_or(""), "service") {
+        Some("git-upload-pack") => Ok("upload-pack"),
+        Some("git-receive-pack") => Ok("receive-pack"),
+        Some(_) => Err(ClientError::BadRequest("unsupported service")),
+        None => Err(ClientError::BadRequest("missing ?service=")),
     }
 }
 
@@ -216,6 +279,10 @@ async fn handle(
 
     match kind {
         Kind::InfoRefs | Kind::UploadPack | Kind::ReceivePack => {
+            let advertised = match kind {
+                Kind::InfoRefs => Some(advertised_subcommand(req.uri().query())?),
+                _ => None,
+            };
             let required = if kind == Kind::ReceivePack {
                 Permission::Developer
             } else {
@@ -228,9 +295,7 @@ async fn handle(
             // A push opens with `GET info/refs?service=git-receive-pack`, so
             // that advertisement belongs to the push as much as the POST
             // after it does and gets the same treatment below.
-            let is_push = kind == Kind::ReceivePack
-                || (kind == Kind::InfoRefs
-                    && query_param(req.uri().query().unwrap_or(""), "service") == Some("git-receive-pack"));
+            let is_push = kind == Kind::ReceivePack || advertised == Some("receive-pack");
             // Clone/fetch flood + scraping guard (`GitRateLimiter`'s own doc
             // comment) — a push is deliberately not covered, same
             // "read-heavy scraping is the actual threat model here" scoping
@@ -264,9 +329,8 @@ async fn handle(
             };
             match kind {
                 Kind::InfoRefs => {
-                    let query = req.uri().query().unwrap_or("");
-                    let service = query_param(query, "service").context("missing ?service=")?;
-                    info_refs_response(ctx, name, &resolved.uid, &mirror, service, actor.as_deref()).await
+                    let git_subcmd = advertised.context("info/refs without a parsed service")?;
+                    info_refs_response(ctx, name, &resolved.uid, &mirror, git_subcmd, actor.as_deref()).await
                 }
                 Kind::UploadPack => {
                     pack_response(ctx, "upload-pack", name, &resolved.uid, &mirror, req, actor.as_deref()).await
@@ -332,9 +396,7 @@ async fn handle(
         }
         Kind::LfsBatch => {
             let headers = req.headers().clone();
-            let body = axum::body::to_bytes(req.into_body(), MAX_LFS_BATCH_BYTES)
-                .await
-                .context("reading LFS batch body")?;
+            let body = read_capped(req.into_body(), MAX_LFS_BATCH_BYTES, "reading LFS batch body").await?;
             let required = crate::git::lfs::required_permission(&crate::git::lfs::peek_operation(&body));
             let actor = match authorize(ctx, &headers, name, &resolved.uid, config.visibility, required).await? {
                 Authz::Allowed(actor) => actor,
@@ -345,7 +407,7 @@ async fn handle(
         }
         Kind::LfsObject => {
             let oid = oid.context("missing LFS oid")?;
-            validate::validate_lfs_oid(oid)?;
+            validate::validate_lfs_oid(oid).map_err(|_| ClientError::BadRequest("invalid LFS oid"))?;
             let is_upload = req.method() == Method::PUT;
             let required = if is_upload {
                 Permission::Developer
@@ -415,9 +477,7 @@ async fn handle(
                     return Ok(crate::git::lfs::denial_response(Denial::Forbidden));
                 }
                 let owner = actor.context("authorize() granted Developer without a credential")?;
-                let body = axum::body::to_bytes(req.into_body(), MAX_LFS_BATCH_BYTES)
-                    .await
-                    .context("reading LFS lock create body")?;
+                let body = read_capped(req.into_body(), MAX_LFS_BATCH_BYTES, "reading LFS lock create body").await?;
                 crate::git::lfs::create_lock_response(&backend, &ctx.cipher, &resolved.uid, &owner, body).await
             } else {
                 let query = req.uri().query().unwrap_or("");
@@ -461,9 +521,7 @@ async fn handle(
             }
             let requester = actor.context("authorize() granted Developer without a credential")?;
             let backend = ctx.backend();
-            let body = axum::body::to_bytes(req.into_body(), MAX_LFS_BATCH_BYTES)
-                .await
-                .context("reading LFS unlock body")?;
+            let body = read_capped(req.into_body(), MAX_LFS_BATCH_BYTES, "reading LFS unlock body").await?;
             crate::git::lfs::unlock_response(&backend, &ctx.cipher, &resolved.uid, id, &requester, body).await
         }
     }
@@ -725,14 +783,10 @@ async fn info_refs_response(
     name: &str,
     repo_uid: &crate::storage::uid::Uid,
     mirror: &Mirror,
-    service: &str,
+    git_subcmd: &str,
     actor: Option<&str>,
 ) -> Result<Response> {
-    let git_subcmd = match service {
-        "git-upload-pack" => "upload-pack",
-        "git-receive-pack" => "receive-pack",
-        other => bail!("unsupported service: {other}"),
-    };
+    let service = format!("git-{git_subcmd}");
     let child = mirror::spawn_git_subcommand_http(
         ctx,
         git_subcmd,
@@ -767,9 +821,7 @@ async fn pack_response(
     req: Request,
     actor: Option<&str>,
 ) -> Result<Response> {
-    let body = axum::body::to_bytes(req.into_body(), MAX_PACK_BODY_BYTES)
-        .await
-        .context("reading request body")?;
+    let body = read_capped(req.into_body(), MAX_PACK_BODY_BYTES, "reading request body").await?;
     let child = mirror::spawn_git_subcommand_http(
         ctx,
         git_subcmd,

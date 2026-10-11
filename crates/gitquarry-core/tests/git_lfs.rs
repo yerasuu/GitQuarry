@@ -638,3 +638,21 @@ async fn unlock_of_a_nonexistent_lock_is_a_404_lfs_error() {
         .await;
     }
 }
+
+#[tokio::test]
+async fn a_malformed_oid_or_an_oversize_body_is_the_clients_error() {
+    let server = start().await;
+    assert_lfs_error(
+        server.get_object(PUBLIC, Some("alice"), "not-a-sha256").await,
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    // Mirrors `git::http::MAX_LFS_BATCH_BYTES`.
+    let oversize = vec![b' '; 8 * 1024 * 1024 + 1];
+    let resp = server
+        .post(PUBLIC, "objects/batch", Some("alice"), oversize)
+        .send()
+        .await
+        .unwrap();
+    assert_lfs_error(resp, StatusCode::PAYLOAD_TOO_LARGE).await;
+}
