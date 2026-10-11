@@ -218,21 +218,18 @@ pub async fn run(rest: &[String]) -> Result<()> {
 
     // Remote config (.conf/global.json in the bucket itself, editable from
     // the UI). Order: explicit CLI flag > config in S3 > default.
-    // A failure here isn't fatal (can start with defaults) but is worth
-    // warning about: it's almost always bad credentials or a bad endpoint.
-    let settings = match storage::settings::get_settings(backend.as_ref(), &cipher).await {
-        Ok((settings, _etag)) => settings,
-        Err(e) => {
-            warn!("couldn't read the bucket config, using defaults: {e:#}");
-            storage::entities::ServerSettings::default()
-        }
-    };
+    // An absent `.conf/global.json` already reads as the defaults; an `Err`
+    // is an unreachable bucket or an object that won't decrypt, and
+    // starting on defaults then would silently drop whatever the operator
+    // configured (registration, quotas, OIDC) until the next restart.
+    let (settings, _etag) = storage::settings::get_settings(backend.as_ref(), &cipher)
+        .await
+        .context("reading the bucket config (.conf/global.json)")?;
 
     // Before any of `settings`'s fields get partially moved out below: OIDC
     // discovery needs its own 4 fields read out. A misconfigured or
-    // unreachable IdP isn't fatal — same "warn and use a default" treatment
-    // as the settings fetch itself just above, ssh:// and the web server
-    // shouldn't go down because of it.
+    // unreachable IdP isn't fatal — ssh:// and the web server shouldn't go
+    // down because of it.
     let oidc_settings = oidc::OidcSettings {
         issuer_url: settings.oidc_issuer_url.clone(),
         client_id: settings.oidc_client_id.clone(),
