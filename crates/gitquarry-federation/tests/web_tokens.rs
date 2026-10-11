@@ -67,6 +67,41 @@ async fn seed_token(state: &FederationState, write: bool) {
 }
 
 #[tokio::test]
+async fn revoking_reports_whether_a_token_was_actually_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = federation_state(dir.path(), &fake_core().await);
+    let (token, secret) = domain::token::create(
+        state.backend.as_ref(),
+        &state.cipher,
+        "alice",
+        "peer A",
+        [Uid::from(REPO_UID.to_string())].into_iter().collect(),
+        false,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        post(&state, "action=revoke&uid=no-such-uid")
+            .await
+            .contains("no such token.")
+    );
+    assert!(
+        post(&state, &format!("action=revoke&uid={}", token.uid))
+            .await
+            .contains("revoked.")
+    );
+    assert!(
+        access::resolve_by_token(state.backend.as_ref(), &state.cipher, &secret)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn is_refused_without_the_user_and_uid_core_forwards() {
     let dir = tempfile::tempdir().unwrap();
     let state = federation_state(dir.path(), &fake_core().await);
