@@ -481,6 +481,46 @@ fn url_encode(value: &str) -> String {
 }
 
 #[tokio::test]
+async fn sister_routes_reach_federation_with_their_body_and_bearer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    for (method, path) in [
+        ("POST", "/_federation/sister/handshake"),
+        ("POST", "/_federation/sister/verify"),
+        ("POST", "/_federation/sister/ban-event"),
+        ("GET", "/_federation/sister/bans"),
+    ] {
+        let body = if method == "POST" { r#"{"k":"v"}"# } else { "" };
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, "Bearer sister-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(send(&app, request).await.status, StatusCode::CREATED, "{method} {path}");
+        let got = received(&mut rx);
+        assert_signed(&got);
+        assert_eq!((got.method.as_str(), got.uri.as_str()), (method, path));
+        assert_eq!(got.header("authorization"), Some("Bearer sister-secret"));
+        assert_eq!(got.body, Bytes::from(body));
+    }
+}
+
+#[tokio::test]
+async fn an_oversized_sister_body_is_refused_before_reaching_federation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/_federation/sister/ban-event")
+        .body(Body::from(vec![b'x'; 3 * 1024 * 1024]))
+        .unwrap();
+    assert_eq!(send(&app, request).await.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_nothing_forwarded(&mut rx, "an oversized sister body");
+}
+
+#[tokio::test]
 async fn an_oversized_public_api_body_is_refused_before_reaching_federation() {
     let dir = tempfile::tempdir().unwrap();
     let (_ctx, app, mut rx) = wired(dir.path()).await;

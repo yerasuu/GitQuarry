@@ -725,7 +725,20 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             "/_federation/gossip/announce",
             axum::routing::post(federation_proxy::proxy_public),
         )
-        .route("/_federation/gossip/peers", get(federation_proxy::proxy_public));
+        .route("/_federation/gossip/peers", get(federation_proxy::proxy_public))
+        .route(
+            "/_federation/sister/handshake",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route(
+            "/_federation/sister/verify",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route(
+            "/_federation/sister/ban-event",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route("/_federation/sister/bans", get(federation_proxy::proxy_public));
 
     app
         // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
