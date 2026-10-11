@@ -37,15 +37,49 @@ struct HandshakeRequest {
 /// `POST /_federation/sister/handshake` — no bearer token yet, this call
 /// is what *establishes* the shared secret in the first place. Anyone can
 /// call it, but it only ever does anything if this side already has
-/// `sister_requested` set for `instance_name` (`sister::receive_handshake`'s
-/// own doc comment).
+/// `sister_requested` on for `instance_name` *and* the instance at that
+/// peer's registered URL vouches for the secret (`sister::receive_handshake`'s
+/// own doc comment). Needs `own_web_base_url`/`own_git_base_url` set, since
+/// the dial-back has to tell the peer who is asking.
 pub(crate) async fn handler_handshake_post(State(state): State_, body: Bytes) -> Response {
     let Ok(req) = serde_json::from_slice::<HandshakeRequest>(&body) else {
         return json_error(StatusCode::BAD_REQUEST, "invalid JSON body");
     };
-    match sister::receive_handshake(state.backend.as_ref(), &state.cipher, &req.instance_name, &req.secret).await {
+    let Some(own) = &state.self_announce else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this instance has no own_web_base_url/own_git_base_url configured, so it can't verify a sister handshake",
+        );
+    };
+    match sister::receive_handshake(
+        state.backend.as_ref(),
+        &state.cipher,
+        &own.name,
+        &req.instance_name,
+        &req.secret,
+    )
+    .await
+    {
         Ok(ok) => json_response(StatusCode::OK, &serde_json::json!({ "ok": ok })),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => json_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+    }
+}
+
+/// `POST /_federation/sister/verify` — the dial-back a peer makes while
+/// handling *our* handshake: `instance_name` is that peer's name as this
+/// instance knows it, `secret` the one it was offered. Answers only
+/// yes/no, so it reveals nothing to a caller who doesn't already hold the
+/// secret.
+pub(crate) async fn handler_verify_post(State(state): State_, body: Bytes) -> Response {
+    let Ok(req) = serde_json::from_slice::<HandshakeRequest>(&body) else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid JSON body");
+    };
+    match sister::verify_staged_secret(state.backend.as_ref(), &state.cipher, &req.instance_name, &req.secret).await {
+        Ok(ok) => json_response(StatusCode::OK, &serde_json::json!({ "ok": ok })),
+        Err(e) => {
+            tracing::error!(target: "gitquarry_federation::web::sister", error = %format!("{e:#}"), "sister verify failed");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "couldn't check the secret")
+        }
     }
 }
 

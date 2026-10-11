@@ -43,25 +43,45 @@ async fn receive_handshake_requires_a_matching_local_request_first() {
     let cipher = cipher();
     seed_peer(backend, &cipher, "acme", false).await;
 
-    // Not requested locally yet: handshake doesn't confirm.
+    // Not requested locally yet: handshake doesn't confirm, and never even
+    // dials the peer.
     assert!(
-        !receive_handshake(backend, &cipher, "acme", "shared-secret")
+        !receive_handshake(backend, &cipher, "me", "acme", "shared-secret")
             .await
             .unwrap()
     );
-
-    request(backend, &cipher, "acme").await.unwrap();
-    assert!(
-        receive_handshake(backend, &cipher, "acme", "shared-secret")
-            .await
-            .unwrap()
-    );
-
     let peer = access::get_peer(backend, &cipher, "acme").await.unwrap().unwrap();
-    assert!(peer.sister_confirmed);
-    assert_eq!(
-        credential_for(backend, &cipher, "acme").await.unwrap().as_deref(),
-        Some("shared-secret")
+    assert!(!peer.sister_confirmed);
+}
+
+#[tokio::test]
+async fn a_staged_request_secret_is_vouched_for_but_authenticates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
+    seed_peer(backend, &cipher, "acme", false).await;
+    let staged = request(backend, &cipher, "acme").await.unwrap();
+
+    assert!(verify_staged_secret(backend, &cipher, "acme", &staged).await.unwrap());
+    assert!(!verify_staged_secret(backend, &cipher, "acme", "guessed").await.unwrap());
+    assert!(!verify_staged_secret(backend, &cipher, "other", &staged).await.unwrap());
+    assert!(sister_by_secret(backend, &cipher, &staged).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn receive_handshake_refuses_an_invalid_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
+    seed_peer(backend, &cipher, "acme", false).await;
+    request(backend, &cipher, "acme").await.unwrap();
+    assert!(receive_handshake(backend, &cipher, "me", "acme", "").await.is_err());
+    assert!(
+        receive_handshake(backend, &cipher, "me", "acme", &"x".repeat(4096))
+            .await
+            .is_err()
     );
 }
 
@@ -74,7 +94,10 @@ async fn sister_by_secret_finds_the_right_peer_and_ignores_unconfirmed_ones() {
     seed_peer(backend, &cipher, "acme", false).await;
     seed_peer(backend, &cipher, "other", false).await;
     request(backend, &cipher, "acme").await.unwrap();
-    receive_handshake(backend, &cipher, "acme", "secret-a").await.unwrap();
+    confirm_after_handshake(backend, &cipher, "acme", "secret-a")
+        .await
+        .unwrap();
+    request(backend, &cipher, "other").await.unwrap();
 
     let found = sister_by_secret(backend, &cipher, "secret-a").await.unwrap();
     assert_eq!(found.map(|p| p.name), Some("acme".to_string()));
