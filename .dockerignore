@@ -1,0 +1,6 @@
+target/
+.git/
+crates/*/target/
+*.tar.gz
+node_modules/
+.env
