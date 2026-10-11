@@ -382,7 +382,9 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
                 .await?;
         }
         new_manifest.refs.insert(update.refname.clone(), update.new.clone());
-        if new_manifest.head.is_none() {
+        // Only a branch can be HEAD: a tag pushed first into an empty repo
+        // would otherwise pin HEAD to it, and nothing ever moves it off.
+        if new_manifest.head.is_none() && update.refname.starts_with("refs/heads/") {
             new_manifest.head = Some(update.refname.clone());
         }
         have_tips.push(update.new.clone());
