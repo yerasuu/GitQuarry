@@ -606,3 +606,62 @@ async fn a_push_over_http_emits_the_refs_it_moved() {
     assert_eq!(refs[0].old.as_deref(), Some(first.as_str()));
     assert_eq!(refs[0].new.as_deref(), Some(second.as_str()));
 }
+
+#[tokio::test]
+async fn a_clone_over_http_gets_the_whole_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let resolved = ctx.resolve_repo("acme/demo").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    work.commit(&[("a.txt", "one\n")], "first").await;
+    let head = work.commit(&[("b.txt", "two\n")], "second").await;
+    work.push(&resolved, "refs/heads/main").await;
+    let base = serve(Arc::new(ctx)).await;
+
+    let into = tempfile::tempdir().unwrap();
+    let url = format!("{base}/acme/demo");
+    gitquarry_test_support::git(into.path(), &["clone", "-q", &url, "c"]).await;
+    let clone = into.path().join("c");
+    assert_eq!(gitquarry_test_support::git(&clone, &["rev-parse", "HEAD"]).await, head);
+    assert_eq!(
+        gitquarry_test_support::git(&clone, &["rev-list", "--count", "HEAD"]).await,
+        "2"
+    );
+}
+
+#[tokio::test]
+async fn a_push_still_uploading_does_not_lock_readers_out_of_the_repo() {
+    use tokio::io::AsyncWriteExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    gitquarry_test_support::user(&ctx, "alice", false).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let base = serve(Arc::new(ctx)).await;
+
+    // A push that announces a body and then sends only part of it, the
+    // way a slow uploader looks from the server.
+    let mut slow = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let auth = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(format!("alice:{PASSWORD}"))
+    };
+    let head = format!(
+        "POST /alice/proj/git-receive-pack HTTP/1.1\r\nHost: x\r\nAuthorization: Basic {auth}\r\n\
+         Content-Type: application/x-git-receive-pack-request\r\nContent-Length: 100000\r\n\r\n0000"
+    );
+    slow.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let fetch = upload_pack_refs(&reqwest::Client::new(), &base, "alice/proj").basic_auth("alice", Some(PASSWORD));
+    let status = tokio::time::timeout(Duration::from_secs(10), fetch.send())
+        .await
+        .expect("the fetch queued behind the stalled push")
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
+    drop(slow);
+}

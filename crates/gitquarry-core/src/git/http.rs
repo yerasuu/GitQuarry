@@ -25,18 +25,19 @@ use crate::mirror;
 use crate::storage::entities::Visibility;
 use crate::validate;
 use anyhow::{Context, Result, bail};
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use futures::StreamExt;
 use gitquarry_auth_crypto::password;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Child;
-use tracing::{error, warn};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tracing::{debug, error, warn};
 
 /// Request bodies for `POST .../info/lfs/objects/batch` only ever list
 /// oids/sizes, never file content — a generous cap, well above any real
@@ -44,11 +45,10 @@ use tracing::{error, warn};
 /// memory before it's even parsed.
 const MAX_LFS_BATCH_BYTES: usize = 8 * 1024 * 1024;
 
-/// `upload-pack`/`receive-pack` request bodies are real pack data, so this
-/// stays generous enough to never trip on a legitimate push/fetch (well past
-/// any real monorepo pack) -- it exists only so a runaway or hostile client
-/// can't make the server buffer an unbounded body into memory before `git`
-/// ever sees a byte of it.
+/// `receive-pack` request bodies are real pack data, so this stays generous
+/// enough to never trip on a legitimate push (well past any real monorepo
+/// pack) -- it exists only so a runaway or hostile client can't fill the
+/// disk [`spool_body`] writes it to before `git` ever sees a byte of it.
 const MAX_PACK_BODY_BYTES: usize = 16 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,27 +322,28 @@ async fn handle(
             // shared and stops queueing behind other fetches and web views
             // of the same repo; `receive-pack` writes it and still needs
             // the mirror to itself.
-            let mirror = if kind == Kind::ReceivePack {
-                ctx.open_mirror(&resolved).await?
-            } else {
-                ctx.open_mirror_read(&resolved).await?
-            };
             match kind {
                 Kind::InfoRefs => {
+                    let mirror = ctx.open_mirror_read(&resolved).await?;
                     let git_subcmd = advertised.context("info/refs without a parsed service")?;
                     info_refs_response(ctx, name, &resolved.uid, &mirror, git_subcmd, actor.as_deref()).await
                 }
                 Kind::UploadPack => {
-                    pack_response(ctx, "upload-pack", name, &resolved.uid, &mirror, req, actor.as_deref()).await
+                    let mirror = ctx.open_mirror_read(&resolved).await?;
+                    upload_pack_response(ctx, name, &resolved.uid, mirror, req.into_body(), actor.as_deref())
                 }
                 Kind::ReceivePack => {
+                    // Spooled before the exclusive lock is taken, so a slow
+                    // uploader holds up nobody else's push, fetch or page
+                    // view of this repo while its pack trickles in.
+                    let pack = spool_body(ctx, req.into_body()).await?;
+                    let mirror = ctx.open_mirror(&resolved).await?;
                     // Snapshot before the push so the post-push block can
                     // diff against it — see `events::diff_refs`'s own doc
                     // comment for why this process has no other way to
                     // learn which refs a push touched.
                     let before_refs = crate::events::mirror_refs(&mirror.path).await;
-                    let resp =
-                        pack_response(ctx, "receive-pack", name, &resolved.uid, &mirror, req, actor.as_deref()).await?;
+                    let resp = receive_pack_response(ctx, name, &resolved.uid, &mirror, pack, actor.as_deref()).await?;
                     // Taken before the re-sync below, which reads the same
                     // possibly-stale manifest and could only blur the diff.
                     let after_refs = crate::events::mirror_refs(&mirror.path).await;
@@ -806,31 +807,147 @@ async fn info_refs_response(
         .into_response())
 }
 
-async fn pack_response(
+/// Streams the request into `git upload-pack` and the pack back out as git
+/// produces it, so neither a long negotiation nor a large clone is ever
+/// held whole in memory. The status line goes out before git has finished,
+/// so a git failure past that point can only cut the stream short (the
+/// client reports a protocol error) and is logged here.
+///
+/// Takes `mirror` by value because git reads it for as long as it runs:
+/// the shared lock moves into the pump task and is released when git
+/// exits, not when this function returns.
+fn upload_pack_response(
     ctx: &AppContext,
-    git_subcmd: &str,
+    name: &str,
+    repo_uid: &crate::storage::uid::Uid,
+    mirror: Mirror,
+    body: Body,
+    actor: Option<&str>,
+) -> Result<Response> {
+    let mut child = mirror::spawn_git_subcommand_http(
+        ctx,
+        "upload-pack",
+        mirror::RepoRef { name, uid: repo_uid },
+        &mirror,
+        false,
+        actor,
+    )?;
+    let stdin = child.stdin.take().context("git stdin")?;
+    let stdout = child.stdout.take().context("git stdout")?;
+    let mut stderr = child.stderr.take().context("git stderr")?;
+    tokio::spawn(async move {
+        let mut err_buf = Vec::new();
+        let (fed, _) = tokio::join!(feed_stdin(body, stdin), stderr.read_to_end(&mut err_buf));
+        if let Err(e) = fed {
+            debug!(error = %e, "http: upload-pack request body ended early");
+        }
+        match child.wait().await {
+            Ok(status) if status.success() => {}
+            Ok(status) => warn!(
+                status = ?status,
+                stderr = %String::from_utf8_lossy(&err_buf),
+                "http: git upload-pack failed"
+            ),
+            Err(e) => warn!(error = %e, "http: waiting for git upload-pack"),
+        }
+        drop(mirror);
+    });
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/x-git-upload-pack-result")],
+        Body::from_stream(stdout_chunks(stdout)),
+    )
+        .into_response())
+}
+
+/// `pack` is the push's request body, already spooled by [`spool_body`].
+/// The response is buffered: it's only `receive-pack`'s report-status, and
+/// the caller needs git's exit before it touches the mirror again anyway.
+async fn receive_pack_response(
+    ctx: &AppContext,
     name: &str,
     repo_uid: &crate::storage::uid::Uid,
     mirror: &Mirror,
-    req: Request,
+    pack: tokio::fs::File,
     actor: Option<&str>,
 ) -> Result<Response> {
-    let body = read_capped(req.into_body(), MAX_PACK_BODY_BYTES, "reading request body").await?;
     let child = mirror::spawn_git_subcommand_http(
         ctx,
-        git_subcmd,
+        "receive-pack",
         mirror::RepoRef { name, uid: repo_uid },
         mirror,
         false,
         actor,
     )?;
-    let stdout = run_stateless_rpc(child, Some(body)).await?;
+    let stdout = run_stateless_rpc(child, Some(pack)).await?;
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, format!("application/x-git-{git_subcmd}-result"))],
+        [(header::CONTENT_TYPE, "application/x-git-receive-pack-result")],
         stdout,
     )
         .into_response())
+}
+
+/// Copies the request body into git's stdin chunk by chunk, closing stdin
+/// at the end so git sees EOF.
+async fn feed_stdin(body: Body, mut stdin: ChildStdin) -> Result<()> {
+    let mut chunks = body.into_data_stream();
+    while let Some(chunk) = chunks.next().await {
+        stdin
+            .write_all(&chunk.context("reading request body")?)
+            .await
+            .context("writing git stdin")?;
+    }
+    Ok(())
+}
+
+const STDOUT_CHUNK_BYTES: usize = 64 * 1024;
+
+/// git's stdout as a response body stream. Ends at the first read error
+/// rather than retrying a pipe that already failed.
+fn stdout_chunks(stdout: ChildStdout) -> impl futures::Stream<Item = std::io::Result<Bytes>> {
+    futures::stream::unfold(Some(stdout), |state| async move {
+        let mut stdout = state?;
+        let mut buf = vec![0; STDOUT_CHUNK_BYTES];
+        match stdout.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok(Bytes::from(buf)), Some(stdout)))
+            }
+            Err(e) => Some((Err(e), None)),
+        }
+    })
+}
+
+/// Writes a push's request body to an already-unlinked temp file under
+/// `mirrors_root` — on disk next to the mirrors, rather than a `/tmp` that
+/// may be a tmpfs and put the pack straight back in RAM — and rewinds it
+/// for reading. Capped at [`MAX_PACK_BODY_BYTES`] (413 past it) so a
+/// runaway client can't fill the disk either.
+async fn spool_body(ctx: &AppContext, body: Body) -> Result<tokio::fs::File> {
+    tokio::fs::create_dir_all(&ctx.mirrors_root)
+        .await
+        .with_context(|| format!("creating {}", ctx.mirrors_root.display()))?;
+    let dir = ctx.mirrors_root.clone();
+    let file = tokio::task::spawn_blocking(move || tempfile::tempfile_in(dir))
+        .await
+        .context("joining the spool file creation")?
+        .context("creating the push spool file")?;
+    let mut file = tokio::fs::File::from_std(file);
+    let mut written = 0;
+    let mut chunks = body.into_data_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|_| ClientError::BadRequest("request body ended early"))?;
+        written += chunk.len();
+        if written > MAX_PACK_BODY_BYTES {
+            return Err(ClientError::TooLarge.into());
+        }
+        file.write_all(&chunk).await.context("writing the push spool file")?;
+    }
+    file.flush().await.context("flushing the push spool file")?;
+    file.rewind().await.context("rewinding the push spool file")?;
+    Ok(file)
 }
 
 /// Writes `request_body` (if any) to `child`'s stdin, closes it, and reads
@@ -839,14 +956,16 @@ async fn pack_response(
 /// draining the other end (same reasoning as `ssh.rs`'s `pump_data`/
 /// `pump_extended_data` `tokio::join!`, just request/response instead of a
 /// persistent channel).
-async fn run_stateless_rpc(mut child: Child, request_body: Option<Bytes>) -> Result<Vec<u8>> {
+async fn run_stateless_rpc(mut child: Child, request_body: Option<tokio::fs::File>) -> Result<Vec<u8>> {
     let mut stdin = child.stdin.take().context("git stdin")?;
     let mut stdout = child.stdout.take().context("git stdout")?;
     let mut stderr = child.stderr.take().context("git stderr")?;
 
     let write_fut = async {
-        if let Some(body) = request_body {
-            let _ = stdin.write_all(&body).await;
+        if let Some(mut body) = request_body {
+            // Ignored, because git stopping early is reported by its exit
+            // status below, with its own stderr.
+            let _ = tokio::io::copy(&mut body, &mut stdin).await;
         }
         drop(stdin);
     };
