@@ -171,10 +171,24 @@ pub async fn middleware(
     if !kind.valid_method(req.method()) {
         return next.run(req).await;
     }
-    let repo = repo.to_string();
+    // A suffix match alone doesn't make it git's: the browsing UI has its
+    // own paths that can end the same way (a file named `info/refs` under
+    // `/owner/repo/blob/main/`), and those must still reach it. Only a
+    // prefix that names a real repo is taken here.
+    let Ok(name) = validate::sanitize_path(repo) else {
+        return next.run(req).await;
+    };
+    let resolved = match ctx.resolve_repo(&name).await {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => return next.run(req).await,
+        Err(e) => {
+            error!(error = %e, "git-http repo lookup failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
+    };
     let oid = oid.map(str::to_string);
     let client = client_key(&ctx, req.headers(), addr.ip());
-    match handle(&ctx, &repo, kind, oid.as_deref(), client, req).await {
+    match handle(&ctx, &name, resolved, kind, oid.as_deref(), client, req).await {
         Ok(resp) => resp,
         Err(e) => {
             error!(error = %e, "git-http request failed");
@@ -185,16 +199,13 @@ pub async fn middleware(
 
 async fn handle(
     ctx: &Arc<AppContext>,
-    raw_repo: &str,
+    name: &str,
+    resolved: crate::app::ResolvedRepo,
     kind: Kind,
     oid: Option<&str>,
     client_key: String,
     req: Request,
 ) -> Result<Response> {
-    let name = validate::sanitize_path(raw_repo)?;
-    let Some(resolved) = ctx.resolve_repo(&name).await? else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
     let (config, _etag) = resolved.remote.get_repo_config().await?;
     // A soft-deleted repo (`domain::repo::delete`) is invisible over every
     // transport until restored or purged, not just blocked on push like an
@@ -210,7 +221,7 @@ async fn handle(
             } else {
                 Permission::Reporter
             };
-            let actor = match authorize(ctx, req.headers(), &name, &resolved.uid, config.visibility, required).await? {
+            let actor = match authorize(ctx, req.headers(), name, &resolved.uid, config.visibility, required).await? {
                 Authz::Allowed(actor) => actor,
                 Authz::Denied(reason) => return Ok(reason.into_git_response()),
             };
@@ -255,10 +266,10 @@ async fn handle(
                 Kind::InfoRefs => {
                     let query = req.uri().query().unwrap_or("");
                     let service = query_param(query, "service").context("missing ?service=")?;
-                    info_refs_response(ctx, &name, &resolved.uid, &mirror, service, actor.as_deref()).await
+                    info_refs_response(ctx, name, &resolved.uid, &mirror, service, actor.as_deref()).await
                 }
                 Kind::UploadPack => {
-                    pack_response(ctx, "upload-pack", &name, &resolved.uid, &mirror, req, actor.as_deref()).await
+                    pack_response(ctx, "upload-pack", name, &resolved.uid, &mirror, req, actor.as_deref()).await
                 }
                 Kind::ReceivePack => {
                     // Snapshot before the push so the post-push block can
@@ -266,16 +277,8 @@ async fn handle(
                     // comment for why this process has no other way to
                     // learn which refs a push touched.
                     let before_refs = resolved.remote.get_manifest().await.ok().map(|(m, _)| m.refs);
-                    let resp = pack_response(
-                        ctx,
-                        "receive-pack",
-                        &name,
-                        &resolved.uid,
-                        &mirror,
-                        req,
-                        actor.as_deref(),
-                    )
-                    .await?;
+                    let resp =
+                        pack_response(ctx, "receive-pack", name, &resolved.uid, &mirror, req, actor.as_deref()).await?;
                     // The pre-receive hook already pushed to the bucket; this just
                     // refreshes the local mirror for the next reader, same as
                     // `ssh.rs` does after a push.
@@ -333,12 +336,12 @@ async fn handle(
                 .await
                 .context("reading LFS batch body")?;
             let required = crate::git::lfs::required_permission(&crate::git::lfs::peek_operation(&body));
-            let actor = match authorize(ctx, &headers, &name, &resolved.uid, config.visibility, required).await? {
+            let actor = match authorize(ctx, &headers, name, &resolved.uid, config.visibility, required).await? {
                 Authz::Allowed(actor) => actor,
                 Authz::Denied(reason) => return Ok(crate::git::lfs::denial_response(reason)),
             };
             let _ = actor; // not attributed anywhere for LFS (no git hook runs for this path)
-            crate::git::lfs::batch_response(&resolved.remote, &name, &headers, body).await
+            crate::git::lfs::batch_response(&resolved.remote, name, &headers, body).await
         }
         Kind::LfsObject => {
             let oid = oid.context("missing LFS oid")?;
@@ -349,7 +352,7 @@ async fn handle(
             } else {
                 Permission::Reporter
             };
-            let actor = match authorize(ctx, req.headers(), &name, &resolved.uid, config.visibility, required).await? {
+            let actor = match authorize(ctx, req.headers(), name, &resolved.uid, config.visibility, required).await? {
                 Authz::Allowed(actor) => actor,
                 Authz::Denied(reason) => return Ok(crate::git::lfs::denial_response(reason)),
             };
@@ -399,7 +402,7 @@ async fn handle(
                 Permission::Reporter
             };
             let headers = req.headers().clone();
-            let actor = match authorize(ctx, &headers, &name, &resolved.uid, config.visibility, required).await? {
+            let actor = match authorize(ctx, &headers, name, &resolved.uid, config.visibility, required).await? {
                 Authz::Allowed(actor) => actor,
                 Authz::Denied(reason) => return Ok(crate::git::lfs::denial_response(reason)),
             };
@@ -425,7 +428,7 @@ async fn handle(
             let actor = match authorize(
                 ctx,
                 req.headers(),
-                &name,
+                name,
                 &resolved.uid,
                 config.visibility,
                 Permission::Reporter,
@@ -443,7 +446,7 @@ async fn handle(
             let actor = match authorize(
                 ctx,
                 req.headers(),
-                &name,
+                name,
                 &resolved.uid,
                 config.visibility,
                 Permission::Developer,

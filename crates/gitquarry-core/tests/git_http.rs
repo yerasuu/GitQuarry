@@ -150,16 +150,19 @@ async fn git_and_lfs_endpoints_are_intercepted_with_the_method_each_expects() {
         }
     }
 
-    // A recognized suffix on a repo that doesn't exist is still git's to
-    // answer, not the browsing UI's.
+    // A recognized suffix whose prefix names no repo is the browsing UI's
+    // to answer: a file called `info/refs` or `info/lfs/locks` viewed
+    // under `/team/proj/blob/main/` looks exactly like a git endpoint.
     let status = upload_pack_refs(&client, &base, "nobody/here")
         .send()
         .await
         .unwrap()
         .status();
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, PASSTHROUGH);
 
     for path in [
+        "/team/proj/blob/main/info/refs",
+        "/team/proj/blob/main/info/lfs/locks",
         "/team/proj",
         "/info/refs",
         "/team/proj/info/lfs/objects/a/b",
