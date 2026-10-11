@@ -20,24 +20,58 @@
 //! trusts a key some other request imported.
 
 use anyhow::{Context, Result, bail};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::process::Command;
-use tracing::error;
+use tracing::{error, warn};
 
 /// Same tempdir every call here starts from — `0700` explicitly rather
 /// than relying on the process umask, since `gpg` itself warns (and some
 /// distro builds refuse to operate at all) on a homedir any other user on
 /// the box could read.
-fn scratch_homedir() -> Result<tempfile::TempDir> {
-    let dir = tempfile::tempdir().context("creating a scratch gpg homedir")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
-            .context("setting scratch gpg homedir permissions")?;
+///
+/// Creation and removal run on the blocking pool because every caller is
+/// async and both are plain filesystem syscalls that would otherwise stall
+/// a runtime worker.
+struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    async fn new() -> Result<Self> {
+        tokio::task::spawn_blocking(|| {
+            let dir = tempfile::tempdir().context("creating a scratch gpg homedir")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+                    .context("setting scratch gpg homedir permissions")?;
+            }
+            Ok(Self(dir.keep()))
+        })
+        .await
+        .context("scratch gpg homedir task panicked")?
     }
-    Ok(dir)
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let path = std::mem::take(&mut self.0);
+        let remove = move || {
+            if let Err(err) = std::fs::remove_dir_all(&path) {
+                warn!(path = %path.display(), %err, "couldn't remove scratch gpg homedir");
+            }
+        };
+        // Dropped outside a runtime only if a caller drives these futures
+        // with a bare executor; removing inline is then the only option.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(remove);
+        } else {
+            remove();
+        }
+    }
 }
 
 /// Whether the "gpg isn't installed" line has already been printed. One
@@ -97,7 +131,7 @@ async fn import(homedir: &Path, armored_key: &str) -> Result<()> {
 /// a pure function — unlike that one, this needs `gpg` itself: there's no
 /// pure-Rust OpenPGP packet parsing here to compute one otherwise).
 pub async fn fingerprint(armored_key: &str) -> Result<String> {
-    let dir = scratch_homedir()?;
+    let dir = ScratchHome::new().await?;
     import(dir.path(), armored_key).await?;
     let out = Command::new("gpg")
         .arg("--homedir")
@@ -142,7 +176,7 @@ pub async fn verify_detached_signature(data: &[u8], signature: &str, armored_key
     if armored_keys.is_empty() {
         return Ok(false);
     }
-    let dir = scratch_homedir()?;
+    let dir = ScratchHome::new().await?;
     for key in armored_keys {
         let _ = import(dir.path(), key).await;
     }
