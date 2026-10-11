@@ -33,7 +33,7 @@ pub(super) async fn save_protected_tags(
                 non_empty(tags.iter().cloned().collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("protected tags updated.")
+            FlashOutcome::Ok("protected tags updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

@@ -37,7 +37,7 @@ pub(super) async fn save_required_reviewers(
                 non_empty(reviewers.iter().cloned().collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("required reviewers updated.")
+            FlashOutcome::Ok("required reviewers updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

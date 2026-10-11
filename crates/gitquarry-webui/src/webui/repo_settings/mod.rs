@@ -64,13 +64,13 @@ use gitquarry_core::validate;
 use maud::{Markup, PreEscaped, html};
 
 /// What each `save_*` helper below reports back, instead of a
-/// `Flash<'static>` directly: the CAS-conflict case now needs
-/// [`gitquarry_i18n::shared::cas_conflict`]'s locale-resolved *owned* `String`,
-/// which can't fit `Flash`'s `&'static str` — so the actual `Flash` is only
-/// built once, in [`handler_repo_conf_post`], where that owned string
-/// already lives long enough to be borrowed from.
+/// `Flash<'static>` directly: locale-resolved messages (the CAS conflict,
+/// a translated success) are *owned* `String`s, which can't fit `Flash`'s
+/// borrowed `&str` — so the actual `Flash` is only built once, in
+/// [`handler_repo_conf_post`], where those strings already live long
+/// enough to be borrowed from.
 enum FlashOutcome {
-    Ok(&'static str),
+    Ok(String),
     Conflict,
     Invalid(String),
 }

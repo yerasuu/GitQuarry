@@ -771,7 +771,7 @@ pub(super) async fn render_merge_detail(
         @if !d.stat.trim().is_empty() {
             div class="scroll-x" { pre class="diff" { (d.stat) } }
         }
-        p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view))) }
+        p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view, locale))) }
         @match &annotated {
             Some(annotated) => div class="scroll-x" { (annotated.markup) },
             None => div class="scroll-x full-bleed" { (side_by_side_diff(&d.diff)) },

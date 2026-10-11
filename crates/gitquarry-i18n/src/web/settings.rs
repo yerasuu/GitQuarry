@@ -112,7 +112,7 @@ msg!(settings_client_secret_placeholder_unset() {
     Locale::Es => "sin configurar",
     Locale::En => "not set",
 });
-msg!(settings_redirect_base_url_label() { Locale::Es => "redirect base url", Locale::En => "redirect base url" });
+msg!(settings_redirect_base_url_label() { Locale::Es => "url base de redireccion", Locale::En => "redirect base url" });
 msg!(settings_redirect_base_url_placeholder() {
     Locale::Es => "https://git.example.com (publica, sin barra final)",
     Locale::En => "https://git.example.com (public, no trailing slash)",

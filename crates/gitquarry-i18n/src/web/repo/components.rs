@@ -17,3 +17,7 @@ msg!(delete_comment_confirm() {
     Locale::Es => "¿borrar este comentario? no se puede deshacer.",
     Locale::En => "delete this comment? this cannot be undone.",
 });
+
+// `webui::diff_view`'s unified/split toggle above a diff.
+msg!(diff_view_unified_button() { Locale::Es => "unificado", Locale::En => "unified" });
+msg!(diff_view_split_button() { Locale::Es => "lado a lado", Locale::En => "side by side" });

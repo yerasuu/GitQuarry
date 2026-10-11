@@ -59,7 +59,7 @@ pub(super) async fn save_conf(
                 )
                 .await;
             }
-            FlashOutcome::Ok("saved to the bucket.")
+            FlashOutcome::Ok("saved to the bucket.".to_string())
         }
         (Cas::Conflict, _) => FlashOutcome::Conflict,
     })

@@ -196,6 +196,7 @@ pub(crate) async fn handler_groups_post(
     // `data-async` request already is — same reasoning
     // `keys::handler_keys_post`'s own doc comment gives for its `fail!`.
     let cas_conflict_msg = gitquarry_i18n::shared::cas_conflict(locale);
+    let saved_msg = gitquarry_i18n::shared::saved_to_bucket(locale);
     let invalid_msg;
     let flash = match &action_result {
         Ok(Cas::Ok) => {
@@ -208,7 +209,7 @@ pub(crate) async fn handler_groups_post(
                 audit_detail,
             )
             .await;
-            Flash::Ok("saved to the bucket.")
+            Flash::Ok(&saved_msg)
         }
         Ok(Cas::Conflict) => {
             if is_async {

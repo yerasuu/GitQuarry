@@ -39,7 +39,7 @@ pub(super) async fn save_default_branch(
                 Some(branch.to_string()),
             )
             .await;
-            FlashOutcome::Ok("default branch updated.")
+            FlashOutcome::Ok("default branch updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

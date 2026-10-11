@@ -32,7 +32,7 @@ pub(super) async fn save_lfs_max_blob_size(
                 value,
             )
             .await;
-            FlashOutcome::Ok("LFS size limit updated.")
+            FlashOutcome::Ok("LFS size limit updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

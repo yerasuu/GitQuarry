@@ -32,7 +32,7 @@ pub(super) async fn save_labels(
                 Some(labels.iter().map(|l| l.name.clone()).collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("labels updated.")
+            FlashOutcome::Ok("labels updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

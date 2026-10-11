@@ -744,7 +744,7 @@ pub fn layout(
     use gitquarry_i18n::web::chrome;
     maud::html! {
         (maud::DOCTYPE)
-        html lang="en"
+        html lang=(locale.code())
             data-theme=[(!theme.is_empty()).then_some(theme)]
             data-density=[(!density.is_empty()).then_some(density)]
             data-accent="crimson" {

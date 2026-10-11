@@ -268,7 +268,7 @@ async fn render_remote_summary(
         }
         (components::commit_table(link_name, &recent, &avatars, locale))
         @if let Some(viewer) = viewer {
-            (render_remote_fork_form(peer_name, repo_name, viewer, headers))
+            (render_remote_fork_form(peer_name, repo_name, viewer, headers, locale))
         }
     }
     .into_string())
@@ -279,7 +279,14 @@ async fn render_remote_summary(
 /// one field-simple since `webui::fork::handler_fork_post` already supports a
 /// group destination generically for whoever wants it via a direct form
 /// post, this is just the common-case one-click path from the browse page.
-fn render_remote_fork_form(peer_name: &str, repo_name: &str, viewer: &User, headers: &HeaderMap) -> maud::Markup {
+fn render_remote_fork_form(
+    peer_name: &str,
+    repo_name: &str,
+    viewer: &User,
+    headers: &HeaderMap,
+    locale: Locale,
+) -> maud::Markup {
+    use gitquarry_i18n::web::repo::summary as t;
     let default_name = repo_name.rsplit('/').next().unwrap_or(repo_name);
     maud::html! {
         form method="post" action=(format!("/_fork/{}", webui::url_encode(repo_name))) class="fork-form" {
@@ -287,8 +294,8 @@ fn render_remote_fork_form(peer_name: &str, repo_name: &str, viewer: &User, head
             input type="hidden" name="peer" value=(peer_name);
             input type="hidden" name="source" value=(repo_name);
             input type="hidden" name="namespace" value=(viewer.username);
-            input name="name" size="20" value=(default_name) placeholder="repo name";
-            button type="submit" class="btn" { (webui::icons::fork()) " fork to " (viewer.username) }
+            input name="name" size="20" value=(default_name) placeholder=(t::fork_name_placeholder(locale));
+            button type="submit" class="btn" { (webui::icons::fork()) " " (t::fork_to_button(locale, &viewer.username)) }
         }
     }
 }

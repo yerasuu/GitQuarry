@@ -26,8 +26,11 @@ async fn an_explicit_locale_cookie_translates_the_chrome() {
     let es = about_page(&app, Some("locale=es")).await;
     assert!(es.contains("saltar al contenido"));
     assert!(!es.contains("skip to content"));
+    assert!(es.contains(r#"<html lang="es""#), "{es}");
 
-    assert!(about_page(&app, Some("locale=en")).await.contains("skip to content"));
+    let en = about_page(&app, Some("locale=en")).await;
+    assert!(en.contains("skip to content"));
+    assert!(en.contains(r#"<html lang="en""#), "{en}");
 }
 
 #[tokio::test]

@@ -94,10 +94,10 @@ async fn resolve_dest_owner(
 /// The typed name as a display name plus the slug the destination path is
 /// built from, or the reason it can't be one. Shared by both branches so a
 /// fork from a peer can't produce a repo name the local path would refuse.
-fn dest_name(name: &str) -> Result<(String, String), String> {
+fn dest_name(name: &str, locale: gitquarry_i18n::Locale) -> Result<(String, String), String> {
     let display = validate::validate_repo_display_name(name).map_err(|e| e.to_string())?;
     let slug = domain::repo::slugify_repo_name(&display)
-        .ok_or_else(|| "name must contain at least one letter or digit.".to_string())?;
+        .ok_or_else(|| gitquarry_i18n::shared::repo::repo_name_needs_alnum(locale))?;
     Ok((display, slug))
 }
 
@@ -187,7 +187,7 @@ pub(crate) async fn handler_fork_post(
             )));
         };
         let dest_owner = resolve_dest_owner(&ctx, &me, namespace, locale).await?;
-        let (_, slug) = dest_name(&form.name).map_err(|msg| AppError::bad_request(anyhow::anyhow!("{msg}")))?;
+        let (_, slug) = dest_name(&form.name, locale).map_err(|msg| AppError::bad_request(anyhow::anyhow!("{msg}")))?;
         let dest = validate::sanitize_path(&format!("{namespace}/{slug}")).map_err(AppError::bad_request)?;
         let (dest_owner_kind, dest_owner_uid) = match &dest_owner {
             OwnerRef::User(uid) => ("user", uid),
@@ -260,7 +260,7 @@ pub(crate) async fn handler_fork_post(
             return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
         }
     };
-    let (dest_display_name, slug) = match dest_name(&form.name) {
+    let (dest_display_name, slug) = match dest_name(&form.name, locale) {
         Ok(names) => names,
         Err(msg) => return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await,
     };

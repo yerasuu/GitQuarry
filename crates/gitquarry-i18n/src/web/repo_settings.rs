@@ -262,3 +262,4 @@ msg!(no_linked_mrs_hint() { Locale::Es => "(sin merge requests vinculados todavi
 msg!(mr_link_table_header_local() { Locale::Es => "local", Locale::En => "local" });
 msg!(mr_link_table_header_external() { Locale::Es => "externa", Locale::En => "external" });
 msg!(mr_link_table_header_cursor() { Locale::Es => "ultimo sync", Locale::En => "last synced" });
+msg!(permission_saved() { Locale::Es => "permiso guardado.", Locale::En => "permission saved." });
