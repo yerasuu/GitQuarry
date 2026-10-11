@@ -361,7 +361,7 @@ async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
     let html = detail(&f, None).await;
     // The label's per-repo color is inlined on the pill itself.
     assert!(
-        html.contains(r#"<span class="decoration" style="border-color:#d73a4a;color:#d73a4a">bug</span>"#),
+        html.contains(r##"<span class="decoration" data-label-color="#d73a4a">bug</span>"##),
         "{html}"
     );
     assert!(html.contains("assignees: bob"), "{html}");

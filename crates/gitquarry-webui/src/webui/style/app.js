@@ -471,6 +471,30 @@ document.addEventListener("drop", (event) => {
   }).catch(() => window.location.reload());
 });
 
+// Label pills (`components::label_pill`, the repo settings' label preview)
+// carry their per-repo colour as `data-label-color` rather than a `style=`
+// attribute, which `style-src 'self'` blocks; setting it through the CSSOM
+// here is not subject to that directive. Re-run on every inserted subtree
+// so a `data-async` fragment swap gets painted too.
+function paintLabelColor(el) {
+  el.style.borderColor = el.dataset.labelColor;
+  el.style.color = el.dataset.labelColor;
+}
+document.querySelectorAll("[data-label-color]").forEach(paintLabelColor);
+new MutationObserver((mutations) => {
+  mutations.forEach((mutation) => {
+    mutation.addedNodes.forEach((node) => {
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+      if (node.matches("[data-label-color]")) {
+        paintLabelColor(node);
+      }
+      node.querySelectorAll("[data-label-color]").forEach(paintLabelColor);
+    });
+  });
+}).observe(document.body, { childList: true, subtree: true });
+
 // A fifth shape, run once at load rather than delegated: client-side syntax
 // highlighting (`/_assets/hljs.js`, `/_assets/hljs-line-numbers.js`, both
 // loaded `defer` ahead of this file -- see `page_chrome.rs`'s `layout()`).

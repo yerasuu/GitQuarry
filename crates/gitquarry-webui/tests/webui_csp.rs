@@ -61,7 +61,7 @@ fn offenders(needle: impl Fn(&str) -> bool) -> Vec<String> {
 
 #[test]
 fn no_view_writes_an_inline_style_attribute() {
-    let found = offenders(|line| line.contains("style=\"") || line.contains("style=("));
+    let found = offenders(|line| line.contains("style=\"") || line.contains("style=(") || line.contains("style={"));
     assert!(
         found.is_empty(),
         "{found:?} set a style attribute, which `style-src 'self'` blocks and no nonce can cover \

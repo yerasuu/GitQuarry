@@ -866,10 +866,12 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// nonce could ever have covered anyway. `tests/webui_csp.rs` walks `src/`
 /// and fails if any view goes back to an inline script, handler or
 /// `javascript:` URL. `style-src` is `'self'` alone, with
-/// no `'unsafe-inline'`: no view sets a `style="..."` attribute any more —
+/// no `'unsafe-inline'`, so no view may set a `style="..."` attribute —
 /// bar widths, language colours and `display:inline` all resolve to classes
 /// in `style/utilities.css` (see `components::width_class` and
-/// `repo::summary::language_class`). That directive can't be relaxed by a
+/// `repo::summary::language_class`), and per-repo label colours, which no
+/// class can enumerate, travel as `data-label-color` for `style/app.js` to
+/// paint through the CSSOM (`components::label_pill`). That directive can't be relaxed by a
 /// nonce either way, since CSP nonces cover `<style>` elements and never
 /// style attributes, so the class file is what keeps it tight —
 /// `tests/webui_csp.rs` fails if a view goes back to an attribute.

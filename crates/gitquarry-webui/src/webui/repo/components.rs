@@ -287,14 +287,15 @@ fn signature_indicator(signature_status: char, verified_by: Option<&str>, instan
 
 /// A label pill: border+text colored, background left transparent — same
 /// "colored outline, not a filled block" shape `.decoration` already uses,
-/// just with a per-label color inlined instead of a fixed CSS var (the
-/// color is dynamic per-repo data, can't be precomputed into a class, same
-/// reasoning `page_chrome.rs`'s language bar documents for its own per-
-/// language hue). Shared by issue and MR label rendering — `RepoConfig.labels`
-/// is one core-owned vocabulary, not owned by either view.
+/// just with a per-label color instead of a fixed CSS var. The color is
+/// dynamic per-repo data that can't be precomputed into a class, and a
+/// `style=` attribute is blocked by `style-src 'self'`, so it travels as
+/// `data-label-color` and `style/app.js` paints it through the CSSOM.
+/// Shared by issue and MR label rendering — `RepoConfig.labels` is one
+/// core-owned vocabulary, not owned by either view.
 pub(crate) fn label_pill(name: &str, color: &str) -> Markup {
     html! {
-        span class="decoration" style={"border-color:" (color) ";color:" (color)} { (name) }
+        span class="decoration" data-label-color=(color) { (name) }
     }
 }
 
