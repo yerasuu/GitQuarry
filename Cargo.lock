@@ -1754,6 +1754,7 @@ dependencies = [
  "data-encoding",
  "dirs",
  "flate2",
+ "form_urlencoded",
  "futures",
  "gitquarry-auth-crypto",
  "gitquarry-forge-clients",

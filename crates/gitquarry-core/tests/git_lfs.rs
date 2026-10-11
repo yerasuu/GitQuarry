@@ -613,6 +613,18 @@ async fn list_locks_filters_by_path_and_id() {
 }
 
 #[tokio::test]
+async fn list_locks_decodes_an_encoded_path_filter() {
+    let server = start().await;
+    json(server.create_lock(PRIVATE, "alice", "art/my file.psd").await).await;
+
+    for query in ["?path=art%2Fmy%20file.psd", "?path=art%2Fmy+file.psd"] {
+        let listed = json(server.list_locks(PRIVATE, Some("carol"), query).await).await;
+        assert_eq!(listed["locks"].as_array().unwrap().len(), 1, "{query}");
+        assert_eq!(listed["locks"][0]["path"], "art/my file.psd");
+    }
+}
+
+#[tokio::test]
 async fn verify_locks_splits_ours_and_theirs_by_the_authenticated_user() {
     let server = start().await;
     for repo in [PRIVATE, PUBLIC] {

@@ -421,14 +421,11 @@ struct UnlockRequest {
     force: bool,
 }
 
-/// Tiny local copy of `git::http`'s own `query_param` — that one is
-/// module-private, and duplicating five lines beats widening its visibility
-/// just to reach across for this.
-fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query.split('&').find_map(|pair| {
-        let (k, v) = pair.split_once('=')?;
-        (k == key).then_some(v)
-    })
+/// Percent- and `+`-decoded, unlike `git::http`'s own `query_param`: git-lfs
+/// encodes `?path=` (`dir%2Fa.psd`), so comparing the raw value against a
+/// stored path never matches anything below the repo root.
+fn query_param(query: &str, key: &str) -> Option<String> {
+    form_urlencoded::parse(query.as_bytes()).find_map(|(k, v)| (k == key).then(|| v.into_owned()))
 }
 
 /// `GET .../info/lfs/locks`: every current lock, optionally narrowed by the
