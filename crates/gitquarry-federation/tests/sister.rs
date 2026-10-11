@@ -1,5 +1,5 @@
 use gitquarry_federation::access;
-use gitquarry_federation::entities::Peer;
+use gitquarry_federation::entities::{Peer, PeerAccessLevel};
 use gitquarry_federation::sister::*;
 use gitquarry_test_support::{backend, cipher};
 use s3db::{Backend, Cipher};
@@ -113,6 +113,79 @@ async fn apply_ban_event_creates_a_stub_peer_for_an_unknown_name() {
     assert_eq!(peer.ban_reason.as_deref(), Some("abuse"));
     assert_eq!(peer.banned_by, "bob");
     assert_eq!(peer.synced_from_sister.as_deref(), Some("sister-instance"));
+    assert_eq!(peer.access_level, PeerAccessLevel::BrowseOnly);
+}
+
+fn event(peer_name: &str, git_base_url: &str, action: BanAction) -> BanEventWire {
+    BanEventWire {
+        peer_name: peer_name.to_string(),
+        git_base_url: git_base_url.to_string(),
+        action,
+        reason: Some("abuse".to_string()),
+        banned_by: "bob".to_string(),
+        banned_at: None,
+    }
+}
+
+#[tokio::test]
+async fn apply_ban_event_refuses_an_invalid_name_or_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
+    for bad in [
+        event("../escape", "https://x.example", BanAction::Ban),
+        event("stranger", "file:///etc", BanAction::Ban),
+        event("stranger", "--upload-pack=sh", BanAction::Ban),
+    ] {
+        assert!(apply_ban_event(backend, &cipher, "sis", &bad).await.is_err());
+    }
+    assert!(access::list_all_peers(backend, &cipher).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn apply_ban_event_unban_of_an_unknown_name_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
+    apply_ban_event(
+        backend,
+        &cipher,
+        "sis",
+        &event("stranger", "https://stranger.example", BanAction::Unban),
+    )
+    .await
+    .unwrap();
+    assert!(access::get_peer(backend, &cipher, "stranger").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_sister_unban_never_lifts_a_ban_it_did_not_put_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let backend = backend.as_ref();
+    let cipher = cipher();
+    seed_peer(backend, &cipher, "acme", false).await;
+    gitquarry_federation::domain::peer::ban(backend, &cipher, "acme", "local decision", "admin")
+        .await
+        .unwrap();
+    seed_peer(backend, &cipher, "other", false).await;
+    apply_ban_event(
+        backend,
+        &cipher,
+        "sis-b",
+        &event("other", "https://other.example", BanAction::Ban),
+    )
+    .await
+    .unwrap();
+
+    for (name, url) in [("acme", "https://acme.example"), ("other", "https://other.example")] {
+        apply_ban_event(backend, &cipher, "sis-a", &event(name, url, BanAction::Unban))
+            .await
+            .unwrap();
+        assert!(access::get_peer(backend, &cipher, name).await.unwrap().unwrap().banned);
+    }
 }
 
 #[tokio::test]
@@ -156,4 +229,5 @@ async fn apply_ban_event_unban_clears_the_ban_and_provenance() {
     let peer = access::get_peer(backend, &cipher, "acme").await.unwrap().unwrap();
     assert!(!peer.banned);
     assert_eq!(peer.synced_from_sister, None);
+    assert_eq!(peer.access_level, PeerAccessLevel::BrowseOnly);
 }

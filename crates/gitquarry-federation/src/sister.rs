@@ -19,8 +19,9 @@
 //! belongs to the *instance*, not any one of its users.
 
 use crate::access;
-use crate::entities::Peer;
+use crate::entities::{Peer, PeerAccessLevel};
 use crate::time::{format_unix_secs, now_secs};
+use crate::validate::validate_git_base_url;
 use anyhow::{Result, bail};
 use gitquarry_wire::Uid;
 use s3db::{Backend, Cipher};
@@ -174,40 +175,62 @@ pub async fn sister_by_secret(backend: &dyn Backend, cipher: &Cipher, secret: &s
     Ok(None)
 }
 
-/// Applies one ban/unban event attributed to `sister_name` — creates a
-/// minimal stub `Peer` if `event.peer_name` isn't already known locally
+/// Applies one ban/unban event attributed to `sister_name` — a ban for a
+/// name not known locally lands as a minimal, `BrowseOnly` stub `Peer`
 /// (section 7: "estar baneado ya no implica haber sido linkeado antes").
 /// Provenance (`banned_by`/`ban_reason`) always reflects the *original*
 /// actor, never `sister_name` itself; [`entities::Peer::synced_from_sister`]
 /// is the only field that records where this instance learned about it.
+///
+/// An unban only lifts a ban that this same sister put here: a ban this
+/// instance issued itself, or learned from another sister, is not
+/// `sister_name`'s to clear. Like a local [`crate::domain::peer::unban`],
+/// it drops `access_level` to `BrowseOnly` instead of restoring it.
+///
+/// # Errors
+///
+/// `event.peer_name` and `event.git_base_url` come from another instance
+/// and end up as an S3 key segment, a filesystem path (core's
+/// `_remote/<peer>`) and a `git fetch` URL, so an invalid one is refused
+/// before anything is stored.
 pub async fn apply_ban_event(
     backend: &dyn Backend,
     cipher: &Cipher,
     sister_name: &str,
     event: &BanEventWire,
 ) -> Result<()> {
+    access::validate_peer_name(&event.peer_name)?;
     let (existing, etag) = Peer::get(backend, cipher, &event.peer_name).await?;
-    let mut peer = existing.unwrap_or_else(|| Peer {
-        name: event.peer_name.clone(),
-        git_base_url: event.git_base_url.clone(),
-        ..Default::default()
-    });
-    match event.action {
-        BanAction::Ban => {
+    let peer = match (event.action, existing) {
+        (BanAction::Ban, existing) => {
+            validate_git_base_url(&event.git_base_url)?;
+            let mut peer = existing.unwrap_or_else(|| Peer {
+                name: event.peer_name.clone(),
+                git_base_url: event.git_base_url.clone(),
+                access_level: PeerAccessLevel::BrowseOnly,
+                ..Default::default()
+            });
             peer.banned = true;
             peer.ban_reason = event.reason.clone();
             peer.banned_at = event.banned_at.clone().or_else(|| Some(format_unix_secs(now_secs())));
             peer.banned_by = event.banned_by.clone();
             peer.synced_from_sister = Some(sister_name.to_string());
+            peer
         }
-        BanAction::Unban => {
+        (BanAction::Unban, Some(mut peer)) => {
+            if !peer.banned || peer.synced_from_sister.as_deref() != Some(sister_name) {
+                return Ok(());
+            }
             peer.banned = false;
             peer.ban_reason = None;
             peer.banned_at = None;
             peer.banned_by = String::new();
+            peer.access_level = PeerAccessLevel::BrowseOnly;
             peer.synced_from_sister = None;
+            peer
         }
-    }
+        (BanAction::Unban, None) => return Ok(()),
+    };
     // Best-effort CAS: a lost race here just means the next reconciliation
     // tick catches it too, same tolerance every other periodic sync in
     // this codebase already has.
@@ -251,20 +274,25 @@ pub async fn reconcile_with_sister(backend: &dyn Backend, cipher: &Cipher, siste
     let remote_names: std::collections::HashSet<&str> = remote_bans.iter().map(|b| b.peer_name.as_str()).collect();
 
     for entry in &remote_bans {
-        apply_ban_event(
-            backend,
-            cipher,
-            &sister.name,
-            &BanEventWire {
-                peer_name: entry.peer_name.clone(),
-                git_base_url: entry.git_base_url.clone(),
-                action: BanAction::Ban,
-                reason: Some(entry.ban_reason.clone()),
-                banned_by: entry.banned_by.clone(),
-                banned_at: entry.banned_at.clone(),
-            },
-        )
-        .await?;
+        let event = BanEventWire {
+            peer_name: entry.peer_name.clone(),
+            git_base_url: entry.git_base_url.clone(),
+            action: BanAction::Ban,
+            reason: Some(entry.ban_reason.clone()),
+            banned_by: entry.banned_by.clone(),
+            banned_at: entry.banned_at.clone(),
+        };
+        // One entry the sister got wrong (an invalid name or URL) must not
+        // hold back every other ban in the same list.
+        if let Err(e) = apply_ban_event(backend, cipher, &sister.name, &event).await {
+            tracing::warn!(
+                target: "gitquarry_federation::sister",
+                sister = %sister.name,
+                peer = %entry.peer_name,
+                error = %format!("{e:#}"),
+                "skipped a sister ban entry"
+            );
+        }
     }
 
     let locally_synced_from_this_sister = access::list_all_peers(backend, cipher)
