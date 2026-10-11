@@ -938,19 +938,36 @@ pub(crate) async fn handler_mark_ready_post(
     Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
-#[derive(serde::Deserialize)]
-pub(crate) struct BulkPrActionForm {
+/// Read by hand from the raw body rather than through axum's `Form`:
+/// `serde_urlencoded` can't collect a key repeated once per checked row into
+/// a `Vec`, so every submission with a selection was a 422.
+#[derive(Default)]
+struct BulkPrActionForm {
     repo_uid: String,
     /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
-    /// repeated once per selected row — same shape
-    /// `issues::handlers::BulkIssueActionForm` already uses.
-    #[serde(default)]
+    /// one per selected row. A value that isn't a number names no MR, so it
+    /// is dropped rather than failing the whole batch.
     numbers: Vec<u64>,
     /// `"close"` or `"reopen"` — anything else is rejected up front, before
     /// touching any MR.
     action: String,
-    #[serde(default)]
     csrf: String,
+}
+
+impl BulkPrActionForm {
+    fn parse(body: &[u8]) -> Self {
+        let mut form = Self::default();
+        for (key, value) in form_urlencoded::parse(body) {
+            match key.as_ref() {
+                "repo_uid" => form.repo_uid = value.into_owned(),
+                "numbers" => form.numbers.extend(value.parse::<u64>().ok()),
+                "action" => form.action = value.into_owned(),
+                "csrf" => form.csrf = value.into_owned(),
+                _ => {}
+            }
+        }
+        form
+    }
 }
 
 /// Best-effort per MR, same tolerance `issues::handlers::handler_bulk_post`
@@ -961,8 +978,9 @@ pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<BulkPrActionForm>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
+    let form = BulkPrActionForm::parse(&body);
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(*resp),

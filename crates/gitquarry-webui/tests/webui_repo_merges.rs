@@ -456,3 +456,28 @@ async fn a_form_carrying_a_stale_repo_uid_is_refused_once_the_name_is_reclaimed(
         1
     );
 }
+
+/// The list's checkboxes all share `name="numbers"`, so a selection arrives
+/// as that key repeated once per row.
+#[tokio::test]
+async fn bulk_close_applies_to_every_checked_row() {
+    use gitquarry_core::storage::merge_requests::MrStatus;
+    let f = fixture().await;
+    open_mr(&f).await;
+    open_mr(&f).await;
+    add_user(&f.ctx, "carol", Some(Permission::Developer)).await;
+    let carol = login(&f.app, "carol").await;
+
+    let fields = [
+        ("repo_uid", f.repo.uid.as_str()),
+        ("numbers", "1"),
+        ("numbers", "2"),
+        ("action", "close"),
+    ];
+    let response = carol.post(&f.app, "/_merges/bulk/team/proj", &fields).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    for number in [1, 2] {
+        let mr = merge_request::get(&f.ctx, &f.repo, number).await.unwrap().unwrap();
+        assert_eq!(mr.status, MrStatus::Closed, "#{number}");
+    }
+}
