@@ -343,7 +343,7 @@ async fn persist_pulled_ref_to_s3(
         let old_sha = manifest.refs.get(ref_name).cloned();
         let have_tips: Vec<String> = manifest.refs.values().cloned().collect();
         let scratch = gitquarry_core::git::scratch_dir(bare_repo)?;
-        let mut uploaded_bytes: u64 = 0;
+        let mut uploaded_bytes = 0;
         if let Some(pack) =
             gitquarry_core::git::pack_objects_for_push(bare_repo, sha, &have_tips, scratch.path()).await?
         {

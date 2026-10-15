@@ -296,7 +296,7 @@ pub(super) fn render(diff: &str, comments: &[(String, MrComment)], view: &View<'
     // hides/shows all of them together. Starts at -1: `Row::Meta` rows (a
     // file's own header, before its first hunk) never reference this, so
     // its value there is moot.
-    let mut hunk_index: i32 = -1;
+    let mut hunk_index = -1;
 
     let markup = html! {
         table class="diff-annotated" {

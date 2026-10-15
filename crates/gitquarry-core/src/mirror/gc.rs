@@ -223,7 +223,7 @@ async fn sweep_once(ctx: &AppContext) -> Result<()> {
     }
 
     kept.sort_by_key(|m| m.last_access);
-    let mut total: u64 = kept.iter().map(|m| m.size_bytes).sum();
+    let mut total = kept.iter().map(|m| m.size_bytes).sum::<u64>();
     for m in kept {
         if total <= ctx.mirror_max_size_bytes {
             break;

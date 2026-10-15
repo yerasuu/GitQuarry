@@ -357,7 +357,7 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
     let mut new_manifest = manifest.clone();
     let mut have_tips: Vec<String> = manifest.refs.values().cloned().collect();
     let tmp_dir = git::scratch_dir(Path::new(&git_dir))?;
-    let mut uploaded_bytes: u64 = 0;
+    let mut uploaded_bytes = 0u64;
 
     for update in &updates {
         if is_zero_sha(&update.new) {

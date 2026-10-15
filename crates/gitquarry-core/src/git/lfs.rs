@@ -287,7 +287,7 @@ pub(super) async fn upload_object(remote: &Remote, oid: &str, req: Request) -> R
 
     let mut file = tokio::fs::File::create(&tmp).await.context("opening LFS temp file")?;
     let mut hasher = Sha256::new();
-    let mut written: u64 = 0;
+    let mut written = 0;
     let mut stream = req.into_body().into_data_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("reading LFS upload body")?;

@@ -796,7 +796,7 @@ pub(crate) async fn handler_upload_asset_post(
                     .into_temp_path();
                 let mut file = tokio::fs::File::create(&tmp).await?;
                 let mut hasher = Sha256::new();
-                let mut size: u64 = 0;
+                let mut size = 0;
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
                     AppError::bad_request(anyhow::anyhow!(
                         "{}",
