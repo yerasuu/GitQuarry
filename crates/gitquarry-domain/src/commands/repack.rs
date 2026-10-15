@@ -64,7 +64,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             }
             "--apply" => apply = true,
             "--help" | "-h" => {
-                println!("{USAGE}");
+                println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
                 return Ok(());
             }
             other if !other.starts_with('-') && repo_arg.is_none() => repo_arg = Some(other.to_string()),

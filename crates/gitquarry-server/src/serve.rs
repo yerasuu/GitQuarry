@@ -18,7 +18,7 @@ use gitquarry_core::{config, storage};
 use gitquarry_webui::webui;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 const DEFAULT_WEB_BIND: &str = "0.0.0.0:8080";
 const DEFAULT_SSH_BIND: &str = "0.0.0.0:2222";
@@ -92,11 +92,11 @@ fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             }
             "--bucket" => args.bucket = Some(value("--bucket")?),
             "--help" | "-h" => {
-                println!("{USAGE}");
+                println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
                 return Ok(None);
             }
             "--version" | "-V" => {
-                println!("gitquarry {}", env!("CARGO_PKG_VERSION"));
+                println!("gitquarry {}", env!("CARGO_PKG_VERSION")); // stdout because --version is the CLI's answer
                 return Ok(None);
             }
             other => bail!("unexpected argument: {other}\n\n{USAGE}"),
@@ -464,7 +464,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             if let Err(e) =
                 gitquarry_core::internal_api::run_server(&internal_bind, internal_ctx, federation.internal_token).await
             {
-                eprintln!("gitquarry: fatal: internal API server failed: {e:#}");
+                error!(error = %format!("{e:#}"), "fatal: internal API server failed");
                 std::process::exit(1);
             }
         });

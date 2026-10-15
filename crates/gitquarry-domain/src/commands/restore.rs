@@ -65,7 +65,7 @@ pub fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             "--list" => args.list = true,
             "--apply" => args.apply = true,
             "--help" | "-h" => {
-                println!("{USAGE}");
+                println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
                 return Ok(None);
             }
             other if other.starts_with('-') => bail!("unexpected argument: {other}\n\n{USAGE}"),

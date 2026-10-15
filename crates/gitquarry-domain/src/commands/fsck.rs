@@ -46,7 +46,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             "--bucket" => bucket_arg = Some(it.next().cloned().context("--bucket needs a value")?),
             "--apply" => apply = true,
             "--help" | "-h" => {
-                println!("{USAGE}");
+                println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
                 return Ok(());
             }
             other => bail!("unexpected argument: {other}\n\n{USAGE}"),

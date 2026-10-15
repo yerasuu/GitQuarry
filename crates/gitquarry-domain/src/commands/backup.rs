@@ -58,7 +58,7 @@ pub fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             "--minimal" => minimal = true,
             "--with-derived" => with_derived = true,
             "--help" | "-h" => {
-                println!("{USAGE}");
+                println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
                 return Ok(None);
             }
             other => bail!("unexpected argument: {other}\n\n{USAGE}"),
