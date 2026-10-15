@@ -26,7 +26,7 @@ pub(crate) const PUBKEY_INDEX: SecondaryIndex = SecondaryIndex::new(INDEX_PREFIX
 /// One pubkey-fingerprint index entry: which username claims it.
 /// `pub(crate)`, same reasoning as [`PUBKEY_INDEX`]: `auth::domain::user::create`
 /// constructs this directly to build a `TxnOp`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct UsernamePointer {
     #[serde(default)]
     pub(crate) username: String,

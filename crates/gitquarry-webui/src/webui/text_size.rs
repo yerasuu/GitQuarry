@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 /// Three tiers, not a plain large/small flag: `Sm` is the original
 /// pre-ergonomics-pass size, `Md` is what `body`'s own (larger) font-size
 /// already gives everything else on the page, `Lg` is bigger still.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum TextSize {
     Sm,
     Md,

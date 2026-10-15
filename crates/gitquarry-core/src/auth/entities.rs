@@ -45,7 +45,7 @@ pub enum Permission {
 /// for SSH keys, there's no pure-Rust way to derive one here) and persisted
 /// alongside the key so nothing needs to re-invoke `gpg` just to render or
 /// remove-by-fingerprint a key someone already added.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GpgKeyEntry {
     pub armored: String,
     pub fingerprint: String,
@@ -54,7 +54,7 @@ pub struct GpgKeyEntry {
 /// A named identity: zero or more authorized SSH pubkeys, and per-repo
 /// permissions that apply regardless of which of its keys authenticated the
 /// connection.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/users")]
 pub struct User {
     /// Stable id, minted once at `add_user` time and never changed — what
@@ -274,7 +274,7 @@ impl User {
 /// shape. The ceiling never grants more than `owner_uid`'s real, current
 /// permission — see `git::http::authorize_impl`, which re-derives that on
 /// every request and takes the lower of the two.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/pat")]
 pub struct PersonalAccessToken {
     #[serde(default)]
@@ -318,7 +318,7 @@ pub struct PersonalAccessToken {
 /// in on its own. Keyed by [`Self::key`] (a digest of the credential id,
 /// see `access::passkey_key`) rather than the id itself: an id may run to
 /// 1023 bytes, which base64-encoded no longer fits an S3 key.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/passkeys")]
 pub struct Passkey {
     #[serde(default)]

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 /// either (`default_branch` lives in the git ref data itself, `updated_at`
 /// isn't tracked anywhere), so this only serializes fields that are real
 /// today rather than fabricating placeholders for the rest.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RepoSummary {
     pub name: String,
     pub description: Option<String>,

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// Server config (binds, mirrors dir) editable from the web UI and persisted
 /// in the bucket itself. All fields are optional: if not set, the server
 /// uses its hardcoded defaults or whatever was passed via CLI.
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ServerSettings {
     #[serde(default)]
     pub web_bind: Option<String>,
@@ -177,7 +177,7 @@ pub struct ServerSettings {
 ///   requests and the anonymous index.
 /// - `Private`: on the web, visible only via `effective_permission`/
 ///   `is_admin`, same as before `Limited` existed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
     #[default]
@@ -193,7 +193,7 @@ pub enum Visibility {
 /// without moving the repo). Internally tagged (`{"kind":"user","uid":"..."}`)
 /// rather than untagged/adjacently-tagged: matches this codebase's plain,
 /// explicit JSON style elsewhere (no serde trickery anywhere else in the tree).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "uid", rename_all = "lowercase")]
 pub enum OwnerRef {
     User(Uid),
@@ -203,7 +203,7 @@ pub enum OwnerRef {
 /// A repo's own config (unlike [`ServerSettings`], which is global to the
 /// whole bucket). Lives at `<repo>/.conf/config.json`, alongside the rest of
 /// that repo's objects.
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Entity)]
 // Literal duplicates `super::REPOS_PREFIX` -- `#[entity(collection = ...)]`
 // needs a string literal, can't reference a const.
 #[entity(collection = "repos", suffix = "/.conf/config.json")]
@@ -435,7 +435,7 @@ pub struct RepoConfig {
 /// `#rrggbb` (validated by `validate::validate_hex_color` at the settings
 /// form) so it can be dropped straight into a label pill's
 /// `style="background:..."` without further checking there.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Label {
     pub name: String,
     pub color: String,
@@ -446,7 +446,7 @@ pub struct Label {
 /// the name is the stable label) plus the repo's full name on that peer at
 /// fork time. Display-only, same as a plain `forked_from` link: never
 /// re-resolved live, never a basis for any permission decision.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PeerOrigin {
     pub peer: String,
     pub repo: String,

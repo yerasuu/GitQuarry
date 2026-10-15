@@ -52,7 +52,7 @@ const DATA_VERSION: Singleton = Singleton::new(".conf/data-version.json");
 /// One entry per migration this bucket has applied — an audit trail, not
 /// something the runner reads back. [`DataVersion::version`] alone decides
 /// what still has to run.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AppliedMigration {
     pub version: u32,
     pub name: String,
@@ -61,7 +61,7 @@ pub struct AppliedMigration {
     pub at: String,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DataVersion {
     /// Every migration up to and including this number has been applied.
     /// `0` — the default a bucket with no such object reads as — means none
@@ -76,7 +76,7 @@ pub struct DataVersion {
 /// [`run_one`] rather than stored as a function pointer here: an `async fn`
 /// isn't nameable in a `const` slice, and boxing one per entry buys nothing
 /// for a list this short.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Migration {
     pub version: u32,
     pub name: &'static str,
@@ -108,7 +108,7 @@ pub const MIGRATIONS: &[Migration] = &[
 /// count of items the pass couldn't finish — a CAS conflict against a
 /// concurrent edit, an entity that vanished mid-pass — and is what decides
 /// whether the version gets stamped.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Outcome {
     /// Human-readable, one line, for the startup log and the CLI report.
     pub summary: String,
@@ -126,7 +126,7 @@ impl Outcome {
 
 /// Whether a pass writes or only counts. `Report` is what `gitquarry migrate`
 /// prints without `--apply`; the startup runner always uses `Apply`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum Mode {
     Report,
     Apply,

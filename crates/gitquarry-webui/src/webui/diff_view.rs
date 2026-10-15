@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 /// Session-only preference (cookie, no account default) — unlike
 /// theme/text-size this isn't tied to a `User` field, there was no request
 /// to make it one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum DiffView {
     Unified,
     Split,

@@ -68,7 +68,7 @@ pub(crate) async fn mirror_refs(mirror: &std::path::Path) -> Option<BTreeMap<Str
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum MergeRequestAction {
     Opened,
     Updated,
@@ -76,7 +76,7 @@ pub enum MergeRequestAction {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum IssueAction {
     Opened,
     Closed,

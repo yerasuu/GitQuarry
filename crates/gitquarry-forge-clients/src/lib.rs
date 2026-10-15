@@ -66,7 +66,7 @@ pub(crate) fn check_path_segment(kind: &str, value: &str) -> Result<()> {
 /// `description` markdown-vs-plain distinction): this is only ever compared
 /// against `ExternalPrLink`/mapped into a local `MergeRequestMeta`, never
 /// stored verbatim.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct RemoteMr {
     pub number: u64,
     pub title: String,
@@ -87,7 +87,7 @@ pub struct RemoteMr {
     pub merge_commit_sha: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum RemoteMrState {
     #[default]
     Open,
@@ -95,7 +95,7 @@ pub enum RemoteMrState {
     Merged,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct RemoteComment {
     /// Provider-native comment id — `ExternalPrLink::synced_remote_comment_ids`'s
     /// element type, the anti-loop inbound-dedup key

@@ -26,7 +26,7 @@ use anyhow::Result;
 use s3db::{Entity, Singleton};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/commit-sig")]
 pub struct CommitSigCache {
     #[serde(default)]
@@ -79,7 +79,7 @@ impl CommitSigCache {
 /// `s3db::RequestCache` collapses to once per request.
 const SIGNING_EPOCH: Singleton = Singleton::new(".conf/index/signing-epoch.json");
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct SigningEpoch {
     #[serde(default)]
     epoch: u64,

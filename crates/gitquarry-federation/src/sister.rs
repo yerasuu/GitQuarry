@@ -35,7 +35,7 @@ fn instance_uid() -> Uid {
     Uid::default()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BanAction {
     Ban,

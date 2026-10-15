@@ -51,7 +51,7 @@ const MAX_LFS_BATCH_BYTES: usize = 8 * 1024 * 1024;
 /// disk [`spool_body`] writes it to before `git` ever sees a byte of it.
 const MAX_PACK_BODY_BYTES: usize = 16 * 1024 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
     InfoRefs,
     UploadPack,
@@ -537,7 +537,7 @@ enum Authz {
 /// endpoints (its spec expects exactly that shape on every error response,
 /// not just inside a 200 batch reply's per-object `error` fields — see
 /// [`super::lfs::denial_response`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) enum Denial {
     Unauthorized,
     Forbidden,

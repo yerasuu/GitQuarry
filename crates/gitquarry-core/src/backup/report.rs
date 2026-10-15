@@ -38,7 +38,7 @@ pub const MAX_SAMPLES: usize = 20;
 /// What started a run. Kept because "the schedule fired" and "an admin hit
 /// the button" have different follow-up: a missing scheduled run is a
 /// broken instance, a missing manual one is just a button nobody pressed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Trigger {
     #[default]
@@ -49,7 +49,7 @@ pub enum Trigger {
     Cli,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
     /// Written at the start of every run — see this module's doc comment.
@@ -70,7 +70,7 @@ pub enum Outcome {
 /// reports, not plaintext sizes: that's what the destination will actually
 /// hold, and it's what a `list_prefix` already returns without an extra
 /// read.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClassStat {
     #[serde(default)]
     pub copied: u64,
@@ -84,7 +84,7 @@ pub struct ClassStat {
     pub bytes_copied: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/backup-runs")]
 pub struct BackupRun {
     /// `<zero-padded millis>-<random>` — lexicographic order is

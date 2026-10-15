@@ -71,7 +71,7 @@ pub const DEFAULT_CLASSES: [Class; 1] = [Class::Entities];
 /// snapshots then reads one small directory instead of every object of every
 /// snapshot, and a snapshot's own key listing can't mistake a manifest for
 /// one of its objects.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SnapshotManifest {
     pub id: String,
     pub started_at: u64,
@@ -343,7 +343,7 @@ pub async fn list(backend: &Arc<dyn Backend>, cipher: &Cipher) -> Result<Vec<Sna
 }
 
 /// What a [`restore`] did, or (with `dry_run`) would do.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct RestoreReport {
     pub manifest: SnapshotManifest,
     /// Keys written back (or that would be, under `dry_run`).

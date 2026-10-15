@@ -146,7 +146,7 @@ pub struct NewCredential {
 }
 
 /// What a successful assertion yields: the counter to store next time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct VerifiedAssertion {
     pub sign_count: u32,
     pub user_verified: bool,

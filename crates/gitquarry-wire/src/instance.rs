@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// federation moderation layer): always recomputed live from the emitting
 /// instance's own `Peer` collection (`count where banned == true`), never a
 /// stored counter that could drift out of sync with the actual ban list.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct InstanceInfo {
     pub name: String,
     pub version: String,

@@ -71,7 +71,7 @@ async fn require_rp(ctx: &AppContext, locale: Locale) -> Result<RelyingParty, Ap
         .ok_or_else(|| AppError::not_found(anyhow!("{}", gitquarry_i18n::shared::auth::passkeys_off(locale))))
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 enum Purpose {
     Register,

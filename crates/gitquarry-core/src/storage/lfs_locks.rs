@@ -16,7 +16,7 @@ use s3db::Collection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LfsLock {
     #[serde(default)]
     pub id: u64,

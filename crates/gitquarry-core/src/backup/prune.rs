@@ -40,7 +40,7 @@ pub const ORPHAN_ROOT: &str = ".conf/backup-orphans";
 
 /// One destination key the source no longer has, and when that was first
 /// noticed.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/backup-orphans")]
 pub struct Orphan {
     /// Hex sha256 of [`Self::key`]. The key itself can't be a key segment —
@@ -64,7 +64,7 @@ fn key_hash(key: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct PruneOutcome {
     /// Keys deleted at the destination.
     pub deleted: u64,

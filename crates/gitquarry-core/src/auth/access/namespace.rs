@@ -59,7 +59,7 @@ pub fn namespace_reservation_key(name: &str) -> Result<String> {
 /// (the single blob's own CAS used to give that uniqueness for free; see
 /// [`reserve_namespace`]). `pub(crate)`, same reasoning as
 /// [`super::pubkey::UsernamePointer`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct NamespaceReservation {
     #[serde(default)]
     pub(crate) kind: String,

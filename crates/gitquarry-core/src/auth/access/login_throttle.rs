@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 const PASSWORD_LOGIN_COUNT: Singleton = Singleton::new(".conf/index/password-login-count.json");
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct PasswordLoginCount {
     #[serde(default)]
     count: u32,

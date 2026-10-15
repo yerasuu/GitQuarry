@@ -15,7 +15,7 @@
 
 /// What a key is, for backup purposes. Order of the variants is meaningless;
 /// what matters is [`classify`]'s ordering of the checks that produce them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Class {
     /// `.conf/encryption.json` — the salt plus the wrapped data key
     /// (`s3db::bootstrap`). Not a normal class: it's the *ordered

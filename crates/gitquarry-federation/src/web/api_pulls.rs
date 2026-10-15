@@ -22,7 +22,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 enum Tier {
     Reporter,
     Developer,

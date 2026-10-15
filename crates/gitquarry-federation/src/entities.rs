@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 /// granular in place of the old single-binary predecessor's binary
 /// linked/no-linked. Ordered (`BrowseOnly < BrowseAndFork < Full`) so a
 /// call site can gate on "at least this tier" with a plain comparison.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PeerAccessLevel {
     BrowseOnly,
@@ -33,7 +33,7 @@ pub enum PeerAccessLevel {
 /// anything. Never referenced by uid elsewhere (unlike `User`/`Group` in
 /// core), so no `#[entity(index)]` field is needed: `name` is both the
 /// display label and the S3 key segment.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/peers")]
 pub struct Peer {
     #[entity(key)]
@@ -129,7 +129,7 @@ pub struct Peer {
 /// this token can't outlive or exceed whatever access `owner` genuinely has
 /// at the moment it's used, and federation never even receives that
 /// permission value, only a yes/no.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/tokens")]
 pub struct AccessToken {
     #[serde(default)]

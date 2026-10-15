@@ -33,7 +33,7 @@ const MAX_PEER_LABEL_LEN: usize = 128;
 /// label — no `expires_at`/`repos`/`write` here, since B is the only party
 /// that knows or enforces any of that; A just holds whatever secret it was
 /// given.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PeerCredential {
     #[serde(default)]
     pub secret: String,

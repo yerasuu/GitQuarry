@@ -49,7 +49,7 @@ pub fn cap_error(text: &str) -> String {
     format!("{}… (truncated)", &text[..cut])
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum ExternalMirrorProvider {
     #[default]
     GitHub,
@@ -61,7 +61,7 @@ pub enum ExternalMirrorProvider {
 /// Per-ref sync state, UI-facing — kept separate from [`ExternalMirror::last_synced`]
 /// so a diverged/errored ref never loses its last known-good sha (see that
 /// field's own doc comment).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RefSyncStatus {
     InSync,
     Diverged,
@@ -77,7 +77,7 @@ impl Default for RefSyncStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum SyncDirection {
     PushOnly,
     PullOnly,
@@ -99,7 +99,7 @@ impl SyncDirection {
 /// forge. `remote_url` never carries a token (unlike the credentialed URL
 /// built at sync time from `remote_url` + `token`) — same separation as
 /// `Peer::git_base_url`/`PeerCredential::secret`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExternalMirror {
     #[serde(default)]
     pub id: String,
@@ -259,7 +259,7 @@ pub async fn delete_external_mirror(backend: &dyn Backend, cipher: &Cipher, uid:
 /// `local_number` (scoped under one specific mirror, not the whole repo: a
 /// repo can have several `ExternalMirror`s, each with independent,
 /// unrelated MR sync).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ExternalPrLink {
     #[serde(default)]
     pub local_number: u64,

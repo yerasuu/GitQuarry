@@ -31,7 +31,7 @@
 pub mod shared;
 pub mod web;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Locale {
     Es,
     En,

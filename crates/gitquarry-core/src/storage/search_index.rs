@@ -26,7 +26,7 @@ pub struct IndexedCommit {
     pub subject: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SearchIndex {
     /// The HEAD commit this index was last built against — `None` means
     /// never indexed yet. [`crate::domain::repo::update_search_index`] diffs

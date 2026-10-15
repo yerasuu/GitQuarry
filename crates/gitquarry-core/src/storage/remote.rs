@@ -22,7 +22,7 @@ const RELEASES_PREFIX: &str = "releases";
 /// that collision impossible, unlike a bare `<tag>` prefix would.
 const RELEASE_META_SUFFIX: &str = "meta.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AssetMeta {
     pub filename: String,
     pub size: u64,
@@ -70,7 +70,7 @@ pub fn unique_asset_object(filename: &str) -> String {
     format!("{:032x}-{filename}", rand::random::<u128>())
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ReleaseMeta {
     #[serde(default)]
     pub tag: String,
@@ -106,7 +106,7 @@ pub struct ReleaseMeta {
 /// shouldn't open that many simultaneous connections to the backend.
 const COPY_CONCURRENCY: usize = 8;
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Manifest {
     #[serde(default)]
     pub refs: BTreeMap<String, String>,

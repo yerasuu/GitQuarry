@@ -110,7 +110,7 @@ pub async fn commit_message(git_dir: &Path, rev: &str) -> Result<(String, String
 
 /// Per-commit change totals from `git log --shortstat` — cgit-style summary
 /// tables show these next to each recent commit.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CommitStats {
     pub files_changed: usize,
     pub insertions: usize,

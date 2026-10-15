@@ -42,7 +42,7 @@ fn audit_collection(month: &str) -> Collection {
 /// paginated log viewer.
 pub const LIST_LIMIT: usize = 200;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AuditEntry {
     #[serde(default)]
     pub at: String,

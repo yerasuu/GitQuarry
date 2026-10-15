@@ -1,7 +1,7 @@
 use crate::uid::Uid;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum MrStatus {
     #[default]
     Open,
@@ -17,7 +17,7 @@ pub enum MrStatus {
 ///
 /// [`Squash`]: MergeStrategy::Squash
 /// [`Rebase`]: MergeStrategy::Rebase
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum MergeStrategy {
     #[default]
     Merge,
@@ -34,7 +34,7 @@ pub enum MergeStrategy {
     FastForward,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MergeRequestMeta {
     #[serde(default)]
     pub number: u64,
@@ -95,7 +95,7 @@ pub struct MergeRequestMeta {
 /// removed line only exists on the old side, an added one only on the new.
 /// A context line exists on both — those anchor to [`DiffSide::New`], so a
 /// comment stays put as long as the line survives.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum DiffSide {
     Old,
     #[default]
@@ -107,7 +107,7 @@ pub enum DiffSide {
 /// MR's *current* head, so a comment whose line no longer appears in that
 /// diff falls back to the flat thread rather than pretending to still mark
 /// a spot that moved.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct CommentAnchor {
     /// Repo-relative path as the diff names it, no `a/`/`b/` prefix.
     #[serde(default)]
@@ -119,7 +119,7 @@ pub struct CommentAnchor {
     pub line: u32,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct MrComment {
     #[serde(default)]
     pub author: String,
@@ -151,7 +151,7 @@ pub struct MrComment {
 /// body without a position either way, the same escape hatch GitHub's own
 /// review form offers when a reviewer wants to weigh in without blocking or
 /// blessing the change.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum ReviewVerdict {
     Approved,
     ChangesRequested,
@@ -163,7 +163,7 @@ pub enum ReviewVerdict {
 /// thread chatter, a review carries a [`ReviewVerdict`] that counts toward
 /// the MR's review state. A reviewer can submit several over an MR's life —
 /// only their latest one counts (see `domain::merge_request::review_summary`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MrReview {
     #[serde(default)]
     pub author: String,
@@ -181,7 +181,7 @@ pub struct MrReview {
 /// `/_api/pulls/detail` and (after the binary split) federation's
 /// `/_internal/merge-requests` proxy serialize, since both sides of the
 /// same cross-instance call need the identical shape.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MrDetail {
     #[serde(default)]
     pub mr: MergeRequestMeta,
