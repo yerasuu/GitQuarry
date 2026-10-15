@@ -56,12 +56,19 @@ pub async fn list(ctx: &AppContext, owner_uid: &Uid) -> Result<Vec<Passkey>> {
 /// sessions, since removing a credential is how an owner answers "this
 /// device is gone" (see [`super::user::revoke_sessions`]). A key that isn't
 /// theirs (or doesn't exist) is a no-op, never someone else's removal.
+///
+/// Sessions end before the record goes: if either step fails the passkey is
+/// still listed and the owner simply retries, instead of a removed passkey
+/// whose sessions survived.
 pub async fn remove(ctx: &AppContext, owner: &User, key: &str, locale: gitquarry_i18n::Locale) -> Result<bool> {
-    if !remove_record(ctx, &owner.uid, key).await? {
+    let (Some(passkey), _) = Passkey::get(ctx.backend().as_ref(), &ctx.cipher, key).await? else {
+        return Ok(false);
+    };
+    if passkey.owner_uid != owner.uid {
         return Ok(false);
     }
     super::user::revoke_sessions(ctx, &owner.username, locale).await?;
-    Ok(true)
+    remove_record(ctx, &owner.uid, key).await
 }
 
 async fn remove_record(ctx: &AppContext, owner_uid: &Uid, key: &str) -> Result<bool> {
