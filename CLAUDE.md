@@ -176,21 +176,26 @@ no existing tag fits, and record it here.
 
 ## Automation reference
 
-| Pattern | Enforcement layer |
+`scripts/check-practices.sh` checks the practices above that clippy and
+rustfmt don't: what is staged by default, `--all` for the whole tree,
+the PR diff in CI. `PRACTICE` findings fail the run; `REVIEW` findings
+are heuristics too weak to block and only ask a human to look.
+
+| Practice | Enforcement |
 |---|---|
-| Obvious comments | `check-humanization.sh` → `obvious-comment` |
-| Doc restates signature | `check-humanization.sh` → `doc-restates-signature` |
-| Trivial type annotations | `check-humanization.sh` → `trivial-type-annotation` |
-| Explicit elidable lifetimes | `check-humanization.sh` → `explicit-lifetime-elision` |
-| Clone where borrow suffices | Clippy + `check-humanization.sh` |
+| Comments that restate the code | `check-practices.sh` → `comment-restates-code` |
+| Doc restates signature | `check-practices.sh` → `doc-restates-signature` |
+| Trivial type annotations | `check-practices.sh` → `trivial-type-annotation` |
+| Explicit elidable lifetimes | `check-practices.sh` → `explicit-lifetime-elision` |
+| Clone where borrow suffices | Clippy `redundant_clone` + review `possible-borrow-instead-of-clone` |
 | Unused trait bounds | Clippy → `extra_unused_type_parameters` |
-| Excessive derives (> 4) | `check-humanization.sh` → `excessive-derives` |
-| Wildcard error match | Clippy + `check-humanization.sh` |
-| Mutex on primitives | Clippy + `check-humanization.sh` |
+| More than 4 behavioural derives | review `excessive-derives` (Debug, serde, `Entity` don't count) |
+| Wildcard error match without a reason | `check-practices.sh` → `wildcard-error-match` |
+| Mutex on primitives | Clippy + `check-practices.sh` → `mutex-on-primitive` |
 | Intermediate `collect()` | Clippy → `needless_collect` |
-| `block_on()` in async | `check-humanization.sh` → `block-on-in-async` |
-| `println!` in production | `check-humanization.sh` → `println-in-production` |
-| AI attribution in commits | `check-humanization.sh` → `ai-attribution` |
+| `block_on()` in async | `check-practices.sh` → `block-on-in-async` |
+| `println!` outside CLI output | `check-practices.sh` → `println-in-production` |
+| AI attribution in commits | `check-practices.sh` → `ai-attribution` |
 | Format violations | `cargo fmt --check` |
 | Semver breaks (libraries) | `cargo semver-checks` |
 
