@@ -758,13 +758,13 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         ))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&ctx),
+            secure_cookies_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&ctx),
             request_cache_middleware,
         ))
         .layer(axum::middleware::from_fn(flash_middleware))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&ctx),
-            secure_cookies_middleware,
-        ))
         .layer(axum::middleware::from_fn(security_headers))
         // Every HTML/CSS/JS response this app sends is compressible text
         // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
@@ -862,8 +862,10 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// Keeps cookies off plain HTTP on an instance that declares itself HTTPS:
 /// [`cookies::set_cookie`] keys `Secure` on `X-Forwarded-Proto`, and a proxy
 /// that forgets the header would otherwise downgrade every session cookie
-/// without a trace. Outside the flash layer so its cookie is covered too;
-/// settings are read only for a response that sets a cookie.
+/// without a trace. Inside `request_cache_middleware`, so the settings read
+/// is a cache hit whenever the handler already loaded them, and only done
+/// for a response that sets a cookie. The flash layer's clearing cookie sits
+/// outside it on purpose: an expired, empty cookie carries nothing.
 async fn secure_cookies_middleware(
     State(ctx): State_,
     req: axum::extract::Request,

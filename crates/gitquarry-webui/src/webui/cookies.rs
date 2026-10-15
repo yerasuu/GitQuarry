@@ -47,31 +47,6 @@ pub(crate) fn is_https(headers: &HeaderMap) -> bool {
 /// A TLS proxy that forgets the header would still downgrade every cookie
 /// silently, so [`force_secure`] adds `Secure` back on every response once
 /// the instance's own `public_url` says it is served over HTTPS.
-/// Adds `Secure` to every `Set-Cookie` in `response` that lacks it. For an
-/// instance whose `ServerSettings::public_url` is `https://`, where no cookie
-/// may ever travel over plain HTTP whatever the proxy sends.
-pub(crate) fn force_secure(response: &mut axum::response::Response) {
-    let headers = response.headers_mut();
-    let lines: Vec<String> = headers
-        .get_all(axum::http::header::SET_COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .map(|line| {
-            if line.split(';').any(|attr| attr.trim().eq_ignore_ascii_case("secure")) {
-                line.to_string()
-            } else {
-                format!("{line}; Secure")
-            }
-        })
-        .collect();
-    headers.remove(axum::http::header::SET_COOKIE);
-    for line in lines {
-        if let Ok(value) = axum::http::HeaderValue::from_str(&line) {
-            headers.append(axum::http::header::SET_COOKIE, value);
-        }
-    }
-}
-
 pub(crate) fn set_cookie(
     headers: &HeaderMap,
     name: &str,
@@ -83,4 +58,27 @@ pub(crate) fn set_cookie(
         axum::http::header::SET_COOKIE,
         format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={max_age_secs}"),
     )
+}
+
+/// Adds `Secure` to every `Set-Cookie` in `response` that lacks it. For an
+/// instance whose `ServerSettings::public_url` is `https://`, where no cookie
+/// may ever travel over plain HTTP whatever the proxy sends. A value that
+/// isn't visible ASCII is kept untouched rather than dropped.
+pub(crate) fn force_secure(response: &mut axum::response::Response) {
+    use axum::http::{HeaderValue, header::SET_COOKIE};
+    let headers = response.headers_mut();
+    let values: Vec<HeaderValue> = headers
+        .get_all(SET_COOKIE)
+        .iter()
+        .map(|value| match value.to_str() {
+            Ok(line) if !line.split(';').any(|attr| attr.trim().eq_ignore_ascii_case("secure")) => {
+                HeaderValue::from_str(&format!("{line}; Secure")).unwrap_or_else(|_| value.clone())
+            }
+            _ => value.clone(),
+        })
+        .collect();
+    headers.remove(SET_COOKIE);
+    for value in values {
+        headers.append(SET_COOKIE, value);
+    }
 }
