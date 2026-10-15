@@ -25,26 +25,31 @@ One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh,
 
 ## Code
 
-- Comments in English, explain WHY (a constraint, a bug fix, an
-  invariant, a workaround, a causal chain), never WHAT the code
-  already shows. A comment is noise if deleting it loses no
-  information that isn't in the signature. Keep `// caches results
-  for 5 minutes because upstream poll interval changed (see #42)`;
-  drop `// Process each item`. Allowed human markers: `// SAFETY:`,
-  `// TODO`, `// FIXME`, `// NOTE`, `// HACK`, `// XXX`, `// WARN`,
-  plus any sentence with a causal keyword: `because`, `since`,
-  `so that`, `otherwise`, `to avoid`, `to prevent`, `to ensure`,
-  `until`, `once`, `due to`. If your comment has one of those
-  connectors, it's explaining WHY — keep it.
-  Caught by: `obvious-comment`.
-- Doc comments (`///`) document contracts and invariants for callers.
-  `# Arguments` / `# Returns` sections that restate types are noise.
-  A good doc comment answers "why does this exist?" or
-  "what contract must the caller uphold?", not "what does this return?".
-  `# Panics`, `# Errors`, `# Safety`, and `# Examples` sections are
-  always welcome. If at least one argument carries contractual info
-  (`must`, `ownership`, `borrowed`, `valid`, `non-empty`), the section
-  survives.
+- Comments are for a technical reader who can already read the code.
+  Write one only when it tells them something the code can't: why
+  this way and not the obvious one, a constraint from outside (git,
+  S3, a protocol, a browser), an invariant other code relies on, a
+  bug or race this avoids, what breaks if it changes, or where the
+  rest of the story lives (`see #42`, a module, an RFC). Name the
+  reason itself; no fixed wording or keyword is required, and none
+  makes a comment useful by itself.
+  - Don't narrate the code (`// loop over the refs`, `// return the
+    result`), restate a name or type, mark sections, log history
+    ("changed from X", "used to"; that is `git log`), or address the
+    reader of the diff instead of the reader of the file.
+  - Test: delete it. If a competent reader of this file loses nothing
+    they couldn't get from the code in front of them, it goes.
+  - `TODO`/`FIXME` say what is missing and what unblocks it;
+    `SAFETY:` states the invariant that makes the code sound.
+  - English, full sentences, as long as the reason needs and no
+    longer. Fix or delete a comment that the code no longer matches.
+  Caught by: `comment-restates-code`.
+- Doc comments (`///`, `//!`) are the contract for callers: why the
+  item exists, what the caller must uphold or can rely on (ownership,
+  validity, ordering, idempotence, what it never does), and its
+  `# Errors`/`# Panics`/`# Safety`/`# Examples`. Leave out what the
+  signature already says: an `# Arguments`/`# Returns` section that
+  restates the types is noise, one that states a precondition stays.
   Caught by: `doc-restates-signature`.
 - Validate at the edge (`validate.rs` per crate): repo path, rev,
   sha, tree path. Network input ends up as an FS path, an S3 key
