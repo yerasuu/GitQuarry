@@ -284,6 +284,25 @@ async fn still_signed_in(app: &axum::Router, session: &Session) -> bool {
     }
 }
 
+#[tokio::test]
+async fn sign_out_everywhere_ends_every_session_including_this_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, here) = app_with(dir.path(), false).await;
+    let elsewhere = Session::login(&app, "alice").await;
+    assert!(security_page(&app, &here).await.contains(r#"value="revoke_sessions""#));
+
+    let done = here
+        .post(&app, "/_account/security", &[("security_action", "revoke_sessions")])
+        .await;
+    assert_eq!(done.status, StatusCode::SEE_OTHER);
+    assert_eq!(done.headers[header::LOCATION], "/_login");
+    assert!(!still_signed_in(&app, &here).await);
+    assert!(!still_signed_in(&app, &elsewhere).await);
+    // A fresh login works as before.
+    let again = Session::login(&app, "alice").await;
+    assert!(still_signed_in(&app, &again).await);
+}
+
 /// Removing an SSH key is how an owner answers "this key leaked": web
 /// sessions opened while it was valid must not outlive it.
 #[tokio::test]

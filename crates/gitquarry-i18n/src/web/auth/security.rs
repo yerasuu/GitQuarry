@@ -150,6 +150,16 @@ msg!(reauth_hint() {
 });
 msg!(new_password_label() { Locale::Es => "contraseña nueva", Locale::En => "new password" });
 msg!(confirm_password_label() { Locale::Es => "repite la contraseña nueva", Locale::En => "repeat the new password" });
+msg!(sessions_heading() { Locale::Es => "sesiones", Locale::En => "sessions" });
+msg!(sessions_hint() {
+    Locale::Es => "Cierra todas las sesiones web abiertas con esta cuenta, en cualquier navegador, también esta. Cambiar la contraseña o quitar una clave SSH o una passkey ya lo hace.",
+    Locale::En => "Signs out every web session of this account, in any browser, this one included. Changing the password or removing an SSH key or a passkey already does it.",
+});
+msg!(revoke_sessions_button() { Locale::Es => "cerrar sesión en todas partes", Locale::En => "sign out everywhere" });
+msg!(revoke_sessions_confirm() {
+    Locale::Es => "¿cerrar todas las sesiones? tendrás que volver a iniciar sesión aquí también.",
+    Locale::En => "sign out every session? you'll have to sign in again here too.",
+});
 msg!(password_mismatch() {
     Locale::Es => "las dos contraseñas no coinciden",
     Locale::En => "the two passwords don't match",
