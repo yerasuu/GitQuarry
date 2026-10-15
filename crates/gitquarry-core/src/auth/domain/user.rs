@@ -534,9 +534,9 @@ pub async fn confirm_totp(
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     let secret = user
         .totp_secret
-        .clone()
+        .as_deref()
         .with_context(|| gitquarry_i18n::shared::auth::no_pending_totp_enrollment(locale))?;
-    if !totp::verify_code(&secret, code) {
+    if !totp::verify_code(secret, code) {
         bail!("{}", gitquarry_i18n::shared::auth::incorrect_code(locale));
     }
     let (plaintext, hashed) = fresh_recovery_codes()?;

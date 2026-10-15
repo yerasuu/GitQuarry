@@ -17,7 +17,7 @@ fn test_state(root: &std::path::Path, name: &str, web_base_url: String) -> Arc<F
             web_base_url: web_base_url.clone(),
             git_base_url: web_base_url,
         }),
-        ..(*federation_state(root, "http://127.0.0.1:1")).clone()
+        ..Arc::unwrap_or_clone(federation_state(root, "http://127.0.0.1:1"))
     })
 }
 

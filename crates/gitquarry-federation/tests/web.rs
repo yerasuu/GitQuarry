@@ -9,7 +9,7 @@ use std::sync::Arc;
 fn with_public_max(root: &std::path::Path, public_max: u32) -> Arc<FederationState> {
     Arc::new(FederationState {
         rate_limit_public_max: public_max,
-        ..(*federation_state(root, "http://127.0.0.1:1")).clone()
+        ..Arc::unwrap_or_clone(federation_state(root, "http://127.0.0.1:1"))
     })
 }
 

@@ -109,7 +109,7 @@ async fn release_and_asset_roundtrip_and_delete_cleanly() {
     // must never be touched by this tag's delete.
     let other = ReleaseMeta {
         tag: "v1.0.1".to_string(),
-        ..release.clone()
+        ..release
     };
     remote.put_release(&other, None).await.unwrap();
 

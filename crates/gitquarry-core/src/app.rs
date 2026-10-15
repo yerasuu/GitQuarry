@@ -226,7 +226,7 @@ impl Locks {
         // Repos nobody is using (only the map's own ref left) get dropped:
         // without this the map grows with every distinct path requested.
         map.retain(|_, m| Arc::strong_count(m) > 1);
-        map.entry(repo.to_string()).or_default().clone()
+        Arc::clone(map.entry(repo.to_string()).or_default())
     }
 }
 

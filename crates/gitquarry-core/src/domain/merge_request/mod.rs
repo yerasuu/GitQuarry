@@ -164,11 +164,12 @@ pub async fn create(
     new: NewMergeRequest<'_>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<MergeRequestMeta> {
+    let fork_remote;
     let source_remote = if new.source_repo == &target.uid {
-        target.remote.clone()
+        &target.remote
     } else {
-        let source_remote = ctx.remote_for_uid(new.source_repo);
-        let (source_config, etag) = source_remote.get_repo_config().await?;
+        fork_remote = ctx.remote_for_uid(new.source_repo);
+        let (source_config, etag) = fork_remote.get_repo_config().await?;
         if etag.is_none() {
             bail!(
                 "{}",
@@ -181,9 +182,9 @@ pub async fn create(
                 gitquarry_i18n::shared::merge_request::source_repo_not_a_fork(locale)
             );
         }
-        source_remote
+        &fork_remote
     };
-    if !branch_exists(&source_remote, new.source_branch).await? {
+    if !branch_exists(source_remote, new.source_branch).await? {
         bail!(
             "{}",
             gitquarry_i18n::shared::repo::not_a_branch(locale, new.source_branch)
@@ -196,7 +197,7 @@ pub async fn create(
         );
     }
 
-    let (title, description) = resolve_title_and_description(ctx, target, &source_remote, &new, locale).await?;
+    let (title, description) = resolve_title_and_description(ctx, target, source_remote, &new, locale).await?;
 
     let backend = ctx.backend();
     let number = merge_requests::next_mr_number(backend.as_ref(), &ctx.cipher, &target.uid).await?;
@@ -1110,7 +1111,7 @@ pub async fn merge(
                 gitquarry_i18n::shared::merge_request::merge_request_not_fast_forwardable(locale, &mr.target_branch)
             );
         }
-        head_sha.clone()
+        head_sha
     } else {
         let (merger_name, merger_email) = merger_identity(ctx, merged_by).await?;
         // Loaded (and, the very first time, generated) only on the path

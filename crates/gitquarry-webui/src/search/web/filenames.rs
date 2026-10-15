@@ -78,7 +78,7 @@ async fn search_one(ctx: &AppContext, repo: &str, query: &str) -> Option<(String
     if let Some(uid) = super::repo_uid_if_local(ctx, repo).await
         && let Ok((Some(index), _etag)) =
             gitquarry_core::storage::search_index::get_search_index(ctx.backend().as_ref(), &ctx.cipher, &uid).await
-        && let Some(head) = index.last_indexed_sha.clone()
+        && let Some(head) = index.last_indexed_sha
     {
         let query_lower = query.to_ascii_lowercase();
         let matches = index

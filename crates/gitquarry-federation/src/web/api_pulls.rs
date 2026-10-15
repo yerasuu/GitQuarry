@@ -215,17 +215,16 @@ pub(crate) async fn handler_create_post(State(state): State_, headers: HeaderMap
         Ok(owner) => owner,
         Err(resp) => return *resp,
     };
-    let source_repo = if form.source_repo.trim().is_empty() {
-        form.repo.clone()
-    } else {
-        form.source_repo.trim().to_string()
+    let source_repo = match form.source_repo.trim() {
+        "" => form.repo.as_str(),
+        trimmed => trimmed,
     };
     // The MR exposes the source branch's commits to everyone who can see
     // the target, so the token must be able to read the source too —
     // otherwise a reporter on a public repo could lift branches out of a
     // private fork it has no access to.
     if source_repo != form.repo
-        && let Err(resp) = authorize_read(&state, &headers, &source_repo).await
+        && let Err(resp) = authorize_read(&state, &headers, source_repo).await
     {
         return *resp;
     }
@@ -233,7 +232,7 @@ pub(crate) async fn handler_create_post(State(state): State_, headers: HeaderMap
         .core
         .create_merge_request(&crate::core_client::CreateMergeRequest {
             repo: &form.repo,
-            source_repo: &source_repo,
+            source_repo,
             source_branch: form.source_branch.trim(),
             target_branch: form.target_branch.trim(),
             title: form.title.trim(),

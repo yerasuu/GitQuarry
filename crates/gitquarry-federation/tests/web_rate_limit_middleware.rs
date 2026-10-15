@@ -14,7 +14,7 @@ fn test_state(root: &std::path::Path, peer_override_by_ip: bool) -> Arc<Federati
     Arc::new(FederationState {
         rate_limit_public_max: 1,
         rate_limit_peer_override_by_ip: peer_override_by_ip,
-        ..(*federation_state(root, "http://127.0.0.1:1")).clone()
+        ..Arc::unwrap_or_clone(federation_state(root, "http://127.0.0.1:1"))
     })
 }
 
