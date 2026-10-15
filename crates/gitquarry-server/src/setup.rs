@@ -86,29 +86,19 @@ type State_ = axum::extract::State<Arc<WizardState>>;
 /// so the page it serves reads as setup and not as some repository.
 const SETUP_PATH: &str = "/_setup";
 
-/// A fresh 192-bit setup token, hex — what `crate::serve::run` hands to
-/// [`run`]. Per process, never stored: a restart mints another.
-pub fn new_token() -> String {
-    let raw: [u8; 24] = rand::random();
-    raw.iter().fold(String::with_capacity(48), |mut s, b| {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
-
 /// Serves the wizard until one submit succeeds.
 ///
 /// `token` gates every request (see the module doc) and is logged with the
-/// setup URL, so it must be unguessable — [`new_token`] — and never empty.
-pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>, token: &str) -> Result<WizardOutcome> {
+/// setup URL, so it must be unguessable — `gitquarry_auth_crypto::random_token`,
+/// minted per process and never stored — and never empty.
+pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>, token: String) -> Result<WizardOutcome> {
     ensure!(!token.is_empty(), "setup token can't be empty");
     let is_prefilled = prefill.is_some();
     let (result_tx, result_rx) = oneshot::channel();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let state = Arc::new(WizardState {
         config_path: config_path.to_path_buf(),
-        token: token.to_string(),
+        token,
         prefill,
         result_tx: Mutex::new(Some(result_tx)),
         shutdown_tx: Mutex::new(Some(shutdown_tx)),
@@ -118,19 +108,20 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>, t
         .route("/", get(|| async { Redirect::to(SETUP_PATH) }))
         .route(SETUP_PATH, get(handler_get).post(handler_post))
         .merge(gitquarry_webui::webui::asset_routes())
-        .with_state(state);
+        .with_state(Arc::clone(&state));
 
     let listener = tokio::net::TcpListener::bind(web_bind)
         .await
         .with_context(|| format!("couldn't listen on {web_bind} for the setup wizard"))?;
     info!(
-        "{} — open http://{web_bind}{SETUP_PATH}?token={token} to {}; \
+        "{} — open http://{web_bind}{SETUP_PATH}?token={} to {}; \
          this token dies with the process",
         if is_prefilled {
             format!("{} connects but has no admin user yet", config_path.display())
         } else {
             format!("couldn't find {}", config_path.display())
         },
+        state.token,
         if is_prefilled {
             "create one"
         } else {

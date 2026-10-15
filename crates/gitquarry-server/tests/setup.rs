@@ -26,7 +26,7 @@ async fn start(config_path: &Path, prefill: Option<Prefill>) -> Wizard {
         .port();
     let bind = format!("127.0.0.1:{port}");
     let config_path = config_path.to_path_buf();
-    let handle = tokio::spawn(async move { setup::run(&config_path, &bind, prefill, TOKEN).await });
+    let handle = tokio::spawn(async move { setup::run(&config_path, &bind, prefill, TOKEN.to_string()).await });
     let wizard = Wizard {
         base: format!("http://127.0.0.1:{port}"),
         url: format!("http://127.0.0.1:{port}/_setup"),

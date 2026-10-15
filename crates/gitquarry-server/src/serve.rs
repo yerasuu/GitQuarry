@@ -172,7 +172,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
                         name: bucket,
                         bucket_cfg,
                     }),
-                    &setup::new_token(),
+                    gitquarry_auth_crypto::random_token(),
                 )
                 .await?;
                 (
@@ -203,7 +203,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             // `allow_push_create`/`trust_forwarded_for` are both off too until an
             // operator opts in by hand.
             let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
-            let outcome = setup::run(&config_path, &web_bind, None, &setup::new_token()).await?;
+            let outcome = setup::run(&config_path, &web_bind, None, gitquarry_auth_crypto::random_token()).await?;
             (
                 outcome.bucket,
                 outcome.bucket_cfg,
