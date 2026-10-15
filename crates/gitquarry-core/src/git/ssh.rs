@@ -417,6 +417,8 @@ async fn pump_data(handle: &Handle, channel: ChannelId, mut r: impl AsyncRead + 
     let mut buf = [0u8; STDOUT_CHUNK];
     loop {
         match r.read(&mut buf).await {
+            // A read error ends the pump like EOF does, since the exit status
+            // sent after both pumps is what tells the client how it ended.
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 if handle.data(channel, buf[..n].to_vec()).await.is_err() {
@@ -431,6 +433,8 @@ async fn pump_extended_data(handle: &Handle, channel: ChannelId, mut r: impl Asy
     let mut buf = [0u8; STDERR_CHUNK];
     loop {
         match r.read(&mut buf).await {
+            // A read error ends the pump like EOF does, since the exit status
+            // sent after both pumps is what tells the client how it ended.
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 // ext == 1: SSH_EXTENDED_DATA_STDERR.

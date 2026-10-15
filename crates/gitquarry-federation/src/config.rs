@@ -170,6 +170,8 @@ fn absolutize(path: PathBuf) -> PathBuf {
     }
     match std::env::current_dir() {
         Ok(cwd) => cwd.join(path),
+        // Left relative since an unreadable cwd leaves nothing to anchor it
+        // to; whatever opens the path next reports the real failure.
         Err(_) => path,
     }
 }

@@ -812,6 +812,8 @@ pub async fn conflicts(
     match git::merge_tree(git_dir, &target_sha, &head_sha, None).await {
         Ok(git::MergeTreeOutcome::Conflicted(paths)) => Ok(Some(paths)),
         Ok(git::MergeTreeOutcome::Clean(_)) => Ok(None),
+        // Any failure is "can't tell" here, because this only decorates a
+        // page (see the doc above); a merge attempt reports the real reason.
         Err(_) => Ok(None),
     }
 }

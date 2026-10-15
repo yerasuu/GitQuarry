@@ -305,7 +305,14 @@ pub async fn apply_ban_event(
 pub async fn push_ban_event(backend: &dyn Backend, cipher: &Cipher, event: &BanEventWire) {
     let sisters = match access::list_all_peers(backend, cipher).await {
         Ok(peers) => peers.into_iter().filter(|p| p.sister_confirmed).collect::<Vec<_>>(),
-        Err(_) => return,
+        Err(e) => {
+            tracing::warn!(
+                target: "gitquarry_federation::sister",
+                error = %format!("{e:#}"),
+                "sister ban-event push skipped: couldn't list peers"
+            );
+            return;
+        }
     };
     for sister in sisters {
         let Ok(Some(secret)) = credential_for(backend, cipher, &sister.name).await else {

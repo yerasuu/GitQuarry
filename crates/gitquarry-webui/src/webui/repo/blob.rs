@@ -70,6 +70,8 @@ pub async fn render_blob(
                 }
             }
         }
+        // Shown as binary since invalid UTF-8 is the only way `from_utf8`
+        // fails, and such bytes can't render as text.
         Err(_) => {
             html! {
                 (PreEscaped(breadcrumbs))

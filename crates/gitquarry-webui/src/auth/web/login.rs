@@ -257,6 +257,8 @@ pub(crate) async fn login_enforced(ctx: &AppContext) -> bool {
     match gitquarry_core::auth::access::password_login_count(ctx.backend().as_ref(), &ctx.cipher).await {
         Ok(Some(count)) => count > 0,
         Ok(None) => false,
+        // Fails closed because an unreadable counter is "can't tell", and
+        // can't-tell keeps the gate shut (see the doc above).
         Err(_) => true,
     }
 }

@@ -203,6 +203,8 @@ pub(crate) async fn handler_create_post(
         ($msg:expr) => {{
             let refs = match ctx.open_mirror_read(&resolved).await {
                 Ok(mirror) => gitquarry_core::git::list_refs(&mirror.path).await.unwrap_or_default(),
+                // Empty because a mirror that won't open costs the datalist,
+                // not the retry (see above).
                 Err(_) => Vec::new(),
             };
             let ref_names: Vec<&str> = refs.iter().filter_map(|r| r.strip_prefix("refs/heads/")).collect();
