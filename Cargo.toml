@@ -81,7 +81,7 @@ sha2 = "0.11.0"
 subtle = "2.6.1"
 tempfile = "3.27.0"
 tokio = "1.53.2"
-toml = "1.1.8+spec-1.1.0"
+toml = "1.1.8"
 tracing = "0.1.44"
 
 [profile.release]
