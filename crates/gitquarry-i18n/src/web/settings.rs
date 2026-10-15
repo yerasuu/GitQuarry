@@ -21,8 +21,8 @@ msg!(settings_web_bind_label() { Locale::Es => "web-bind", Locale::En => "web-bi
 msg!(settings_ssh_bind_label() { Locale::Es => "ssh-bind", Locale::En => "ssh-bind" });
 msg!(settings_public_url_label() { Locale::Es => "URL pública", Locale::En => "public URL" });
 msg!(settings_public_url_hint() {
-    Locale::Es => "La dirección con la que se llega a esta instancia. Las passkeys quedan ligadas a su dominio y siguen desactivadas mientras esté vacía.",
-    Locale::En => "The address this instance is reached at. Passkeys are bound to its domain and stay off while it is empty.",
+    Locale::Es => "La dirección con la que se llega a esta instancia. Las passkeys quedan ligadas a su dominio y siguen desactivadas mientras esté vacía. Si empieza por https://, las cookies llevan siempre Secure aunque el proxy no envíe X-Forwarded-Proto.",
+    Locale::En => "The address this instance is reached at. Passkeys are bound to its domain and stay off while it is empty. If it starts with https://, cookies always carry Secure even when the proxy sends no X-Forwarded-Proto.",
 });
 msg!(settings_public_url_invalid() {
     Locale::Es => "la URL pública debe ser https:// (o http://localhost) y nombrar un dominio, no una dirección IP",

@@ -182,7 +182,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use gitquarry_core::app::AppContext;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 pub(crate) type State_ = axum::extract::State<Arc<AppContext>>;
 
@@ -761,6 +761,10 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             request_cache_middleware,
         ))
         .layer(axum::middleware::from_fn(flash_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&ctx),
+            secure_cookies_middleware,
+        ))
         .layer(axum::middleware::from_fn(security_headers))
         // Every HTML/CSS/JS response this app sends is compressible text
         // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
@@ -851,6 +855,41 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
         && let Ok(cookie) = axum::http::HeaderValue::from_str(&cookie)
     {
         response.headers_mut().append(name, cookie);
+    }
+    response
+}
+
+/// Keeps cookies off plain HTTP on an instance that declares itself HTTPS:
+/// [`cookies::set_cookie`] keys `Secure` on `X-Forwarded-Proto`, and a proxy
+/// that forgets the header would otherwise downgrade every session cookie
+/// without a trace. Outside the flash layer so its cookie is covered too;
+/// settings are read only for a response that sets a cookie.
+async fn secure_cookies_middleware(
+    State(ctx): State_,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut response = next.run(req).await;
+    if !response.headers().contains_key(axum::http::header::SET_COOKIE) {
+        return response;
+    }
+    match gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await {
+        Ok((settings, _)) => {
+            let is_https = settings
+                .public_url
+                .as_deref()
+                .and_then(|url| url.get(..8))
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+            if is_https {
+                cookies::force_secure(&mut response);
+            }
+        }
+        // Fails open to the per-request answer rather than failing the
+        // response: the cookie still gets `Secure` whenever the proxy said
+        // https, as before this layer existed.
+        Err(e) => {
+            warn!(target: "webui::cookies", error = %e, "couldn't read settings; Secure follows X-Forwarded-Proto only")
+        }
     }
     response
 }

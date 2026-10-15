@@ -44,6 +44,34 @@ pub(crate) fn is_https(headers: &HeaderMap) -> bool {
 /// should not be handing its session cookie to a plain-HTTP request. Keyed
 /// on the request, so both deployments get the right answer without a
 /// config knob to set wrong. `max_age_secs = 0` clears the cookie (logout).
+/// A TLS proxy that forgets the header would still downgrade every cookie
+/// silently, so [`force_secure`] adds `Secure` back on every response once
+/// the instance's own `public_url` says it is served over HTTPS.
+/// Adds `Secure` to every `Set-Cookie` in `response` that lacks it. For an
+/// instance whose `ServerSettings::public_url` is `https://`, where no cookie
+/// may ever travel over plain HTTP whatever the proxy sends.
+pub(crate) fn force_secure(response: &mut axum::response::Response) {
+    let headers = response.headers_mut();
+    let lines: Vec<String> = headers
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .map(|line| {
+            if line.split(';').any(|attr| attr.trim().eq_ignore_ascii_case("secure")) {
+                line.to_string()
+            } else {
+                format!("{line}; Secure")
+            }
+        })
+        .collect();
+    headers.remove(axum::http::header::SET_COOKIE);
+    for line in lines {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&line) {
+            headers.append(axum::http::header::SET_COOKIE, value);
+        }
+    }
+}
+
 pub(crate) fn set_cookie(
     headers: &HeaderMap,
     name: &str,
