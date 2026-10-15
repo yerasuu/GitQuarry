@@ -52,9 +52,19 @@ pub async fn list(ctx: &AppContext, owner_uid: &Uid) -> Result<Vec<Passkey>> {
     access::list_passkeys_for_owner(ctx.backend().as_ref(), &ctx.cipher, owner_uid).await
 }
 
-/// Removes `owner_uid`'s passkey stored under `key`. A key that isn't
+/// Removes `owner`'s passkey stored under `key` and ends their web
+/// sessions, since removing a credential is how an owner answers "this
+/// device is gone" (see [`super::user::revoke_sessions`]). A key that isn't
 /// theirs (or doesn't exist) is a no-op, never someone else's removal.
-pub async fn remove(ctx: &AppContext, owner_uid: &Uid, key: &str) -> Result<bool> {
+pub async fn remove(ctx: &AppContext, owner: &User, key: &str, locale: gitquarry_i18n::Locale) -> Result<bool> {
+    if !remove_record(ctx, &owner.uid, key).await? {
+        return Ok(false);
+    }
+    super::user::revoke_sessions(ctx, &owner.username, locale).await?;
+    Ok(true)
+}
+
+async fn remove_record(ctx: &AppContext, owner_uid: &Uid, key: &str) -> Result<bool> {
     let backend = ctx.backend();
     let (Some(passkey), _) = Passkey::get(backend.as_ref(), &ctx.cipher, key).await? else {
         return Ok(false);
@@ -74,7 +84,7 @@ pub(crate) async fn remove_all(ctx: &AppContext, owner_uid: &Uid) {
         return;
     };
     for passkey in passkeys {
-        let _ = remove(ctx, owner_uid, &passkey.key).await;
+        let _ = remove_record(ctx, owner_uid, &passkey.key).await;
     }
 }
 

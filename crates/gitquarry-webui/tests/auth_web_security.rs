@@ -273,3 +273,32 @@ async fn a_security_post_without_the_session_csrf_token_is_refused() {
     assert_eq!(send(&app, request).await.status, StatusCode::BAD_REQUEST);
     assert!(alice(&ctx).await.0.totp_secret.is_none());
 }
+
+/// Whether `session` still reaches the page — the page redirects to
+/// `/_login` once the cookie stops resolving.
+async fn still_signed_in(app: &axum::Router, session: &Session) -> bool {
+    match session.get(app, "/_account/security").await.status {
+        StatusCode::OK => true,
+        StatusCode::SEE_OTHER => false,
+        other => panic!("unexpected {other}"),
+    }
+}
+
+/// Removing an SSH key is how an owner answers "this key leaked": web
+/// sessions opened while it was valid must not outlive it.
+#[tokio::test]
+async fn removing_an_ssh_key_ends_open_web_sessions() {
+    const PUBKEY: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK787z0ABFAXS4w2j6x8H+c/+hhOEFYZwauXxV9nstMy alice@laptop";
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, app, session) = app_with(dir.path(), false).await;
+    let locale = gitquarry_i18n::Locale::En;
+    domain::user::add_pubkey(&ctx, "alice", PUBKEY, locale).await.unwrap();
+    assert!(still_signed_in(&app, &session).await);
+
+    let fingerprint = gitquarry_core::auth::access::key_fingerprint(PUBKEY).unwrap();
+    domain::user::remove_pubkey(&ctx, "alice", &fingerprint, locale)
+        .await
+        .unwrap();
+    assert!(!still_signed_in(&app, &session).await);
+}

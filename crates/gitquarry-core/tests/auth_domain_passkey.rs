@@ -6,6 +6,7 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain::passkey::{self, Assertion, PasskeyRefusal};
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::User;
+use gitquarry_i18n::Locale;
 use gitquarry_test_support::authenticator::{Authenticator, Key, UP, UV};
 use gitquarry_test_support::{account, ctx};
 
@@ -173,11 +174,31 @@ async fn only_the_owner_removes_a_passkey_and_a_removed_one_no_longer_signs_in()
     enroll(&ctx, &alice, &key, "laptop").await.unwrap();
     let stored = passkey::list(&ctx, &alice.uid).await.unwrap().remove(0);
 
-    assert!(!passkey::remove(&ctx, &bob.uid, &stored.key).await.unwrap());
-    assert!(sign_in(&ctx, &key, 0, None).await.is_ok());
+    let epoch = |name: &'static str| {
+        let ctx = &ctx;
+        async move {
+            gitquarry_core::auth::access::get_user(ctx.backend().as_ref(), &ctx.cipher, name)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .session_epoch
+        }
+    };
+    let (alice_before, bob_before) = (epoch("alice").await, epoch("bob").await);
 
-    assert!(passkey::remove(&ctx, &alice.uid, &stored.key).await.unwrap());
+    assert!(!passkey::remove(&ctx, &bob, &stored.key, Locale::DEFAULT).await.unwrap());
+    assert!(sign_in(&ctx, &key, 0, None).await.is_ok());
+    assert_eq!(epoch("bob").await, bob_before);
+
+    assert!(
+        passkey::remove(&ctx, &alice, &stored.key, Locale::DEFAULT)
+            .await
+            .unwrap()
+    );
     assert!(passkey::list(&ctx, &alice.uid).await.unwrap().is_empty());
+    // Alice's open web sessions die with the passkey.
+    assert_ne!(epoch("alice").await, alice_before);
     assert_eq!(
         sign_in(&ctx, &key, 0, None).await.unwrap_err(),
         PasskeyRefusal::UnknownCredential

@@ -372,11 +372,25 @@ pub async fn remove_pubkey(
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.pubkeys
         .retain(|k| access::key_fingerprint(k).map(|fp| fp != fingerprint).unwrap_or(true));
+    // Removing a key is how an owner answers "this key leaked", so web
+    // sessions issued while it was valid go too — see [`set_password`].
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     if cas == Cas::Ok {
         access::release_pubkey(ctx.backend().as_ref(), fingerprint).await;
     }
     Ok(cas)
+}
+
+/// Ends every web session of `username`, the caller's own included: the
+/// "sign out everywhere" action, and what each credential removal does on
+/// its way out. Bumps `User::session_epoch` and touches nothing else.
+///
+/// `Err` if `username` doesn't exist.
+pub async fn revoke_sessions(ctx: &AppContext, username: &str, locale: gitquarry_i18n::Locale) -> Result<Cas> {
+    let (mut user, etag) = require_user(ctx, username, locale).await?;
+    user.session_epoch = user.session_epoch.wrapping_add(1);
+    access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await
 }
 
 /// No global uniqueness claim, unlike [`add_pubkey`] — see [`crate::auth::entities::User::gpg_keys`]'s
