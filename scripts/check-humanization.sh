@@ -12,7 +12,12 @@ report() {
 
 # Local pre-commit hook: scan what's staged. In CI there's nothing staged
 # on a plain checkout, so diff the PR against its base branch instead.
-if [ -n "${GITHUB_BASE_REF:-}" ]; then
+# `--all` scans every tracked file, so a backlog that predates the hook
+# shows up too instead of only what the next commit touches.
+if [ "${1:-}" = "--all" ]; then
+    range="origin/master..HEAD"
+    files=$(git ls-files -- '*.rs')
+elif [ -n "${GITHUB_BASE_REF:-}" ]; then
     git fetch --depth=1 origin "$GITHUB_BASE_REF" >/dev/null 2>&1
     range="origin/${GITHUB_BASE_REF}...HEAD"
     files=$(git diff --name-only --diff-filter=ACM "$range" -- '*.rs')
