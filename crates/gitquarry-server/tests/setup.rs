@@ -8,6 +8,9 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
+/// What the server would have logged with the setup URL.
+const TOKEN: &str = "0123456789abcdef";
+
 struct Wizard {
     base: String,
     url: String,
@@ -23,7 +26,7 @@ async fn start(config_path: &Path, prefill: Option<Prefill>) -> Wizard {
         .port();
     let bind = format!("127.0.0.1:{port}");
     let config_path = config_path.to_path_buf();
-    let handle = tokio::spawn(async move { setup::run(&config_path, &bind, prefill).await });
+    let handle = tokio::spawn(async move { setup::run(&config_path, &bind, prefill, TOKEN.to_string()).await });
     let wizard = Wizard {
         base: format!("http://127.0.0.1:{port}"),
         url: format!("http://127.0.0.1:{port}/_setup"),
@@ -61,10 +64,23 @@ fn encode(fields: &[(&str, &str)]) -> String {
 
 impl Wizard {
     async fn get(&self) -> String {
-        self.http.get(&self.url).send().await.unwrap().text().await.unwrap()
+        self.http
+            .get(format!("{}?token={TOKEN}", self.url))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
     }
 
     async fn post(&self, fields: &[(&str, &str)]) -> (u16, String) {
+        let mut with_token = vec![("token", TOKEN)];
+        with_token.extend_from_slice(fields);
+        self.post_raw(&with_token).await
+    }
+
+    async fn post_raw(&self, fields: &[(&str, &str)]) -> (u16, String) {
         let resp = self
             .http
             .post(&self.url)
@@ -117,6 +133,35 @@ async fn the_root_sends_to_setup_and_the_form_posts_back_there() {
     assert_eq!(root.status().as_u16(), 303);
     assert_eq!(root.headers()["location"], "/_setup");
     assert!(wizard.get().await.contains(r#"<form method="post" action="/_setup">"#));
+}
+
+/// The wizard answers before any account exists: reaching the port first
+/// must not be enough to read the form or to create the admin.
+#[tokio::test]
+async fn without_the_logged_token_the_wizard_shows_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gitquarry.toml");
+    let bucket = dir.path().join("bucket");
+    std::fs::create_dir(&bucket).unwrap();
+    let wizard = start(&config, None).await;
+
+    for url in [wizard.url.clone(), format!("{}?token=wrong", wizard.url)] {
+        let resp = wizard.http.get(&url).send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{url}");
+        assert!(!resp.text().await.unwrap().contains("admin_password"), "{url}");
+    }
+
+    let bucket = bucket.to_string_lossy().to_string();
+    let fields = with_admin(&[("driver", "local"), ("local_bucket", bucket.as_str())]);
+    let (status, _) = wizard.post_raw(&fields).await;
+    assert_eq!(status, 403);
+    let mut wrong = vec![("token", "wrong")];
+    wrong.extend_from_slice(&fields);
+    let (status, _) = wizard.post_raw(&wrong).await;
+    assert_eq!(status, 403);
+
+    assert!(!config.exists());
+    assert!(!wizard.handle.is_finished());
 }
 
 /// The wizard is its own short-lived server, so it has to serve the

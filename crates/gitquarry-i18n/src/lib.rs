@@ -59,6 +59,15 @@ impl Locale {
             _ => None,
         }
     }
+
+    /// The BCP 47 tag, for `<html lang>` — what screen readers and
+    /// hyphenation pick a language by.
+    pub fn code(self) -> &'static str {
+        match self {
+            Locale::Es => "es",
+            Locale::En => "en",
+        }
+    }
 }
 
 /// Defines one catalog entry as a real function taking `Locale` first, then

@@ -19,12 +19,14 @@
 //! belongs to the *instance*, not any one of its users.
 
 use crate::access;
-use crate::entities::Peer;
+use crate::entities::{Peer, PeerAccessLevel};
 use crate::time::{format_unix_secs, now_secs};
+use crate::validate::validate_git_base_url;
 use anyhow::{Result, bail};
 use gitquarry_wire::Uid;
-use s3db::{Backend, Cipher};
+use s3db::{Backend, Cas, Cipher};
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 /// The pseudo-user a sister handshake secret is filed under —
 /// `PeerCredential` storage is per-user by design, but this credential
@@ -62,11 +64,15 @@ pub struct SisterBanEntry {
     pub banned_at: Option<String>,
 }
 
-/// Admin/moderator action: `Err` if `name` isn't linked at all, or was
-/// auto-linked via gossip. Only sets the *local* flag — the actual
-/// handshake attempt (an outbound HTTP call) is the caller's job
-/// (`web::peers`), same domain/web split every other action here follows.
-pub async fn request(backend: &dyn Backend, cipher: &Cipher, name: &str) -> Result<()> {
+/// Admin/moderator action: `Err` if `name` isn't linked at all, was
+/// auto-linked via gossip, or is already a sister. Raises the *local* flag
+/// and stages a fresh handshake secret for `name`, returned for the
+/// caller to offer in the handshake — the outbound HTTP call itself is the
+/// caller's job (`web::peers`), same domain/web split every other action
+/// here follows. Staged, the secret authenticates nothing yet
+/// ([`sister_by_secret`] only considers confirmed sisters); it only lets
+/// [`verify_staged_secret`] vouch for it when `name` dials back.
+pub async fn request(backend: &dyn Backend, cipher: &Cipher, name: &str) -> Result<String> {
     let (peer, etag) = Peer::get(backend, cipher, name).await?;
     let Some(mut peer) = peer else {
         bail!("no such linked peer: {name}");
@@ -74,9 +80,37 @@ pub async fn request(backend: &dyn Backend, cipher: &Cipher, name: &str) -> Resu
     if peer.auto_linked {
         bail!("'{name}' was auto-linked via gossip — sister status requires a manually-linked peer");
     }
+    if peer.sister_confirmed {
+        bail!("'{name}' is already a sister");
+    }
     peer.sister_requested = true;
     peer.put(backend, cipher, etag.as_deref()).await?;
-    Ok(())
+    let secret = access::generate_secret();
+    access::set_peer_credential(backend, cipher, &instance_uid(), name, &secret, "sister handshake").await?;
+    Ok(secret)
+}
+
+/// Inbound `POST /_federation/sister/verify`, the other half of
+/// [`receive_handshake`]'s dial-back: `true` only if this instance itself
+/// staged (or already confirmed) exactly `secret` for `peer_name`.
+pub async fn verify_staged_secret(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    peer_name: &str,
+    secret: &str,
+) -> Result<bool> {
+    let Some(peer) = access::get_peer(backend, cipher, peer_name).await? else {
+        return Ok(false);
+    };
+    if peer.auto_linked || !(peer.sister_requested || peer.sister_confirmed) {
+        return Ok(false);
+    }
+    let stored = access::get_peer_credential(backend, cipher, &instance_uid(), peer_name).await?;
+    Ok(stored.is_some_and(|c| secrets_match(&c.secret, secret)))
+}
+
+fn secrets_match(stored: &str, offered: &str) -> bool {
+    bool::from(stored.as_bytes().ct_eq(offered.as_bytes()))
 }
 
 /// Inbound `POST /_federation/sister/handshake`: `true` only if this side
@@ -84,23 +118,29 @@ pub async fn request(backend: &dyn Backend, cipher: &Cipher, name: &str) -> Resu
 /// one-sided request is stored (via [`request`]) but never confirms
 /// anything by itself.
 ///
-/// `instance_name` in the request body is an unauthenticated, self-chosen
-/// claim — this call can't verify the caller actually controls
-/// `announcer_name`'s registered `web_base_url` (that needs a dial-back
-/// verification this protocol doesn't do yet). To at least bound the
-/// damage a spoofed claim can do: once a secret is confirmed for
-/// `announcer_name`, a later call can only replay that exact secret
-/// (idempotent retry of a lost response), never overwrite it with a
-/// different one, and `sister_requested` is cleared on success so the
-/// one-shot request/confirm cycle can't be replayed again after the fact.
+/// `announcer_name` is a self-chosen claim in the request body, so before
+/// confirming anything this dials back the URL *this* instance registered
+/// for `announcer_name` and asks it to vouch for `secret` under `own_name`
+/// (this instance's own name as the peer knows it). Only the instance
+/// that really staged that secret can say yes, so a stranger can neither
+/// confirm a pending request nor plant a secret of its choosing. Once
+/// confirmed, a later handshake may only replay that exact secret (idempotent
+/// retry of a lost response), never overwrite it.
+///
+/// # Errors
+///
+/// An invalid name or secret, a storage failure, or a dial-back that
+/// couldn't reach the peer at all.
 pub async fn receive_handshake(
     backend: &dyn Backend,
     cipher: &Cipher,
+    own_name: &str,
     announcer_name: &str,
     secret: &str,
 ) -> Result<bool> {
-    let (peer, etag) = Peer::get(backend, cipher, announcer_name).await?;
-    let Some(mut peer) = peer else {
+    access::validate_peer_name(announcer_name)?;
+    access::validate_peer_credential(secret, "")?;
+    let Some(peer) = access::get_peer(backend, cipher, announcer_name).await? else {
         return Ok(false);
     };
     if peer.auto_linked {
@@ -113,14 +153,22 @@ pub async fn receive_handshake(
     // retry path this comment documents permanently unreachable.
     if peer.sister_confirmed {
         let current = access::get_peer_credential(backend, cipher, &instance_uid(), announcer_name).await?;
-        return Ok(current.is_some_and(|c| c.secret == secret));
+        return Ok(current.is_some_and(|c| secrets_match(&c.secret, secret)));
     }
     if !peer.sister_requested {
         return Ok(false);
     }
-    peer.sister_confirmed = true;
-    peer.sister_requested = false;
-    peer.put(backend, cipher, etag.as_deref()).await?;
+    if !crate::instance_client::verify_sister_secret(&peer.web_base_url, own_name, secret).await? {
+        return Ok(false);
+    }
+    // Re-read after the round trip so the CAS below can't clobber an admin
+    // action (unlink, ban, a fresh request) that landed in the meantime.
+    let (peer, etag) = Peer::get(backend, cipher, announcer_name).await?;
+    let Some(mut peer) = peer.filter(|p| p.sister_requested && !p.sister_confirmed && !p.auto_linked) else {
+        return Ok(false);
+    };
+    // Secret first: a peer marked confirmed while still holding this side's
+    // own staged secret would fail every sister call until re-handshaken.
     access::set_peer_credential(
         backend,
         cipher,
@@ -130,6 +178,11 @@ pub async fn receive_handshake(
         "sister handshake",
     )
     .await?;
+    peer.sister_confirmed = true;
+    peer.sister_requested = false;
+    if peer.put(backend, cipher, etag.as_deref()).await? == Cas::Conflict {
+        bail!("'{announcer_name}' changed during the handshake, retry");
+    }
     Ok(true)
 }
 
@@ -166,7 +219,7 @@ pub async fn sister_by_secret(backend: &dyn Backend, cipher: &Cipher, secret: &s
             continue;
         }
         if let Some(stored) = access::get_peer_credential(backend, cipher, &instance_uid(), &peer.name).await?
-            && stored.secret == secret
+            && secrets_match(&stored.secret, secret)
         {
             return Ok(Some(peer));
         }
@@ -174,40 +227,70 @@ pub async fn sister_by_secret(backend: &dyn Backend, cipher: &Cipher, secret: &s
     Ok(None)
 }
 
-/// Applies one ban/unban event attributed to `sister_name` — creates a
-/// minimal stub `Peer` if `event.peer_name` isn't already known locally
+/// Applies one ban/unban event attributed to `sister_name` — a ban for a
+/// name not known locally lands as a minimal, `BrowseOnly` stub `Peer`
 /// (section 7: "estar baneado ya no implica haber sido linkeado antes").
 /// Provenance (`banned_by`/`ban_reason`) always reflects the *original*
 /// actor, never `sister_name` itself; [`entities::Peer::synced_from_sister`]
 /// is the only field that records where this instance learned about it.
+///
+/// An unban only lifts a ban that this same sister put here: a ban this
+/// instance issued itself, or learned from another sister, is not
+/// `sister_name`'s to clear. Like a local [`crate::domain::peer::unban`],
+/// it drops `access_level` to `BrowseOnly` instead of restoring it.
+///
+/// # Errors
+///
+/// `event.peer_name` and `event.git_base_url` come from another instance
+/// and end up as an S3 key segment, a filesystem path (core's
+/// `_remote/<peer>`) and a `git fetch` URL, so an invalid one is refused
+/// before anything is stored.
 pub async fn apply_ban_event(
     backend: &dyn Backend,
     cipher: &Cipher,
     sister_name: &str,
     event: &BanEventWire,
 ) -> Result<()> {
+    access::validate_peer_name(&event.peer_name)?;
     let (existing, etag) = Peer::get(backend, cipher, &event.peer_name).await?;
-    let mut peer = existing.unwrap_or_else(|| Peer {
-        name: event.peer_name.clone(),
-        git_base_url: event.git_base_url.clone(),
-        ..Default::default()
-    });
-    match event.action {
-        BanAction::Ban => {
+    let peer = match (event.action, existing) {
+        // Already banned here on someone else's word — most often this
+        // instance's own ban echoing back through the sister's list.
+        // Re-attributing it would stop a later local unban from reaching
+        // the sisters (`domain::peer::unban` propagates only this
+        // instance's own bans) and drop it from `total_bans_issued`.
+        (BanAction::Ban, Some(peer)) if peer.banned && peer.synced_from_sister.as_deref() != Some(sister_name) => {
+            return Ok(());
+        }
+        (BanAction::Ban, existing) => {
+            validate_git_base_url(&event.git_base_url)?;
+            let mut peer = existing.unwrap_or_else(|| Peer {
+                name: event.peer_name.clone(),
+                git_base_url: event.git_base_url.clone(),
+                access_level: PeerAccessLevel::BrowseOnly,
+                ..Default::default()
+            });
             peer.banned = true;
             peer.ban_reason = event.reason.clone();
             peer.banned_at = event.banned_at.clone().or_else(|| Some(format_unix_secs(now_secs())));
             peer.banned_by = event.banned_by.clone();
             peer.synced_from_sister = Some(sister_name.to_string());
+            peer
         }
-        BanAction::Unban => {
+        (BanAction::Unban, Some(mut peer)) => {
+            if !peer.banned || peer.synced_from_sister.as_deref() != Some(sister_name) {
+                return Ok(());
+            }
             peer.banned = false;
             peer.ban_reason = None;
             peer.banned_at = None;
             peer.banned_by = String::new();
+            peer.access_level = PeerAccessLevel::BrowseOnly;
             peer.synced_from_sister = None;
+            peer
         }
-    }
+        (BanAction::Unban, None) => return Ok(()),
+    };
     // Best-effort CAS: a lost race here just means the next reconciliation
     // tick catches it too, same tolerance every other periodic sync in
     // this codebase already has.
@@ -229,9 +312,11 @@ pub async fn push_ban_event(backend: &dyn Backend, cipher: &Cipher, event: &BanE
             continue;
         };
         if let Err(e) = crate::instance_client::send_sister_ban_event(&sister.web_base_url, &secret, event).await {
-            eprintln!(
-                "gitquarry-federation: warning: sister ban-event push to '{}' failed: {e:#}",
-                sister.name
+            tracing::warn!(
+                target: "gitquarry_federation::sister",
+                sister = %sister.name,
+                error = %format!("{e:#}"),
+                "sister ban-event push failed"
             );
         }
     }
@@ -249,20 +334,25 @@ pub async fn reconcile_with_sister(backend: &dyn Backend, cipher: &Cipher, siste
     let remote_names: std::collections::HashSet<&str> = remote_bans.iter().map(|b| b.peer_name.as_str()).collect();
 
     for entry in &remote_bans {
-        apply_ban_event(
-            backend,
-            cipher,
-            &sister.name,
-            &BanEventWire {
-                peer_name: entry.peer_name.clone(),
-                git_base_url: entry.git_base_url.clone(),
-                action: BanAction::Ban,
-                reason: Some(entry.ban_reason.clone()),
-                banned_by: entry.banned_by.clone(),
-                banned_at: entry.banned_at.clone(),
-            },
-        )
-        .await?;
+        let event = BanEventWire {
+            peer_name: entry.peer_name.clone(),
+            git_base_url: entry.git_base_url.clone(),
+            action: BanAction::Ban,
+            reason: Some(entry.ban_reason.clone()),
+            banned_by: entry.banned_by.clone(),
+            banned_at: entry.banned_at.clone(),
+        };
+        // One entry the sister got wrong (an invalid name or URL) must not
+        // hold back every other ban in the same list.
+        if let Err(e) = apply_ban_event(backend, cipher, &sister.name, &event).await {
+            tracing::warn!(
+                target: "gitquarry_federation::sister",
+                sister = %sister.name,
+                peer = %entry.peer_name,
+                error = %format!("{e:#}"),
+                "skipped a sister ban entry"
+            );
+        }
     }
 
     let locally_synced_from_this_sister = access::list_all_peers(backend, cipher)
@@ -306,7 +396,7 @@ pub async fn run_periodic_reconcile_tick(
         let sisters = match access::list_all_peers(backend.as_ref(), &cipher).await {
             Ok(peers) => peers.into_iter().filter(|p| p.sister_confirmed).collect::<Vec<_>>(),
             Err(e) => {
-                eprintln!("gitquarry-federation: warning: sister reconcile tick couldn't list peers: {e:#}");
+                tracing::warn!(target: "gitquarry_federation::sister", error = %format!("{e:#}"), "sister reconcile tick couldn't list peers");
                 continue;
             }
         };
@@ -316,9 +406,11 @@ pub async fn run_periodic_reconcile_tick(
                 _ => continue,
             };
             if let Err(e) = reconcile_with_sister(backend.as_ref(), &cipher, &sister, &secret).await {
-                eprintln!(
-                    "gitquarry-federation: warning: sister reconciliation with '{}' failed: {e:#}",
-                    sister.name
+                tracing::warn!(
+                    target: "gitquarry_federation::sister",
+                    sister = %sister.name,
+                    error = %format!("{e:#}"),
+                    "sister reconciliation failed"
                 );
             }
         }

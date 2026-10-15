@@ -24,6 +24,9 @@ anyhow = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 dirs = { workspace = true }
+subtle = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 gitquarry-test-support = { workspace = true }

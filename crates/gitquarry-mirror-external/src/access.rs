@@ -69,7 +69,7 @@ pub enum RefSyncStatus {
 }
 
 /// No variant is a "natural" default for a ref never synced before — `InSync`
-/// is picked here only as the harmless starting point [`update_ref_status`]'s
+/// is picked here only as the harmless starting point [`update_mirror`]'s
 /// get/modify/put loop needs before the very first write ever lands.
 impl Default for RefSyncStatus {
     fn default() -> Self {
@@ -147,11 +147,26 @@ pub struct ExternalMirror {
     /// than silently doing nothing.
     #[serde(default)]
     pub sync_merge_requests: bool,
+    /// local MR number -> failed attempts at opening it on the external
+    /// side. Capped at [`MAX_MR_EXPORT_ATTEMPTS`] so an MR the forge keeps
+    /// rejecting (its branch was never pushed there, a permission it lacks)
+    /// stops costing a forge request every tick, forever.
+    #[serde(default)]
+    pub mr_export_failures: BTreeMap<u64, u32>,
+    /// `since` for the next MR discovery listing: held at the oldest MR
+    /// whose import failed, so a retry still sees it. Derived from the MR
+    /// links' own cursors while empty (a mirror stored before this field),
+    /// which alone let a failed MR fall behind a newer linked one forever.
+    #[serde(default)]
+    pub mr_discovery_cursor: String,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
 }
+
+/// See [`ExternalMirror::mr_export_failures`].
+pub const MAX_MR_EXPORT_ATTEMPTS: u32 = 5;
 
 pub fn validate_external_mirror(mirror: &ExternalMirror) -> Result<()> {
     validate_mirror_url(&mirror.remote_url)?;
@@ -378,9 +393,27 @@ pub async fn update_last_synced(
     ref_name: &str,
     sha: &str,
 ) -> Result<()> {
-    update_ref_status(backend, cipher, uid, mirror_id, ref_name, |status, last_synced| {
-        *status = RefSyncStatus::InSync;
-        last_synced.insert(ref_name.to_string(), sha.to_string());
+    update_mirror(backend, cipher, uid, mirror_id, ref_name, |mirror| {
+        mirror.ref_status.insert(ref_name.to_string(), RefSyncStatus::InSync);
+        mirror.last_synced.insert(ref_name.to_string(), sha.to_string());
+    })
+    .await
+}
+
+/// Drops `ref_name` from both `last_synced` and `ref_status`, for a ref now
+/// gone from both sides. Otherwise the stale `last_synced` sha outlives the
+/// ref, and a later ref of the same name is mistaken for one side of a
+/// deletion and never synced.
+pub async fn forget_ref(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    mirror_id: &str,
+    ref_name: &str,
+) -> Result<()> {
+    update_mirror(backend, cipher, uid, mirror_id, ref_name, |mirror| {
+        mirror.last_synced.remove(ref_name);
+        mirror.ref_status.remove(ref_name);
     })
     .await
 }
@@ -403,14 +436,51 @@ pub async fn set_ref_status(
         RefSyncStatus::Error(msg) => RefSyncStatus::Error(cap_error(&crate::git_remote::redact_url(&msg))),
         other => other,
     };
-    update_ref_status(backend, cipher, uid, mirror_id, ref_name, move |s, _| {
-        *s = status.clone();
+    update_mirror(backend, cipher, uid, mirror_id, ref_name, move |mirror| {
+        mirror.ref_status.insert(ref_name.to_string(), status.clone());
+    })
+    .await
+}
+
+/// One more failed attempt at opening local MR `local_number` on the
+/// external side, kept so the cap on [`ExternalMirror::mr_export_failures`]
+/// can bite.
+pub async fn record_mr_export_failure(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    mirror_id: &str,
+    local_number: u64,
+) -> Result<()> {
+    update_mirror(
+        backend,
+        cipher,
+        uid,
+        mirror_id,
+        &format!("MR #{local_number}"),
+        |mirror| {
+            *mirror.mr_export_failures.entry(local_number).or_default() += 1;
+        },
+    )
+    .await
+}
+
+/// See [`ExternalMirror::mr_discovery_cursor`].
+pub async fn set_mr_discovery_cursor(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    mirror_id: &str,
+    cursor: &str,
+) -> Result<()> {
+    update_mirror(backend, cipher, uid, mirror_id, "MR discovery cursor", |mirror| {
+        mirror.mr_discovery_cursor = cursor.to_string();
     })
     .await
 }
 
 /// Records (`Some`) or clears (`None`) [`ExternalMirror::last_error`] —
-/// same CAS-retry shape as [`update_ref_status`], one level up: this is the
+/// same CAS-retry shape as [`update_mirror`], one level up: this is the
 /// whole mirror's outcome, not one ref's.
 ///
 /// `error` is passed through [`crate::git_remote::redact_url`] before it's
@@ -453,13 +523,14 @@ pub async fn set_mirror_error(
     )
 }
 
-async fn update_ref_status(
+/// `what` only names the touched entry in the give-up error.
+async fn update_mirror(
     backend: &dyn Backend,
     cipher: &Cipher,
     uid: &Uid,
     mirror_id: &str,
-    ref_name: &str,
-    apply: impl Fn(&mut RefSyncStatus, &mut BTreeMap<String, String>),
+    what: &str,
+    apply: impl Fn(&mut ExternalMirror),
 ) -> Result<()> {
     let collection = mirrors_collection(uid);
     for attempt in 1..=UPDATE_MAX_RETRIES {
@@ -467,9 +538,7 @@ async fn update_ref_status(
         let Some(mut mirror) = mirror else {
             bail!("no such external mirror: {mirror_id}");
         };
-        let mut status = mirror.ref_status.get(ref_name).cloned().unwrap_or_default();
-        apply(&mut status, &mut mirror.last_synced);
-        mirror.ref_status.insert(ref_name.to_string(), status);
+        apply(&mut mirror);
         match collection
             .put(backend, cipher, mirror_id, &mirror, etag.as_deref())
             .await?
@@ -482,7 +551,5 @@ async fn update_ref_status(
             Cas::Conflict => break,
         }
     }
-    bail!(
-        "too many CAS conflicts updating mirror '{mirror_id}' ref '{ref_name}' (giving up after {UPDATE_MAX_RETRIES} attempts)"
-    )
+    bail!("too many CAS conflicts updating mirror '{mirror_id}' {what} (giving up after {UPDATE_MAX_RETRIES} attempts)")
 }

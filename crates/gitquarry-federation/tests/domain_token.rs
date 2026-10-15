@@ -34,7 +34,7 @@ async fn create_then_revoke_roundtrips_and_revoke_is_owner_scoped() {
     assert!(resolved.is_some());
 
     // A different owner can't revoke it.
-    revoke(backend, &cipher, "bob", token.uid.as_str()).await.unwrap();
+    assert!(!revoke(backend, &cipher, "bob", token.uid.as_str()).await.unwrap());
     assert!(
         access::resolve_by_token(backend, &cipher, &secret)
             .await
@@ -42,7 +42,7 @@ async fn create_then_revoke_roundtrips_and_revoke_is_owner_scoped() {
             .is_some()
     );
 
-    revoke(backend, &cipher, "alice", token.uid.as_str()).await.unwrap();
+    assert!(revoke(backend, &cipher, "alice", token.uid.as_str()).await.unwrap());
     assert!(
         access::resolve_by_token(backend, &cipher, &secret)
             .await

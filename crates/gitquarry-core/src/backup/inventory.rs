@@ -153,6 +153,7 @@ fn classify_repo(rest: &str) -> Class {
     }
     if tail == ".conf/config.json"
         || tail.starts_with("lfs-locks/")
+        || tail.starts_with("lfs-lock-paths/")
         || tail.starts_with("merges/")
         || tail.starts_with("mirrors/")
     {

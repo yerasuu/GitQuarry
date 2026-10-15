@@ -17,10 +17,18 @@
 //! user is seeded into the bucket, `gitquarry.toml` is written if it didn't
 //! already exist, and this temporary server hands off to normal startup in
 //! the same process: no restart, no separate `gitquarry init` step.
+//!
+//! The wizard answers before any account exists, and a submit picks the
+//! storage, writes the config and creates the first admin — so both the GET
+//! and the POST demand the one-time token `run` logs with the setup URL, the
+//! same way `gitquarry_webui::webui::bootstrap` guards the admin pages once a
+//! config exists. Whoever can read the server's log is the operator; whoever
+//! merely reaches the port first is not. The token also rides in the form
+//! body, which a cross-site page can't know, so it doubles as CSRF defence.
 
 use anyhow::{Context, Result, bail, ensure};
 use axum::Router;
-use axum::extract::{Form, State};
+use axum::extract::{Form, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
@@ -35,6 +43,7 @@ use s3db::SpooledBackend;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use subtle::ConstantTimeEq;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -62,6 +71,7 @@ pub struct Prefill {
 
 struct WizardState {
     config_path: PathBuf,
+    token: String,
     prefill: Option<Prefill>,
     // `Option` + taken on the one successful submit: a `oneshot::Sender`
     // only sends once, and this wizard only ever completes once (the
@@ -76,12 +86,19 @@ type State_ = axum::extract::State<Arc<WizardState>>;
 /// so the page it serves reads as setup and not as some repository.
 const SETUP_PATH: &str = "/_setup";
 
-pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -> Result<WizardOutcome> {
+/// Serves the wizard until one submit succeeds.
+///
+/// `token` gates every request (see the module doc) and is logged with the
+/// setup URL, so it must be unguessable — `gitquarry_auth_crypto::random_token`,
+/// minted per process and never stored — and never empty.
+pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>, token: String) -> Result<WizardOutcome> {
+    ensure!(!token.is_empty(), "setup token can't be empty");
     let is_prefilled = prefill.is_some();
     let (result_tx, result_rx) = oneshot::channel();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let state = Arc::new(WizardState {
         config_path: config_path.to_path_buf(),
+        token,
         prefill,
         result_tx: Mutex::new(Some(result_tx)),
         shutdown_tx: Mutex::new(Some(shutdown_tx)),
@@ -91,18 +108,20 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
         .route("/", get(|| async { Redirect::to(SETUP_PATH) }))
         .route(SETUP_PATH, get(handler_get).post(handler_post))
         .merge(gitquarry_webui::webui::asset_routes())
-        .with_state(state);
+        .with_state(Arc::clone(&state));
 
     let listener = tokio::net::TcpListener::bind(web_bind)
         .await
         .with_context(|| format!("couldn't listen on {web_bind} for the setup wizard"))?;
     info!(
-        "{} — open http://{web_bind}{SETUP_PATH} to {}",
+        "{} — open http://{web_bind}{SETUP_PATH}?token={} to {}; \
+         this token dies with the process",
         if is_prefilled {
             format!("{} connects but has no admin user yet", config_path.display())
         } else {
             format!("couldn't find {}", config_path.display())
         },
+        state.token,
         if is_prefilled {
             "create one"
         } else {
@@ -122,8 +141,42 @@ pub async fn run(config_path: &Path, web_bind: &str, prefill: Option<Prefill>) -
         .context("setup wizard closed without finishing configuration")
 }
 
-async fn handler_get(State(state): State_) -> Html<String> {
-    Html(render_form(None, state.prefill.as_ref()))
+#[derive(Deserialize)]
+struct TokenQuery {
+    #[serde(default)]
+    token: String,
+}
+
+impl WizardState {
+    fn token_matches(&self, submitted: &str) -> bool {
+        bool::from(submitted.as_bytes().ct_eq(self.token.as_bytes()))
+    }
+}
+
+/// Same answer for a missing and a wrong token, so the page says nothing
+/// about which one it got.
+fn token_refused() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Html(layout(
+            "setup",
+            "",
+            "<p>Open the setup link printed in the server's log: it carries the one-time token this \
+             page needs. The token changes every time the server starts.</p>",
+            "",
+            "",
+            "",
+            gitquarry_i18n::Locale::DEFAULT,
+        )),
+    )
+        .into_response()
+}
+
+async fn handler_get(State(state): State_, Query(query): Query<TokenQuery>) -> Response {
+    if !state.token_matches(&query.token) {
+        return token_refused();
+    }
+    Html(render_form(None, state.prefill.as_ref(), &state.token)).into_response()
 }
 
 /// Every field is driver-prefixed and read only by that one driver's arm of
@@ -134,6 +187,9 @@ async fn handler_get(State(state): State_) -> Html<String> {
 /// actually belonged to once submitted).
 #[derive(Deserialize)]
 struct WizardForm {
+    /// The setup token, carried as a hidden field — see the module doc.
+    #[serde(default)]
+    token: String,
     /// `[buckets.<name>]` section key / `--bucket` value — a separate,
     /// purely local concept from any driver's own physical storage-target
     /// identifier (see `S3Params::bucket`'s doc comment).
@@ -179,6 +235,9 @@ struct WizardForm {
 }
 
 async fn handler_post(State(state): State_, Form(form): Form<WizardForm>) -> Response {
+    if !state.token_matches(&form.token) {
+        return token_refused();
+    }
     match try_setup(&state, &form).await {
         Ok(outcome) => {
             // Hand off the result and trigger shutdown only once startup can
@@ -207,7 +266,11 @@ async fn handler_post(State(state): State_, Form(form): Form<WizardForm>) -> Res
             warn!("setup wizard: {e:#}");
             (
                 StatusCode::BAD_REQUEST,
-                Html(render_form(Some(&format!("{e:#}")), state.prefill.as_ref())),
+                Html(render_form(
+                    Some(&format!("{e:#}")),
+                    state.prefill.as_ref(),
+                    &state.token,
+                )),
             )
                 .into_response()
         }
@@ -536,7 +599,7 @@ impl From<&Prefill> for FieldValues {
     }
 }
 
-fn render_form(error: Option<&str>, prefill: Option<&Prefill>) -> String {
+fn render_form(error: Option<&str>, prefill: Option<&Prefill>, token: &str) -> String {
     let flash = error
         .map(|e| format!("<p class=\"flash flash-err\">{}</p>", esc(e)))
         .unwrap_or_default();
@@ -571,6 +634,7 @@ picked is read, the other two are ignored. Each driver has its own fields below,
 shared between sections.</p>
 {flash}
 <form method="post" action="{SETUP_PATH}">
+<input type="hidden" name="token" value="{token}">
 <h4>entry</h4>
 <table class="commit-meta">
 <tr><td>name</td><td><input name="name" size="40" required autofocus value="{name}" placeholder="how you'll refer to this (--bucket, [buckets.&lt;name&gt;])"></td></tr>
@@ -618,6 +682,7 @@ shared between sections.</p>
 </table>
 <p><button type="submit">create and start</button></p>
 </form>"#,
+        token = val(token),
         name = val(&v.name),
         s3_sel = selected("s3"),
         r2_sel = selected("r2"),

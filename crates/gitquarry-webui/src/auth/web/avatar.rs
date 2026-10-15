@@ -281,15 +281,10 @@ pub(crate) async fn handler_emails_post(
             );
         }
     }
+    let saved = gitquarry_i18n::shared::saved(locale);
     let body = account_settings_page(
         "profile",
-        render_profile_section(
-            &me,
-            &csrf,
-            self_service,
-            Some(crate::webui::Flash::Ok("saved.")),
-            locale,
-        ),
+        render_profile_section(&me, &csrf, self_service, Some(crate::webui::Flash::Ok(&saved)), locale),
         federation_ui_active(&ctx),
         locale,
     )

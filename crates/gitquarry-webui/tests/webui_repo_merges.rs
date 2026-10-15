@@ -361,7 +361,7 @@ async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
     let html = detail(&f, None).await;
     // The label's per-repo color is inlined on the pill itself.
     assert!(
-        html.contains(r#"<span class="decoration" style="border-color:#d73a4a;color:#d73a4a">bug</span>"#),
+        html.contains(r##"<span class="decoration" data-label-color="#d73a4a">bug</span>"##),
         "{html}"
     );
     assert!(html.contains("assignees: bob"), "{html}");
@@ -455,4 +455,67 @@ async fn a_form_carrying_a_stale_repo_uid_is_refused_once_the_name_is_reclaimed(
         merge_request::list_comments(&f.ctx, &impostor, 1).await.unwrap().len(),
         1
     );
+}
+
+/// An async merge swaps `#mr-actions` with the response body, so a conflict
+/// has to come back as an error the toast reads, not as a redirect whose
+/// full page would land inside that box.
+#[tokio::test]
+async fn an_async_merge_that_conflicts_is_an_error_not_a_page() {
+    let f = fixture().await;
+    git(f.work.path(), &["checkout", "--quiet", "main"]).await;
+    f.work.commit(&[("f.txt", "hello\nmars\n")], "add mars").await;
+    f.work.push(&f.repo, "refs/heads/main").await;
+    open_mr(&f).await;
+    add_user(&f.ctx, "carol", Some(Permission::Developer)).await;
+    let carol = login(&f.app, "carol").await;
+
+    let fields = [
+        ("csrf", carol.csrf.as_str()),
+        ("repo_uid", f.repo.uid.as_str()),
+        ("number", "1"),
+    ];
+    let request = axum::http::Request::post("/_merges/merge/team/proj")
+        .header(axum::http::header::COOKIE, &carol.cookie)
+        .header(axum::http::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("x-gq-async", "1")
+        .body(axum::body::Body::from(
+            form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(fields)
+                .finish(),
+        ))
+        .unwrap();
+    let response = gitquarry_test_support::send(&f.app, request).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST, "{}", response.body);
+    assert!(
+        response.body.contains("conflicts with the target branch"),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains("f.txt"), "{}", response.body);
+}
+
+/// The list's checkboxes all share `name="numbers"`, so a selection arrives
+/// as that key repeated once per row.
+#[tokio::test]
+async fn bulk_close_applies_to_every_checked_row() {
+    use gitquarry_core::storage::merge_requests::MrStatus;
+    let f = fixture().await;
+    open_mr(&f).await;
+    open_mr(&f).await;
+    add_user(&f.ctx, "carol", Some(Permission::Developer)).await;
+    let carol = login(&f.app, "carol").await;
+
+    let fields = [
+        ("repo_uid", f.repo.uid.as_str()),
+        ("numbers", "1"),
+        ("numbers", "2"),
+        ("action", "close"),
+    ];
+    let response = carol.post(&f.app, "/_merges/bulk/team/proj", &fields).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    for number in [1, 2] {
+        let mr = merge_request::get(&f.ctx, &f.repo, number).await.unwrap().unwrap();
+        assert_eq!(mr.status, MrStatus::Closed, "#{number}");
+    }
 }

@@ -31,6 +31,8 @@ axum = { workspace = true, features = ["multipart"] }
 reqwest = { workspace = true }
 
 serde = { workspace = true }
+# Compares the setup wizard's one-time token (setup.rs) in constant time.
+subtle = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

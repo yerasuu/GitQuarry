@@ -38,7 +38,7 @@ pub(super) async fn save_require_signed_commits(
                 non_empty(branches.iter().cloned().collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("signed-commit requirement updated.")
+            FlashOutcome::Ok("signed-commit requirement updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

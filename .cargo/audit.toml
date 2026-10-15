@@ -1,0 +1,12 @@
+# Advisories reviewed and accepted, so `cargo audit` stays a clean gate for
+# everything else. Each entry says why it can't be reached here; revisit
+# when the reason stops holding (kb decision on #11).
+[advisories]
+ignore = [
+    # Marvin (RSA timing side channel) needs a private-key operation. Both
+    # rsa crates only ever verify: russh/ssh-key check client RSA public
+    # keys (host and signing keys are Ed25519, `git::ssh`, `git::signing`),
+    # and openidconnect checks IdP JWT signatures. No fixed release exists;
+    # dropping russh's `rsa` feature would refuse every RSA user key.
+    "RUSTSEC-2023-0071",
+]

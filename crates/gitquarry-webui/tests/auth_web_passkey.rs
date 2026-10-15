@@ -283,7 +283,8 @@ async fn a_passkey_registered_from_the_security_page_is_listed_there() {
     .await;
     assert_eq!(begin.status, StatusCode::OK, "{}", begin.body);
     let line = set_cookie_line(&begin, "passkey-challenge").unwrap();
-    assert!(line.ends_with("; HttpOnly; SameSite=Lax; Max-Age=300"), "{line}");
+    // `PUBLIC_URL` is https, so the challenge never travels over plain HTTP.
+    assert!(line.ends_with("; HttpOnly; SameSite=Lax; Max-Age=300; Secure"), "{line}");
     let options: Value = serde_json::from_str(&begin.body).unwrap();
     let me = access::get_user(gq.ctx.backend().as_ref(), &gq.ctx.cipher, "alice")
         .await

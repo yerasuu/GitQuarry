@@ -74,9 +74,14 @@ pub(crate) async fn handler_toggle_diff_view(headers: HeaderMap, Form(form): For
 /// whichever view has one (`commit`, `compare`) — `return_to` is that same
 /// page's own URL, built by the caller (there's no single "current page" the
 /// way `render_text_size_buttons` has for the summary tab).
-pub(crate) fn render_diff_view_buttons(return_to: &str, current: DiffView) -> String {
+pub(crate) fn render_diff_view_buttons(return_to: &str, current: DiffView, locale: gitquarry_i18n::Locale) -> String {
+    use gitquarry_i18n::web::repo::components as t;
+    let buttons = [
+        (DiffView::Unified, t::diff_view_unified_button(locale)),
+        (DiffView::Split, t::diff_view_split_button(locale)),
+    ];
     maud::html! {
-        @for (view, label) in [(DiffView::Unified, "unified"), (DiffView::Split, "side by side")] {
+        @for (view, label) in buttons {
             form method="post" action="/_prefs/diff_view" class="inline-form" {
                 input type="hidden" name="view" value=(view.as_cookie());
                 input type="hidden" name="return_to" value=(return_to);

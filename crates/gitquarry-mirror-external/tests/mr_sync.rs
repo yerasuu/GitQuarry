@@ -81,6 +81,10 @@ struct FakeGitLab {
     mrs: Vec<FakeMr>,
     notes: HashMap<u64, Vec<FakeNote>>,
     next_note_id: u64,
+    /// Answers every new-MR POST with a 422 and counts them, so a test can
+    /// see when the retries stop.
+    reject_creates: bool,
+    create_attempts: u32,
 }
 
 type Shared = Arc<RwLock<FakeGitLab>>;
@@ -110,6 +114,10 @@ async fn handle(State(state): State<Shared>, req: Request) -> Response {
         } else {
             Vec::new()
         }),
+        (Method::POST, []) if gl.reject_creates => {
+            gl.create_attempts += 1;
+            return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+        }
         (Method::POST, []) => {
             let iid = gl.mrs.iter().map(|m| m.iid).max().unwrap_or(0) + 1;
             let mut mr = FakeMr::open(
@@ -362,6 +370,8 @@ async fn discovers_a_new_remote_mr_and_links_it() {
     let local = w.local_mrs().await;
     assert_eq!(local.len(), 1);
     assert_eq!(local[0].title, "external title");
+    // Never plain "alice": that would hand a local alice this MR.
+    assert_eq!(local[0].author, "127.0.0.1/alice");
     let links = w.links().await;
     assert_eq!(links.len(), 1);
     assert_eq!((links[0].external_number, links[0].local_number), (7, local[0].number));
@@ -419,6 +429,11 @@ async fn comment_anti_loop_exports_once_and_imports_once() {
         .await
         .unwrap();
     assert_eq!(imported.iter().filter(|c| c.body == "from gitlab").count(), 1);
+    assert!(
+        imported
+            .iter()
+            .any(|c| c.body == "from gitlab" && c.author == "127.0.0.1/dave")
+    );
 
     w.sweep().await;
     assert_eq!(
@@ -581,6 +596,75 @@ async fn a_concurrent_link_write_doesnt_cost_the_comment_dedup_state() {
         1,
         "the comment was exported twice"
     );
+}
+
+#[tokio::test]
+async fn only_open_same_repo_mrs_are_exported() {
+    let w = world(SyncDirection::Bidirectional, FakeGitLab::default()).await;
+    let closed = w.local_mr("closed one", "bob").await;
+    merge_request::close(&w.ctx, &w.repo, closed, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap();
+    let fork = w.local_mr("from a fork", "bob").await;
+    let (mr, etag) = merge_requests::get_merge_request(w.ctx.backend().as_ref(), &w.ctx.cipher, &w.repo.uid, fork)
+        .await
+        .unwrap();
+    let mut mr = mr.unwrap();
+    mr.source_repo = gitquarry_core::storage::uid::Uid::from("bob/proj".to_string());
+    merge_requests::put_merge_request(
+        w.ctx.backend().as_ref(),
+        &w.ctx.cipher,
+        &w.repo.uid,
+        &mr,
+        etag.as_deref(),
+    )
+    .await
+    .unwrap();
+    w.sweep().await;
+
+    assert!(w.gitlab.read().unwrap().mrs.is_empty());
+    assert!(w.links().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_rejected_export_stops_being_retried() {
+    let w = world(
+        SyncDirection::Bidirectional,
+        FakeGitLab {
+            reject_creates: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    w.local_mr("rejected", "bob").await;
+    for _ in 0..access::MAX_MR_EXPORT_ATTEMPTS + 2 {
+        w.sweep().await;
+    }
+    assert_eq!(w.gitlab.read().unwrap().create_attempts, access::MAX_MR_EXPORT_ATTEMPTS);
+}
+
+/// The second import fails (its link slot is already taken), the first
+/// succeeds with a newer `updated_at`. A cursor taken from the links alone
+/// would jump past the failed one and never list it again.
+#[tokio::test]
+async fn an_mr_whose_import_failed_is_listed_again_next_tick() {
+    let w = world(
+        SyncDirection::Bidirectional,
+        FakeGitLab {
+            mrs: vec![
+                FakeMr::open(2, "feature", "newer", "alice", T1),
+                FakeMr::open(1, "feature", "older", "alice", T0),
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+    w.link(2, 999).await;
+    w.sweep().await;
+    assert!(!w.links().await.iter().any(|l| l.external_number == 1));
+
+    w.sweep().await;
+    assert!(w.links().await.iter().any(|l| l.external_number == 1));
 }
 
 /// An MR opened from a fork carries a head branch that lives in that fork,

@@ -130,6 +130,24 @@ pub(crate) async fn handler_security_post(
         }};
     }
 
+    // Ends this very session too, so there's no page left to re-render:
+    // straight to the login page.
+    if form.action == "revoke_sessions" {
+        if let Err(e) = domain::user::revoke_sessions(&ctx, &me.username, locale).await {
+            fail!(e.to_string());
+        }
+        gitquarry_core::storage::audit::record(
+            ctx.backend().as_ref(),
+            &ctx.cipher,
+            &me.username,
+            "user.revoke_sessions",
+            &me.username,
+            None,
+        )
+        .await;
+        return Ok(axum::response::Redirect::to("/_login").into_response());
+    }
+
     let mut pending_totp_secret = None;
     let mut revealed_recovery_codes = None;
     let cas = match form.action.as_str() {
@@ -351,6 +369,15 @@ pub(crate) fn render_security_page(
         }
 
         (passkeys)
+
+        (settings_section(&t::sessions_heading(locale), None, html! {
+            p class="muted" { (t::sessions_hint(locale)) }
+            form method="post" action=(action_url) data-confirm=(t::revoke_sessions_confirm(locale)) {
+                (PreEscaped(csrf))
+                input type="hidden" name="security_action" value="revoke_sessions";
+                button type="submit" { (t::revoke_sessions_button(locale)) }
+            }
+        }))
       }
     }
 }

@@ -140,6 +140,20 @@ pub fn traversal_free(path_and_query: &str) -> bool {
     })
 }
 
+/// Same ceiling axum's `DefaultBodyLimit` puts on every extractor-read
+/// body. These handlers take the raw `Request` instead, which that limit
+/// never reaches, and `/_api/*` is open to anonymous callers — so without
+/// this one request could make core buffer an arbitrarily large body.
+const MAX_PROXIED_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+/// `Err` is a ready 413. A body that fails mid-stream for another reason
+/// (client hung up) gets the same answer, since nobody is left to read it.
+async fn capped_body(req: Request) -> Result<Bytes, Box<Response>> {
+    axum::body::to_bytes(req.into_body(), MAX_PROXIED_BODY_BYTES)
+        .await
+        .map_err(|_| Box::new((StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()))
+}
+
 pub(crate) async fn proxy_public(
     State(ctx): State_,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -159,9 +173,10 @@ pub(crate) async fn proxy_public(
     }
     let mut headers = passthrough_headers(req.headers());
     headers.push((CLIENT_IP_HEADER, addr.ip().to_string()));
-    let body = axum::body::to_bytes(req.into_body(), usize::MAX)
-        .await
-        .unwrap_or_default();
+    let body = match capped_body(req).await {
+        Ok(body) => body,
+        Err(resp) => return *resp,
+    };
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
     send(federation, method, &path_and_query, &headers, body).await
 }
@@ -188,9 +203,10 @@ pub(crate) async fn proxy_peers(State(ctx): State_, req: Request) -> Result<Resp
     let mut extra = vec![(USER_HEADER, username), (CSRF_HEADER, session_csrf_value(&headers))];
     extra.extend(content_type_header(&headers));
     let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
-    let body = axum::body::to_bytes(req.into_body(), usize::MAX)
-        .await
-        .unwrap_or_default();
+    let body = match capped_body(req).await {
+        Ok(body) => body,
+        Err(resp) => return Ok(*resp),
+    };
     require_proxied_csrf(&headers, &method, &body)?;
     Ok(send(federation, method, "/_peers", &extra, body).await)
 }
@@ -217,9 +233,10 @@ pub(crate) async fn proxy_tokens(State(ctx): State_, req: Request) -> Result<Res
     ];
     extra.extend(content_type_header(&headers));
     let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
-    let body = axum::body::to_bytes(req.into_body(), usize::MAX)
-        .await
-        .unwrap_or_default();
+    let body = match capped_body(req).await {
+        Ok(body) => body,
+        Err(resp) => return Ok(*resp),
+    };
     require_proxied_csrf(&headers, &method, &body)?;
     Ok(send(federation, method, "/_account/tokens", &extra, body).await)
 }

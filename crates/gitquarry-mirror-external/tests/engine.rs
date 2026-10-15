@@ -42,6 +42,8 @@ struct Tick {
     local: Option<String>,
     remote: Option<String>,
     report: SyncReport,
+    /// `refs/heads/main`'s `last_synced` as stored after the tick.
+    last_synced: Option<String>,
 }
 
 /// One real [`sync_mirror_once`] tick with `refs/heads/main` at `local` in
@@ -130,6 +132,16 @@ async fn tick(
         mirror
             .last_synced
             .insert("refs/heads/main".to_string(), sha.to_string());
+        access::update_last_synced(
+            ctx.backend().as_ref(),
+            &ctx.cipher,
+            &repo.uid,
+            &mirror.id,
+            "refs/heads/main",
+            sha,
+        )
+        .await
+        .unwrap();
     }
 
     let report = sync_mirror_once(&ctx, &repo, &mirror).await.unwrap();
@@ -137,10 +149,12 @@ async fn tick(
     let remote_refs = gitquarry_mirror_external::git_remote::list_refs_with_sha(&target)
         .await
         .unwrap();
+    let (stored, _) = domain::get(&ctx, &repo.uid, &mirror.id).await.unwrap().unwrap();
     Tick {
         local: manifest.refs.get("refs/heads/main").cloned(),
         remote: remote_refs.get("refs/heads/main").cloned(),
         report,
+        last_synced: stored.last_synced.get("refs/heads/main").cloned(),
     }
 }
 
@@ -214,6 +228,20 @@ async fn a_ref_deleted_on_either_side_is_never_resurrected() {
     let t = tick(&h, Some(&h.b), None, Some(&h.b), Bidirectional).await;
     assert_eq!((t.report.pushed, t.remote.as_deref()), (0, None));
     assert_eq!(t.report.deleted, ["refs/heads/main"]);
+}
+
+#[tokio::test]
+async fn a_ref_gone_from_both_sides_forgets_its_last_synced_sha() {
+    let h = history().await;
+    // Kept, the stale sha would make a later ref of the same name look
+    // like one side of a deletion, and it would never sync.
+    let t = tick(&h, None, None, Some(&h.b), Bidirectional).await;
+    assert_eq!(t.last_synced, None);
+    assert!(t.report.deleted.is_empty());
+    assert_eq!(t.report.failure_summary(), None);
+    // A one-sided deletion still has to remember the sha.
+    let t = tick(&h, None, Some(&h.b), Some(&h.b), Bidirectional).await;
+    assert_eq!(t.last_synced.as_deref(), Some(h.b.as_str()));
 }
 
 #[tokio::test]

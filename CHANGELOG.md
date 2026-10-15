@@ -11,7 +11,7 @@ modules, functions, constants, deploy steps — is in
 [`tag-changelog/vX.Y.Z.md`](tag-changelog/), which is also what `/_changelog`
 serves for the running version.
 
-## [0.6.0] — 2026-10-01
+## [0.6.0] — 2026-10-15
 
 ### Breaking
 
@@ -26,6 +26,13 @@ serves for the running version.
   old place, point `local_dir` at it.
 - A filesystem (`path:`) backup destination still in the old `files` format
   must be converted with `s3db-local-migrate <dir>` before the next backup.
+- Release assets are stored under a new name per upload. Assets uploaded
+  before keep working, but an older version can't serve the ones uploaded by
+  this one, so don't roll back once you've added assets.
+- Federation: a sister handshake is now verified by calling the other
+  instance back at the address registered for it. Both instances need this
+  version and `own_web_base_url`/`own_git_base_url` set in
+  `gitquarry-federation.toml`. Sisters already confirmed keep working.
 
 ### Added
 
@@ -48,12 +55,24 @@ serves for the running version.
 - Writes that hooks and CLI commands leave spooled are replayed by the
   server at startup and every minute; stale storage transactions are swept
   every 10 minutes instead of only at startup.
+- "Sign out everywhere" on `/_account/security` ends every web session of
+  your account, the current one included.
 
 ### Changed
 
 - The first-run setup wizard lives at `/_setup`; `/` redirects there.
 - Pushes, merges and mirror pulls to any branch count as repo activity, not
   only those to the default branch.
+- Clones and fetches over HTTP stream instead of being held in memory, and
+  a push is written to disk (up to 16 GiB) before the repo is locked, so a
+  slow upload no longer holds up everyone else on that repo.
+- The server refuses to start when the instance settings in the bucket
+  can't be read or decrypted, instead of quietly starting on defaults.
+- The federation process logs like the main server (`RUST_LOG`, `info` by
+  default).
+- Release builds carry no debug info. The Docker build context leaves out
+  `target/`, `.git/`, `.env` and `gitquarry.toml`: mount the config at run
+  time.
 
 ### Fixed
 
@@ -68,6 +87,42 @@ serves for the running version.
 - A data migration with nothing to do says so.
 - The setup wizard loads its stylesheet and scripts, and works when re-run
   against an existing local bucket.
+- HTTP clones and fetches from git clients that compress large requests
+  (many refs) work.
+- Malformed git or LFS requests over HTTP get a 400 or 413 instead of a 500.
+- A file whose path ends like a git endpoint (say, one named `info/refs`)
+  can be browsed instead of answering 404.
+- The first step of an HTTP push no longer counts against the clone rate
+  limit or triggers an external-mirror sync.
+- Push webhooks and events fire for every push; they were often skipped.
+- Pushing a tag first into an empty repo no longer makes it the repo's HEAD.
+- Startup no longer wipes the refs of locally cached federation peer repos.
+- LFS: two clients locking the same file at once can't both get the lock,
+  listing locks by path works for files in subdirectories, and lock storage
+  errors are reported instead of ignored. LFS objects uploaded right after a
+  push are counted against the quota.
+- Deleting or restoring a repo while it's being changed retries instead of
+  leaving it half hidden.
+- Release assets over 2 MiB upload.
+- External mirrors: a branch deleted on both sides and later recreated syncs
+  again. Only open merge requests between the repo's own branches are
+  exported, and one the forge keeps rejecting is given up after 5 attempts.
+  Imports no longer skip merge requests updated at the same instant as the
+  last one, and a failed import is retried.
+- Merging a merge request with conflicts shows an error instead of a page
+  nested in the page.
+- Bulk close/reopen of merge requests works.
+- The appearance settings and personal access token forms submit again.
+- Forking a repo from a federation peer works and checks the name like a
+  local fork.
+- Label colours show again.
+- More of the UI follows the chosen language: the page's language tag, the
+  peer fork form, the diff view toggle and several save confirmations.
+- Federation: sister instances reach each other through the main server's
+  port; your own ban echoed back by a sister stays yours, so unbanning still
+  propagates; revoking a token says when it failed; the merge-request API
+  reports server failures as such instead of as a bad token or a missing
+  repo; the rate limiter no longer grows without bound.
 
 ### Security
 
@@ -77,6 +132,36 @@ serves for the running version.
 - Federation: a confirmed sister instance can't have its shared secret
   replaced, and gossip announcements are capped and checked before any
   address they name is contacted.
+- The setup wizard at `/_setup` opens only through the link printed in the
+  server log, which carries a one-time token that changes on every start.
+  Before, whoever reached the port first could configure the instance and
+  create the admin.
+- Removing an SSH key or a passkey signs that account out of every web
+  session.
+- With a public URL starting `https://`, cookies always carry `Secure`, even
+  when the reverse proxy doesn't send `X-Forwarded-Proto`.
+- Admin forms on an instance with no login method yet are CSRF-protected by
+  the bootstrap grant; they used to fail.
+- With `trust_forwarded_for` on, the anonymous git rate limit keys on the
+  last `X-Forwarded-For` entry, the one your proxy added, so a client can't
+  pick its own bucket. Your proxy must append (or set) that header.
+- Changing the permission of a repo's maintainer or owner needs the owner
+  tier; a maintainer could demote an owner.
+- Login and preference redirects refuse targets with control characters or
+  whitespace, which could send you to another site.
+- A crafted file name can't inject markup into the code view.
+- A GPG key upload holding more than one key is refused; the extra key's
+  signatures would have verified as the first one's.
+- Authors of merge requests and comments imported from an external forge are
+  shown as `host/login`, so a local user with the same name gets no rights
+  over them.
+- Federation: a sister can only lift bans it set here, and its ban lists are
+  validated; a gossip candidate that changes address starts over; a
+  cross-instance merge request needs read access to its source repo;
+  proxied federation requests are capped at 2 MiB; the internal token is
+  compared in constant time; `git://` peer URLs are refused.
+- rustls 0.23.46 (RUSTSEC-2026-0346 to 0349). RUSTSEC-2023-0071 (RSA timing)
+  is reviewed and accepted: RSA is only used to verify signatures here.
 
 ## [0.5.1] — 2026-09-08
 

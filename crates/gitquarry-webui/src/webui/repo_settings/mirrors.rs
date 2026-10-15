@@ -117,7 +117,7 @@ pub(super) async fn save_mirror(
             )
             .await;
             let pending = Some((created.id.clone(), created.token.clone()));
-            Ok((FlashOutcome::Ok("mirror added."), pending))
+            Ok((FlashOutcome::Ok("mirror added.".to_string()), pending))
         }
         "edit_mirror" => {
             // The CAS guard is `form.mirror_etag` — what the browser last
@@ -159,7 +159,7 @@ pub(super) async fn save_mirror(
                     )
                     .await;
                     let pending = rotated_token.then(|| (mirror.id.clone(), mirror.token.clone()));
-                    (FlashOutcome::Ok("mirror updated."), pending)
+                    (FlashOutcome::Ok("mirror updated.".to_string()), pending)
                 }
                 Cas::Conflict => (FlashOutcome::Conflict, None),
             })
@@ -187,7 +187,7 @@ pub(super) async fn save_mirror(
                 non_empty(form.mirror_id.clone()),
             )
             .await;
-            Ok((FlashOutcome::Ok("mirror removed."), None))
+            Ok((FlashOutcome::Ok("mirror removed.".to_string()), None))
         }
         _ => {
             // "sync_mirror_now" — the only other action this dispatcher is
@@ -228,7 +228,7 @@ pub(super) async fn save_mirror(
             )
             .await;
             let _ = locale;
-            Ok((FlashOutcome::Ok("sync triggered."), None))
+            Ok((FlashOutcome::Ok("sync triggered.".to_string()), None))
         }
     }
 }

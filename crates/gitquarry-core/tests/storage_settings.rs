@@ -156,6 +156,35 @@ async fn bump_pack_bytes_and_lfs_bytes_accumulate_independently() {
 }
 
 #[tokio::test]
+async fn bump_lfs_bytes_counts_through_a_cache_another_process_made_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = backend(dir.path());
+    let cached = s3db::CachedBackend::new(std::sync::Arc::clone(&raw), s3db::CacheConfig::default());
+    let cipher = cipher();
+    let repo_uid = Uid::new();
+    put_repo_config(
+        &cached,
+        repo_uid.as_str(),
+        &gitquarry_core::storage::entities::RepoConfig {
+            uid: repo_uid.clone(),
+            ..Default::default()
+        },
+        None,
+        &cipher,
+    )
+    .await
+    .unwrap();
+    // The push hook runs out of process: its write bypasses the server's cache.
+    bump_pack_bytes(raw.as_ref(), &cipher, &repo_uid, 100).await;
+
+    bump_lfs_bytes(&cached, &cipher, &repo_uid, 10).await;
+
+    let (config, _etag) = get_repo_config(raw.as_ref(), repo_uid.as_str(), &cipher).await.unwrap();
+    assert_eq!(config.pack_bytes, 100);
+    assert_eq!(config.lfs_bytes, 10);
+}
+
+#[tokio::test]
 async fn bump_bytes_is_a_silent_no_op_for_a_repo_that_doesnt_exist() {
     let dir = tempfile::tempdir().unwrap();
     let backend = backend(dir.path());

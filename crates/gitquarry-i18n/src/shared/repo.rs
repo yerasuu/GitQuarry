@@ -100,6 +100,15 @@ msg!(
 );
 
 msg!(
+    /// A typed repo name that slugifies to nothing (only punctuation or
+    /// whitespace), so there's no path to put the repo at.
+    repo_name_needs_alnum() {
+        Locale::Es => "el nombre tiene que tener al menos una letra o un digito.",
+        Locale::En => "name must contain at least one letter or digit.",
+    }
+);
+
+msg!(
     /// A destination repo name already claimed by a live repo — confirmed
     /// duplicated verbatim across `webui::fork`, `webui::repo_settings` (move).
     repo_already_exists_at(name: &str) {

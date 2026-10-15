@@ -378,6 +378,36 @@ async fn sha256_zero_shas_mark_deletions_and_creations_too() {
 }
 
 #[tokio::test]
+async fn a_tag_pushed_first_into_an_empty_repo_never_becomes_head() {
+    let f = Fixture::new("sha1", Owner::Alice).await;
+    let remote = || async {
+        let backend = backend(&f.dir.path().join("bucket"));
+        let cipher = Arc::new(bootstrap::open_cipher(backend.as_ref(), PASSPHRASE).await.unwrap());
+        Remote::new(backend, format!("repos/{}", f.repo_uid), cipher)
+    };
+    {
+        let remote = remote().await;
+        let (_seeded, etag) = remote.get_manifest().await.unwrap();
+        remote
+            .put_manifest(&Manifest::default(), etag.as_deref())
+            .await
+            .unwrap();
+    }
+    let zero = f.zero();
+
+    f.push(Some("alice"), &format!("{zero} {} refs/tags/v0\n", f.base))
+        .unwrap();
+    assert_eq!(remote().await.get_manifest().await.unwrap().0.head, None);
+
+    f.push(Some("alice"), &format!("{zero} {} refs/heads/trunk\n", f.base))
+        .unwrap();
+    assert_eq!(
+        remote().await.get_manifest().await.unwrap().0.head.as_deref(),
+        Some("refs/heads/trunk")
+    );
+}
+
+#[tokio::test]
 async fn deleting_an_unprotected_branch_removes_it_from_refs_json() {
     let f = Fixture::new("sha256", Owner::Alice).await;
     f.push(Some("bob"), &format!("{} {} refs/heads/dev\n", f.base, f.zero()))

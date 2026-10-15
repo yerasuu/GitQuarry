@@ -182,7 +182,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use gitquarry_core::app::AppContext;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 pub(crate) type State_ = axum::extract::State<Arc<AppContext>>;
 
@@ -601,7 +601,11 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         )
         .route(
             "/_releases/asset_upload/{*repo}",
-            get(repo::releases::handler_mutation_get).post(repo::releases::handler_upload_asset_post),
+            get(repo::releases::handler_mutation_get)
+                .post(repo::releases::handler_upload_asset_post)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    repo::releases::MAX_ASSET_UPLOAD_BODY_BYTES,
+                )),
         )
         .route(
             "/_releases/asset_delete/{*repo}",
@@ -721,7 +725,20 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             "/_federation/gossip/announce",
             axum::routing::post(federation_proxy::proxy_public),
         )
-        .route("/_federation/gossip/peers", get(federation_proxy::proxy_public));
+        .route("/_federation/gossip/peers", get(federation_proxy::proxy_public))
+        .route(
+            "/_federation/sister/handshake",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route(
+            "/_federation/sister/verify",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route(
+            "/_federation/sister/ban-event",
+            axum::routing::post(federation_proxy::proxy_public),
+        )
+        .route("/_federation/sister/bans", get(federation_proxy::proxy_public));
 
     app
         // Every mutation target (`/_merges`, `/_tags/delete`, ... 31 of them)
@@ -738,6 +755,10 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&ctx),
             gitquarry_core::git::http::middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&ctx),
+            secure_cookies_middleware,
         ))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&ctx),
@@ -838,6 +859,43 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
     response
 }
 
+/// Keeps cookies off plain HTTP on an instance that declares itself HTTPS:
+/// [`cookies::set_cookie`] keys `Secure` on `X-Forwarded-Proto`, and a proxy
+/// that forgets the header would otherwise downgrade every session cookie
+/// without a trace. Inside `request_cache_middleware`, so the settings read
+/// is a cache hit whenever the handler already loaded them, and only done
+/// for a response that sets a cookie. The flash layer's clearing cookie sits
+/// outside it on purpose: an expired, empty cookie carries nothing.
+async fn secure_cookies_middleware(
+    State(ctx): State_,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut response = next.run(req).await;
+    if !response.headers().contains_key(axum::http::header::SET_COOKIE) {
+        return response;
+    }
+    match gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await {
+        Ok((settings, _)) => {
+            let is_https = settings
+                .public_url
+                .as_deref()
+                .and_then(|url| url.get(..8))
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+            if is_https {
+                cookies::force_secure(&mut response);
+            }
+        }
+        // Fails open to the per-request answer rather than failing the
+        // response: the cookie still gets `Secure` whenever the proxy said
+        // https, as before this layer existed.
+        Err(e) => {
+            warn!(target: "webui::cookies", error = %e, "couldn't read settings; Secure follows X-Forwarded-Proto only")
+        }
+    }
+    response
+}
+
 /// Response headers applied to every route, hand-rolled (`from_fn`, no
 /// `tower-http`) since it's four header inserts, same "small enough to
 /// write directly" call as [`cookies::get_cookie`]/[`cookies::set_cookie`].
@@ -849,10 +907,12 @@ async fn flash_middleware(req: axum::extract::Request, next: axum::middleware::N
 /// nonce could ever have covered anyway. `tests/webui_csp.rs` walks `src/`
 /// and fails if any view goes back to an inline script, handler or
 /// `javascript:` URL. `style-src` is `'self'` alone, with
-/// no `'unsafe-inline'`: no view sets a `style="..."` attribute any more —
+/// no `'unsafe-inline'`, so no view may set a `style="..."` attribute —
 /// bar widths, language colours and `display:inline` all resolve to classes
 /// in `style/utilities.css` (see `components::width_class` and
-/// `repo::summary::language_class`). That directive can't be relaxed by a
+/// `repo::summary::language_class`), and per-repo label colours, which no
+/// class can enumerate, travel as `data-label-color` for `style/app.js` to
+/// paint through the CSSOM (`components::label_pill`). That directive can't be relaxed by a
 /// nonce either way, since CSP nonces cover `<style>` elements and never
 /// style attributes, so the class file is what keeps it tight —
 /// `tests/webui_csp.rs` fails if a view goes back to an attribute.

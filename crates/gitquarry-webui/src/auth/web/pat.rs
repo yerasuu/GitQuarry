@@ -124,6 +124,10 @@ async fn resolve_scopes(
 
 #[derive(serde::Deserialize)]
 pub(crate) struct PatForm {
+    /// Not `action` on the wire: a control named `action` shadows the
+    /// `data-async` form's own `.action` property, so `style/app.js` would
+    /// post to `[object HTMLInputElement]` (see `webui::actions`).
+    #[serde(rename = "pat_action")]
     action: String,
     #[serde(default)]
     csrf: String,
@@ -258,7 +262,7 @@ fn render_pat_page(
                         td {
                             form method="post" action=(&action_url) class="inline-form" data-async data-async-target="#pat-body" data-confirm=(t::revoke_confirm(locale, &token.label)) {
                                 (PreEscaped(csrf))
-                                input type="hidden" name="action" value="revoke";
+                                input type="hidden" name="pat_action" value="revoke";
                                 input type="hidden" name="uid" value=(token.uid.as_str());
                                 button type="submit" { (t::revoke_button(locale)) }
                             }
@@ -271,7 +275,7 @@ fn render_pat_page(
         (settings_section(&t::create_heading(locale), None, html! {
             form method="post" action=(&action_url) data-async data-async-target="#pat-body" {
                 (PreEscaped(csrf))
-                input type="hidden" name="action" value="create";
+                input type="hidden" name="pat_action" value="create";
                 (field(&t::label_column_header(locale), None, html! {
                     input name="label" size="30" placeholder=(t::label_placeholder(locale));
                 }))

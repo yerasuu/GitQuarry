@@ -13,11 +13,18 @@ use gitquarry_federation::state::FederationState;
 use gitquarry_federation::web;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    // `RUST_LOG` overrides; otherwise `info`, same default `gitquarry`
+    // itself uses, so both processes log at the same level out of the box.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
     if let Err(e) = run().await {
-        eprintln!("gitquarry-federation: fatal: {e:#}");
+        tracing::error!(target: "gitquarry_federation", error = %format!("{e:#}"), "fatal");
         std::process::exit(1);
     }
 }
@@ -37,9 +44,10 @@ async fn run() -> Result<()> {
         }),
         _ => {
             if !config.seed_peers.is_empty() {
-                eprintln!(
-                    "gitquarry-federation: warning: seed_peers is set but own_web_base_url/own_git_base_url \
-                     aren't both configured — this instance will answer gossip but never initiate it"
+                tracing::warn!(
+                    target: "gitquarry_federation",
+                    "seed_peers is set but own_web_base_url/own_git_base_url aren't both configured — this \
+                     instance will answer gossip but never initiate it"
                 );
             }
             None

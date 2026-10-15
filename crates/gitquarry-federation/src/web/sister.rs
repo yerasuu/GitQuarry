@@ -37,15 +37,49 @@ struct HandshakeRequest {
 /// `POST /_federation/sister/handshake` — no bearer token yet, this call
 /// is what *establishes* the shared secret in the first place. Anyone can
 /// call it, but it only ever does anything if this side already has
-/// `sister_requested` set for `instance_name` (`sister::receive_handshake`'s
-/// own doc comment).
+/// `sister_requested` on for `instance_name` *and* the instance at that
+/// peer's registered URL vouches for the secret (`sister::receive_handshake`'s
+/// own doc comment). Needs `own_web_base_url`/`own_git_base_url` set, since
+/// the dial-back has to tell the peer who is asking.
 pub(crate) async fn handler_handshake_post(State(state): State_, body: Bytes) -> Response {
     let Ok(req) = serde_json::from_slice::<HandshakeRequest>(&body) else {
         return json_error(StatusCode::BAD_REQUEST, "invalid JSON body");
     };
-    match sister::receive_handshake(state.backend.as_ref(), &state.cipher, &req.instance_name, &req.secret).await {
+    let Some(own) = &state.self_announce else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this instance has no own_web_base_url/own_git_base_url configured, so it can't verify a sister handshake",
+        );
+    };
+    match sister::receive_handshake(
+        state.backend.as_ref(),
+        &state.cipher,
+        &own.name,
+        &req.instance_name,
+        &req.secret,
+    )
+    .await
+    {
         Ok(ok) => json_response(StatusCode::OK, &serde_json::json!({ "ok": ok })),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => json_error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+    }
+}
+
+/// `POST /_federation/sister/verify` — the dial-back a peer makes while
+/// handling *our* handshake: `instance_name` is that peer's name as this
+/// instance knows it, `secret` the one it was offered. Answers only
+/// yes/no, so it reveals nothing to a caller who doesn't already hold the
+/// secret.
+pub(crate) async fn handler_verify_post(State(state): State_, body: Bytes) -> Response {
+    let Ok(req) = serde_json::from_slice::<HandshakeRequest>(&body) else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid JSON body");
+    };
+    match sister::verify_staged_secret(state.backend.as_ref(), &state.cipher, &req.instance_name, &req.secret).await {
+        Ok(ok) => json_response(StatusCode::OK, &serde_json::json!({ "ok": ok })),
+        Err(e) => {
+            tracing::error!(target: "gitquarry_federation::web::sister", error = %format!("{e:#}"), "sister verify failed");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "couldn't check the secret")
+        }
     }
 }
 
@@ -76,20 +110,18 @@ pub(crate) async fn handler_bans_get(State(state): State_, headers: HeaderMap) -
     let Some(secret) = bearer_token(&headers) else {
         return json_error(StatusCode::UNAUTHORIZED, "missing bearer token");
     };
-    if sister::sister_by_secret(state.backend.as_ref(), &state.cipher, &secret)
-        .await
-        .ok()
-        .flatten()
-        .is_none()
-    {
+    let Ok(Some(caller)) = sister::sister_by_secret(state.backend.as_ref(), &state.cipher, &secret).await else {
         return json_error(StatusCode::UNAUTHORIZED, "unknown sister credential");
-    }
+    };
     let peers = access::list_all_peers(state.backend.as_ref(), &state.cipher)
         .await
         .unwrap_or_default();
+    // Bans learned from the caller are its own decisions; handing them back
+    // would let a ban it has since lifted (and whose unban push got lost)
+    // come straight back to it on its next pull.
     let out: Vec<SisterBanEntry> = peers
         .into_iter()
-        .filter(|p| p.banned)
+        .filter(|p| p.banned && p.synced_from_sister.as_deref() != Some(caller.name.as_str()))
         .map(|p| SisterBanEntry {
             peer_name: p.name,
             git_base_url: p.git_base_url,

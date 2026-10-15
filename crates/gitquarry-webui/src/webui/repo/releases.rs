@@ -696,6 +696,42 @@ pub(crate) async fn handler_delete_post(
 /// handler" precedent `export::PLAIN_MAX_BYTES` already sets.
 const MAX_ASSET_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// The route's whole-body cap, layered on in `webui::router`: axum's
+/// default 2 MiB `DefaultBodyLimit` otherwise rejects any asset past that
+/// as an unparseable multipart body. The extra MiB is room for the text
+/// fields and multipart framing, so an asset right at
+/// [`MAX_ASSET_UPLOAD_BYTES`] still reaches the handler's own, clearer cap.
+pub(crate) const MAX_ASSET_UPLOAD_BODY_BYTES: usize = MAX_ASSET_UPLOAD_BYTES as usize + 1024 * 1024;
+
+/// Cap on each text field (`tag`/`csrf`/`signature`): `Field::text`
+/// buffers the whole field in memory, and with the body limit raised for
+/// the file a single text field could otherwise hold gigabytes. An armored
+/// detached signature is a few KiB.
+const MAX_TEXT_FIELD_BYTES: usize = 64 * 1024;
+
+async fn read_text_field(
+    mut field: axum::extract::multipart::Field<'_>,
+    locale: gitquarry_i18n::Locale,
+) -> Result<String, AppError> {
+    let name = field.name().unwrap_or_default().to_string();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = field.chunk().await.map_err(|e| {
+        AppError::bad_request(anyhow::anyhow!(
+            "{}",
+            gitquarry_i18n::shared::release::invalid_multipart(locale, e)
+        ))
+    })? {
+        if bytes.len() + chunk.len() > MAX_TEXT_FIELD_BYTES {
+            return Err(AppError::bad_request(anyhow::anyhow!(
+                "{}",
+                gitquarry_i18n::shared::release::text_field_too_large(locale, &name, MAX_TEXT_FIELD_BYTES)
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes).map_err(|e| AppError::bad_request(anyhow::anyhow!("{e}")))
+}
+
 /// Lowercase hex — same tiny local helper `git::lfs` has, not worth a shared
 /// utility module for four lines.
 fn encode_hex(bytes: &[u8]) -> String {
@@ -742,24 +778,9 @@ pub(crate) async fn handler_upload_asset_post(
         ))
     })? {
         match field.name() {
-            Some("tag") => {
-                tag = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::bad_request(anyhow::anyhow!("{e}")))?;
-            }
-            Some("csrf") => {
-                csrf = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::bad_request(anyhow::anyhow!("{e}")))?;
-            }
-            Some("signature") => {
-                signature = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::bad_request(anyhow::anyhow!("{e}")))?;
-            }
+            Some("tag") => tag = read_text_field(field, locale).await?,
+            Some("csrf") => csrf = read_text_field(field, locale).await?,
+            Some("signature") => signature = read_text_field(field, locale).await?,
             Some("file") => {
                 let filename = validate::validate_asset_filename(field.file_name().unwrap_or(""))
                     .map_err(AppError::bad_request)?;

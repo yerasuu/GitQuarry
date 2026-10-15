@@ -68,6 +68,37 @@ async fn delete_twice_and_restore_without_deleting_both_reject() {
     assert!(repo::delete(&ctx, &resolved, "team/proj").await.is_err());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_deletes_let_exactly_one_win() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    let resolved = Arc::new(
+        repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+
+    // A delete that lost its CAS race used to report success anyway, so
+    // several concurrent ones all came back `Ok`.
+    let tasks: Vec<_> = (0..8)
+        .map(|_| {
+            let ctx = Arc::clone(&ctx);
+            let resolved = Arc::clone(&resolved);
+            tokio::spawn(async move { repo::delete(&ctx, &resolved, "team/proj").await.is_ok() })
+        })
+        .collect();
+    let mut wins = 0;
+    for task in tasks {
+        if task.await.unwrap() {
+            wins += 1;
+        }
+    }
+    assert_eq!(wins, 1);
+    let (config, _etag) = resolved.remote.get_repo_config().await.unwrap();
+    assert!(config.deleted_at.is_some());
+}
+
 #[tokio::test]
 async fn purge_wipes_the_repo_and_frees_its_name() {
     let dir = tempfile::tempdir().unwrap();

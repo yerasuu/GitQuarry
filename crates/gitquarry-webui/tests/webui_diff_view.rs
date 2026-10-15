@@ -81,6 +81,16 @@ async fn diff_view_buttons_mark_the_current_one_active() {
 }
 
 #[tokio::test]
+async fn diff_view_buttons_follow_the_locale() {
+    let (_dir, app, sha) = fixture().await;
+    let uri = format!("/team/proj?view=commit&sha={sha}");
+    let html = get(&app, &uri, Some("locale=es")).await;
+    assert!(html.contains(">unificado</button>"), "{html}");
+    assert!(html.contains(">lado a lado</button>"), "{html}");
+    assert!(!html.contains(">side by side</button>"), "{html}");
+}
+
+#[tokio::test]
 async fn toggle_diff_view_sets_the_explicit_pick_and_redirects() {
     let page = toggle("split", "/acme/proj").await;
     assert_eq!(page.status, StatusCode::SEE_OTHER);

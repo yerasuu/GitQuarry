@@ -3,12 +3,10 @@
 //! resolve a `Peer` by anything other than its own `name`.
 
 use crate::entities::Peer;
-use crate::validate::validate_instance_url;
 use anyhow::{Result, bail};
 use s3db::{Backend, Cas, Cipher};
 
 const MAX_PEER_NAME_LEN: usize = 128;
-const MAX_PEER_URL_LEN: usize = 512;
 
 /// Validates a peer's display name before it's stored — it's also a
 /// literal S3 key segment (`.conf/peers/<name>.json`).
@@ -23,14 +21,6 @@ pub fn validate_peer_name(name: &str) -> Result<()> {
         bail!("invalid peer name (can't contain '/' or '\\\\')");
     }
     Ok(())
-}
-
-/// Validates a peer's `web_base_url`/`git_base_url`.
-pub fn validate_peer_url(url: &str) -> Result<()> {
-    if url.len() > MAX_PEER_URL_LEN {
-        bail!("too-long peer URL (max {MAX_PEER_URL_LEN})");
-    }
-    validate_instance_url(url)
 }
 
 /// Fetches one peer by name — `None` means "no such peer".

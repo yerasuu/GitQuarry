@@ -129,3 +129,28 @@ async fn list_comments_drops_system_notes_and_keeps_notes_without_the_flag() {
     assert_eq!(comments[0].author, "bob");
     assert_eq!(comments[0].body, "looks good");
 }
+
+#[tokio::test]
+async fn list_merge_requests_cuts_at_or_after_since_by_instant_not_by_spelling() {
+    let (base, _seen) = fake_gitlab(|path| {
+        path.ends_with("/merge_requests").then(|| {
+            let mr = |iid: u64, updated_at: &str| {
+                json!({"iid": iid, "title": "t", "state": "opened", "author": {"username": "alice"},
+                       "source_branch": "feature", "target_branch": "main",
+                       "created_at": "2024-01-01T00:00:00Z", "updated_at": updated_at})
+            };
+            json!([
+                // The same instant as `since`, in GitLab's millisecond shape.
+                mr(6, "2024-01-02T00:00:00.000Z"),
+                // An hour *before* `since`, spelled in a later-sorting offset.
+                mr(5, "2024-01-02T00:00:00+01:00"),
+            ])
+        })
+    })
+    .await;
+    let forge = GitLabForge::new(&format!("{base}/acme/demo"), "tok").unwrap();
+
+    let mrs = forge.list_merge_requests(Some("2024-01-02T00:00:00Z")).await.unwrap();
+    let numbers: Vec<u64> = mrs.iter().map(|m| m.number).collect();
+    assert_eq!(numbers, [6]);
+}

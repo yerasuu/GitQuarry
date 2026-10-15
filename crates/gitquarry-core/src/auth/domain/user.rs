@@ -372,11 +372,39 @@ pub async fn remove_pubkey(
     let (mut user, etag) = require_user(ctx, username, locale).await?;
     user.pubkeys
         .retain(|k| access::key_fingerprint(k).map(|fp| fp != fingerprint).unwrap_or(true));
+    // Removing a key is how an owner answers "this key leaked", so web
+    // sessions issued while it was valid go too — see [`set_password`].
+    user.session_epoch = user.session_epoch.wrapping_add(1);
     let cas = access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await?;
     if cas == Cas::Ok {
         access::release_pubkey(ctx.backend().as_ref(), fingerprint).await;
     }
     Ok(cas)
+}
+
+/// Ends every web session of `username`, the caller's own included: the
+/// "sign out everywhere" action, and what each credential removal does on
+/// its way out. Bumps `User::session_epoch` and touches nothing else.
+///
+/// Retries a lost CAS instead of handing [`Cas::Conflict`] back, because a
+/// caller that reports "signed out" over a conflict leaves the very session
+/// it meant to kill alive; any concurrent edit only changes other fields,
+/// so re-reading and bumping again is always right.
+///
+/// # Errors
+///
+/// `username` doesn't exist, storage fails, or the record keeps changing
+/// under every attempt.
+pub async fn revoke_sessions(ctx: &AppContext, username: &str, locale: gitquarry_i18n::Locale) -> Result<()> {
+    const ATTEMPTS: usize = 5;
+    for _ in 0..ATTEMPTS {
+        let (mut user, etag) = require_user(ctx, username, locale).await?;
+        user.session_epoch = user.session_epoch.wrapping_add(1);
+        if access::put_user(ctx.backend().as_ref(), &ctx.cipher, &user, etag.as_deref()).await? == Cas::Ok {
+            return Ok(());
+        }
+    }
+    bail!("{}", gitquarry_i18n::shared::cas_conflict(locale))
 }
 
 /// No global uniqueness claim, unlike [`add_pubkey`] — see [`crate::auth::entities::User::gpg_keys`]'s

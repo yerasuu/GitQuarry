@@ -40,6 +40,7 @@ async fn seeded() -> (tempfile::TempDir, Work, Router, String) {
             uploaded_by: "alice".to_string(),
             signature: None,
             signature_verified: false,
+            object: None,
         }],
         created_at: "2024-01-01T00:00:00Z".to_string(),
         created_by: "alice".to_string(),

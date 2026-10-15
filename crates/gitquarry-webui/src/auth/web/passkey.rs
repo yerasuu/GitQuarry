@@ -427,7 +427,7 @@ pub(crate) async fn handler_remove(
     if !is_passkey_key(&form.key) {
         return Err(not_found());
     }
-    if !domain::passkey::remove(&ctx, &me.uid, &form.key).await? {
+    if !domain::passkey::remove(&ctx, &me, &form.key, locale).await? {
         return Err(not_found());
     }
     gitquarry_core::storage::audit::record(

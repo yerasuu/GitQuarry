@@ -90,8 +90,16 @@ impl GossipTable {
             last_seen: now,
             reported_by: BTreeSet::new(),
         });
-        entry.web_base_url = web_base_url.to_string();
-        entry.git_base_url = git_base_url.to_string();
+        // The name is self-chosen, so corroboration only ever vouches for the
+        // URLs it was gathered against — otherwise anyone could announce a
+        // well-corroborated candidate's name with their own URL and inherit
+        // its sources and age straight into an auto-link.
+        if entry.web_base_url != web_base_url || entry.git_base_url != git_base_url {
+            entry.web_base_url = web_base_url.to_string();
+            entry.git_base_url = git_base_url.to_string();
+            entry.first_seen = now;
+            entry.reported_by.clear();
+        }
         entry.last_seen = now;
         if let Some(reporter) = reporter {
             entry.reported_by.insert(reporter.to_string());
@@ -189,7 +197,9 @@ async fn announce_once(gossip: &GossipTable, seed_url: &str, self_info: &GossipC
                 }
             }
         }
-        Err(e) => eprintln!("gitquarry-federation: warning: gossip announce to {seed_url} failed: {e:#}"),
+        Err(e) => {
+            tracing::warn!(target: "gitquarry_federation::gossip", seed_url, error = %format!("{e:#}"), "gossip announce failed")
+        }
     }
 }
 
@@ -217,7 +227,7 @@ pub async fn run_auto_link_tick(
     let linked: HashSet<String> = match crate::access::list_all_peers(backend, cipher).await {
         Ok(peers) => peers.into_iter().map(|p| p.name).collect(),
         Err(e) => {
-            eprintln!("gitquarry-federation: warning: auto-link tick couldn't list current peers: {e:#}");
+            tracing::warn!(target: "gitquarry_federation::gossip", error = %format!("{e:#}"), "auto-link tick couldn't list current peers");
             return;
         }
     };
@@ -234,15 +244,20 @@ pub async fn run_auto_link_tick(
         .await
         {
             Ok(Some(_)) => {
-                eprintln!(
-                    "gitquarry-federation: auto-linked '{}' after gossip corroboration ({}+ linked sources, {}+s old)",
-                    candidate.name, min_sources, min_age_secs
+                tracing::info!(
+                    target: "gitquarry_federation::gossip",
+                    peer = %candidate.name,
+                    min_sources,
+                    min_age_secs,
+                    "auto-linked after gossip corroboration"
                 );
             }
             Ok(None) => {} // Name collision with an already-linked peer added concurrently — fine, skip.
-            Err(e) => eprintln!(
-                "gitquarry-federation: warning: auto-link of '{}' failed: {e:#}",
-                candidate.name
+            Err(e) => tracing::warn!(
+                target: "gitquarry_federation::gossip",
+                peer = %candidate.name,
+                error = %format!("{e:#}"),
+                "auto-link failed"
             ),
         }
     }

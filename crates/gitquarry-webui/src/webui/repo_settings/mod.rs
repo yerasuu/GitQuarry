@@ -64,13 +64,13 @@ use gitquarry_core::validate;
 use maud::{Markup, PreEscaped, html};
 
 /// What each `save_*` helper below reports back, instead of a
-/// `Flash<'static>` directly: the CAS-conflict case now needs
-/// [`gitquarry_i18n::shared::cas_conflict`]'s locale-resolved *owned* `String`,
-/// which can't fit `Flash`'s `&'static str` — so the actual `Flash` is only
-/// built once, in [`handler_repo_conf_post`], where that owned string
-/// already lives long enough to be borrowed from.
+/// `Flash<'static>` directly: locale-resolved messages (the CAS conflict,
+/// a translated success) are *owned* `String`s, which can't fit `Flash`'s
+/// borrowed `&str` — so the actual `Flash` is only built once, in
+/// [`handler_repo_conf_post`], where those strings already live long
+/// enough to be borrowed from.
 enum FlashOutcome {
-    Ok(&'static str),
+    Ok(String),
     Conflict,
     Invalid(String),
 }
@@ -91,6 +91,21 @@ fn needs_owner_tier(form: &RepoConfForm) -> bool {
         "set_perm" => matches!(form.perm.as_str(), "maintainer" | "owner"),
         _ => false,
     }
+}
+
+/// Whether a `set_perm` targets someone who already holds `Maintainer`+ on
+/// `repo`. [`needs_owner_tier`] only sees the *new* tier, so without this a
+/// `Maintainer` could demote or strip an `Owner` by submitting a lower one.
+async fn touches_privileged_member(
+    ctx: &gitquarry_core::app::AppContext,
+    repo: &str,
+    form: &RepoConfForm,
+) -> Result<bool, AppError> {
+    if form.action != "set_perm" {
+        return Ok(false);
+    }
+    let current = access::effective_permission_for(ctx.backend().as_ref(), &ctx.cipher, &form.username, repo).await?;
+    Ok(matches!(current, Some(Permission::Maintainer | Permission::Owner)))
 }
 
 /// `None` if this request may proceed with the authority `form`'s action
@@ -128,7 +143,7 @@ async fn require_repo_authority(
     }
     let Some(user) = login::current_user(ctx, headers).await else {
         return Ok(Some(
-            Redirect::to(&format!("/_login?return_to={}", url_encode(repo))).into_response(),
+            Redirect::to(&format!("/_login?return_to={}", url_encode(&format!("/{repo}")))).into_response(),
         ));
     };
     let allowed = if form.action == "purge_repo" {
@@ -136,7 +151,7 @@ async fn require_repo_authority(
         // entirely is an instance-admin call, not something a repo's own
         // Owner tier grants — see `domain::repo::purge`'s doc comment.
         user.is_admin
-    } else if needs_owner_tier(form) {
+    } else if needs_owner_tier(form) || touches_privileged_member(ctx, repo, form).await? {
         access::can_manage_repo_members_for(ctx.backend().as_ref(), &ctx.cipher, &user.username, repo).await?
     } else {
         access::can_manage_repo_settings_for(ctx.backend().as_ref(), &ctx.cipher, &user.username, repo).await?

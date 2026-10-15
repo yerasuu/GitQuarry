@@ -25,6 +25,22 @@ fn auto_link_requires_both_enough_linked_sources_and_enough_age() {
 }
 
 #[test]
+fn reannouncing_a_corroborated_name_with_other_urls_starts_corroboration_over() {
+    let table = GossipTable::default();
+    table.report("acme", "https://acme.example", "https://acme.example", Some("linked-a"));
+    table.report("acme", "https://acme.example", "https://acme.example", Some("linked-b"));
+    let linked: HashSet<String> = ["linked-a".to_string(), "linked-b".to_string()].into_iter().collect();
+    assert_eq!(table.auto_link_candidates(2, 0, &linked).len(), 1);
+
+    table.report("acme", "https://evil.example", "https://evil.example", None);
+    assert!(table.auto_link_candidates(1, 0, &linked).is_empty());
+    // The old sources vouched for acme.example, so they stay forgotten even
+    // once one of them reports the new URLs too — only fresh reports count.
+    table.report("acme", "https://evil.example", "https://evil.example", Some("linked-a"));
+    assert!(table.auto_link_candidates(2, 0, &linked).is_empty());
+}
+
+#[test]
 fn auto_link_ignores_reporters_that_arent_currently_linked() {
     let table = GossipTable::default();
     table.report(

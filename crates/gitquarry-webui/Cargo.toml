@@ -43,8 +43,6 @@ form_urlencoded = { workspace = true }
 
 # General utilities
 anyhow = { workspace = true }
-# CSPRNG for the first-boot bootstrap token -- see `webui::bootstrap`.
-rand = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 lru = "0.18.5"

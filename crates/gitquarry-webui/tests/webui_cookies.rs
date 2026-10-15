@@ -129,3 +129,29 @@ async fn the_session_cookie_is_secure_behind_an_https_proxy() {
     let line = set_cookie_line(&response, "web-session");
     assert!(line.contains("; Secure"), "{line}");
 }
+
+/// An instance whose `public_url` is HTTPS keeps every cookie `Secure` even
+/// when its proxy forgets `X-Forwarded-Proto`; an HTTP one doesn't change.
+#[tokio::test]
+async fn an_https_public_url_keeps_cookies_secure_without_the_proxy_header() {
+    use gitquarry_core::storage::settings;
+    for (url, secure) in [("https://git.example.com", true), ("http://git.example.com", false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+        gitquarry_test_support::user(&ctx, "alice", false).await;
+        let (mut stored, etag) = settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+            .await
+            .unwrap();
+        stored.public_url = Some(url.to_string());
+        settings::put_settings(ctx.backend().as_ref(), &stored, etag.as_deref(), &ctx.cipher)
+            .await
+            .unwrap();
+        let app = gitquarry_webui::webui::router(ctx);
+
+        let line = login_csrf_cookie_with_proto(&app, None).await;
+        assert_eq!(line.contains("; Secure"), secure, "{url}: {line}");
+        // Never doubled when the proxy did send it.
+        let line = login_csrf_cookie_with_proto(&app, Some("https")).await;
+        assert_eq!(line.matches("Secure").count(), 1, "{url}: {line}");
+    }
+}

@@ -100,12 +100,11 @@ pub(crate) async fn handler_tokens_post(
             }
             Err(e) => e,
         },
-        "revoke" => {
-            domain::token::revoke(state.backend.as_ref(), &state.cipher, &username, &form.uid)
-                .await
-                .ok();
-            "revoked.".to_string()
-        }
+        "revoke" => match domain::token::revoke(state.backend.as_ref(), &state.cipher, &username, &form.uid).await {
+            Ok(true) => "revoked.".to_string(),
+            Ok(false) => "no such token.".to_string(),
+            Err(e) => format!("revoke failed: {e:#}"),
+        },
         "link_peer" => {
             match domain::peer_credential::set(
                 state.backend.as_ref(),

@@ -150,16 +150,19 @@ async fn git_and_lfs_endpoints_are_intercepted_with_the_method_each_expects() {
         }
     }
 
-    // A recognized suffix on a repo that doesn't exist is still git's to
-    // answer, not the browsing UI's.
+    // A recognized suffix whose prefix names no repo is the browsing UI's
+    // to answer: a file called `info/refs` or `info/lfs/locks` viewed
+    // under `/team/proj/blob/main/` looks exactly like a git endpoint.
     let status = upload_pack_refs(&client, &base, "nobody/here")
         .send()
         .await
         .unwrap()
         .status();
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, PASSTHROUGH);
 
     for path in [
+        "/team/proj/blob/main/info/refs",
+        "/team/proj/blob/main/info/lfs/locks",
         "/team/proj",
         "/info/refs",
         "/team/proj/info/lfs/objects/a/b",
@@ -215,7 +218,7 @@ async fn info_refs_advertises_the_service_named_anywhere_in_the_query() {
         format!("{base}/acme/demo/info/refs?service=git-evil"),
     ] {
         let status = client.get(&url).send().await.unwrap().status();
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{url}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{url}");
     }
 }
 
@@ -480,6 +483,18 @@ async fn anonymous_info_refs_gets_rate_limited_past_the_cap() {
 }
 
 #[tokio::test]
+async fn a_push_advertisement_is_not_counted_against_the_clone_rate_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = serve_public_repo(dir.path(), false).await;
+    let client = reqwest::Client::new();
+    let push_refs = || client.get(format!("{base}/acme/demo/info/refs?service=git-receive-pack"));
+    spend_anonymous_budget(|_| push_refs()).await;
+    assert_eq!(push_refs().send().await.unwrap().status(), StatusCode::OK);
+    // The fetch budget is still whole.
+    spend_anonymous_budget(|_| upload_pack_refs(&client, &base, "acme/demo")).await;
+}
+
+#[tokio::test]
 async fn the_rate_limit_ignores_a_forwarded_header_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let base = serve_public_repo(dir.path(), false).await;
@@ -498,21 +513,22 @@ async fn the_rate_limit_ignores_a_forwarded_header_by_default() {
 }
 
 #[tokio::test]
-async fn a_trusted_forwarded_header_keys_the_rate_limit_on_its_first_hop() {
+async fn a_trusted_forwarded_header_keys_the_rate_limit_on_its_last_hop() {
     let dir = tempfile::tempdir().unwrap();
     let base = serve_public_repo(dir.path(), true).await;
     let client = reqwest::Client::new();
     let forwarded = |value: String| upload_pack_refs(&client, &base, "acme/demo").header("x-forwarded-for", value);
 
-    // Only the proxy hops vary, so every request shares 9.9.9.9's bucket.
-    spend_anonymous_budget(|i| forwarded(format!("9.9.9.9, 10.0.0.{i}"))).await;
-    let exhausted = forwarded("9.9.9.9, 10.0.0.250".to_string())
+    // The proxy appends the address it saw; whatever the client prepends
+    // varies freely and must not buy it a fresh bucket.
+    spend_anonymous_budget(|i| forwarded(format!("10.0.0.{i}, 9.9.9.9"))).await;
+    let exhausted = forwarded("10.0.0.250, 9.9.9.9".to_string())
         .send()
         .await
         .unwrap()
         .status();
     assert_eq!(exhausted, StatusCode::TOO_MANY_REQUESTS);
-    let other_client = forwarded("8.8.8.8".to_string()).send().await.unwrap().status();
+    let other_client = forwarded("9.9.9.9, 8.8.8.8".to_string()).send().await.unwrap().status();
     assert_eq!(other_client, StatusCode::OK);
 }
 
@@ -537,4 +553,199 @@ async fn without_the_forwarded_header_a_trusting_server_keys_the_rate_limit_on_t
         .unwrap()
         .status();
     assert_eq!(status, StatusCode::OK);
+}
+
+/// The real `pre-receive` hook needs the `gitquarry` binary; this stand-in
+/// accepts every push and, like the real one, never tells this process
+/// what it did.
+fn accept_every_push(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = dir.join("accepting-hook");
+    std::fs::write(&exe, "#!/bin/sh\ncat >/dev/null\nexit 0\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    exe
+}
+
+/// `base` with alice's Basic credentials in it, the way a git remote URL
+/// carries them.
+fn as_alice(base: &str) -> String {
+    base.replace("http://", &format!("http://alice:{}@", PASSWORD.replace(' ', "%20")))
+}
+
+#[tokio::test]
+async fn a_push_over_http_emits_the_refs_it_moved() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = AppContext {
+        exe_path: accept_every_push(dir.path()),
+        ..gitquarry_test_support::ctx(dir.path())
+    };
+    gitquarry_test_support::user(&ctx, "alice", false).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let resolved = ctx.resolve_repo("alice/proj").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let first = work.commit(&[("a.txt", "one\n")], "first").await;
+    work.push(&resolved, "refs/heads/main").await;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    ctx.events.register(Arc::new(move |event| {
+        let _ = tx.lock().unwrap().send(event);
+    }));
+    let base = serve(Arc::new(ctx)).await;
+    let second = work.commit(&[("a.txt", "two\n")], "second").await;
+    let remote = format!("{}/alice/proj", as_alice(&base));
+    gitquarry_test_support::git(work.path(), &["push", "-q", &remote, "main"]).await;
+
+    let event = rx.recv_timeout(Duration::from_secs(10)).expect("no push event");
+    let gitquarry_core::events::RepoEvent::Push { refs, pusher, .. } = event else {
+        panic!("not a push event: {event:?}");
+    };
+    assert_eq!(pusher.as_deref(), Some("alice"));
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].refname, "refs/heads/main");
+    assert_eq!(refs[0].old.as_deref(), Some(first.as_str()));
+    assert_eq!(refs[0].new.as_deref(), Some(second.as_str()));
+}
+
+#[tokio::test]
+async fn a_clone_over_http_gets_the_whole_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let resolved = ctx.resolve_repo("acme/demo").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    work.commit(&[("a.txt", "one\n")], "first").await;
+    let head = work.commit(&[("b.txt", "two\n")], "second").await;
+    work.push(&resolved, "refs/heads/main").await;
+    let base = serve(Arc::new(ctx)).await;
+
+    let into = tempfile::tempdir().unwrap();
+    let url = format!("{base}/acme/demo");
+    gitquarry_test_support::git(into.path(), &["clone", "-q", &url, "c"]).await;
+    let clone = into.path().join("c");
+    assert_eq!(gitquarry_test_support::git(&clone, &["rev-parse", "HEAD"]).await, head);
+    assert_eq!(
+        gitquarry_test_support::git(&clone, &["rev-list", "--count", "HEAD"]).await,
+        "2"
+    );
+}
+
+/// Re-wraps every response body so it is polled once more after it ends,
+/// which body adapters in front of the git layer may do (the web UI's
+/// compression layer does).
+async fn poll_body_past_its_end(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    use http_body_util::BodyExt;
+    let (parts, body) = next.run(req).await.into_parts();
+    let frames = futures::stream::unfold(Some(body), |state| async move {
+        let mut body = state?;
+        match body.frame().await {
+            Some(Ok(frame)) => Some((Ok(frame.into_data().unwrap_or_default()), Some(body))),
+            Some(Err(e)) => Some((Err(e), None)),
+            None => {
+                let _ = body.frame().await;
+                None
+            }
+        }
+    });
+    Response::from_parts(parts, axum::body::Body::from_stream(frames))
+}
+
+#[tokio::test]
+async fn a_fetch_survives_its_body_being_polled_past_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let resolved = ctx.resolve_repo("acme/demo").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let head = work.commit(&[("a.txt", "one\n")], "first").await;
+    work.push(&resolved, "refs/heads/main").await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new()
+        .fallback(|| async { PASSTHROUGH })
+        .layer(axum::middleware::from_fn_with_state(
+            ctx,
+            gitquarry_core::git::http::middleware,
+        ))
+        .layer(axum::middleware::from_fn(poll_body_past_its_end));
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    let into = tempfile::tempdir().unwrap();
+    gitquarry_test_support::git(into.path(), &["init", "-q", "--bare", "m"]).await;
+    let mirror = into.path().join("m");
+    let url = format!("http://{addr}/acme/demo");
+    gitquarry_test_support::git(
+        &mirror,
+        &["fetch", "-q", "--prune", "--prune-tags", &url, "+refs/*:refs/*"],
+    )
+    .await;
+    assert_eq!(
+        gitquarry_test_support::git(&mirror, &["rev-parse", "refs/heads/main"]).await,
+        head
+    );
+}
+
+#[tokio::test]
+async fn a_clone_whose_request_git_gzips_still_works() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    create_repo(&ctx, "acme/demo", Visibility::Public).await;
+    let resolved = ctx.resolve_repo("acme/demo").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    // One distinct commit per branch: git sends a `want` line per distinct
+    // oid, and past 1 KiB of them it gzips the upload-pack request.
+    const BRANCHES: usize = 40;
+    for i in 0..BRANCHES {
+        work.commit(&[("n.txt", &i.to_string())], &format!("commit {i}")).await;
+        gitquarry_test_support::git(work.path(), &["branch", &format!("b{i}")]).await;
+    }
+    work.push(&resolved, "refs/heads/main").await;
+    let base = serve(Arc::new(ctx)).await;
+
+    let into = tempfile::tempdir().unwrap();
+    let url = format!("{base}/acme/demo");
+    gitquarry_test_support::git(into.path(), &["clone", "-q", "--mirror", &url, "c"]).await;
+    let branches = gitquarry_test_support::git(&into.path().join("c"), &["branch", "--list", "b*"]).await;
+    assert_eq!(branches.lines().count(), BRANCHES);
+}
+
+#[tokio::test]
+async fn a_push_still_uploading_does_not_lock_readers_out_of_the_repo() {
+    use tokio::io::AsyncWriteExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    gitquarry_test_support::user(&ctx, "alice", false).await;
+    create_repo(&ctx, "alice/proj", Visibility::Private).await;
+    let base = serve(Arc::new(ctx)).await;
+
+    // A push that announces a body and then sends only part of it, the
+    // way a slow uploader looks from the server.
+    let mut slow = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let auth = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(format!("alice:{PASSWORD}"))
+    };
+    let head = format!(
+        "POST /alice/proj/git-receive-pack HTTP/1.1\r\nHost: x\r\nAuthorization: Basic {auth}\r\n\
+         Content-Type: application/x-git-receive-pack-request\r\nContent-Length: 100000\r\n\r\n0000"
+    );
+    slow.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let fetch = upload_pack_refs(&reqwest::Client::new(), &base, "alice/proj").basic_auth("alice", Some(PASSWORD));
+    let status = tokio::time::timeout(Duration::from_secs(10), fetch.send())
+        .await
+        .expect("the fetch queued behind the stalled push")
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
+    drop(slow);
 }

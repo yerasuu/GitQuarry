@@ -68,12 +68,21 @@ async fn authorize(
             "missing or invalid bearer token",
         )));
     };
-    let Ok(Some((owner, token))) = access::resolve_by_token(state.backend.as_ref(), &state.cipher, &secret).await
-    else {
-        return Err(Box::new(json_error(
-            StatusCode::UNAUTHORIZED,
-            "missing or invalid bearer token",
-        )));
+    let (owner, token) = match access::resolve_by_token(state.backend.as_ref(), &state.cipher, &secret).await {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => {
+            return Err(Box::new(json_error(
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid bearer token",
+            )));
+        }
+        Err(e) => {
+            return Err(Box::new(upstream_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "token lookup",
+                &e,
+            )));
+        }
     };
     if !ceiling_covers(&token, required) {
         return Err(Box::new(json_error(
@@ -83,7 +92,8 @@ async fn authorize(
     }
     let uid = match state.core.uid_for_name(repo).await {
         Ok(Some(uid)) => uid,
-        _ => return Err(Box::new(json_error(StatusCode::NOT_FOUND, "no such repo"))),
+        Ok(None) => return Err(Box::new(json_error(StatusCode::NOT_FOUND, "no such repo"))),
+        Err(e) => return Err(Box::new(upstream_error(StatusCode::BAD_GATEWAY, "repo lookup", &e))),
     };
     if !token.repos.contains(&uid) {
         return Err(Box::new(json_error(
@@ -93,12 +103,13 @@ async fn authorize(
     }
     match state.core.authorize(&owner, repo, required.as_str()).await {
         Ok(true) => {}
-        _ => {
+        Ok(false) => {
             return Err(Box::new(json_error(
                 StatusCode::FORBIDDEN,
                 "token lacks sufficient access to this repo",
             )));
         }
+        Err(e) => return Err(Box::new(upstream_error(StatusCode::BAD_GATEWAY, "authorization", &e))),
     }
     access::touch_token_last_used(state.backend.as_ref(), &state.cipher, &token).await;
     Ok(owner)
@@ -113,8 +124,10 @@ async fn authorize_read(
     headers: &HeaderMap,
     repo: &str,
 ) -> Result<(), Box<Response>> {
-    if state.core.public_repo(repo).await.ok().flatten().is_some() {
-        return Ok(());
+    match state.core.public_repo(repo).await {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(e) => return Err(Box::new(upstream_error(StatusCode::BAD_GATEWAY, "repo lookup", &e))),
     }
     authorize(state, headers, repo, Tier::Reporter).await.map(|_| ())
 }
@@ -131,6 +144,16 @@ struct ApiError<'a> {
 
 fn json_error(status: StatusCode, message: &str) -> Response {
     json_response(status, &ApiError { error: message })
+}
+
+/// A storage or core failure must never read as a credential or access
+/// verdict (401/403/404) — the caller would drop a perfectly valid token
+/// or conclude a repo doesn't exist. The detail stays in the log, since it
+/// can name internal hosts or keys an anonymous caller has no business
+/// seeing.
+fn upstream_error(status: StatusCode, what: &str, error: &anyhow::Error) -> Response {
+    tracing::error!(target: "gitquarry_federation::web::api_pulls", what, error = %format!("{error:#}"), "PR API dependency failed");
+    json_error(status, &format!("{what} failed, try again later"))
 }
 
 pub(crate) async fn handler_list_get(
@@ -197,6 +220,15 @@ pub(crate) async fn handler_create_post(State(state): State_, headers: HeaderMap
     } else {
         form.source_repo.trim().to_string()
     };
+    // The MR exposes the source branch's commits to everyone who can see
+    // the target, so the token must be able to read the source too —
+    // otherwise a reporter on a public repo could lift branches out of a
+    // private fork it has no access to.
+    if source_repo != form.repo
+        && let Err(resp) = authorize_read(&state, &headers, &source_repo).await
+    {
+        return *resp;
+    }
     match state
         .core
         .create_merge_request(&crate::core_client::CreateMergeRequest {

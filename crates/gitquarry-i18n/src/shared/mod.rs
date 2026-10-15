@@ -26,6 +26,23 @@ msg!(
 );
 
 msg!(
+    /// A settings form's success flash where nothing more specific applies.
+    saved() {
+        Locale::Es => "guardado.",
+        Locale::En => "saved.",
+    }
+);
+
+msg!(
+    /// A success flash for a write that lands in the bucket itself (users,
+    /// groups), as opposed to a per-browser preference.
+    saved_to_bucket() {
+        Locale::Es => "guardado en el bucket.",
+        Locale::En => "saved to the bucket.",
+    }
+);
+
+msg!(
     /// A confirm-dialog's dismiss action — the footer "Cancel" button and
     /// the header `×` both abandon the dialog the same way, so they share
     /// this one string rather than minting two near-duplicates.

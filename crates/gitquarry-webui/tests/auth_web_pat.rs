@@ -52,7 +52,7 @@ async fn create_and_revoke_share_one_async_target() {
 
     let fields = [
         ("csrf", session.csrf.as_str()),
-        ("action", "create"),
+        ("pat_action", "create"),
         ("label", "ci"),
         ("scopes", "alice/proj:developer"),
     ];
@@ -95,15 +95,22 @@ async fn create_and_revoke_share_one_async_target() {
 async fn revoking_removes_the_token_from_the_list() {
     let dir = tempfile::tempdir().unwrap();
     let (app, session) = app_with_alice(dir.path()).await;
-    let fields = [("action", "create"), ("label", "ci"), ("scopes", "alice/proj:reporter")];
+    let fields = [
+        ("pat_action", "create"),
+        ("label", "ci"),
+        ("scopes", "alice/proj:reporter"),
+    ];
     session.post(&app, "/_account/pat", &fields).await;
 
     let html = pat_page(&app, &session).await;
+    // A control named `action` would shadow the `data-async` form's own
+    // `.action`, which `style/app.js` posts to.
+    assert!(!html.contains(r#"name="action""#), "{html}");
     let marker = r#"name="uid" value=""#;
     let start = html.find(marker).unwrap() + marker.len();
     let uid = &html[start..start + html[start..].find('"').unwrap()];
     let response = session
-        .post(&app, "/_account/pat", &[("action", "revoke"), ("uid", uid)])
+        .post(&app, "/_account/pat", &[("pat_action", "revoke"), ("uid", uid)])
         .await;
     assert_eq!(response.status, StatusCode::OK);
 
@@ -118,7 +125,7 @@ async fn a_wildcard_scope_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let (app, session) = app_with_alice(dir.path()).await;
 
-    let fields = [("action", "create"), ("label", "ci"), ("scopes", "*:owner")];
+    let fields = [("pat_action", "create"), ("label", "ci"), ("scopes", "*:owner")];
     let html = session.post(&app, "/_account/pat", &fields).await.body;
     assert!(html.contains("can't scope to all repos"), "{html}");
     assert!(html.contains("no tokens yet"), "{html}");
@@ -131,7 +138,7 @@ async fn a_pat_post_without_the_session_csrf_token_is_refused() {
 
     let fields = [
         ("csrf", "forged"),
-        ("action", "create"),
+        ("pat_action", "create"),
         ("label", "ci"),
         ("scopes", "alice/proj:owner"),
     ];

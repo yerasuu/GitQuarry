@@ -203,12 +203,36 @@ pub async fn bump_pack_bytes(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, 
 /// Same as [`bump_pack_bytes`], for `RepoConfig::lfs_bytes` — called once
 /// per genuinely new LFS object upload (the caller only calls this when
 /// the oid didn't already exist, see that field's own doc comment).
+///
+/// Unlike [`bump_pack_bytes`] it retries a lost CAS: an upload usually
+/// lands right after a push, whose out-of-process hook has just rewritten
+/// this config behind the server's read cache, so the first attempt almost
+/// always conflicts — and a dropped bump here is an LFS object never
+/// counted against the owner's quota. A failure that survives the retries
+/// is logged, not returned, since the object itself is already stored.
 pub async fn bump_lfs_bytes(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, delta_bytes: u64) {
-    let Ok((mut config, etag)) = get_repo_config(backend, uid.as_str(), cipher).await else {
-        return;
-    };
-    config.lfs_bytes = config.lfs_bytes.saturating_add(delta_bytes);
-    let _ = put_repo_config(backend, uid.as_str(), &config, etag.as_deref(), cipher).await;
+    const MAX_ATTEMPTS: u32 = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        // A `Conflict` evicts the cached copy, so this re-read is fresh.
+        let (mut config, etag) = match get_repo_config(backend, uid.as_str(), cipher).await {
+            Ok((_, None)) => return,
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!(repo = %uid, delta_bytes, error = %e, "couldn't read repo config to count LFS bytes");
+                return;
+            }
+        };
+        config.lfs_bytes = config.lfs_bytes.saturating_add(delta_bytes);
+        match put_repo_config(backend, uid.as_str(), &config, etag.as_deref(), cipher).await {
+            Ok(Cas::Ok) => return,
+            Ok(Cas::Conflict) => super::cas_retry_backoff(attempt).await,
+            Err(e) => {
+                tracing::warn!(repo = %uid, delta_bytes, error = %e, "couldn't write repo config to count LFS bytes");
+                return;
+            }
+        }
+    }
+    tracing::warn!(repo = %uid, delta_bytes, "LFS bytes left uncounted: repo config kept changing concurrently");
 }
 
 /// Stamps [`RepoConfig::last_push`]/[`RepoConfig::last_push_commits`] with

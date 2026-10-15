@@ -37,6 +37,21 @@ fn a_zero_max_blocks_immediately() {
 }
 
 #[test]
+fn evicting_idle_keys_never_resets_a_key_still_at_its_ceiling() {
+    let limiter = PeerRateLimiter::default();
+    let window = Duration::from_millis(200);
+    assert!(limiter.check_public("idle", 1, window));
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(limiter.check_public("busy", 1, window));
+    std::thread::sleep(Duration::from_millis(100));
+    // Past one window since the first sweep, so this call sweeps: "idle"
+    // has expired and goes, "busy" is still inside its window and stays.
+    assert!(limiter.check_public("other", 1, window));
+    assert!(!limiter.check_public("busy", 1, window));
+    assert!(limiter.check_public("idle", 1, window));
+}
+
+#[test]
 fn an_expired_window_frees_up_the_allowance_again() {
     let limiter = PeerRateLimiter::default();
     let window = Duration::from_millis(20);

@@ -32,7 +32,7 @@ pub(super) async fn save_labels(
                 Some(labels.iter().map(|l| l.name.clone()).collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("labels updated.")
+            FlashOutcome::Ok("labels updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })
@@ -57,7 +57,7 @@ pub(super) fn render_labels_form(
             @if !config.labels.is_empty() {
                 p {
                     @for label in &config.labels {
-                        span class="decoration" style={"border-color:" (label.color) ";color:" (label.color)} { (label.name) }
+                        (crate::webui::repo::components::label_pill(&label.name, &label.color))
                         " "
                     }
                 }

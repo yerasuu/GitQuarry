@@ -5,7 +5,7 @@
 use crate::access;
 use crate::entities::AccessToken;
 use crate::time::{format_unix_secs, now_secs};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use gitquarry_wire::Uid;
 use s3db::{Backend, Cas, Cipher, txn};
 use std::collections::BTreeSet;
@@ -67,20 +67,31 @@ pub async fn list_for_owner(backend: &dyn Backend, cipher: &Cipher, owner: &str)
     access::list_tokens_for_owner(backend, cipher, owner).await
 }
 
-/// Best-effort, a no-op if `uid` doesn't exist or isn't owned by `owner` —
-/// never lets one user revoke another's token by guessing a uid. Deletes
-/// the token object first (fail-closed: [`access::resolve_by_token`] stops
-/// finding it the instant this returns), then releases its `token_hash`
-/// index entry and owner-listing entry.
-pub async fn revoke(backend: &dyn Backend, cipher: &Cipher, owner: &str, uid: &str) -> Result<()> {
+/// `Ok(false)` if `uid` doesn't exist or isn't owned by `owner` — never
+/// lets one user revoke another's token by guessing a uid. Deletes the
+/// token object first (fail-closed: [`access::resolve_by_token`] stops
+/// finding it the instant that delete lands), then releases its
+/// `token_hash` index entry and owner-listing entry.
+///
+/// # Errors
+///
+/// A failed delete means the token is still live, so the caller must not
+/// report it revoked. A failed index release after that is still an `Err`,
+/// worded so the owner knows the token itself is already dead.
+pub async fn revoke(backend: &dyn Backend, cipher: &Cipher, owner: &str, uid: &str) -> Result<bool> {
     let Some(token) = access::get_token(backend, cipher, uid).await? else {
-        return Ok(());
+        return Ok(false);
     };
     if token.owner != owner {
-        return Ok(());
+        return Ok(false);
     }
-    let _ = AccessToken::delete(backend, cipher, uid).await;
-    let _ = token.release_token_hash(backend).await;
+    AccessToken::delete(backend, cipher, uid)
+        .await
+        .context("couldn't delete the token, it is still active")?;
+    token
+        .release_token_hash(backend)
+        .await
+        .context("token revoked, but releasing its hash index failed")?;
     access::remove_owner_index(backend, cipher, owner, &token.uid).await;
-    Ok(())
+    Ok(true)
 }

@@ -142,6 +142,34 @@ pub async fn sister_handshake(web_base_url: &str, my_name: &str, secret: &str) -
     Ok(resp.ok)
 }
 
+/// `POST <web_base_url>/_federation/sister/verify` — the receiving side's
+/// dial-back during a handshake: asks the instance at the peer's
+/// *registered* URL whether it really staged `secret` for `my_name`. A
+/// handshake body names its sender but can't prove it; only the real peer
+/// can answer `true` here.
+pub async fn verify_sister_secret(web_base_url: &str, my_name: &str, secret: &str) -> Result<bool> {
+    let client = http_client()?;
+    let url = format!("{}/_federation/sister/verify", web_base_url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "instance_name": my_name, "secret": secret }))
+        .send()
+        .await
+        .with_context(|| format!("couldn't reach {url}"))?;
+    if !resp.status().is_success() {
+        bail!("{url} returned {}", resp.status());
+    }
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        ok: bool,
+    }
+    let resp: Resp = resp
+        .json()
+        .await
+        .with_context(|| format!("{url} returned malformed JSON"))?;
+    Ok(resp.ok)
+}
+
 /// `POST <web_base_url>/_federation/sister/ban-event` — pushed immediately
 /// on every local ban/unban to each currently-confirmed sister
 /// (`sister::push_ban_event`).

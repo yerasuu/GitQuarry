@@ -35,3 +35,7 @@ msg!(n_releases(n: usize) { Locale::Es => "{n} lanzamientos", Locale::En => "{n}
 msg!(you_suffix() { Locale::Es => "(tu)", Locale::En => "(you)" });
 msg!(name_placeholder() { Locale::Es => "nombre", Locale::En => "name" });
 msg!(fork_button() { Locale::Es => "bifurcar", Locale::En => "fork" });
+
+// `webui::remote_repo`'s one-click fork of a federation peer's repo.
+msg!(fork_to_button(username: &str) { Locale::Es => "bifurcar a {username}", Locale::En => "fork to {username}" });
+msg!(fork_name_placeholder() { Locale::Es => "nombre del repo", Locale::En => "repo name" });

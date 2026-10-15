@@ -101,3 +101,41 @@ async fn prewarm_does_not_refresh_an_existing_mirrors_last_access() {
         "prewarming an on-disk mirror must not count as a query"
     );
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// A peer mirror has no manifest in this bucket: warming it as if it were a
+/// local repo synced it against an empty one and pruned every ref.
+#[tokio::test]
+async fn prewarm_leaves_peer_mirrors_alone() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = AppContext {
+        mirror_max_age: Duration::from_secs(3600),
+        mirror_max_size_bytes: u64::MAX,
+        ..gitquarry_test_support::ctx(root.path())
+    };
+    let mirror = ctx.mirrors_root.join("_remote/peer/team/proj");
+    std::fs::create_dir_all(&mirror).unwrap();
+    git(&mirror, &["init", "--quiet", "--bare"]);
+    let tree = git(&mirror, &["mktree"]);
+    let commit = git(&mirror, &["commit-tree", "--no-gpg-sign", "-m", "base", &tree]);
+    git(&mirror, &["update-ref", "refs/heads/main", &commit]);
+    std::fs::write(mirror.join(LAST_ACCESS_MARKER), b"").unwrap();
+
+    gitquarry_core::mirror::gc::prewarm_recent_mirrors(Arc::new(ctx)).await;
+
+    assert_eq!(git(&mirror, &["rev-parse", "refs/heads/main"]), commit);
+}

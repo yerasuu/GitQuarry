@@ -58,6 +58,10 @@ fn public_routes(state: Arc<FederationState>) -> Router {
             axum::routing::post(sister::handler_handshake_post),
         )
         .route(
+            "/_federation/sister/verify",
+            axum::routing::post(sister::handler_verify_post),
+        )
+        .route(
             "/_federation/sister/ban-event",
             axum::routing::post(sister::handler_ban_event_post),
         )

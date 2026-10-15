@@ -58,6 +58,7 @@ fn asset(filename: &str, sha_char: &str, signature: Option<bool>) -> AssetMeta {
         uploaded_by: "alice".to_string(),
         signature: signature.map(|_| "-----BEGIN PGP SIGNATURE-----...".to_string()),
         signature_verified: signature.unwrap_or(false),
+        object: None,
     }
 }
 
@@ -290,4 +291,50 @@ async fn release_detail_notes_a_dangling_tag_without_hiding_the_release() {
     assert!(!html.contains(r#"action="/_releases/edit/"#), "{html}");
     assert!(!html.contains(r#"action="/_releases/asset_upload/"#), "{html}");
     assert!(!html.contains(r#"action="/_releases/delete/"#), "{html}");
+}
+
+/// The detail page's upload form as a browser sends it: `csrf`, `tag`, then
+/// `file` holding `content` as `filename`.
+async fn upload_asset(r: &Repo, session: &gitquarry_test_support::Session, filename: &str, content: &[u8]) -> Page {
+    let boundary = "gitquarry-test-boundary";
+    let mut body = Vec::with_capacity(content.len() + 512);
+    for (name, value) in [("csrf", session.csrf.as_str()), ("tag", "v1.0")] {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let request = axum::http::Request::post("/_releases/asset_upload/team/proj")
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::COOKIE, &session.cookie)
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    gitquarry_test_support::send(&r.app, request).await
+}
+
+#[tokio::test]
+async fn an_asset_larger_than_axums_default_body_limit_uploads() {
+    let r = repo(&["v1.0"]).await;
+    put_release(&r, "v1.0", "First release", false, Vec::new()).await;
+    gitquarry_test_support::user(&r.ctx, "alice", false).await;
+    user::set_repo_perm(&r.ctx, "alice", "team/proj", Some(Permission::Developer), Locale::En)
+        .await
+        .unwrap();
+    let alice = gitquarry_test_support::Session::login(&r.app, "alice").await;
+
+    let Page { status, body, .. } = upload_asset(&r, &alice, "big.bin", &vec![7u8; 3 * 1024 * 1024]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let Page { body: html, .. } = get(&r.app, "/team/proj?view=release&tag=v1.0", "").await;
+    assert!(html.contains("big.bin"), "{html}");
 }

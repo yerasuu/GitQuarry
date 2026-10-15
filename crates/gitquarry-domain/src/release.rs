@@ -13,7 +13,7 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::git;
 use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::audit::format_unix_secs;
-use gitquarry_core::storage::remote::{AssetMeta, ReleaseMeta};
+use gitquarry_core::storage::remote::{AssetMeta, ReleaseMeta, unique_asset_object};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -167,12 +167,14 @@ pub async fn delete(resolved: &ResolvedRepo, tag: &str) -> Result<()> {
 /// explicit [`remove_asset`]-then-re-upload to replace one, so there's never
 /// an ambiguous "did this overwrite or orphan the old bytes" question.
 ///
-/// Accepted risk: if the upload succeeds but the metadata CAS then conflicts
-/// (a concurrent edit of the same release), the just-uploaded blob becomes
-/// unreferenced — same class of risk `upload_pack`-then-manifest-CAS already
-/// accepts elsewhere in this codebase. The caller surfaces a CAS conflict as
-/// "reload and retry" like every other form here; the orphaned blob is
-/// harmless (never listed, never served).
+/// The bytes go to a fresh [`unique_asset_object`] name recorded in the
+/// metadata, never to a key derived from `filename`, since the
+/// duplicate-filename guard runs before the CAS: two concurrent uploads of
+/// one filename both pass it, and with a shared key the CAS loser's bytes would land under the
+/// winner's sha256/signature. If the CAS conflicts, the just-uploaded
+/// object is deleted — safe because nothing else can reference that name.
+/// The caller surfaces a CAS conflict as "reload and retry" like every
+/// other form here.
 /// Bundled so [`add_asset`] doesn't cross clippy's `too_many_arguments` --
 /// adding `locale` (needed for the "no existe"/"ya hay un asset" checks)
 /// was the 8th positional param.
@@ -226,7 +228,8 @@ pub async fn add_asset(ctx: &AppContext, resolved: &ResolvedRepo, asset: NewAsse
         }
         None => false,
     };
-    resolved.remote.upload_asset(tag, filename, source).await?;
+    let object = unique_asset_object(filename);
+    resolved.remote.upload_asset(tag, &object, source).await?;
     release.assets.push(AssetMeta {
         filename: filename.to_string(),
         size,
@@ -235,8 +238,16 @@ pub async fn add_asset(ctx: &AppContext, resolved: &ResolvedRepo, asset: NewAsse
         uploaded_by: uploaded_by.to_string(),
         signature: signature.map(str::to_string),
         signature_verified,
+        object: Some(object.clone()),
     });
-    resolved.remote.put_release(&release, etag.as_deref()).await
+    let cas = resolved.remote.put_release(&release, etag.as_deref()).await?;
+    // Only a definite conflict proves the metadata never names `object`;
+    // an `Err` may have landed anyway (e.g. a timeout after the write), so
+    // deleting then could strip bytes from a listed asset.
+    if cas == Cas::Conflict {
+        resolved.remote.delete_asset(tag, &object).await;
+    }
+    Ok(cas)
 }
 
 /// Removes the asset from the release's metadata first (CAS); only once
@@ -255,14 +266,13 @@ pub async fn remove_asset(
     if etag.is_none() {
         bail!("{}", gitquarry_i18n::shared::release::release_not_found(locale, tag));
     }
-    let before = release.assets.len();
-    release.assets.retain(|a| a.filename != filename);
-    if release.assets.len() == before {
+    let Some(index) = release.assets.iter().position(|a| a.filename == filename) else {
         bail!("{}", gitquarry_i18n::shared::release::asset_not_found(locale, filename));
-    }
+    };
+    let removed = release.assets.remove(index);
     let cas = resolved.remote.put_release(&release, etag.as_deref()).await?;
     if cas == Cas::Ok {
-        resolved.remote.delete_asset(tag, filename).await;
+        resolved.remote.delete_asset(tag, removed.object_name()).await;
     }
     Ok(cas)
 }

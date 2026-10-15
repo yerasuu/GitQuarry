@@ -7,6 +7,7 @@ use crate::entities::{Peer, PeerAccessLevel};
 use crate::instance_client::verify_instance;
 use crate::sister::{self, BanAction, BanEventWire};
 use crate::time::{format_unix_secs, now_secs};
+use crate::validate::{validate_git_base_url, validate_web_base_url};
 use anyhow::{Result, bail};
 use s3db::{Backend, Cas, Cipher};
 
@@ -37,8 +38,8 @@ pub async fn add(
     auto_linked: bool,
 ) -> Result<Option<Cas>> {
     access::validate_peer_name(name)?;
-    access::validate_peer_url(web_base_url)?;
-    access::validate_peer_url(git_base_url)?;
+    validate_web_base_url(web_base_url)?;
+    validate_git_base_url(git_base_url)?;
     if let Some(existing) = access::get_peer(backend, cipher, name).await?
         && existing.banned
     {

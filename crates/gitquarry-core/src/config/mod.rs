@@ -91,10 +91,10 @@ struct RawConfig {
     /// fail loudly, not silently create a new empty repo.
     #[serde(default)]
     allow_push_create: bool,
-    /// Whether `X-Forwarded-For`'s first hop may be taken as the client
+    /// Whether `X-Forwarded-For`'s last hop may be taken as the client
     /// address for anonymous git rate limiting. Off by default, and it has
     /// to stay off unless a reverse proxy in front of this server always
-    /// *overwrites* that header: a client that can set it freely rotates
+    /// sets or appends that header: a client that can set it freely rotates
     /// its own rate-limit bucket at will, which is strictly worse than the
     /// socket address. On, behind such a proxy, it's the only way the limit
     /// distinguishes clients at all — every request otherwise arrives from

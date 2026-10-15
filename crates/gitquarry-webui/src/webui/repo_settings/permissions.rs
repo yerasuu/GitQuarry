@@ -51,7 +51,7 @@ pub(super) async fn save_perm(
                 Some(format!("{}: {}", form.username, form.perm)),
             )
             .await;
-            FlashOutcome::Ok("permission saved.")
+            FlashOutcome::Ok(gitquarry_i18n::web::repo_settings::permission_saved(locale))
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

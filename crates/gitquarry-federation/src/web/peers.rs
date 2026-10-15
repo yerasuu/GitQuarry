@@ -150,9 +150,10 @@ pub(crate) async fn handler_peers_post(
 /// left in the "requested, waiting on the other admin" state, same as
 /// [`crate::sister::request`]'s own doc comment describes.
 async fn request_sister(state: &crate::state::FederationState, name: &str) -> Option<String> {
-    if let Err(e) = crate::sister::request(state.backend.as_ref(), &state.cipher, name).await {
-        return Some(e.to_string());
-    }
+    let secret = match crate::sister::request(state.backend.as_ref(), &state.cipher, name).await {
+        Ok(secret) => secret,
+        Err(e) => return Some(e.to_string()),
+    };
     let Some(peer) = access::get_peer(state.backend.as_ref(), &state.cipher, name)
         .await
         .ok()
@@ -164,11 +165,10 @@ async fn request_sister(state: &crate::state::FederationState, name: &str) -> Op
         Some(info) => info.name.clone(),
         None => {
             return Some(format!(
-                "sister requested locally — this instance has no own_web_base_url/own_git_base_url configured, so it can't identify itself to '{name}' yet; the handshake will complete once the sister side requests back and syncs"
+                "sister requested locally — this instance has no own_web_base_url/own_git_base_url configured, so it can't identify itself to '{name}'; set both to complete the handshake"
             ));
         }
     };
-    let secret = access::generate_secret();
     match crate::instance_client::sister_handshake(&peer.web_base_url, &my_name, &secret).await {
         Ok(true) => {
             if let Err(e) =

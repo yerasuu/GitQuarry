@@ -26,8 +26,14 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
+struct Attempts {
+    by_key: HashMap<String, Vec<Instant>>,
+    last_sweep: Option<Instant>,
+}
+
+#[derive(Default)]
 struct Bucket {
-    inner: Mutex<HashMap<String, Vec<Instant>>>,
+    inner: Mutex<Attempts>,
 }
 
 impl Bucket {
@@ -38,8 +44,18 @@ impl Bucket {
     /// evicting old ones from the retained set. Records only on success.
     fn check(&self, key: &str, max: u32, window: Duration) -> bool {
         let now = Instant::now();
-        let mut map = self.inner.lock().expect("rate limit bucket lock poisoned");
-        let attempts = map.entry(key.to_string()).or_default();
+        let mut inner = self.inner.lock().expect("rate limit bucket lock poisoned");
+        // Swept at most once per window so the map only ever holds keys seen
+        // within roughly the last two windows — otherwise every distinct
+        // caller IP ever seen stays resident until restart.
+        if inner.last_sweep.is_none_or(|last| now.duration_since(last) >= window) {
+            inner.by_key.retain(|_, attempts| {
+                attempts.retain(|t| now.duration_since(*t) < window);
+                !attempts.is_empty()
+            });
+            inner.last_sweep = Some(now);
+        }
+        let attempts = inner.by_key.entry(key.to_string()).or_default();
         attempts.retain(|t| now.duration_since(*t) < window);
         if attempts.len() as u32 >= max {
             return false;
