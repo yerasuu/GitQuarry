@@ -95,8 +95,27 @@ for f in $files; do
 
     # 4. Explicit lifetimes where elision applies.
     #    "fn foo<'a>(x: &'a str) -> &'a str" with single input/output.
-    if grep -nE 'fn\s+\w+<\s*'\''a\s*>\s*\([^)]*&\s*'\''a\s' "$f" >/dev/null 2>&1 \
-       && ! grep -q 'unsafe\|extern\|dyn' <<< "$(grep -E 'fn\s+\w+<\s*'\''a\s*>' "$f")"; then
+    #    Only when that `&'a` is the sole reference among the parameters:
+    #    with a second one (`fn f<'a>(m: &'a Map, k: &Key) -> &'a V`) elision
+    #    can't tell which input the output borrows from, so `'a` is required.
+    if awk '
+        match($0, /fn[[:space:]]+[[:alnum:]_]+<[[:space:]]*'\''a[[:space:]]*>[[:space:]]*[(]/) {
+            rest = substr($0, RSTART + RLENGTH); depth = 1; params = ""
+            for (i = 1; i <= length(rest) && depth > 0; i++) {
+                c = substr(rest, i, 1)
+                if (c == "(") depth++
+                else if (c == ")") depth--
+                if (depth > 0) params = params c
+            }
+            refs = gsub(/&/, "&", params)
+            ticks = gsub(/'\''a/, "'\''a", params)
+            if (refs == 1 && ticks == 1 && params ~ /&[[:space:]]*'\''a[[:space:]]/ && $0 !~ /unsafe|extern|dyn/) {
+                found = 1
+                exit
+            }
+        }
+        END { exit !found }
+    ' "$f"; then
         report "explicit-lifetime-elision" "$f — lifetime can be elided"
     fi
 
