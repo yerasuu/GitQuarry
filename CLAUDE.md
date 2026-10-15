@@ -151,6 +151,24 @@ the range, never by feel:
 - Changes to `.gitignore`, `.conf/` or the passphrase: warn about
   the impact, don't assume.
 
+## Board tags
+
+Every `kb` entry carries tags from this fixed set; add a new one only when
+no existing tag fits, and record it here.
+
+- Area, one or two per entry: `storage`, `crypto`, `ssh`, `http`, `webui`,
+  `auth`, `federation`, `backup`, `mirror`, `security`, `release`, `ops`,
+  `modules` (the parked `feature/*` modules), `brain` (the board itself).
+- `s3db`: work on the storage engine. It has no board of its own; its
+  tasks live here, are fixed there under a new tag, then repinned here.
+- Security entries add standard tags (kb decision #72):
+  - `cwe-N`: the MITRE CWE id of the weakness, one or more.
+  - `owasp-aNN`: the OWASP Top 10:2025 category, only where it clearly fits.
+  - `sev-high` / `sev-medium` / `sev-low`: qualitative (CVSS-scale)
+    severity, on findings only, never on design decisions.
+  - Process notes (audit scope, test policy) take no CWE.
+- Board text is in Spain Spanish; tags, identifiers and code stay verbatim.
+
 ## Automation reference
 
 | Pattern | Enforcement layer |
