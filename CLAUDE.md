@@ -164,6 +164,13 @@ no existing tag fits, and record it here.
 - Area, one or two per entry: `storage`, `crypto`, `ssh`, `http`, `webui`,
   `auth`, `federation`, `backup`, `mirror`, `security`, `release`, `ops`,
   `modules` (the parked `feature/*` modules), `brain` (the board itself).
+- Type, on every task: the Conventional Commits type its commits carry
+  (or will) — `feat`, `fix`, `perf`, `refactor`, `style`, `docs`, `test`,
+  `build`, `ci`, `chore`. A task whose work lands as two types takes both
+  (a security fix that also adds an action: `fix` + `feat`). Board-only
+  work (seeding, reviews, releases) is `chore`. Notes and decisions take
+  none: they aren't commits. `kb list --tag fix` is what the next
+  version's notes draw from.
 - `s3db`: work on the storage engine. It has no board of its own; its
   tasks live here, are fixed there under a new tag, then repinned here.
 - Security entries add standard tags (kb decision #72):
