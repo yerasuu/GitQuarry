@@ -31,6 +31,10 @@ axum = { workspace = true, features = ["multipart"] }
 reqwest = { workspace = true }
 
 serde = { workspace = true }
+# The setup wizard's one-time token (setup.rs): minted from the CSPRNG and
+# compared in constant time, like webui's bootstrap token.
+rand = { workspace = true }
+subtle = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

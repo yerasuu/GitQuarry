@@ -1,6 +1,7 @@
 //! The first-run wizard as the real `gitquarry` binary reaches it: a config
 //! that already exists and connects, over a bucket with no admin yet.
 
+use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -31,6 +32,23 @@ async fn wait_for(http: &reqwest::Client, url: &str) -> reqwest::Response {
     panic!("nothing answered at {url}");
 }
 
+/// The one-time token the wizard logs with its URL — the only way to get it,
+/// same as an operator. Keeps draining stderr afterwards so the server never
+/// blocks on a full pipe.
+fn setup_token(server: &mut Server) -> String {
+    let stderr = server.0.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some((_, rest)) = line.split_once("/_setup?token=") {
+                let _ = tx.send(rest.chars().take_while(char::is_ascii_hexdigit).collect::<String>());
+            }
+        }
+    });
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("the wizard never logged its setup URL")
+}
+
 /// A local redb bucket takes an exclusive lock, so the wizard can only open
 /// it for its round trip once startup has let go of the handle it used to
 /// see that no admin exists yet.
@@ -49,7 +67,7 @@ async fn a_prefilled_wizard_over_a_local_redb_bucket_completes_and_hands_off() {
     )
     .unwrap();
     let (web, ssh) = (free_port(), free_port());
-    let _server = Server(
+    let mut server = Server(
         Command::new(env!("CARGO_BIN_EXE_gitquarry"))
             .args([
                 "--web-bind",
@@ -61,20 +79,22 @@ async fn a_prefilled_wizard_over_a_local_redb_bucket_completes_and_hands_off() {
             .arg(dir.path().join("mirrors"))
             .env("GITQUARRY_CONFIG", &config)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
     );
+    let token = setup_token(&mut server);
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
     let base = format!("http://127.0.0.1:{web}");
-    let form = wait_for(&http, &format!("{base}/_setup")).await;
+    let form = wait_for(&http, &format!("{base}/_setup?token={token}")).await;
     assert_eq!(form.status().as_u16(), 200);
 
     let bucket = bucket.to_string_lossy().to_string();
     let fields = [
+        ("token", token.as_str()),
         ("name", "main"),
         ("driver", "local"),
         ("local_bucket", bucket.as_str()),
