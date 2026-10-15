@@ -10,6 +10,25 @@ report() {
     errors=$((errors + 1))
 }
 
+# Prints the lines of file $2 matching ERE $1 that carry no WHY: neither a
+# causal `//` comment on the same line nor in the comment block right above.
+# Lets a deliberate exception (CLI stdout, a fallback where every failure
+# means the same) pass once it says why, instead of being flagged forever.
+unjustified() {
+    awk -v pat="$1" '
+        BEGIN { why = "(^|[^[:alnum:]_])(because|since|so that|otherwise|to avoid|to prevent|to ensure|until|once|due to)([^[:alnum:]_]|$)" }
+        /^[[:space:]]*\/\// {
+            if (!in_block) { block_why = 0; in_block = 1 }
+            if ($0 ~ why) block_why = 1
+            next
+        }
+        {
+            if ($0 ~ pat && !block_why && !($0 ~ ("//.*" why))) print FNR ": " $0
+            in_block = 0; block_why = 0
+        }
+    ' "$2"
+}
+
 # Local pre-commit hook: scan what's staged. In CI there's nothing staged
 # on a plain checkout, so diff the PR against its base branch instead.
 # `--all` scans every tracked file, so a backlog that predates the hook
@@ -94,13 +113,22 @@ for f in $files; do
     fi
 
     # 7. Generic println! in non-test code (use tracing instead).
-    if grep -nE 'println!\s*\(' "$f" | grep -v '#\[cfg(test)\]\|mod tests\|#\[test\]' >/dev/null 2>&1; then
-        report "println-in-production" "$f — println! in production code, use tracing instead"
-    fi
+    #    Files under a crate's tests/ aren't production. A CLI's own stdout
+    #    (--help, --version, a command's report) is output, not logging, so
+    #    it passes once a comment says so.
+    case "$f" in
+        */tests/*) ;;
+        *)
+            if [ -n "$(unjustified 'println![[:space:]]*[(]' "$f")" ]; then
+                report "println-in-production" "$f — println! in production code, use tracing instead"
+            fi
+            ;;
+    esac
 
     # 8. Catch-all wildcard match on closed enums.
-    #    "Err(_) => " when the error variant is known and few.
-    if grep -nE 'Err\(_\)\s*=>' "$f" >/dev/null 2>&1; then
+    #    "Err(_) => " when the error variant is known and few. Passes when a
+    #    comment says why every failure means the same thing there.
+    if [ -n "$(unjustified 'Err[(]_[)][[:space:]]*=>' "$f")" ]; then
         report "wildcard-error-match" "$f — Err(_) catches all variants, handle explicitly or document why"
     fi
 
