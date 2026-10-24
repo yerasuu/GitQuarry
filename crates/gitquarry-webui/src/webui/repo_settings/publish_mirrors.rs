@@ -415,7 +415,10 @@ fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
                 dt { (t::public_head(locale)) }
                 dd {
                     @match &r.public_head {
-                        Some(sha) => code { (sha) },
+                        Some(sha) => {
+                            code { (sha) }
+                            @if r.unchanged { " " em { "(" (t::public_head_unchanged(locale)) ")" } }
+                        }
                         None => em { (t::public_head_none(locale)) },
                     }
                 }

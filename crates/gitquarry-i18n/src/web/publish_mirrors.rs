@@ -129,6 +129,7 @@ msg!(preview_no_refs() {
 msg!(private_head() { Locale::Es => "head privado", Locale::En => "private head" });
 msg!(public_head() { Locale::Es => "head público resultante", Locale::En => "resulting public head" });
 msg!(public_head_none() { Locale::Es => "(nada que publicar)", Locale::En => "(nothing to publish)" });
+msg!(public_head_unchanged() { Locale::Es => "sin cambios: no se empujaría nada", Locale::En => "unchanged: nothing would be pushed" });
 msg!(published_commits() { Locale::Es => "commits publicados", Locale::En => "published commits" });
 msg!(collapsed_commits() { Locale::Es => "commits que colapsan", Locale::En => "commits that collapse" });
 msg!(excluded_heading() { Locale::Es => "excluidas, por regla", Locale::En => "excluded, by rule" });
