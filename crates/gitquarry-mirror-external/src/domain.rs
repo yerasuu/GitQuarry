@@ -74,15 +74,20 @@ async fn check_host_allowed(ctx: &AppContext, remote_url: &str) -> Result<()> {
 }
 
 /// Re-derives `.conf/index/mirrors-enabled/<uid>` from this repo's *actual*
-/// current mirrors, rather than tracking "did this specific write turn a
+/// current mirrors, external and publish alike (the periodic sweep finds
+/// both through this one index), rather than tracking "did this specific write turn a
 /// mirror on or off" at each call site — simpler, and correct regardless of
 /// which field changed or how many mirrors this repo has. The index itself
 /// lives in `gitquarry_core::storage::settings` now, not here — see
 /// `docs/mirror-external-extraction-concept.md` Phase 1: `mirror::hook`'s
 /// pre-receive path reads the same index directly, and it can't depend on
 /// this crate without a cycle.
-async fn refresh_mirrors_enabled_index(ctx: &AppContext, uid: &Uid) -> Result<()> {
-    let any_enabled = list(ctx, uid).await?.iter().any(|m| m.enabled);
+pub(crate) async fn refresh_mirrors_enabled_index(ctx: &AppContext, uid: &Uid) -> Result<()> {
+    let any_enabled = list(ctx, uid).await?.iter().any(|m| m.enabled)
+        || crate::publish::list_with_etags(ctx, uid)
+            .await?
+            .iter()
+            .any(|(m, _)| m.enabled);
     gitquarry_core::storage::settings::set_mirrors_enabled_index(ctx.backend().as_ref(), &ctx.cipher, uid, any_enabled)
         .await
         .context("recording this repo in the enabled-mirrors index (nothing would sync without it)")

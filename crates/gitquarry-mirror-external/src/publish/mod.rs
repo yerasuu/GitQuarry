@@ -16,7 +16,7 @@ pub mod rewrite;
 mod secrets;
 
 use crate::validate::{
-    validate_identity_email, validate_identity_name, validate_mirror_label, validate_mirror_url,
+    validate_identity_email, validate_identity_name, validate_mirror_label, validate_mirror_token, validate_mirror_url,
     validate_publish_patterns, validate_publish_ref_pattern, validate_sha, validate_spdx_id, validate_tree_path,
 };
 use anyhow::{Result, bail};
@@ -67,9 +67,58 @@ pub struct SecretAllow {
     pub sha: String,
 }
 
-/// One publish mirror of a repo. There is deliberately no token and no
-/// `enabled` flag yet: phase 0 can't push, so storing a credential for a
-/// push that can't happen would only be a secret at rest for nothing.
+/// What a publish run puts on the public side.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PublishMode {
+    /// One commit per publish holding the filtered tree of each published
+    /// branch's head, on top of the previous snapshot: no private history,
+    /// no mapping. The right mode for a repo whose history is itself the
+    /// sensitive part. Branches only: `publish_tags` is not read.
+    #[default]
+    Snapshot,
+}
+
+/// The forge credential of a publish mirror. Its own type so that `Debug`
+/// (a test failure, a `tracing` field) can never print it; s3db seals it at
+/// rest like every other field, as [`crate::access::ExternalMirror::token`].
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MirrorToken(String);
+
+impl MirrorToken {
+    pub fn new(token: String) -> Self {
+        Self(token)
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for MirrorToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "MirrorToken(none)"
+        } else {
+            "MirrorToken(<redacted>)"
+        })
+    }
+}
+
+/// Author and committer of every snapshot commit. A snapshot squashes many
+/// private commits into one, so no private author is the right one to name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Publisher {
+    pub name: String,
+    pub email: String,
+}
+
+/// One publish mirror of a repo.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PublishMirror {
     #[serde(default)]
@@ -77,9 +126,20 @@ pub struct PublishMirror {
     #[serde(default)]
     pub label: String,
     /// The public remote, checked against the instance's host allowlist at
-    /// save time and again at every preview (and, later, every publish).
+    /// save time and again at every preview and every publish run.
     #[serde(default)]
     pub remote_url: String,
+    #[serde(default)]
+    pub token: MirrorToken,
+    /// Whether the periodic sweep publishes this mirror. "Publish now"
+    /// works either way.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: PublishMode,
+    /// `None` blocks every snapshot run at the identity gate.
+    #[serde(default)]
+    pub publisher: Option<Publisher>,
     /// The authoritative half of the filter; `.gitquarry/publish.toml` in the
     /// source ref can only add to it (see [`filter::RepoFilterFile`]).
     #[serde(default)]
@@ -105,6 +165,15 @@ pub struct PublishMirror {
 pub fn validate_publish_mirror(mirror: &PublishMirror) -> Result<()> {
     validate_mirror_url(&mirror.remote_url)?;
     validate_mirror_label(&mirror.label)?;
+    if !mirror.token.is_empty() {
+        validate_mirror_token(mirror.token.expose())?;
+    } else if mirror.enabled {
+        bail!("an enabled publish mirror needs a token for its public remote");
+    }
+    if let Some(publisher) = &mirror.publisher {
+        validate_identity_name(&publisher.name)?;
+        validate_identity_email(&publisher.email)?;
+    }
     validate_publish_patterns(&mirror.filter.include)?;
     validate_publish_patterns(&mirror.filter.exclude)?;
     for pattern in mirror.publish_branches.iter().chain(&mirror.publish_tags) {
@@ -145,7 +214,10 @@ pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: PublishMirror) -> R
         .put(ctx.backend().as_ref(), &ctx.cipher, &mirror.id, &mirror, None)
         .await?
     {
-        Cas::Ok => Ok(mirror),
+        Cas::Ok => {
+            crate::domain::refresh_mirrors_enabled_index(ctx, uid).await?;
+            Ok(mirror)
+        }
         Cas::Conflict => bail!("publish mirror id collision, try again"),
     }
 }
@@ -155,7 +227,7 @@ pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: PublishMirror) -> R
 pub async fn update(ctx: &AppContext, uid: &Uid, mirror: &PublishMirror, expected_etag: &str) -> Result<Cas> {
     validate_publish_mirror(mirror)?;
     check_host_allowed(ctx, &mirror.remote_url).await?;
-    publish_mirrors_collection(uid)
+    let cas = publish_mirrors_collection(uid)
         .put(
             ctx.backend().as_ref(),
             &ctx.cipher,
@@ -163,7 +235,11 @@ pub async fn update(ctx: &AppContext, uid: &Uid, mirror: &PublishMirror, expecte
             mirror,
             Some(expected_etag),
         )
-        .await
+        .await?;
+    if cas == Cas::Ok {
+        crate::domain::refresh_mirrors_enabled_index(ctx, uid).await?;
+    }
+    Ok(cas)
 }
 
 pub async fn get(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<Option<(PublishMirror, String)>> {
@@ -199,7 +275,8 @@ pub async fn list_with_etags(ctx: &AppContext, uid: &Uid) -> Result<Vec<(Publish
 pub async fn delete(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<()> {
     publish_mirrors_collection(uid)
         .delete(ctx.backend().as_ref(), &ctx.cipher, mirror_id)
-        .await
+        .await?;
+    crate::domain::refresh_mirrors_enabled_index(ctx, uid).await
 }
 
 /// The host gate (`docs/publish-mirror-concept.md` §5): the same instance

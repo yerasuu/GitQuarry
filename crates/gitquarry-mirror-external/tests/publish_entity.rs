@@ -163,3 +163,35 @@ async fn untrusted_fields_are_validated_before_storing() {
         );
     }
 }
+
+#[tokio::test]
+async fn an_enabled_mirror_needs_a_token_and_lands_in_the_sweep_index() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = ctx(root.path());
+    let uid = repo(&ctx).await;
+    let enabled = PublishMirror {
+        enabled: true,
+        ..sample()
+    };
+    assert!(publish::create(&ctx, &uid, enabled.clone()).await.is_err(), "no token");
+    let stored = publish::create(
+        &ctx,
+        &uid,
+        PublishMirror {
+            token: publish::MirrorToken::new("tok3n".to_string()),
+            ..enabled
+        },
+    )
+    .await
+    .unwrap();
+    let indexed = gitquarry_core::storage::settings::list_repos_with_enabled_mirrors(ctx.backend().as_ref())
+        .await
+        .unwrap();
+    assert_eq!(indexed, std::slice::from_ref(&uid));
+
+    publish::delete(&ctx, &uid, &stored.id).await.unwrap();
+    let indexed = gitquarry_core::storage::settings::list_repos_with_enabled_mirrors(ctx.backend().as_ref())
+        .await
+        .unwrap();
+    assert!(indexed.is_empty());
+}
