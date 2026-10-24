@@ -72,6 +72,13 @@ async fn sync_all_repos_once(ctx: &AppContext) -> Result<()> {
             if let Err(e) = sync_repo_mirrors(ctx, &resolved).await {
                 warn!("sync failed for repo {uid}: {e:#}");
             }
+            // Here and not in `sync_repo_mirrors`, which the pre-serve hook
+            // also calls: a publish changes nothing a clone is served, and a
+            // run cut short by that hook's few-second timeout would leave no
+            // record of what it did.
+            if let Err(e) = crate::publish::run::publish_repo_mirrors(ctx, &resolved).await {
+                warn!(repo = %uid, error = %format!("{e:#}"), "publish sweep failed");
+            }
             Ok(())
         })
         .await

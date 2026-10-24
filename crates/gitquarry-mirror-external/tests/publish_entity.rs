@@ -195,3 +195,68 @@ async fn an_enabled_mirror_needs_a_token_and_lands_in_the_sweep_index() {
         .unwrap();
     assert!(indexed.is_empty());
 }
+
+/// What reaches the remote is covered in `publish_run.rs`; this is which
+/// mirrors the sweep runs at all. The allowlist is narrowed after saving,
+/// so a mirror the sweep does run stops at the host gate, with no network.
+#[tokio::test]
+async fn the_sweep_runs_enabled_mirrors_of_live_repos_only_and_rechecks_the_host() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = ctx(root.path());
+    let resolved = ctx.create_repo("alice/private").await.unwrap().unwrap();
+    set_extra_hosts(&ctx, &["example.invalid"]).await;
+    let on_remote = PublishMirror {
+        remote_url: "https://example.invalid/acme/public.git".to_string(),
+        token: publish::MirrorToken::new("tok3n".to_string()),
+        ..sample()
+    };
+    let enabled = publish::create(
+        &ctx,
+        &resolved.uid,
+        PublishMirror {
+            enabled: true,
+            ..on_remote.clone()
+        },
+    )
+    .await
+    .unwrap();
+    let disabled = publish::create(&ctx, &resolved.uid, on_remote).await.unwrap();
+    set_extra_hosts(&ctx, &[]).await;
+
+    publish::run::publish_repo_mirrors(&ctx, &resolved).await.unwrap();
+
+    let ran = publish::log::get(&ctx, &resolved.uid, &enabled.id).await.unwrap();
+    assert_eq!(ran.runs.len(), 1);
+    assert_eq!(ran.runs[0].outcome, publish::log::RunOutcome::Blocked);
+    assert!(
+        ran.last_error.as_deref().unwrap().contains("example.invalid"),
+        "{ran:?}"
+    );
+    let skipped = publish::log::get(&ctx, &resolved.uid, &disabled.id).await.unwrap();
+    assert!(skipped.runs.is_empty());
+
+    let (mut config, etag) = resolved.remote.get_repo_config().await.unwrap();
+    config.deleted_at = Some(1);
+    gitquarry_core::storage::settings::put_repo_config(
+        ctx.backend().as_ref(),
+        resolved.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &ctx.cipher,
+    )
+    .await
+    .unwrap();
+    publish::run::publish_repo_mirrors(&ctx, &resolved).await.unwrap();
+    let after_delete = publish::log::get(&ctx, &resolved.uid, &enabled.id).await.unwrap();
+    assert_eq!(after_delete.runs.len(), 1, "a deleted repo is published nowhere");
+}
+
+async fn set_extra_hosts(ctx: &AppContext, hosts: &[&str]) {
+    let (mut settings, etag) = gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+        .await
+        .unwrap();
+    settings.mirror_extra_hosts = hosts.iter().map(|h| h.to_string()).collect();
+    gitquarry_core::storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher)
+        .await
+        .unwrap();
+}
