@@ -240,27 +240,105 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
     text.lines().map(str::trim).filter(|line| !line.is_empty())
 }
 
-fn render_form(repo_name: &str, existing: Option<(&PublishMirror, &str)>, csrf: &str, locale: Locale) -> Markup {
+/// What the form's inputs show, from a stored mirror or from what the user
+/// typed. Never the token, so nothing secret can be echoed back.
+struct FormValues {
+    label: String,
+    remote_url: String,
+    enabled: bool,
+    snapshot_mode: bool,
+    publisher_name: String,
+    publisher_email: String,
+    exclude_mode: bool,
+    include: String,
+    exclude: String,
+    exclude_submodules: bool,
+    strip_empty_dirs: bool,
+    branches: String,
+    tags: String,
+    identities: String,
+    passthrough: bool,
+    spdx: String,
+    allowlist: String,
+}
+
+impl FormValues {
+    fn of_mirror(mirror: &PublishMirror) -> Self {
+        let csv = |set: &std::collections::BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
+        Self {
+            label: mirror.label.clone(),
+            remote_url: mirror.remote_url.clone(),
+            enabled: mirror.enabled,
+            snapshot_mode: mirror.mode == PublishMode::Snapshot,
+            publisher_name: mirror.publisher.as_ref().map_or_else(String::new, |p| p.name.clone()),
+            publisher_email: mirror.publisher.as_ref().map_or_else(String::new, |p| p.email.clone()),
+            exclude_mode: mirror.filter.mode == FilterMode::Exclude,
+            include: mirror.filter.include.join("\n"),
+            exclude: mirror.filter.exclude.join("\n"),
+            exclude_submodules: mirror.filter.exclude_submodules,
+            strip_empty_dirs: mirror.filter.strip_empty_dirs,
+            branches: csv(&mirror.publish_branches),
+            tags: csv(&mirror.publish_tags),
+            identities: mirror
+                .identities
+                .iter()
+                .map(|i| match &i.name {
+                    Some(name) => format!("{} {} {name}", i.private, i.public),
+                    None => format!("{} {}", i.private, i.public),
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            passthrough: mirror.unmapped == UnmappedPolicy::Passthrough,
+            spdx: mirror.spdx.clone().unwrap_or_default(),
+            allowlist: mirror
+                .secret_allowlist
+                .iter()
+                .map(|a| format!("{} {}", a.sha, a.path).trim_end().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    /// The raw fields as submitted, so a value the validation refused is
+    /// still there to correct.
+    fn of_form(form: &RepoConfForm) -> Self {
+        Self {
+            label: form.label.clone(),
+            remote_url: form.remote_url.clone(),
+            enabled: form.mirror_enabled == "1",
+            snapshot_mode: matches!(form.publish_run_mode.as_str(), "snapshot" | ""),
+            publisher_name: form.publish_publisher_name.clone(),
+            publisher_email: form.publish_publisher_email.clone(),
+            exclude_mode: form.publish_mode == "exclude",
+            include: form.publish_include.clone(),
+            exclude: form.publish_exclude.clone(),
+            exclude_submodules: form.publish_exclude_submodules == "1",
+            strip_empty_dirs: form.publish_strip_empty_dirs == "1",
+            branches: form.publish_branches.clone(),
+            tags: form.publish_tags.clone(),
+            identities: form.publish_identities.clone(),
+            passthrough: form.publish_unmapped == "passthrough",
+            spdx: form.publish_spdx.clone(),
+            allowlist: form.publish_secret_allowlist.clone(),
+        }
+    }
+}
+
+/// `retry` is the rejected submission of this very form, if there was one.
+/// It supplies the typed values and, on an edit, the etag the browser
+/// loaded, so a conflict stays a conflict.
+fn render_form(
+    repo_name: &str,
+    existing: Option<(&PublishMirror, &str)>,
+    retry: Option<&RepoConfForm>,
+    csrf: &str,
+    locale: Locale,
+) -> Markup {
     let action_url = repo_link(repo_name, "settings", "").to_string();
     let default = PublishMirror::default();
-    let (mirror, etag) = existing.unwrap_or((&default, ""));
-    let join_lines = |items: &[String]| items.join("\n");
-    let identities = mirror
-        .identities
-        .iter()
-        .map(|i| match &i.name {
-            Some(name) => format!("{} {} {name}", i.private, i.public),
-            None => format!("{} {}", i.private, i.public),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let allowlist = mirror
-        .secret_allowlist
-        .iter()
-        .map(|a| format!("{} {}", a.sha, a.path).trim_end().to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let csv = |set: &std::collections::BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
+    let (mirror, stored_etag) = existing.unwrap_or((&default, ""));
+    let etag = retry.map_or(stored_etag, |f| f.publish_mirror_etag.as_str());
+    let v = retry.map_or_else(|| FormValues::of_mirror(mirror), FormValues::of_form);
     html! {
         form method="post" action=(&action_url) {
             (PreEscaped(csrf))
@@ -271,10 +349,10 @@ fn render_form(repo_name: &str, existing: Option<(&PublishMirror, &str)>, csrf: 
             } @else {
                 input type="hidden" name="conf_action" value="add_publish_mirror";
             }
-            label { (t::field_label(locale)) " " input name="label" value=(mirror.label); }
+            label { (t::field_label(locale)) " " input name="label" value=(v.label); }
             label {
                 (t::field_remote_url(locale)) " "
-                input type="url" name="remote_url" value=(mirror.remote_url) required size="40";
+                input type="url" name="remote_url" value=(v.remote_url) required size="40";
             }
             label {
                 (t::field_token(locale)) " "
@@ -282,46 +360,46 @@ fn render_form(repo_name: &str, existing: Option<(&PublishMirror, &str)>, csrf: 
                     placeholder=(if existing.is_some() && !mirror.token.is_empty() { t::token_placeholder_keep(locale) } else { t::token_placeholder_new(locale) });
             }
             label {
-                input type="checkbox" name="mirror_enabled" value="1" checked[mirror.enabled];
+                input type="checkbox" name="mirror_enabled" value="1" checked[v.enabled];
                 " " (t::field_enabled(locale))
             }
             label {
                 (t::field_run_mode(locale)) " "
                 select name="publish_run_mode" {
-                    option value="snapshot" selected[mirror.mode == PublishMode::Snapshot] { (t::run_mode_snapshot(locale)) }
+                    option value="snapshot" selected[v.snapshot_mode] { (t::run_mode_snapshot(locale)) }
                 }
             }
-            label { (t::field_publisher_name(locale)) " " input name="publish_publisher_name" value=(mirror.publisher.as_ref().map_or("", |p| p.name.as_str())) size="24"; }
-            label { (t::field_publisher_email(locale)) " " input type="email" name="publish_publisher_email" value=(mirror.publisher.as_ref().map_or("", |p| p.email.as_str())) size="30"; }
+            label { (t::field_publisher_name(locale)) " " input name="publish_publisher_name" value=(v.publisher_name) size="24"; }
+            label { (t::field_publisher_email(locale)) " " input type="email" name="publish_publisher_email" value=(v.publisher_email) size="30"; }
             label {
                 (t::field_mode(locale)) " "
                 select name="publish_mode" {
-                    option value="allowlist" selected[mirror.filter.mode == FilterMode::Allowlist] { (t::mode_allowlist(locale)) }
-                    option value="exclude" selected[mirror.filter.mode == FilterMode::Exclude] { (t::mode_exclude(locale)) }
+                    option value="allowlist" selected[!v.exclude_mode] { (t::mode_allowlist(locale)) }
+                    option value="exclude" selected[v.exclude_mode] { (t::mode_exclude(locale)) }
                 }
             }
-            label { (t::field_include(locale)) br; textarea name="publish_include" rows="4" cols="40" { (join_lines(&mirror.filter.include)) } }
-            label { (t::field_exclude(locale)) br; textarea name="publish_exclude" rows="4" cols="40" { (join_lines(&mirror.filter.exclude)) } }
+            label { (t::field_include(locale)) br; textarea name="publish_include" rows="4" cols="40" { (v.include) } }
+            label { (t::field_exclude(locale)) br; textarea name="publish_exclude" rows="4" cols="40" { (v.exclude) } }
             label {
-                input type="checkbox" name="publish_exclude_submodules" value="1" checked[mirror.filter.exclude_submodules];
+                input type="checkbox" name="publish_exclude_submodules" value="1" checked[v.exclude_submodules];
                 " " (t::field_exclude_submodules(locale))
             }
             label {
-                input type="checkbox" name="publish_strip_empty_dirs" value="1" checked[mirror.filter.strip_empty_dirs];
+                input type="checkbox" name="publish_strip_empty_dirs" value="1" checked[v.strip_empty_dirs];
                 " " (t::field_strip_empty_dirs(locale))
             }
-            label { (t::field_branches(locale)) " " input name="publish_branches" value=(csv(&mirror.publish_branches)) size="30"; }
-            label { (t::field_tags(locale)) " " input name="publish_tags" value=(csv(&mirror.publish_tags)) size="30"; }
-            label { (t::field_identities(locale)) br; textarea name="publish_identities" rows="3" cols="60" { (identities) } }
+            label { (t::field_branches(locale)) " " input name="publish_branches" value=(v.branches) size="30"; }
+            label { (t::field_tags(locale)) " " input name="publish_tags" value=(v.tags) size="30"; }
+            label { (t::field_identities(locale)) br; textarea name="publish_identities" rows="3" cols="60" { (v.identities) } }
             label {
                 (t::field_unmapped(locale)) " "
                 select name="publish_unmapped" {
-                    option value="block" selected[mirror.unmapped == UnmappedPolicy::Block] { (t::unmapped_block(locale)) }
-                    option value="passthrough" selected[mirror.unmapped == UnmappedPolicy::Passthrough] { (t::unmapped_passthrough(locale)) }
+                    option value="block" selected[!v.passthrough] { (t::unmapped_block(locale)) }
+                    option value="passthrough" selected[v.passthrough] { (t::unmapped_passthrough(locale)) }
                 }
             }
-            label { (t::field_spdx(locale)) " " input name="publish_spdx" value=(mirror.spdx.as_deref().unwrap_or("")) size="20"; }
-            label { (t::field_secret_allowlist(locale)) br; textarea name="publish_secret_allowlist" rows="3" cols="60" { (allowlist) } }
+            label { (t::field_spdx(locale)) " " input name="publish_spdx" value=(v.spdx) size="20"; }
+            label { (t::field_secret_allowlist(locale)) br; textarea name="publish_secret_allowlist" rows="3" cols="60" { (v.allowlist) } }
             button type="submit" { (if existing.is_some() { t::save_button(locale) } else { t::add_button(locale) }) }
         }
     }
@@ -410,6 +488,9 @@ fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
         @if let Some(error) = &r.error {
             p class="flash flash-err" { (t::ref_error(locale)) ": " (error) }
         } @else {
+            @if r.history_truncated {
+                p class="flash flash-err" { (t::history_truncated(locale, publish::preview::MAX_PREVIEW_COMMITS)) }
+            }
             dl {
                 dt { (t::private_head(locale)) } dd { code { (r.private_head) } }
                 dt { (t::public_head(locale)) }
@@ -453,12 +534,25 @@ fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
     }
 }
 
+/// Truncation is the only thing keeping the preview from passing.
+fn only_truncated(preview: &Preview) -> bool {
+    preview.host.passed()
+        && !preview.refs.is_empty()
+        && preview.refs.iter().any(|r| r.history_truncated)
+        && preview
+            .refs
+            .iter()
+            .all(|r| r.error.is_none() && r.gates.iter().all(GateReport::passed))
+}
+
 fn render_preview(label: &str, preview: &Preview, locale: Locale) -> Markup {
     html! {
         div class="publish-preview" {
             h4 { (t::preview_heading(locale, label)) }
             @if preview.passed() {
                 p class="flash flash-ok" { (t::preview_verdict_pass(locale)) }
+            } @else if only_truncated(preview) {
+                p class="flash flash-err" { (t::preview_verdict_truncated(locale)) }
             } @else {
                 p class="flash flash-err" { (t::preview_verdict_blocked(locale)) }
             }
@@ -491,9 +585,6 @@ fn short(sha: &str) -> &str {
 fn render_gate_record(record: &GateRecord, locale: Locale) -> Markup {
     html! {
         li {
-            @if r.history_truncated {
-                p class="flash flash-err" { (t::history_truncated(locale, publish::preview::MAX_PREVIEW_COMMITS)) }
-            }
             (gate_label(record.gate, locale)) ": "
             @if record.passed() {
                 (t::gate_pass(locale))
@@ -534,25 +625,12 @@ fn render_runs(runs: &[PublishRun], locale: Locale) -> Markup {
                                 td {
                                     @for r in &run.refs {
                                         div {
-/// Truncation is the only thing keeping the preview from passing.
-fn only_truncated(preview: &Preview) -> bool {
-    preview.host.passed()
-        && !preview.refs.is_empty()
-        && preview.refs.iter().any(|r| r.history_truncated)
-        && preview
-            .refs
-            .iter()
-            .all(|r| r.error.is_none() && r.gates.iter().all(GateReport::passed))
-}
-
                                             code { (r.ref_name) } " "
                                             code { (short(&r.private_head)) } " → "
                                             @match &r.public_head {
                                                 Some(head) => code { (short(head)) },
                                                 None => em { "—" },
                                             }
-            } @else if only_truncated(preview) {
-                p class="flash flash-err" { (t::preview_verdict_truncated(locale)) }
                                             " " (t::run_counts(locale, r.published_files, r.excluded_entries))
                                         }
                                     }
@@ -585,6 +663,7 @@ pub(super) fn render_publish_mirrors_section(
     repo_name: &str,
     mirrors: &[ListedPublishMirror],
     shown: Option<&ShownPreview>,
+    retry: Option<&RepoConfForm>,
     csrf: &str,
     locale: Locale,
 ) -> Markup {
@@ -657,11 +736,17 @@ pub(super) fn render_publish_mirrors_section(
                 @if let Some(shown) = shown.filter(|s| s.mirror_id == mirror.id) {
                     (render_preview(&mirror.label, &shown.preview, locale))
                 }
-                (render_form(repo_name, Some((mirror, etag.as_str())), csrf, locale))
+                (render_form(
+                    repo_name,
+                    Some((mirror, etag.as_str())),
+                    retry.filter(|f| f.action == "edit_publish_mirror" && f.publish_mirror_id == mirror.id),
+                    csrf,
+                    locale,
+                ))
                 hr;
             }
             h4 { (t::add_heading(locale)) }
-            (render_form(repo_name, None, csrf, locale))
+            (render_form(repo_name, None, retry.filter(|f| f.action == "add_publish_mirror"), csrf, locale))
         },
     )
 }

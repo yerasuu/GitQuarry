@@ -910,9 +910,14 @@ pub(crate) fn render_settings_section(
         "settings_mirrors" => {
             mirrors::render_mirrors_section(repo_name, mirrors, mr_links, csrf, pending_mirror_token, locale)
         }
-        "settings_publish" => {
-            publish_mirrors::render_publish_mirrors_section(repo_name, publish_mirrors, publish_preview, csrf, locale)
-        }
+        "settings_publish" => publish_mirrors::render_publish_mirrors_section(
+            repo_name,
+            publish_mirrors,
+            publish_preview,
+            retry,
+            csrf,
+            locale,
+        ),
         "settings_move" => {
             move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale)
         }

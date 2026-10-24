@@ -294,6 +294,78 @@ async fn an_edit_with_a_blank_token_keeps_the_stored_one() {
 }
 
 #[tokio::test]
+async fn a_rejected_add_comes_back_with_what_was_typed_but_not_the_token() {
+    let gq = Instance::new().await;
+    let root = gq.login("root").await;
+
+    let page = gq
+        .save(
+            &root,
+            &[
+                ("conf_action", "add_publish_mirror"),
+                ("label", "typed-label"),
+                ("remote_url", "https://github.com/acme/typed.git"),
+                ("token", "typed-secret-token"),
+                ("publish_branches", "main, dev"),
+                ("publish_include", "src/**\nLICENSE"),
+                ("publish_identities", "lonely-token-without-a-public-email"),
+                ("publish_unmapped", "passthrough"),
+                ("mirror_enabled", "1"),
+            ],
+        )
+        .await;
+
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let html = &page.body;
+    assert!(html.contains("flash-err"), "{html}");
+    assert!(html.contains(r#"value="typed-label""#), "{html}");
+    assert!(html.contains(r#"value="https://github.com/acme/typed.git""#), "{html}");
+    assert!(html.contains(r#"value="main, dev""#), "{html}");
+    assert!(html.contains("src/**\nLICENSE"), "{html}");
+    assert!(html.contains("lonely-token-without-a-public-email"), "{html}");
+    assert!(!html.contains("typed-secret-token"), "{html}");
+    let uid = gq.resolved().await.uid;
+    assert!(publish::list_with_etags(&gq.ctx, &uid).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_rejected_edit_comes_back_typed_and_never_shows_the_stored_token() {
+    let gq = Instance::new().await;
+    let mirror = seed_on_a_host_since_disallowed(&gq).await;
+    let uid = gq.resolved().await.uid;
+    let (_, etag) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    let alice = gq.login("alice").await;
+
+    let page = gq
+        .save(
+            &alice,
+            &[
+                ("conf_action", "edit_publish_mirror"),
+                ("publish_mirror_id", &mirror.id),
+                ("publish_mirror_etag", &etag),
+                ("label", "half-typed"),
+                ("remote_url", "https://example.invalid/acme/public.git"),
+                ("publish_branches", "main"),
+                ("publish_publisher_name", "Only A Name"),
+            ],
+        )
+        .await;
+
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let html = &page.body;
+    assert!(html.contains("flash-err"), "{html}");
+    assert!(html.contains(r#"value="half-typed""#), "{html}");
+    assert!(html.contains(r#"value="Only A Name""#), "{html}");
+    assert!(
+        html.contains(&format!(r#"name="publish_mirror_etag" value="{etag}""#)),
+        "{html}"
+    );
+    assert!(!html.contains(TOKEN), "{html}");
+    let (stored, _) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    assert_ne!(stored.label, "half-typed");
+}
+
+#[tokio::test]
 async fn a_truncated_preview_says_so_and_is_not_a_pass() {
     use gitquarry_mirror_external::publish::preview::{MAX_PREVIEW_COMMITS, MAX_PREVIEW_PATHS};
     use std::io::Write;
