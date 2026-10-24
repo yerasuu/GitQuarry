@@ -15,6 +15,8 @@ anyhow = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
+# `.gitquarry/publish.toml`.
+toml = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
 tracing = { workspace = true }
 
