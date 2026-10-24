@@ -3,12 +3,12 @@
 
 use gitquarry_i18n::Locale;
 use gitquarry_i18n::web::publish_mirrors as t;
-use gitquarry_mirror_external::publish;
 use gitquarry_mirror_external::publish::audit::{Finding, Gate, GateReport};
 use gitquarry_mirror_external::publish::filter::ExcludedBy;
 use gitquarry_mirror_external::publish::log::{GateRecord, PublishRun, RunOutcome};
 use gitquarry_mirror_external::publish::preview::{Preview, RefPreview};
 use gitquarry_mirror_external::publish::rewrite::IdentRole;
+use gitquarry_mirror_external::publish::{self, PublishMode};
 use maud::{Markup, html};
 
 fn rule_label(rule: &ExcludedBy, locale: Locale) -> String {
@@ -98,7 +98,7 @@ fn render_gate(report: &GateReport, locale: Locale) -> Markup {
     }
 }
 
-fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
+fn render_ref(r: &RefPreview, history: bool, locale: Locale) -> Markup {
     html! {
         h5 { code { (r.ref_name) } }
         @if let Some(error) = &r.error {
@@ -121,6 +121,10 @@ fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
                 }
                 dt { (t::published_commits(locale)) } dd { (r.published_commits) }
                 dt { (t::collapsed_commits(locale)) } dd { (r.collapsed_commits) }
+                @if history {
+                    dt { (t::commits_to_rewrite(locale)) } dd { (r.commits_to_rewrite) }
+                    dt { (t::commits_reused(locale)) } dd { (r.commits_reused) }
+                }
             }
             div class="scroll-x" {
                 table class="list" {
@@ -153,6 +157,7 @@ fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
 /// Truncation is the only thing keeping the preview from passing.
 fn only_truncated(preview: &Preview) -> bool {
     preview.host.passed()
+        && !preview.epoch_bump_needed
         && !preview.refs.is_empty()
         && preview.refs.iter().any(|r| r.history_truncated)
         && preview
@@ -161,10 +166,21 @@ fn only_truncated(preview: &Preview) -> bool {
             .all(|r| r.error.is_none() && r.gates.iter().all(GateReport::passed))
 }
 
-pub(super) fn render_preview(label: &str, preview: &Preview, locale: Locale) -> Markup {
+/// `history` is whether the mirror publishes its history, the only mode
+/// with epochs, force pushes and rewrite counts to show.
+pub(super) fn render_preview(label: &str, preview: &Preview, history: bool, locale: Locale) -> Markup {
     html! {
         div class="publish-preview" {
             h4 { (t::preview_heading(locale, label)) }
+            @if history {
+                p { (t::preview_epoch(locale, preview.epoch)) }
+                @if preview.epoch_bump_needed {
+                    p class="flash flash-err" { (t::preview_bump_needed(locale)) }
+                }
+                @if preview.force_push {
+                    p class="flash flash-err" { strong { (t::preview_force_push(locale)) } }
+                }
+            }
             @if preview.passed() {
                 p class="flash flash-ok" { (t::preview_verdict_pass(locale)) }
             } @else if only_truncated(preview) {
@@ -178,7 +194,7 @@ pub(super) fn render_preview(label: &str, preview: &Preview, locale: Locale) -> 
             @if preview.refs.is_empty() {
                 p { em { (t::preview_no_refs(locale)) } }
             }
-            @for r in &preview.refs { (render_ref(r, locale)) }
+            @for r in &preview.refs { (render_ref(r, history, locale)) }
         }
     }
 }
@@ -236,6 +252,19 @@ pub(super) fn render_runs(runs: &[PublishRun], locale: Locale) -> Markup {
                                 td { (run.started_at) }
                                 td {
                                     (outcome_badge(run.outcome, locale))
+                                    @if run.mode == PublishMode::History {
+                                        br;
+                                        small {
+                                            @if let Some(epoch) = run.epoch { (t::run_epoch(locale, epoch)) " " }
+                                            @if run.forced { strong { (t::run_forced(locale)) } " " }
+                                            (t::run_history_counts(
+                                                locale,
+                                                run.commits_rewritten,
+                                                run.commits_reused,
+                                                run.commits_collapsed,
+                                            ))
+                                        }
+                                    }
                                     @if let Some(error) = &run.error { br; small { (error) } }
                                 }
                                 td {

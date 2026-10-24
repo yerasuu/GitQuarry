@@ -638,6 +638,11 @@ pub(crate) struct RepoConfForm {
     publish_publisher_name: String,
     #[serde(default)]
     publish_publisher_email: String,
+    /// Checkbox, present ("1") only if checked: bumps
+    /// `PublishMirror::filter_epoch`, the confirmation a change to a
+    /// history mirror's output needs.
+    #[serde(default)]
+    publish_confirm_epoch_bump: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every

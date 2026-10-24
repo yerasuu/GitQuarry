@@ -432,3 +432,138 @@ async fn a_truncated_preview_says_so_and_is_not_a_pass() {
     assert!(!html.contains("every gate passes"), "{html}");
     assert!(html.contains("list truncated"), "{html}");
 }
+
+/// A history mirror that has published once, into a local bare repo
+/// standing in for the forge (pointed at in memory only, as the mirror
+/// crate's own run tests do).
+async fn published_history_mirror(gq: &Instance, public: &std::path::Path) -> PublishMirror {
+    set_extra_hosts(&gq.ctx, &["example.invalid"]).await;
+    let resolved = gq.resolved().await;
+    let mirror = publish::create(
+        &gq.ctx,
+        &resolved.uid,
+        PublishMirror {
+            label: "public".to_string(),
+            remote_url: "https://example.invalid/acme/public.git".to_string(),
+            token: MirrorToken::new(TOKEN.to_string()),
+            mode: publish::PublishMode::History,
+            filter: FilterConfig {
+                mode: FilterMode::Exclude,
+                exclude: vec!["deploy/**".to_string()],
+                ..Default::default()
+            },
+            publish_branches: ["main".to_string()].into(),
+            unmapped: publish::UnmappedPolicy::Passthrough,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let work = Work::new().await;
+    work.commit(
+        &[
+            ("LICENSE", "SPDX-License-Identifier: MIT\n"),
+            ("src/main.rs", "fn main() {}\n"),
+            ("docs/plan.md", "internal\n"),
+        ],
+        "start\n",
+    )
+    .await;
+    work.push(&resolved, "refs/heads/main").await;
+    std::fs::create_dir_all(public).unwrap();
+    git(public, &["init", "--quiet", "--bare"]).await;
+    let local = PublishMirror {
+        remote_url: public.to_string_lossy().to_string(),
+        ..mirror.clone()
+    };
+    publish::run::publish_mirror_now(&gq.ctx, &resolved, &local)
+        .await
+        .unwrap();
+    mirror
+}
+
+fn history_edit<'a>(mirror: &'a PublishMirror, etag: &'a str, exclude: &'a str) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("conf_action", "edit_publish_mirror"),
+        ("publish_mirror_id", &mirror.id),
+        ("publish_mirror_etag", etag),
+        ("label", "public"),
+        ("remote_url", "https://example.invalid/acme/public.git"),
+        ("publish_run_mode", "history"),
+        ("publish_mode", "exclude"),
+        ("publish_exclude", exclude),
+        ("publish_branches", "main"),
+        ("publish_unmapped", "passthrough"),
+    ]
+}
+
+#[tokio::test]
+async fn changing_a_published_history_needs_the_confirmed_epoch_bump() {
+    let gq = Instance::new().await;
+    let public_dir = tempfile::tempdir().unwrap();
+    let mirror = published_history_mirror(&gq, &public_dir.path().join("public.git")).await;
+    let uid = gq.resolved().await.uid;
+    let (_, etag) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    let alice = gq.login("alice").await;
+
+    let root = gq.login("root").await;
+    let page = gq.get(&settings_url("settings_publish"), Some(&root)).await;
+    assert!(page.body.contains("history, epoch 0"), "{}", page.body);
+    assert!(
+        page.body.contains(r#"name="publish_confirm_epoch_bump""#),
+        "{}",
+        page.body
+    );
+
+    let refused = gq
+        .save(&alice, &history_edit(&mirror, &etag, "deploy/**\ndocs/**"))
+        .await;
+    assert_eq!(refused.status, StatusCode::OK, "{}", refused.body);
+    assert!(refused.body.contains("flash-err"), "{}", refused.body);
+    assert!(refused.body.contains("no longer matches"), "{}", refused.body);
+    let (stored, etag) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    assert_eq!((stored.filter.exclude.len(), stored.filter_epoch), (1, 0));
+
+    let mut confirmed = history_edit(&mirror, &etag, "deploy/**\ndocs/**");
+    confirmed.push(("publish_confirm_epoch_bump", "1"));
+    let saved = gq.save(&alice, &confirmed).await;
+    assert!(saved.body.contains("saved at epoch 1"), "{}", saved.body);
+    let (stored, _) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    assert_eq!((stored.filter.exclude.len(), stored.filter_epoch), (2, 1));
+
+    let preview = gq
+        .save(
+            &alice,
+            &[
+                ("conf_action", "preview_publish_mirror"),
+                ("publish_mirror_id", &mirror.id),
+            ],
+        )
+        .await;
+    assert!(preview.body.contains("epoch 1"), "{}", preview.body);
+    assert!(preview.body.contains("FORCE PUSH"), "{}", preview.body);
+    assert!(preview.body.contains("commits to rewrite"), "{}", preview.body);
+}
+
+#[tokio::test]
+async fn a_maintainer_cannot_bump_the_epoch() {
+    let gq = Instance::new().await;
+    let public_dir = tempfile::tempdir().unwrap();
+    let mirror = published_history_mirror(&gq, &public_dir.path().join("public.git")).await;
+    gq.user_with_perm("maint", Permission::Maintainer).await;
+    let uid = gq.resolved().await.uid;
+    let (_, etag) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    let mut confirmed = history_edit(&mirror, &etag, "deploy/**\ndocs/**");
+    confirmed.push(("publish_confirm_epoch_bump", "1"));
+
+    let maint = gq.login("maint").await;
+    assert_eq!(gq.save(&maint, &confirmed).await.status, StatusCode::FORBIDDEN);
+    let alice = gq.login("alice").await;
+    let forged = Session {
+        cookie: alice.cookie.clone(),
+        csrf: String::new(),
+    };
+    assert_eq!(gq.save(&forged, &confirmed).await.status, StatusCode::BAD_REQUEST);
+    let (stored, _) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    assert_eq!(stored.filter_epoch, 0);
+}

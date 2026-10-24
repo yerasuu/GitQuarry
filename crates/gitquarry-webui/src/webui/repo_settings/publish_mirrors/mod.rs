@@ -15,9 +15,10 @@ use gitquarry_core::storage::Cas;
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_i18n::Locale;
 use gitquarry_i18n::web::publish_mirrors as t;
+use gitquarry_mirror_external::publish::epoch::EpochBumpRequired;
 use gitquarry_mirror_external::publish::log::{PublishLog, RunOutcome};
 use gitquarry_mirror_external::publish::preview::Preview;
-use gitquarry_mirror_external::publish::{self, PublishMirror};
+use gitquarry_mirror_external::publish::{self, PublishMirror, PublishMode};
 use maud::{Markup, PreEscaped, html};
 use report::{render_preview, render_runs};
 
@@ -90,18 +91,31 @@ pub(super) async fn save_publish_mirror(
             else {
                 return Err(AppError::not_found(anyhow::anyhow!("no such publish mirror")));
             };
+            let existing_epoch = existing.filter_epoch;
             let mirror = match mirror_from_form(existing, form, locale) {
                 Ok(mirror) => mirror,
                 Err(msg) => return Ok((FlashOutcome::Invalid(msg), None)),
             };
             // The etag the browser loaded the form with, so an edit that
             // landed in between is a conflict rather than silently lost.
+            let bumped = mirror.filter_epoch != existing_epoch;
             match publish::update(ctx, &resolved.uid, &mirror, &form.publish_mirror_etag).await {
+                Ok(Cas::Ok) if bumped => {
+                    audit(
+                        "publish_mirror.epoch_bump",
+                        format!("{} epoch {}", mirror.label, mirror.filter_epoch),
+                    )
+                    .await;
+                    Ok((FlashOutcome::Ok(t::epoch_bumped(locale, mirror.filter_epoch)), None))
+                }
                 Ok(Cas::Ok) => {
                     audit("publish_mirror.edit", mirror.label).await;
                     Ok((FlashOutcome::Ok(t::updated(locale)), None))
                 }
                 Ok(Cas::Conflict) => Ok((FlashOutcome::Conflict, None)),
+                Err(e) if e.downcast_ref::<EpochBumpRequired>().is_some() => {
+                    Ok((FlashOutcome::Invalid(t::epoch_bump_required(locale)), None))
+                }
                 Err(e) => Ok((FlashOutcome::Invalid(e.to_string()), None)),
             }
         }
@@ -191,6 +205,9 @@ pub(super) fn render_publish_mirrors_section(
                         tr {
                             td {
                                 (mirror.label)
+                                @if mirror.mode == PublishMode::History {
+                                    " " span class="badge" { (t::history_badge(locale, mirror.filter_epoch)) }
+                                }
                                 @if !mirror.enabled { " " span class="badge" { (t::disabled(locale)) } }
                             }
                             td { code { (mirror.remote_url) } }
@@ -237,7 +254,12 @@ pub(super) fn render_publish_mirrors_section(
                 }
                 (render_runs(&log.runs, locale))
                 @if let Some(shown) = shown.filter(|s| s.mirror_id == mirror.id) {
-                    (render_preview(&mirror.label, &shown.preview, locale))
+                    (render_preview(
+                        &mirror.label,
+                        &shown.preview,
+                        mirror.mode == PublishMode::History,
+                        locale,
+                    ))
                 }
                 (render_form(
                     repo_name,

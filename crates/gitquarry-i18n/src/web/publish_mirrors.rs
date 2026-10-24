@@ -5,8 +5,8 @@ use super::super::{Locale, msg};
 
 msg!(heading() { Locale::Es => "espejos de publicación", Locale::En => "publish mirrors" });
 msg!(prose() {
-    Locale::Es => "Publica una versión filtrada de este repo privado en un remoto público. Modo snapshot: cada publicación es un único commit con el árbol filtrado de cada rama publicada, sin la historia privada, siempre en fast-forward sobre el anterior. Todas las puertas se comprueban antes de empujar nada; la vista previa no empuja.",
-    Locale::En => "Publishes a filtered version of this private repo to a public remote. Snapshot mode: each publish is one commit holding the filtered tree of each published branch, without the private history, always a fast-forward on the previous one. Every gate is checked before anything is pushed; the preview pushes nothing.",
+    Locale::Es => "Publica una versión filtrada de este repo privado en un remoto público. Modo snapshot: cada publicación es un único commit con el árbol filtrado de cada rama publicada, sin la historia privada, siempre en fast-forward sobre el anterior. Modo historia: cada commit alcanzable desde las ramas y tags publicados se reescribe con el filtro, de forma determinista, y cada publicación es un fast-forward de la anterior dentro de un mismo epoch; cambiar lo que se publica exige confirmar un nuevo epoch, y solo entonces se hace force push. Todas las puertas se comprueban antes de empujar nada; la vista previa no empuja.",
+    Locale::En => "Publishes a filtered version of this private repo to a public remote. Snapshot mode: each publish is one commit holding the filtered tree of each published branch, without the private history, always a fast-forward on the previous one. History mode: every commit reachable from the published branches and tags is rewritten through the filter, deterministically, and each publish fast-forwards the last within one epoch; changing what is published needs a confirmed new epoch, and only then is there a force push. Every gate is checked before anything is pushed; the preview pushes nothing.",
 });
 msg!(none_hint() { Locale::Es => "(sin espejos de publicación)", Locale::En => "(no publish mirrors yet)" });
 msg!(add_heading() { Locale::Es => "nuevo espejo de publicación", Locale::En => "new publish mirror" });
@@ -55,6 +55,41 @@ msg!(field_run_mode() { Locale::Es => "publicación", Locale::En => "publishing"
 msg!(run_mode_snapshot() {
     Locale::Es => "snapshot (un commit por publicación, sin historia; solo ramas)",
     Locale::En => "snapshot (one commit per publish, no history; branches only)",
+});
+msg!(run_mode_history() {
+    Locale::Es => "historia (cada commit reescrito de forma determinista; ramas y tags)",
+    Locale::En => "history (every commit rewritten, deterministically; branches and tags)",
+});
+msg!(history_badge(epoch: u32) { Locale::Es => "historia, epoch {epoch}", Locale::En => "history, epoch {epoch}" });
+msg!(field_epoch(epoch: u32) { Locale::Es => "epoch del filtro: {epoch}", Locale::En => "filter epoch: {epoch}" });
+msg!(confirm_epoch_bump() {
+    Locale::Es => "confirmar un nuevo epoch: la próxima publicación reescribe toda la historia pública y hace force push; todo el que haya clonado o hecho fork del repo público tiene una historia que ya no coincide",
+    Locale::En => "confirm a new epoch: the next publish rewrites the whole public history and force-pushes it; everyone who cloned or forked the public repo has a history that no longer matches",
+});
+msg!(epoch_bump_required() {
+    Locale::Es => "este cambio reescribe la historia pública y no se ha guardado: marca la confirmación del nuevo epoch para guardarlo. Todo el que haya clonado o hecho fork del repo público tiene una historia que ya no coincide.",
+    Locale::En => "this change rewrites the public history and was not saved: tick the new-epoch confirmation to save it. Everyone who cloned or forked the public repo has a history that no longer matches.",
+});
+msg!(epoch_bumped(epoch: u32) {
+    Locale::Es => "espejo de publicación guardado en el epoch {epoch}: la próxima publicación es un force push.",
+    Locale::En => "publish mirror saved at epoch {epoch}: the next publish is a force push.",
+});
+msg!(preview_epoch(epoch: u32) { Locale::Es => "epoch {epoch}", Locale::En => "epoch {epoch}" });
+msg!(preview_force_push() {
+    Locale::Es => "publicar ahora haría FORCE PUSH sobre lo publicado en el epoch anterior: todo el que haya clonado o hecho fork del repo público tiene una historia que ya no coincide.",
+    Locale::En => "publishing now would FORCE PUSH over what the previous epoch published: everyone who cloned or forked the public repo has a history that no longer matches.",
+});
+msg!(preview_bump_needed() {
+    Locale::Es => "el filtro ha cambiado desde que se publicó este epoch (ajustes o .gitquarry/publish.toml): una publicación se negará hasta que se confirme un nuevo epoch.",
+    Locale::En => "the filter changed since this epoch was published (settings or .gitquarry/publish.toml): a publish will refuse until a new epoch is confirmed.",
+});
+msg!(commits_to_rewrite() { Locale::Es => "commits a reescribir", Locale::En => "commits to rewrite" });
+msg!(commits_reused() { Locale::Es => "commits ya reescritos", Locale::En => "commits already rewritten" });
+msg!(run_epoch(epoch: u32) { Locale::Es => "epoch {epoch}", Locale::En => "epoch {epoch}" });
+msg!(run_forced() { Locale::Es => "force push", Locale::En => "force push" });
+msg!(run_history_counts(rewritten: usize, reused: usize, collapsed: usize) {
+    Locale::Es => "{rewritten} reescritos, {reused} reutilizados, {collapsed} colapsados",
+    Locale::En => "{rewritten} rewritten, {reused} reused, {collapsed} collapsed",
 });
 msg!(field_publisher_name() { Locale::Es => "nombre del publicador", Locale::En => "publisher name" });
 msg!(field_publisher_email() { Locale::Es => "email del publicador", Locale::En => "publisher email" });

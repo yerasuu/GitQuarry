@@ -28,8 +28,14 @@ pub(super) fn mirror_from_form(
     mirror.enabled = form.mirror_enabled == "1";
     mirror.mode = match form.publish_run_mode.as_str() {
         "snapshot" | "" => PublishMode::Snapshot,
+        "history" => PublishMode::History,
         other => return Err(t::bad_run_mode(locale, other)),
     };
+    // Only ever by one, and only from the stored epoch: `publish::update`
+    // refuses anything else, and refuses an output change without it.
+    if form.publish_confirm_epoch_bump == "1" {
+        mirror.filter_epoch = mirror.filter_epoch.saturating_add(1);
+    }
     let (name, email) = (form.publish_publisher_name.trim(), form.publish_publisher_email.trim());
     mirror.publisher = match (name.is_empty(), email.is_empty()) {
         (true, true) => None,
@@ -98,7 +104,7 @@ struct FormValues {
     label: String,
     remote_url: String,
     enabled: bool,
-    snapshot_mode: bool,
+    history_mode: bool,
     publisher_name: String,
     publisher_email: String,
     exclude_mode: bool,
@@ -121,7 +127,7 @@ impl FormValues {
             label: mirror.label.clone(),
             remote_url: mirror.remote_url.clone(),
             enabled: mirror.enabled,
-            snapshot_mode: mirror.mode == PublishMode::Snapshot,
+            history_mode: mirror.mode == PublishMode::History,
             publisher_name: mirror.publisher.as_ref().map_or_else(String::new, |p| p.name.clone()),
             publisher_email: mirror.publisher.as_ref().map_or_else(String::new, |p| p.email.clone()),
             exclude_mode: mirror.filter.mode == FilterMode::Exclude,
@@ -158,7 +164,7 @@ impl FormValues {
             label: form.label.clone(),
             remote_url: form.remote_url.clone(),
             enabled: form.mirror_enabled == "1",
-            snapshot_mode: matches!(form.publish_run_mode.as_str(), "snapshot" | ""),
+            history_mode: form.publish_run_mode == "history",
             publisher_name: form.publish_publisher_name.clone(),
             publisher_email: form.publish_publisher_email.clone(),
             exclude_mode: form.publish_mode == "exclude",
@@ -218,7 +224,8 @@ pub(super) fn render_form(
             label {
                 (t::field_run_mode(locale)) " "
                 select name="publish_run_mode" {
-                    option value="snapshot" selected[v.snapshot_mode] { (t::run_mode_snapshot(locale)) }
+                    option value="snapshot" selected[!v.history_mode] { (t::run_mode_snapshot(locale)) }
+                    option value="history" selected[v.history_mode] { (t::run_mode_history(locale)) }
                 }
             }
             label { (t::field_publisher_name(locale)) " " input name="publish_publisher_name" value=(v.publisher_name) size="24"; }
@@ -252,6 +259,17 @@ pub(super) fn render_form(
             }
             label { (t::field_spdx(locale)) " " input name="publish_spdx" value=(v.spdx) size="20"; }
             label { (t::field_secret_allowlist(locale)) br; textarea name="publish_secret_allowlist" rows="3" cols="60" { (v.allowlist) } }
+            @if existing.is_some() {
+                fieldset {
+                    legend { (t::field_epoch(locale, mirror.filter_epoch)) }
+                    label {
+                        // Never pre-checked, not even on a retry: each bump
+                        // is its own explicit decision.
+                        input type="checkbox" name="publish_confirm_epoch_bump" value="1";
+                        " " strong { (t::confirm_epoch_bump(locale)) }
+                    }
+                }
+            }
             button type="submit" { (if existing.is_some() { t::save_button(locale) } else { t::add_button(locale) }) }
         }
     }
