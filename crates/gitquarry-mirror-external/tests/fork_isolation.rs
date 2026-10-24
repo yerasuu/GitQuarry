@@ -5,7 +5,7 @@
 
 use gitquarry_core::storage::entities::{OwnerRef, Visibility};
 use gitquarry_core::storage::uid::Uid;
-use gitquarry_mirror_external::{access, domain};
+use gitquarry_mirror_external::{access, domain, publish};
 use gitquarry_test_support::ctx;
 
 #[tokio::test]
@@ -50,4 +50,49 @@ async fn a_fork_doesnt_inherit_the_sources_mirror_credential() {
         inherited.len()
     );
     assert_eq!(domain::list(&ctx, &source.uid).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_fork_doesnt_inherit_the_sources_publish_mirror() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path());
+    let source = gitquarry_core::domain::repo::create(&ctx, "alice/private", None, None, None, Visibility::Private)
+        .await
+        .unwrap()
+        .unwrap();
+
+    publish::create(
+        &ctx,
+        &source.uid,
+        publish::PublishMirror {
+            label: "public".to_string(),
+            remote_url: "https://github.com/alice/public.git".to_string(),
+            token: publish::MirrorToken::new("ghp_alices_secret".to_string()),
+            enabled: true,
+            publish_branches: ["main".to_string()].into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let fork = gitquarry_core::domain::repo::fork(
+        &ctx,
+        &source,
+        "bob/private",
+        None,
+        OwnerRef::User(Uid::from("u-bob".to_string())),
+        gitquarry_i18n::Locale::DEFAULT,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let inherited = publish::list_with_etags(&ctx, &fork.uid).await.unwrap();
+    assert!(
+        inherited.is_empty(),
+        "the fork inherited {} publish mirror(s), credential included",
+        inherited.len()
+    );
+    assert_eq!(publish::list_with_etags(&ctx, &source.uid).await.unwrap().len(), 1);
 }

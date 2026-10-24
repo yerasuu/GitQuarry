@@ -336,8 +336,18 @@ pub async fn purge(ctx: &AppContext, resolved: &ResolvedRepo, full_name: &str) -
 /// held LFS locks isn't what a fork is, and no forge behaves that way.
 ///
 /// `publish/` is a publish mirror's rewritten repo and mapping: it belongs
-/// to a mirror of the source, and the copy has none.
-const NOT_INHERITED_BY_A_COPY: [&str; 5] = ["mirrors/", "merges/", "lfs-locks/", "lfs-lock-paths/", "publish/"];
+/// to a mirror of the source, and the copy has none. `publish-mirrors/` is
+/// the other credential holder (a forge token), and `publish-log/` its run
+/// record; neither is under `publish/`, so each needs its own entry.
+const NOT_INHERITED_BY_A_COPY: [&str; 7] = [
+    "mirrors/",
+    "merges/",
+    "lfs-locks/",
+    "lfs-lock-paths/",
+    "publish/",
+    "publish-mirrors/",
+    "publish-log/",
+];
 
 /// Strips [`NOT_INHERITED_BY_A_COPY`] from a freshly copied repo. Runs
 /// *after* the copy rather than filtering inside `copy_all_to`: that
