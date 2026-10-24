@@ -122,6 +122,18 @@ msg!(preview_verdict_blocked() {
     Locale::Es => "bloqueado: una publicación se negaría a empezar",
     Locale::En => "blocked: a publish run would refuse to start",
 });
+msg!(preview_verdict_truncated() {
+    Locale::Es => "no concluyente: el historial se truncó, así que las puertas no revisaron todo",
+    Locale::En => "inconclusive: the history was truncated, so the gates did not look at all of it",
+});
+msg!(history_truncated(count: usize) {
+    Locale::Es => "historial truncado: las puertas y los contadores de esta rama cubren solo los {count} commits más recientes; lo anterior no se revisó",
+    Locale::En => "history truncated: the gates and counts for this branch cover only the {count} newest commits; older ones were not checked",
+});
+msg!(paths_truncated(shown: usize, total: usize) {
+    Locale::Es => "lista truncada: se muestran {shown} de {total} rutas",
+    Locale::En => "list truncated: showing {shown} of {total} paths",
+});
 msg!(preview_no_refs() {
     Locale::Es => "ninguna rama ni tag coincide con las refs declaradas.",
     Locale::En => "no branch or tag matches the declared refs.",

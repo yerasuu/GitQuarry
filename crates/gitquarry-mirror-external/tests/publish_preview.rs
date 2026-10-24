@@ -5,7 +5,9 @@
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_mirror_external::publish::audit::{Finding, Gate, GateReport};
 use gitquarry_mirror_external::publish::filter::{ExcludedBy, FilterConfig, FilterMode};
-use gitquarry_mirror_external::publish::preview::{Preview, RefPreview, preview};
+use gitquarry_mirror_external::publish::preview::{
+    MAX_PREVIEW_COMMITS, MAX_PREVIEW_PATHS, Preview, RefPreview, preview,
+};
 use gitquarry_mirror_external::publish::{IdentityMapping, PublishMirror, Publisher, SecretAllow, UnmappedPolicy};
 use gitquarry_test_support::{Work, ctx, git};
 
@@ -377,6 +379,29 @@ async fn the_host_gate_runs_again_at_preview_time() {
 
 /// `git args` in `dir` with `input` on stdin, for the plumbing the shared
 /// `git` helper can't feed.
+/// A `git fast-import` stream of `count` commits on main; `file` gets its
+/// content from `content(i)`, plus `extra` files in the first commit.
+fn history(count: usize, extra: &[(String, &str)], content: impl Fn(usize) -> String) -> String {
+    let mut stream = String::new();
+    for i in 0..count {
+        let message = format!("c{i}\n");
+        stream.push_str(&format!(
+            "commit refs/heads/main\ncommitter T <t@example.com> {} +0000\ndata {}\n{message}",
+            1_700_000_000 + i,
+            message.len()
+        ));
+        let mut files = vec![("file.txt".to_string(), content(i))];
+        if i == 0 {
+            files.push(("LICENSE".to_string(), MIT.to_string()));
+            files.extend(extra.iter().map(|(p, c)| (p.clone(), c.to_string())));
+        }
+        for (path, body) in files {
+            stream.push_str(&format!("M 100644 inline {path}\ndata {}\n{body}\n", body.len()));
+        }
+    }
+    stream
+}
+
 fn pipe(dir: &std::path::Path, args: &[&str], input: &str, env: &[(&str, &str)]) -> String {
     use std::io::Write;
     let mut child = std::process::Command::new("git")
@@ -396,4 +421,57 @@ fn pipe(dir: &std::path::Path, args: &[&str], input: &str, env: &[(&str, &str)])
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[tokio::test]
+async fn a_history_past_the_cap_is_previewed_truncated_and_never_passes() {
+    let fx = Fixture::new().await;
+    let stream = history(MAX_PREVIEW_COMMITS + 1, &[], |i| format!("{i}\n"));
+    pipe(fx.work.path(), &["fast-import", "--quiet"], &stream, &[]);
+    let mut m = mirror(excluding(&[]));
+    m.unmapped = UnmappedPolicy::Passthrough;
+
+    let preview = fx.preview(&m).await;
+
+    let main = &preview.refs[0];
+    assert!(main.error.is_none(), "{:?}", main.error);
+    assert!(main.history_truncated);
+    assert_eq!(main.published_commits, MAX_PREVIEW_COMMITS);
+    assert!(main.gates.iter().all(GateReport::passed), "{:?}", main.gates);
+    assert!(
+        !preview.passed(),
+        "gates over a truncated history must not read as a pass"
+    );
+}
+
+#[tokio::test]
+async fn a_history_within_the_cap_is_not_truncated() {
+    let fx = Fixture::new().await;
+    let stream = history(3, &[], |i| format!("{i}\n"));
+    pipe(fx.work.path(), &["fast-import", "--quiet"], &stream, &[]);
+
+    let main = fx.main(&mirror(excluding(&[]))).await;
+
+    assert!(!main.history_truncated);
+    assert_eq!(main.published_commits, 3);
+}
+
+#[tokio::test]
+async fn the_path_list_is_capped_but_counted() {
+    let fx = Fixture::new().await;
+    let extra: Vec<(String, &str)> = (0..MAX_PREVIEW_PATHS)
+        .map(|i| (format!("d/f{i:05}.txt"), "x\n"))
+        .collect();
+    pipe(
+        fx.work.path(),
+        &["fast-import", "--quiet"],
+        &history(1, &extra, |_| "x\n".to_string()),
+        &[],
+    );
+
+    let main = fx.main(&mirror(excluding(&[]))).await;
+
+    assert_eq!(main.published_paths.len(), MAX_PREVIEW_PATHS);
+    assert_eq!(main.published_paths_total, MAX_PREVIEW_PATHS + 2);
+    assert_eq!(main.published_paths[0], "LICENSE");
 }

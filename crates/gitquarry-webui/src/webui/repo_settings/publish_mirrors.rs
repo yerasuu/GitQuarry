@@ -441,7 +441,10 @@ fn render_ref(r: &RefPreview, locale: Locale) -> Markup {
                 }
             }
             details {
-                summary { (t::published_paths(locale, r.published_paths.len())) }
+                summary { (t::published_paths(locale, r.published_paths_total)) }
+                @if r.published_paths.len() < r.published_paths_total {
+                    p class="muted" { em { (t::paths_truncated(locale, r.published_paths.len(), r.published_paths_total)) } }
+                }
                 ul {
                     @for path in &r.published_paths { li { code { (path) } } }
                 }
@@ -488,6 +491,9 @@ fn short(sha: &str) -> &str {
 fn render_gate_record(record: &GateRecord, locale: Locale) -> Markup {
     html! {
         li {
+            @if r.history_truncated {
+                p class="flash flash-err" { (t::history_truncated(locale, publish::preview::MAX_PREVIEW_COMMITS)) }
+            }
             (gate_label(record.gate, locale)) ": "
             @if record.passed() {
                 (t::gate_pass(locale))
@@ -528,12 +534,25 @@ fn render_runs(runs: &[PublishRun], locale: Locale) -> Markup {
                                 td {
                                     @for r in &run.refs {
                                         div {
+/// Truncation is the only thing keeping the preview from passing.
+fn only_truncated(preview: &Preview) -> bool {
+    preview.host.passed()
+        && !preview.refs.is_empty()
+        && preview.refs.iter().any(|r| r.history_truncated)
+        && preview
+            .refs
+            .iter()
+            .all(|r| r.error.is_none() && r.gates.iter().all(GateReport::passed))
+}
+
                                             code { (r.ref_name) } " "
                                             code { (short(&r.private_head)) } " → "
                                             @match &r.public_head {
                                                 Some(head) => code { (short(head)) },
                                                 None => em { "—" },
                                             }
+            } @else if only_truncated(preview) {
+                p class="flash flash-err" { (t::preview_verdict_truncated(locale)) }
                                             " " (t::run_counts(locale, r.published_files, r.excluded_entries))
                                         }
                                     }

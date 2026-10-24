@@ -292,3 +292,71 @@ async fn an_edit_with_a_blank_token_keeps_the_stored_one() {
     assert_eq!(stored.token.expose(), TOKEN);
     assert!(!stored.enabled, "an unchecked box turns the sweep off");
 }
+
+#[tokio::test]
+async fn a_truncated_preview_says_so_and_is_not_a_pass() {
+    use gitquarry_mirror_external::publish::preview::{MAX_PREVIEW_COMMITS, MAX_PREVIEW_PATHS};
+    use std::io::Write;
+    let gq = Instance::new().await;
+    let mirror = publish::create(
+        &gq.ctx,
+        &gq.resolved().await.uid,
+        PublishMirror {
+            remote_url: "https://github.com/acme/public.git".to_string(),
+            publish_branches: ["main".to_string()].into(),
+            unmapped: publish::UnmappedPolicy::Passthrough,
+            filter: FilterConfig {
+                mode: FilterMode::Exclude,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let work = Work::new().await;
+    let mut stream = String::new();
+    for i in 0..=MAX_PREVIEW_COMMITS {
+        let message = format!("c{i}\n");
+        stream.push_str(&format!(
+            "commit refs/heads/main\ncommitter T <t@example.com> {} +0000\ndata {}\n{message}",
+            1_700_000_000 + i,
+            message.len()
+        ));
+        let mut files = vec![("file.txt".to_string(), format!("{i}\n"))];
+        if i == 0 {
+            files.push(("LICENSE".to_string(), "SPDX-License-Identifier: MIT\n".to_string()));
+            files.extend((0..MAX_PREVIEW_PATHS).map(|n| (format!("d/f{n:05}.txt"), "x\n".to_string())));
+        }
+        for (path, body) in files {
+            stream.push_str(&format!("M 100644 inline {path}\ndata {}\n{body}\n", body.len()));
+        }
+    }
+    let mut import = std::process::Command::new("git")
+        .current_dir(work.path())
+        .args(["fast-import", "--quiet"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    import.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(import.wait().unwrap().success());
+    work.push(&gq.resolved().await, "refs/heads/main").await;
+
+    let root = gq.login("root").await;
+    let page = gq
+        .save(
+            &root,
+            &[
+                ("conf_action", "preview_publish_mirror"),
+                ("publish_mirror_id", &mirror.id),
+            ],
+        )
+        .await;
+
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let html = &page.body;
+    assert!(html.contains("history truncated"), "{html}");
+    assert!(html.contains("inconclusive"), "{html}");
+    assert!(!html.contains("every gate passes"), "{html}");
+    assert!(html.contains("list truncated"), "{html}");
+}

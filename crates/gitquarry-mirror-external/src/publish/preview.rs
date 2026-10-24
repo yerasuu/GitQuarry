@@ -7,7 +7,9 @@
 use super::audit::{self, GateReport};
 use super::filter::{Decision, ExcludedBy, Filter, REPO_FILTER_PATH, RepoFilterFile};
 use super::log::{self, PublishLog};
-use super::objects::{Commit, ObjectKind, ObjectReader, Oid, list_branches_and_tags, parse_tree, to_hex, topo_order};
+use super::objects::{
+    Commit, ObjectKind, ObjectReader, Oid, list_branches_and_tags, parse_tree, to_hex, topo_order_newest,
+};
 use super::rewrite::{EMPTY_TREE, Rewriter, entry_kind, join};
 use super::snapshot::{Snapshot, plan_snapshot};
 use super::{NEVER_PUBLISHED_REF_PREFIXES, PublishMirror, PublishMode};
@@ -16,6 +18,16 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::git::codeowners::segments_match;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// Newest commits the preview rewrites and gates per ref, and the longest
+/// path list it keeps. The preview runs inside the settings request, and
+/// every commit costs several synchronous round trips to `git cat-file`, so
+/// the cap keeps a deep history from outlasting the request; the path cap
+/// keeps the page a size a browser lays out at once (a few hundred KB of
+/// list items). Both are chosen for that, not measured; raising them is
+/// safe, only slower or heavier.
+pub const MAX_PREVIEW_COMMITS: usize = 5_000;
+pub const MAX_PREVIEW_PATHS: usize = 2_000;
 
 /// The whole preview of one mirror.
 #[derive(Debug)]
@@ -33,7 +45,7 @@ impl Preview {
             && self
                 .refs
                 .iter()
-                .all(|r| r.error.is_none() && r.gates.iter().all(GateReport::passed))
+                .all(|r| r.error.is_none() && !r.history_truncated && r.gates.iter().all(GateReport::passed))
     }
 }
 
@@ -50,8 +62,15 @@ pub struct RefPreview {
     /// A publish would push nothing: the filtered tree is the one the last
     /// recorded snapshot holds.
     pub unchanged: bool,
-    /// Every file and gitlink path in the public head tree, sorted.
+    /// The file and gitlink paths of the public head tree, sorted, the first
+    /// [`MAX_PREVIEW_PATHS`] of [`Self::published_paths_total`].
     pub published_paths: Vec<String>,
+    pub published_paths_total: usize,
+    /// Only the newest [`MAX_PREVIEW_COMMITS`] commits were rewritten, so
+    /// every gate and count here speaks about that window and not the whole
+    /// history. Never a pass: [`Preview::passed`] is false while it is set,
+    /// because content older than the window was not looked at.
+    pub history_truncated: bool,
     /// Entries excluded from the head tree, by the rule that excluded them.
     /// An excluded directory counts once: its children are never read.
     pub excluded: BTreeMap<ExcludedBy, usize>,
@@ -141,8 +160,12 @@ fn preview_ref(
     let head_commit = super::objects::parse_commit(&reader.read_kind(&head, ObjectKind::Commit)?)?;
     let (repo_file, repo_file_error) = load_repo_filter(reader, head_commit.tree)?;
     let filter = Filter::new(&mirror.filter, repo_file.as_ref());
+    let (commits, history_truncated) = topo_order_newest(git_dir, &head, MAX_PREVIEW_COMMITS)?;
     let mut rewriter = Rewriter::new(&filter, &mirror.identities);
-    for commit in topo_order(git_dir, &head)? {
+    if history_truncated {
+        rewriter = rewriter.windowed();
+    }
+    for commit in commits {
         rewriter.rewrite_commit(reader, commit)?;
     }
     let full_head = rewriter.mapped(&head).flatten();
@@ -166,12 +189,17 @@ fn preview_ref(
     ];
     let mut excluded = BTreeMap::new();
     count_exclusions(reader, &filter, String::new(), head_commit.tree, false, &mut excluded)?;
+    let mut paths = head_tree.map(|t| published_paths(&rewriter, t)).unwrap_or_default();
+    let published_paths_total = paths.len();
+    paths.truncate(MAX_PREVIEW_PATHS);
     Ok(RefPreview {
         ref_name: ref_name.to_string(),
         private_head: to_hex(&head),
         public_head: public_head.map(|c| to_hex(&c)),
         unchanged,
-        published_paths: head_tree.map(|t| published_paths(&rewriter, t)).unwrap_or_default(),
+        published_paths: paths,
+        published_paths_total,
+        history_truncated,
         excluded,
         published_commits: rewriter.published.len(),
         collapsed_commits: rewriter.collapsed,

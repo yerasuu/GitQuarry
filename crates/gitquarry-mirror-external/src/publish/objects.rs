@@ -336,6 +336,33 @@ pub(crate) fn topo_order(git_dir: &Path, tip: &Oid) -> Result<Vec<Oid>> {
     String::from_utf8_lossy(&out.stdout).lines().map(from_hex).collect()
 }
 
+/// The newest `limit` commits reachable from `tip`, parents before children,
+/// and whether older ones were left out. The oldest commit of a truncated
+/// window has parents outside it.
+pub(crate) fn topo_order_newest(git_dir: &Path, tip: &Oid, limit: usize) -> Result<(Vec<Oid>, bool)> {
+    let out = Command::new("git")
+        .env("GIT_DIR", git_dir)
+        .args(["rev-list", "--topo-order", "--reverse"])
+        // One past the limit, only to learn whether there is more.
+        .arg(format!("--max-count={}", limit.saturating_add(1)))
+        .args(["--end-of-options"])
+        .arg(to_hex(tip))
+        .output()
+        .context("couldn't run git rev-list")?;
+    if !out.status.success() {
+        bail!("git rev-list failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    let mut commits = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(from_hex)
+        .collect::<Result<Vec<_>>>()?;
+    let truncated = commits.len() > limit;
+    if truncated {
+        commits.remove(0);
+    }
+    Ok((commits, truncated))
+}
+
 /// Every ref under `refs/heads/` and `refs/tags/`, with the commit it
 /// finally points at (an annotated tag peeled) — `None` for a ref that
 /// doesn't end at a commit.

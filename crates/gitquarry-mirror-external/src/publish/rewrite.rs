@@ -48,6 +48,9 @@ pub(crate) struct Rewriter<'f> {
     excluded_trees_seen: HashSet<Oid>,
     pub published: Vec<PublishedCommit>,
     pub collapsed: usize,
+    /// Parents never rewritten count as the root of the history instead of
+    /// an error, for a window that cuts the history short.
+    windowed: bool,
 }
 
 /// git's empty tree, used for a commit whose whole tree was filtered away
@@ -71,7 +74,16 @@ impl<'f> Rewriter<'f> {
             excluded_trees_seen: HashSet::new(),
             published: Vec::new(),
             collapsed: 0,
+            windowed: false,
         }
+    }
+
+    /// For rewriting only the newest commits of a history: the ones whose
+    /// parents fall outside the window become roots, so everything computed
+    /// afterwards describes the window and not the whole history.
+    pub(crate) fn windowed(mut self) -> Self {
+        self.windowed = true;
+        self
     }
 
     /// The public commit `private` maps to: `None` if it hasn't been
@@ -94,10 +106,17 @@ impl<'f> Rewriter<'f> {
             .with_context(|| format!("parsing commit {}", to_hex(&private)))?;
         let mut parents: Vec<Oid> = Vec::with_capacity(commit.parents.len());
         for parent in &commit.parents {
-            let mapped = self
-                .mapping
-                .get(parent)
-                .with_context(|| format!("parent {} of {} not rewritten yet", to_hex(parent), to_hex(&private)))?;
+            let mapped = match self.mapping.get(parent) {
+                Some(mapped) => mapped,
+                None if self.windowed => &None,
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "parent {} of {} not rewritten yet",
+                        to_hex(parent),
+                        to_hex(&private)
+                    ));
+                }
+            };
             if let Some(mapped) = mapped
                 && !parents.contains(mapped)
             {
