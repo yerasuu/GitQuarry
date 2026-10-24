@@ -118,3 +118,13 @@ fn short_sha_never_panics_on_a_multibyte_string() {
     let mixed = "a\u{1F600}\u{1F600}\u{1F600}";
     assert_eq!(short_sha(mixed), mixed);
 }
+
+#[test]
+fn repo_uid_accepts_only_the_minted_shape() {
+    let uid = gitquarry_core::storage::uid::Uid::new();
+    assert_eq!(validate_repo_uid(uid.as_str()).unwrap(), uid);
+    assert!(validate_repo_uid("").is_err());
+    assert!(validate_repo_uid("../0123456789abcdef0123456789abc").is_err());
+    assert!(validate_repo_uid("0123456789ABCDEF0123456789ABCDEF").is_err());
+    assert!(validate_repo_uid("0123456789abcdef0123456789abcde/").is_err());
+}

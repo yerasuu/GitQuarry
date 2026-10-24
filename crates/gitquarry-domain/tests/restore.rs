@@ -72,3 +72,30 @@ fn a_flag_missing_its_value_is_an_error() {
 fn help_parses_to_nothing_to_do() {
     assert!(parse_args(&args(&["--help"])).unwrap().is_none());
 }
+
+#[test]
+fn a_repo_restore_needs_no_snapshot_id_and_is_a_dry_run_by_default() {
+    let parsed = parse_args(&args(&["--repo", "0123456789abcdef0123456789abcdef"]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        parsed.repo.as_ref().map(|uid| uid.as_str()),
+        Some("0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(parsed.snapshot_id, None);
+    assert!(!parsed.apply);
+}
+
+#[test]
+fn a_repo_uid_that_is_not_one_is_refused() {
+    // It becomes the `repos/<uid>/` prefix: `..` or an empty uid would name
+    // something other than one repo.
+    assert!(parse_args(&args(&["--repo", "../x"])).is_err());
+    assert!(parse_args(&args(&["--repo", ""])).is_err());
+    assert!(parse_args(&args(&["--repo"])).is_err());
+}
+
+#[test]
+fn list_and_repo_together_are_refused() {
+    assert!(parse_args(&args(&["--list", "--repo", "0123456789abcdef0123456789abcdef"])).is_err());
+}
