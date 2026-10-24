@@ -1044,25 +1044,6 @@ async fn merge_commit(
     }
 }
 
-/// Merges `number` into its target branch per `strategy` (or `Conflict`
-/// with the conflicting paths, nothing written), then uploaded and
-/// CAS-linked into the target's own manifest exactly the way a real push
-/// would — reusing [`git::pack_objects_for_push`]/[`Remote::upload_pack`]
-/// rather than inventing separate upload plumbing. See [`merge_commit`] for
-/// how each strategy computes its final sha.
-///
-/// Unlike [`diff`], this opens the target's mirror itself: called directly
-/// from a `POST /_merges/merge` request, not nested inside a `handler_repo`
-/// GET view that already holds it, so there's no reentrant-lock risk here.
-///
-/// `Err` if `number` doesn't exist, isn't `Open`, is still a draft, has a
-/// reviewer's latest verdict at [`ReviewVerdict::ChangesRequested`], or the
-/// target branch has since been deleted; a merge race (the target branch
-/// moved between reading its manifest and the CAS write below) surfaces as
-/// [`gitquarry_i18n::shared::cas_conflict`] — same "reload and retry" contract
-/// every other CAS writer in this codebase already gives. The review-state
-/// gate only checks for a pending *rejection* — it doesn't require any
-/// approvals to exist, unlike a GitHub branch-protection rule.
 /// The `CODEOWNERS` file location this codebase checks — repo root only,
 /// unlike GitHub's own fallback chain (`.github/CODEOWNERS`,
 /// `docs/CODEOWNERS`) — one location is enough for what this feature needs
@@ -1107,6 +1088,25 @@ async fn missing_required_reviewers(
     Ok((!missing.is_empty()).then_some(missing))
 }
 
+/// Merges `number` into its target branch per `strategy` (or `Conflict`
+/// with the conflicting paths, nothing written), then uploaded and
+/// CAS-linked into the target's own manifest exactly the way a real push
+/// would — reusing [`git::pack_objects_for_push`]/[`Remote::upload_pack`]
+/// rather than inventing separate upload plumbing. See [`merge_commit`] for
+/// how each strategy computes its final sha.
+///
+/// Unlike [`diff`], this opens the target's mirror itself: called directly
+/// from a `POST /_merges/merge` request, not nested inside a `handler_repo`
+/// GET view that already holds it, so there's no reentrant-lock risk here.
+///
+/// `Err` if `number` doesn't exist, isn't `Open`, is still a draft, has a
+/// reviewer's latest verdict at [`ReviewVerdict::ChangesRequested`], or the
+/// target branch has since been deleted; a merge race (the target branch
+/// moved between reading its manifest and the CAS write below) surfaces as
+/// [`gitquarry_i18n::shared::cas_conflict`] — same "reload and retry" contract
+/// every other CAS writer in this codebase already gives. The review-state
+/// gate only checks for a pending *rejection* — it doesn't require any
+/// approvals to exist, unlike a GitHub branch-protection rule.
 pub async fn merge(
     ctx: &AppContext,
     target: &ResolvedRepo,
