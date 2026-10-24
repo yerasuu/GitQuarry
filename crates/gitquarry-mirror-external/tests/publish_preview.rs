@@ -342,13 +342,13 @@ async fn secret_scan_covers_content_and_messages_and_honours_the_allowlist() {
     assert!(secrets.findings.contains(&Finding::Secret {
         path: "config.py".to_string(),
         sha: blob.clone(),
-        rule: "aws-access-key-id",
+        rule: "aws-access-key-id".to_string(),
         line: 1,
     }));
     assert!(secrets.findings.contains(&Finding::Secret {
         path: String::new(),
         sha: commit.clone(),
-        rule: "aws-access-key-id",
+        rule: "aws-access-key-id".to_string(),
         line: 1,
     }));
 

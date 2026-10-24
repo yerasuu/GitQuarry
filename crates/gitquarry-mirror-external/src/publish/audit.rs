@@ -1,18 +1,19 @@
 //! The gates of `docs/publish-mirror-concept.md` §5, each a function from a
-//! finished rewrite to its findings. In phase 0 they only ever run dry, for
-//! the preview; the contract a publish run will rely on is already the one
-//! here: a gate with any finding blocks, and none of them reads or writes
-//! anything on the public side.
+//! finished rewrite to its findings. The preview runs them dry over the
+//! whole rewritten history; a snapshot run ([`super::run`]) runs them over
+//! the one tree it is about to push. Either way a gate with any finding
+//! blocks, and none of them reads or writes anything on the public side.
 
 use super::filter::{ExcludedBy, Filter};
-use super::objects::{EMPTY_BLOB, ObjectKind, ObjectReader, Oid, to_hex};
+use super::objects::{EMPTY_BLOB, ObjectKind, ObjectReader, Oid, TreeEntry, to_hex};
 use super::rewrite::{IdentRole, Rewriter, entry_kind, join};
 use super::secrets::{Scan, scan_blob, scan_text};
-use super::{PublishMirror, UnmappedPolicy};
+use super::{Publisher, SecretAllow, UnmappedPolicy};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Gate {
     Filter,
     BlobSet,
@@ -22,7 +23,7 @@ pub enum Gate {
     Host,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Finding {
     /// `.gitquarry/publish.toml` exists in the source ref but couldn't be
     /// used. Blocks rather than being ignored: ignoring it would drop the
@@ -57,7 +58,7 @@ pub enum Finding {
     Secret {
         path: String,
         sha: String,
-        rule: &'static str,
+        rule: String,
         line: usize,
     },
     /// A text file over the scan limit: not known to be clean.
@@ -74,9 +75,11 @@ pub enum Finding {
     HostNotAllowed {
         error: String,
     },
+    /// A snapshot commit needs an author, and the mirror names none.
+    PublisherMissing,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateReport {
     pub gate: Gate,
     pub findings: Vec<Finding>,
@@ -98,21 +101,31 @@ pub(crate) struct PublishedSet {
 }
 
 pub(crate) fn published_set(rewriter: &Rewriter<'_>, filter: &Filter) -> PublishedSet {
+    published_set_from(
+        rewriter.published.iter().map(|commit| commit.tree),
+        &rewriter.public_trees,
+        filter,
+    )
+}
+
+/// [`published_set`] over the trees under `roots` only: a snapshot publishes
+/// one tree, not the rewritten history.
+pub(crate) fn published_set_from(
+    roots: impl IntoIterator<Item = Oid>,
+    public_trees: &HashMap<Oid, Vec<TreeEntry>>,
+    filter: &Filter,
+) -> PublishedSet {
     let mut set = PublishedSet {
         blobs: HashMap::new(),
         filter_findings: Vec::new(),
     };
     let mut seen = HashSet::new();
-    let mut stack: Vec<(String, Oid)> = rewriter
-        .published
-        .iter()
-        .map(|commit| (String::new(), commit.tree))
-        .collect();
+    let mut stack: Vec<(String, Oid)> = roots.into_iter().map(|tree| (String::new(), tree)).collect();
     while let Some((dir, tree)) = stack.pop() {
         if !seen.insert((dir.clone(), tree)) {
             continue;
         }
-        let Some(entries) = rewriter.public_trees.get(&tree) else {
+        let Some(entries) = public_trees.get(&tree) else {
             continue;
         };
         for entry in entries {
@@ -244,20 +257,16 @@ pub(crate) fn license_gate(
 
 /// Secret scan over every published blob (every one of them entered the
 /// public history through some published diff) and every published commit
-/// message. Binary blobs aren't scanned; text past the size limit is a
+/// message, each given with the private commit id its allowlist entry is
+/// keyed by. Binary blobs aren't scanned; text past the size limit is a
 /// finding of its own.
-pub(crate) fn secret_gate(
+pub(crate) fn secret_gate<'m>(
     reader: &mut ObjectReader,
     set: &PublishedSet,
-    rewriter: &Rewriter<'_>,
-    mirror: &PublishMirror,
+    messages: impl IntoIterator<Item = (Oid, &'m [u8])>,
+    allowlist: &[SecretAllow],
 ) -> Result<GateReport> {
-    let allowed = |path: &str, sha: &str| {
-        mirror
-            .secret_allowlist
-            .iter()
-            .any(|allow| allow.path == path && allow.sha == sha)
-    };
+    let allowed = |path: &str, sha: &str| allowlist.iter().any(|allow| allow.path == path && allow.sha == sha);
     let mut findings = Vec::new();
     let mut blobs: Vec<(&Oid, &String)> = set.blobs.iter().collect();
     blobs.sort_by(|a, b| a.1.cmp(b.1));
@@ -275,23 +284,23 @@ pub(crate) fn secret_gate(
             Scan::Hits(hits) => findings.extend(hits.into_iter().map(|hit| Finding::Secret {
                 path: path.clone(),
                 sha: sha.clone(),
-                rule: hit.rule,
+                rule: hit.rule.to_string(),
                 line: hit.line,
             })),
         }
     }
-    for commit in &rewriter.published {
-        let sha = to_hex(&commit.private);
+    for (private, message) in messages {
+        let sha = to_hex(&private);
         if allowed("", &sha) {
             continue;
         }
         findings.extend(
-            scan_text(&String::from_utf8_lossy(&commit.message))
+            scan_text(&String::from_utf8_lossy(message))
                 .into_iter()
                 .map(|hit| Finding::Secret {
                     path: String::new(),
                     sha: sha.clone(),
-                    rule: hit.rule,
+                    rule: hit.rule.to_string(),
                     line: hit.line,
                 }),
         );
@@ -335,6 +344,16 @@ pub(crate) fn identity_gate(rewriter: &Rewriter<'_>, policy: UnmappedPolicy) -> 
     GateReport {
         gate: Gate::Identity,
         findings,
+    }
+}
+
+/// Identity gate of a snapshot run: its one commit is authored by the
+/// mirror's publisher, never by a private identity, so the only thing left
+/// to check is that there is one.
+pub(crate) fn publisher_gate(publisher: Option<&Publisher>) -> GateReport {
+    GateReport {
+        gate: Gate::Identity,
+        findings: publisher.map_or_else(|| vec![Finding::PublisherMissing], |_| Vec::new()),
     }
 }
 

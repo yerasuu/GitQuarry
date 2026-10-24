@@ -145,3 +145,7 @@ msg!(finding_unmapped_committer(email: &str, commits: usize, example: &str) {
     Locale::En => "unmapped committer {email} on {commits} commit(s), e.g. {example}",
 });
 msg!(finding_host_not_allowed(error: &str) { Locale::Es => "{error}", Locale::En => "{error}" });
+msg!(finding_publisher_missing() {
+    Locale::Es => "el espejo no tiene identidad de publicación: un commit de snapshot necesita autor",
+    Locale::En => "the mirror has no publisher identity: a snapshot commit needs an author",
+});

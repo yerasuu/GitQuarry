@@ -91,7 +91,7 @@ async fn sync_all_repos_once(ctx: &AppContext) -> Result<()> {
 ///
 /// A sweep always takes this lock *before* the repo's own, never the other
 /// way round, so the two can't cycle.
-fn sweep_lock_key(uid: &Uid) -> String {
+pub(crate) fn sweep_lock_key(uid: &Uid) -> String {
     format!("mirror-sweep/{uid}")
 }
 

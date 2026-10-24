@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 
 /// Whose identity on a published commit.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum IdentRole {
     Author,
     Committer,

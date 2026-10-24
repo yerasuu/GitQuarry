@@ -75,7 +75,7 @@ pub async fn preview(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &Publish
 
 /// The refs a mirror publishes: branches and tags matching its declared
 /// patterns, nothing else.
-fn selected_refs(git_dir: &Path, mirror: &PublishMirror) -> Result<Vec<(String, Option<Oid>)>> {
+pub(super) fn selected_refs(git_dir: &Path, mirror: &PublishMirror) -> Result<Vec<(String, Option<Oid>)>> {
     let refs = list_branches_and_tags(git_dir)?;
     Ok(refs
         .into_iter()
@@ -121,13 +121,7 @@ fn preview_ref(
     head: Oid,
 ) -> Result<RefPreview> {
     let head_commit = super::objects::parse_commit(&reader.read_kind(&head, ObjectKind::Commit)?)?;
-    let (repo_file, repo_file_error) = match read_repo_filter(reader, head_commit.tree)? {
-        None => (None, None),
-        Some(bytes) => match RepoFilterFile::parse(&bytes) {
-            Ok(file) => (Some(file), None),
-            Err(e) => (None, Some(format!("{e:#}"))),
-        },
-    };
+    let (repo_file, repo_file_error) = load_repo_filter(reader, head_commit.tree)?;
     let filter = Filter::new(&mirror.filter, repo_file.as_ref());
     let mut rewriter = Rewriter::new(&filter, &mirror.identities);
     for commit in topo_order(git_dir, &head)? {
@@ -141,7 +135,12 @@ fn preview_ref(
         audit::filter_gate(&set, repo_file_error),
         audit::blob_set_gate(&set, &rewriter),
         audit::license_gate(reader, &rewriter, head_tree, mirror.spdx.as_deref())?,
-        audit::secret_gate(reader, &set, &rewriter, mirror)?,
+        audit::secret_gate(
+            reader,
+            &set,
+            rewriter.published.iter().map(|c| (c.private, c.message.as_slice())),
+            &mirror.secret_allowlist,
+        )?,
         audit::identity_gate(&rewriter, mirror.unmapped),
     ];
     let mut excluded = BTreeMap::new();
@@ -156,6 +155,21 @@ fn preview_ref(
         collapsed_commits: rewriter.collapsed,
         gates,
         error: None,
+    })
+}
+
+/// The in-repo half of the filter from `root`, or why it couldn't be used:
+/// an unusable file is a filter-gate finding, never silently ignored.
+pub(super) fn load_repo_filter(
+    reader: &mut ObjectReader,
+    root: Oid,
+) -> Result<(Option<RepoFilterFile>, Option<String>)> {
+    Ok(match read_repo_filter(reader, root)? {
+        None => (None, None),
+        Some(bytes) => match RepoFilterFile::parse(&bytes) {
+            Ok(file) => (Some(file), None),
+            Err(e) => (None, Some(format!("{e:#}"))),
+        },
     })
 }
 
@@ -182,7 +196,7 @@ fn read_repo_filter(reader: &mut ObjectReader, root: Oid) -> Result<Option<Vec<u
 /// The head tree walked with the filter only, to count what it excludes and
 /// why. Separate from the rewrite because the rewrite's cache skips every
 /// subtree it has already seen in an earlier commit.
-fn count_exclusions(
+pub(super) fn count_exclusions(
     reader: &mut ObjectReader,
     filter: &Filter,
     dir: String,
@@ -203,7 +217,7 @@ fn count_exclusions(
     Ok(())
 }
 
-fn published_paths(rewriter: &Rewriter<'_>, root: Oid) -> Vec<String> {
+pub(super) fn published_paths(rewriter: &Rewriter<'_>, root: Oid) -> Vec<String> {
     let mut paths = Vec::new();
     let mut stack = vec![(String::new(), root)];
     while let Some((dir, tree)) = stack.pop() {

@@ -301,6 +301,7 @@ fn finding_text(finding: &Finding, locale: Locale) -> String {
             example_commit,
         } => t::finding_unmapped_committer(locale, email, *commits, example_commit),
         Finding::HostNotAllowed { error } => t::finding_host_not_allowed(locale, error),
+        Finding::PublisherMissing => t::finding_publisher_missing(locale),
     }
 }
 

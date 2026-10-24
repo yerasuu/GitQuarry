@@ -107,7 +107,7 @@ impl RepoFilterFile {
 
 /// Why an entry was left out of the public tree — what the preview groups
 /// excluded paths by.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ExcludedBy {
     /// A pattern from the mirror entity.
     Config(String),

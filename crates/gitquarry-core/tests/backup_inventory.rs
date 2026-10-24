@@ -47,6 +47,7 @@ fn per_repo_entities_classify_as_entities() {
     assert_eq!(classify("repos/abc123/merges/1/comments/x.json"), Class::Entities);
     assert_eq!(classify("repos/abc123/mirrors/m1/mr-links/x.json"), Class::Entities);
     assert_eq!(classify("repos/abc123/publish-mirrors/m1.json"), Class::Entities);
+    assert_eq!(classify("repos/abc123/publish-log/m1.json"), Class::Entities);
 }
 
 #[test]

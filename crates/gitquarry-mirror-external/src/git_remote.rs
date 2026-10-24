@@ -181,7 +181,20 @@ pub async fn ls_remote_refs(url: &str, token: &str) -> Result<std::collections::
 ///
 /// Same out-of-band credential as [`ls_remote_refs`].
 pub async fn push_to_remote_url(bare_repo: &Path, url: &str, token: &str, refspecs: &[String]) -> Result<()> {
-    let mut args: Vec<&OsStr> = vec![OsStr::new("push"), OsStr::new("--end-of-options"), OsStr::new(url)];
+    push(bare_repo, url, token, &[], refspecs).await
+}
+
+/// [`push_to_remote_url`] with `--atomic`: every ref moves or none does. A
+/// remote that can't do atomic pushes refuses the whole push rather than
+/// applying part of it.
+pub async fn push_atomic_to_remote_url(bare_repo: &Path, url: &str, token: &str, refspecs: &[String]) -> Result<()> {
+    push(bare_repo, url, token, &[OsStr::new("--atomic")], refspecs).await
+}
+
+async fn push(bare_repo: &Path, url: &str, token: &str, flags: &[&OsStr], refspecs: &[String]) -> Result<()> {
+    let mut args: Vec<&OsStr> = vec![OsStr::new("push")];
+    args.extend_from_slice(flags);
+    args.extend([OsStr::new("--end-of-options"), OsStr::new(url)]);
     args.extend(refspecs.iter().map(OsStr::new));
     run_authed(Some(bare_repo), token, &args)
         .await
@@ -207,6 +220,26 @@ pub async fn fetch_ref_from_remote_url(bare_repo: &Path, url: &str, token: &str,
         token,
         &[
             OsStr::new("fetch"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(url),
+            OsStr::new(ref_name),
+        ],
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;
+    Ok(())
+}
+
+/// [`fetch_ref_from_remote_url`] at depth 1: only the tip commit and its
+/// tree, enough for a local commit built on top of it to be pushed as a
+/// fast-forward without the remote's whole history.
+pub async fn fetch_tip_from_remote_url(bare_repo: &Path, url: &str, token: &str, ref_name: &str) -> Result<()> {
+    run_authed(
+        Some(bare_repo),
+        token,
+        &[
+            OsStr::new("fetch"),
+            OsStr::new("--depth=1"),
             OsStr::new("--end-of-options"),
             OsStr::new(url),
             OsStr::new(ref_name),

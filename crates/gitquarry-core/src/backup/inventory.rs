@@ -157,6 +157,7 @@ fn classify_repo(rest: &str) -> Class {
         || tail.starts_with("merges/")
         || tail.starts_with("mirrors/")
         || tail.starts_with("publish-mirrors/")
+        || tail.starts_with("publish-log/")
     {
         return Class::Entities;
     }

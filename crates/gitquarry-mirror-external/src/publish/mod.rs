@@ -1,8 +1,9 @@
 //! Publish mirrors: a private repo published, filtered, to a public remote —
-//! `docs/publish-mirror-concept.md`. Phase 0 of that document only: the
-//! entity, the filter, the gates and a dry-run preview. Nothing in this
-//! module can push, write a ref or write an object anywhere; the rewrite
-//! computes object ids in memory (see [`rewrite`]).
+//! `docs/publish-mirror-concept.md`. The entity, the filter, the gates, the
+//! dry-run preview (phase 0) and the snapshot publish run (phase 1, see
+//! [`run`]). The rewrite and the preview compute object ids in memory and
+//! write nothing; only [`run`] writes objects, into a scratch repository of
+//! its own, and pushes from there.
 //!
 //! Hand-built collection rather than `#[derive(Entity)]`, for the same
 //! reason as [`crate::access`]: the collection lives under the repo's own
@@ -10,10 +11,13 @@
 
 pub mod audit;
 pub mod filter;
+pub mod log;
 mod objects;
 pub mod preview;
 pub mod rewrite;
+pub mod run;
 mod secrets;
+mod snapshot;
 
 use crate::validate::{
     validate_identity_email, validate_identity_name, validate_mirror_label, validate_mirror_token, validate_mirror_url,
@@ -268,6 +272,9 @@ pub async fn list_with_etags(ctx: &AppContext, uid: &Uid) -> Result<Vec<(Publish
     Ok(mirrors)
 }
 
+/// Deletes the mirror and its run log; what it already published stays on
+/// the public remote.
+///
 /// # Errors
 ///
 /// Fails if the bucket refuses the delete; a mirror that is already gone is
@@ -276,6 +283,7 @@ pub async fn delete(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<()> 
     publish_mirrors_collection(uid)
         .delete(ctx.backend().as_ref(), &ctx.cipher, mirror_id)
         .await?;
+    log::delete(ctx, uid, mirror_id).await?;
     crate::domain::refresh_mirrors_enabled_index(ctx, uid).await
 }
 
