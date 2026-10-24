@@ -269,6 +269,9 @@ pub async fn update(ctx: &AppContext, uid: &Uid, mirror: &PublishMirror, expecte
         )
         .await?;
     if cas == Cas::Ok {
+        if mirror.filter_epoch != stored.filter_epoch {
+            epoch::record_bump(ctx, uid, &mirror.id, stored.filter_epoch).await;
+        }
         crate::domain::refresh_mirrors_enabled_index(ctx, uid).await?;
     }
     Ok(cas)

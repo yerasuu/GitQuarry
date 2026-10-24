@@ -449,6 +449,8 @@ async fn a_confirmed_bump_force_pushes_with_a_lease_and_records_the_epoch() {
     })
     .await
     .unwrap();
+    let bumped_at = fx.log().await.abandoned.get(&0).copied();
+    assert!(bumped_at.is_some(), "the bump records when epoch 0 was left");
     let preview = preview(&fx.ctx, &fx.repo, &fx.mirror).await.unwrap();
     assert_eq!(preview.epoch, 1);
     assert!(preview.force_push);
@@ -468,6 +470,10 @@ async fn a_confirmed_bump_force_pushes_with_a_lease_and_records_the_epoch() {
     let log = fx.log().await;
     assert_eq!(log.epoch, Some(1));
     assert_eq!(log.runs[0].epoch, Some(1));
+    // Epoch 0 stayed protected as the published one until this run, so its
+    // grace counts from here, not from the bump.
+    assert!(log.abandoned.get(&0).copied() >= bumped_at);
+    assert!(!log.abandoned.contains_key(&1));
 
     // And the next run in the new epoch is a plain fast-forward again.
     fx.work.commit(&[("src/more.rs", "pub fn more() {}\n")], "more\n").await;

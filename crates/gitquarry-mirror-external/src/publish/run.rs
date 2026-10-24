@@ -14,7 +14,7 @@
 //! into the private repo or reads a public object back into it.
 
 use super::audit::{self, Finding, GateReport};
-use super::epoch::{Fingerprint, config_fingerprint, repo_files_fingerprint};
+use super::epoch::{Fingerprint, config_fingerprint, published_epoch, repo_files_fingerprint};
 use super::log::{self, GateRecord, PublicHead, PublishLog, PublishRun, RefRun, RunOutcome, stored_error};
 use super::objects::{Oid, to_hex};
 use super::snapshot::{self, RefBuild, RefError, Snapshot};
@@ -24,7 +24,7 @@ use crate::git_remote;
 use anyhow::{Context, Result, bail};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use std::path::Path;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use tracing::{info, warn};
 
 /// The "publish now" button: one mirror, enabled or not, with the error
@@ -91,12 +91,7 @@ struct Push {
 async fn publish_once(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &PublishMirror) -> Result<PublishRun> {
     let started = Instant::now();
     let mut run = PublishRun {
-        started_at: gitquarry_core::storage::audit::format_unix_secs(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        ),
+        started_at: gitquarry_core::storage::audit::format_unix_secs(log::unix_now()),
         duration_ms: 0,
         mode: mirror.mode,
         epoch: Some(mirror.filter_epoch),
@@ -367,10 +362,22 @@ async fn record(
     run: &PublishRun,
     fingerprint: Option<Fingerprint>,
 ) -> Result<()> {
+    let now = log::unix_now();
     log::update(ctx, &resolved.uid, &mirror.id, |log| {
         if let Some(fingerprint) = &fingerprint
             && matches!(run.outcome, RunOutcome::Published | RunOutcome::Unchanged)
         {
+            // The epoch leaving the public side starts its GC grace now,
+            // whatever its bump recorded: until this run it was protected
+            // as the published one, so rollback time is counted from here.
+            if let Some(old) = published_epoch(log)
+                && Some(old) != run.epoch
+            {
+                log.abandoned.insert(old, now);
+            }
+            if let Some(epoch) = run.epoch {
+                log.abandoned.remove(&epoch);
+            }
             log.epoch = run.epoch;
             log.fingerprint = Some(fingerprint.clone());
         }

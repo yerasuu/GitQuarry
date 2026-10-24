@@ -20,6 +20,7 @@ use gitquarry_core::storage::uid::Uid;
 use s3db::{Collection, Update};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Runs kept per mirror, newest first. The sweep runs every 15 minutes, so
 /// an unbounded list would grow by a hundred records a day for a mirror
@@ -68,6 +69,14 @@ pub struct PublishLog {
     /// history that would not fast-forward.
     #[serde(default)]
     pub fingerprint: Option<Fingerprint>,
+    /// Epoch -> Unix seconds of when it stopped being both the mirror's
+    /// `filter_epoch` and the published epoch: set by the bump that leaves
+    /// an unpublished epoch, overwritten by the run that publishes a new
+    /// one, so it is the later of the two. The GC grace period counts from
+    /// it (see `publish::gc`); an abandoned epoch missing here gets one at
+    /// the first sweep that sees it, never an immediate delete.
+    #[serde(default)]
+    pub abandoned: BTreeMap<u32, u64>,
     /// Newest first, at most [`MAX_RUNS`].
     #[serde(default)]
     pub runs: Vec<PublishRun>,
@@ -179,7 +188,7 @@ pub(crate) fn stored_error(text: &str) -> String {
     cap_error(&redact_url(text))
 }
 
-fn log_collection(uid: &Uid) -> Collection {
+pub(super) fn log_collection(uid: &Uid) -> Collection {
     Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/publish-log"))
 }
 
@@ -219,4 +228,11 @@ impl PublishLog {
         self.runs.insert(0, run);
         self.runs.truncate(MAX_RUNS);
     }
+}
+
+pub(crate) fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }

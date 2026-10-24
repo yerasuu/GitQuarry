@@ -9,10 +9,13 @@
 //! changes with a push to the private repo, not with a settings edit.
 
 use super::filter::{FilterConfig, FilterMode, RepoFilterFile};
-use super::log::PublishLog;
+use super::log::{self, PublishLog};
 use super::{PublishMirror, PublishMode};
+use gitquarry_core::app::AppContext;
+use gitquarry_core::storage::uid::Uid;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use tracing::warn;
 
 /// What a history publish's output depends on, hashed: the entity's half
 /// (mode, filter, identity map) and the in-repo filter files' half.
@@ -145,4 +148,30 @@ pub(crate) fn check_update(stored: &PublishMirror, new: &PublishMirror, log: &Pu
         return Err(EpochBumpRequired.into());
     }
     Ok(())
+}
+
+/// Starts the GC grace of `left`, the epoch a confirmed bump moved away
+/// from, unless something already recorded it. An epoch that is still the
+/// published one stays protected anyway, and the run that replaces it on
+/// the public side records the later moment over this one.
+///
+/// Never fails the save it follows, which has already landed: a lost
+/// record only means the GC sweep records the epoch when it first sees it,
+/// which gives it a longer grace, never a shorter one.
+pub(crate) async fn record_bump(ctx: &AppContext, uid: &Uid, mirror_id: &str, left: u32) {
+    let now = log::unix_now();
+    if let Err(e) = log::update(ctx, uid, mirror_id, |log| {
+        log.abandoned.entry(left).or_insert(now);
+    })
+    .await
+    {
+        warn!(
+            target: "publish",
+            repo = %uid,
+            mirror = %mirror_id,
+            epoch = left,
+            error = %format!("{e:#}"),
+            "couldn't record when the epoch was abandoned; the next GC sweep records it"
+        );
+    }
 }
