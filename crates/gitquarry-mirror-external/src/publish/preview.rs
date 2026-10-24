@@ -6,9 +6,11 @@
 
 use super::audit::{self, GateReport};
 use super::filter::{Decision, ExcludedBy, Filter, REPO_FILTER_PATH, RepoFilterFile};
-use super::objects::{ObjectKind, ObjectReader, Oid, list_branches_and_tags, parse_tree, to_hex, topo_order};
-use super::rewrite::{Rewriter, entry_kind, join};
-use super::{NEVER_PUBLISHED_REF_PREFIXES, PublishMirror};
+use super::log::{self, PublishLog};
+use super::objects::{Commit, ObjectKind, ObjectReader, Oid, list_branches_and_tags, parse_tree, to_hex, topo_order};
+use super::rewrite::{EMPTY_TREE, Rewriter, entry_kind, join};
+use super::snapshot::{Snapshot, plan_snapshot};
+use super::{NEVER_PUBLISHED_REF_PREFIXES, PublishMirror, PublishMode};
 use anyhow::{Context, Result};
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::git::codeowners::segments_match;
@@ -40,8 +42,14 @@ impl Preview {
 pub struct RefPreview {
     pub ref_name: String,
     pub private_head: String,
-    /// `None` when the whole history filters away to nothing.
+    /// What a publish would leave on the public branch, by the mirror's
+    /// mode: the snapshot commit, or the one already there when
+    /// [`Self::unchanged`]. `None` when the filter leaves nothing, or when
+    /// the mode has no publisher to author the commit.
     pub public_head: Option<String>,
+    /// A publish would push nothing: the filtered tree is the one the last
+    /// recorded snapshot holds.
+    pub unchanged: bool,
     /// Every file and gitlink path in the public head tree, sorted.
     pub published_paths: Vec<String>,
     /// Entries excluded from the head tree, by the rule that excluded them.
@@ -67,7 +75,14 @@ pub async fn preview(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &Publish
     let mirror = mirror.clone();
     // Thousands of synchronous pipe round trips, so off the async workers;
     // `local` moves in with it so the repo lock is held until it's done.
-    let refs = tokio::task::spawn_blocking(move || preview_refs(&local.path, &mirror))
+    // A mirror that was never saved has no id to key a log by, and nothing
+    // published either.
+    let log = if mirror.id.is_empty() {
+        PublishLog::default()
+    } else {
+        log::get(ctx, &resolved.uid, &mirror.id).await?
+    };
+    let refs = tokio::task::spawn_blocking(move || preview_refs(&local.path, &mirror, &log))
         .await
         .context("the preview task panicked")??;
     Ok(Preview { host, refs })
@@ -91,17 +106,19 @@ pub(super) fn selected_refs(git_dir: &Path, mirror: &PublishMirror) -> Result<Ve
         .collect())
 }
 
-fn preview_refs(git_dir: &Path, mirror: &PublishMirror) -> Result<Vec<RefPreview>> {
+fn preview_refs(git_dir: &Path, mirror: &PublishMirror, log: &PublishLog) -> Result<Vec<RefPreview>> {
     let mut reader = ObjectReader::open(git_dir)?;
     let mut previews = Vec::new();
     for (ref_name, head) in selected_refs(git_dir, mirror)? {
         let preview = match head {
-            Some(head) => preview_ref(&mut reader, git_dir, mirror, &ref_name, head).unwrap_or_else(|e| RefPreview {
-                ref_name: ref_name.clone(),
-                private_head: to_hex(&head),
-                error: Some(format!("{e:#}")),
-                ..Default::default()
-            }),
+            Some(head) => {
+                preview_ref(&mut reader, git_dir, mirror, log, &ref_name, head).unwrap_or_else(|e| RefPreview {
+                    ref_name: ref_name.clone(),
+                    private_head: to_hex(&head),
+                    error: Some(format!("{e:#}")),
+                    ..Default::default()
+                })
+            }
             None => RefPreview {
                 ref_name: ref_name.clone(),
                 error: Some("doesn't point at a commit".to_string()),
@@ -117,6 +134,7 @@ fn preview_ref(
     reader: &mut ObjectReader,
     git_dir: &Path,
     mirror: &PublishMirror,
+    log: &PublishLog,
     ref_name: &str,
     head: Oid,
 ) -> Result<RefPreview> {
@@ -127,8 +145,11 @@ fn preview_ref(
     for commit in topo_order(git_dir, &head)? {
         rewriter.rewrite_commit(reader, commit)?;
     }
-    let public_head = rewriter.mapped(&head).flatten();
-    let head_tree = public_head.and_then(|c| rewriter.public_tree_of(&c));
+    let full_head = rewriter.mapped(&head).flatten();
+    let head_tree = full_head.and_then(|c| rewriter.public_tree_of(&c));
+    let (public_head, unchanged) = match mirror.mode {
+        PublishMode::Snapshot => snapshot_head(mirror, log, ref_name, &head_commit, head_tree)?,
+    };
 
     let set = audit::published_set(&rewriter, &filter);
     let gates = vec![
@@ -149,12 +170,40 @@ fn preview_ref(
         ref_name: ref_name.to_string(),
         private_head: to_hex(&head),
         public_head: public_head.map(|c| to_hex(&c)),
+        unchanged,
         published_paths: head_tree.map(|t| published_paths(&rewriter, t)).unwrap_or_default(),
         excluded,
         published_commits: rewriter.published.len(),
         collapsed_commits: rewriter.collapsed,
         gates,
         error: None,
+    })
+}
+
+/// The commit a snapshot publish would leave on the branch and whether it is
+/// already there, from the same [`plan_snapshot`] the run uses. The base is
+/// the last snapshot the log recorded: the preview doesn't ask the remote.
+fn snapshot_head(
+    mirror: &PublishMirror,
+    log: &PublishLog,
+    ref_name: &str,
+    head_commit: &Commit,
+    head_tree: Option<Oid>,
+) -> Result<(Option<Oid>, bool)> {
+    let Some(tree) = head_tree.filter(|tree| *tree != EMPTY_TREE) else {
+        return Ok((None, false));
+    };
+    let planned = plan_snapshot(
+        mirror.publisher.as_ref(),
+        ref_name,
+        head_commit,
+        tree,
+        log.heads.get(ref_name),
+    )?;
+    Ok(match planned.snapshot {
+        Some(Snapshot::Unchanged { commit, .. }) => (Some(commit), true),
+        Some(Snapshot::New { commit, .. }) => (Some(commit), false),
+        None => (None, false),
     })
 }
 

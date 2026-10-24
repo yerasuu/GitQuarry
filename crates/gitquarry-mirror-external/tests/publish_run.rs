@@ -7,6 +7,7 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_mirror_external::access::RefSyncStatus;
 use gitquarry_mirror_external::publish::filter::{FilterConfig, FilterMode};
 use gitquarry_mirror_external::publish::log::{self, RunOutcome};
+use gitquarry_mirror_external::publish::preview::{RefPreview, preview};
 use gitquarry_mirror_external::publish::run::publish_mirror_now;
 use gitquarry_mirror_external::publish::{self, MirrorToken, PublishMirror, Publisher, UnmappedPolicy};
 use gitquarry_test_support::{Work, ctx, git};
@@ -88,6 +89,12 @@ impl Fixture {
     async fn log(&self) -> log::PublishLog {
         log::get(&self.ctx, &self.repo.uid, &self.mirror.id).await.unwrap()
     }
+}
+
+async fn previewed_main(fx: &Fixture) -> RefPreview {
+    let mut preview = preview(&fx.ctx, &fx.repo, &fx.mirror).await.unwrap();
+    assert_eq!(preview.refs.len(), 1, "{:?}", preview.refs);
+    preview.refs.remove(0)
 }
 
 async fn allow_host(ctx: &AppContext, host: &str) {
@@ -383,4 +390,31 @@ async fn a_mirror_without_a_publisher_is_blocked_before_any_push() {
 
     assert!(err.to_string().contains("Identity"), "{err:#}");
     assert_eq!(fx.public_head().await, None);
+}
+
+#[tokio::test]
+async fn the_preview_shows_the_sha_the_next_publish_pushes() {
+    let fx = Fixture::new().await;
+    start(&fx).await;
+    fx.work.push(&fx.repo, "refs/heads/main").await;
+    let first_preview = previewed_main(&fx).await;
+    fx.publish().await.unwrap();
+    let first = fx.public_head().await.unwrap();
+    assert_eq!(first_preview.public_head.as_deref(), Some(first.as_str()));
+    assert!(!first_preview.unchanged);
+
+    let unchanged = previewed_main(&fx).await;
+    assert_eq!(unchanged.public_head.as_deref(), Some(first.as_str()));
+    assert!(unchanged.unchanged);
+
+    fx.work
+        .commit(&[("src/lib.rs", "pub fn run() {}\n")], "add lib\n")
+        .await;
+    fx.work.push(&fx.repo, "refs/heads/main").await;
+    let second_preview = previewed_main(&fx).await;
+    assert!(!second_preview.unchanged);
+    fx.publish().await.unwrap();
+    let second = fx.public_head().await.unwrap();
+    assert_ne!(second, first);
+    assert_eq!(second_preview.public_head.as_deref(), Some(second.as_str()));
 }

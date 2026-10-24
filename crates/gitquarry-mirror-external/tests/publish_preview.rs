@@ -6,7 +6,7 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_mirror_external::publish::audit::{Finding, Gate, GateReport};
 use gitquarry_mirror_external::publish::filter::{ExcludedBy, FilterConfig, FilterMode};
 use gitquarry_mirror_external::publish::preview::{Preview, RefPreview, preview};
-use gitquarry_mirror_external::publish::{IdentityMapping, PublishMirror, SecretAllow, UnmappedPolicy};
+use gitquarry_mirror_external::publish::{IdentityMapping, PublishMirror, Publisher, SecretAllow, UnmappedPolicy};
 use gitquarry_test_support::{Work, ctx, git};
 
 const MIT: &str = "SPDX-License-Identifier: MIT\n\nPermission is hereby granted...\n";
@@ -230,27 +230,7 @@ async fn allowlist_mode_keeps_a_new_top_level_dir_private() {
 }
 
 #[tokio::test]
-async fn with_nothing_filtered_the_public_head_is_the_private_head() {
-    // The ids are computed, never written; an identity rewrite reproducing
-    // git's own ids byte for byte is what shows the encoding is right.
-    let fx = Fixture::new().await;
-    fx.work.commit(&[("LICENSE", MIT), ("a/b/c.txt", "c\n")], "one\n").await;
-    git(fx.work.path(), &["checkout", "-q", "-b", "side"]).await;
-    fx.work.commit(&[("side.txt", "s\n")], "side\n").await;
-    git(fx.work.path(), &["checkout", "-q", "main"]).await;
-    fx.work.commit(&[("main.txt", "m\n")], "main\n").await;
-    git(fx.work.path(), &["merge", "-q", "--no-edit", "side"]).await;
-    let head = git(fx.work.path(), &["rev-parse", "HEAD"]).await;
-
-    let main = fx.main(&mirror(excluding(&[]))).await;
-
-    assert_eq!(main.private_head, head);
-    assert_eq!(main.public_head.as_deref(), Some(head.as_str()));
-    assert_eq!(main.collapsed_commits, 0);
-}
-
-#[tokio::test]
-async fn the_public_head_matches_what_git_would_build_from_the_filtered_tree() {
+async fn the_public_head_matches_what_git_would_build_for_the_snapshot() {
     let fx = Fixture::new().await;
     fx.work
         .commit(
@@ -267,11 +247,23 @@ async fn the_public_head_matches_what_git_would_build_from_the_filtered_tree() {
     let expected = pipe(
         dir,
         &["commit-tree", &tree],
-        "only\n",
-        &[("GIT_AUTHOR_DATE", &author), ("GIT_COMMITTER_DATE", &author)],
+        "Publish snapshot of main\n",
+        &[
+            ("GIT_AUTHOR_DATE", &author),
+            ("GIT_COMMITTER_DATE", &author),
+            ("GIT_AUTHOR_NAME", "Acme Publisher"),
+            ("GIT_AUTHOR_EMAIL", "publish@acme.example"),
+            ("GIT_COMMITTER_NAME", "Acme Publisher"),
+            ("GIT_COMMITTER_EMAIL", "publish@acme.example"),
+        ],
     );
+    let mut m = mirror(excluding(&["secret/"]));
+    m.publisher = Some(Publisher {
+        name: "Acme Publisher".to_string(),
+        email: "publish@acme.example".to_string(),
+    });
 
-    let main = fx.main(&mirror(excluding(&["secret/"]))).await;
+    let main = fx.main(&m).await;
 
     assert_eq!(main.public_head.as_deref(), Some(expected.as_str()));
 }

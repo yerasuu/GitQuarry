@@ -225,28 +225,16 @@ impl Builder<'_> {
         out.excluded_entries = excluded.values().sum();
         out.published_files = published_paths(&rewriter, tree).len();
 
-        let parent = match base {
-            Some(base) if from_hex(&base.tree)? == tree => {
-                out.snapshot = Some(Snapshot::Unchanged {
-                    commit: from_hex(&base.commit)?,
-                    tree,
-                });
-                return Ok(());
-            }
-            Some(base) => Some(from_hex(&base.commit)?),
-            None => None,
-        };
+        let planned = plan_snapshot(mirror.publisher.as_ref(), &out.ref_name, &head_commit, tree, base)?;
+        if matches!(planned.snapshot, Some(Snapshot::Unchanged { .. })) {
+            out.snapshot = planned.snapshot;
+            return Ok(());
+        }
         let message = snapshot_message(&out.ref_name);
         self.write_tree_objects(&rewriter, tree)?;
-        let commit = match &mirror.publisher {
-            Some(publisher) => {
-                let body = snapshot_commit(publisher, &head_commit.committer, tree, parent, &message)?;
-                let commit = hash_object(ObjectKind::Commit, &body);
-                self.write(ObjectKind::Commit, [(commit, body)])?;
-                Some(commit)
-            }
-            None => None,
-        };
+        if let (Some(Snapshot::New { commit, .. }), Some(body)) = (planned.snapshot, planned.commit_body) {
+            self.write(ObjectKind::Commit, [(commit, body)])?;
+        }
 
         // Against the scratch repo: the gates read the objects actually
         // written, whose ids `write_objects` has just checked against the
@@ -265,7 +253,7 @@ impl Builder<'_> {
             )?,
             audit::publisher_gate(mirror.publisher.as_ref()),
         ];
-        out.snapshot = commit.map(|commit| Snapshot::New { commit, tree, parent });
+        out.snapshot = planned.snapshot;
         Ok(())
     }
 
@@ -307,6 +295,60 @@ impl Builder<'_> {
         self.written.extend(ids);
         Ok(())
     }
+}
+
+/// A branch's snapshot decided in memory, before anything is written.
+pub(super) struct PlannedSnapshot {
+    /// `None` when there is no publisher to author a new commit.
+    pub snapshot: Option<Snapshot>,
+    /// The body that hashes to the `New` commit.
+    pub commit_body: Option<Vec<u8>>,
+}
+
+/// What a publish would push for `tree` on top of `base`. Shared by the run
+/// and the dry-run preview so the sha the preview shows is the one the run
+/// pushes: neither side has its own copy of the commit's inputs.
+pub(super) fn plan_snapshot(
+    publisher: Option<&Publisher>,
+    ref_name: &str,
+    private_head: &Commit,
+    tree: Oid,
+    base: Option<&PublicHead>,
+) -> Result<PlannedSnapshot> {
+    let parent = match base {
+        Some(base) if from_hex(&base.tree)? == tree => {
+            return Ok(PlannedSnapshot {
+                snapshot: Some(Snapshot::Unchanged {
+                    commit: from_hex(&base.commit)?,
+                    tree,
+                }),
+                commit_body: None,
+            });
+        }
+        Some(base) => Some(from_hex(&base.commit)?),
+        None => None,
+    };
+    let Some(publisher) = publisher else {
+        return Ok(PlannedSnapshot {
+            snapshot: None,
+            commit_body: None,
+        });
+    };
+    let body = snapshot_commit(
+        publisher,
+        &private_head.committer,
+        tree,
+        parent,
+        &snapshot_message(ref_name),
+    )?;
+    Ok(PlannedSnapshot {
+        snapshot: Some(Snapshot::New {
+            commit: hash_object(ObjectKind::Commit, &body),
+            tree,
+            parent,
+        }),
+        commit_body: Some(body),
+    })
 }
 
 /// Fixed text: the private messages are exactly what a snapshot leaves
