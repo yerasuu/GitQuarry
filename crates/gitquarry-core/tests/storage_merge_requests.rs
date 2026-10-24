@@ -400,3 +400,33 @@ async fn an_anchor_roundtrips_alongside_plain_thread_comments() {
     assert_eq!(anchor.side, DiffSide::Old);
     assert_eq!(anchor.line, 42);
 }
+
+/// A thread entry that no longer opens (corruption, a wrong key, an object
+/// moved from elsewhere) is an error, not a shorter list: dropping it would
+/// show a review thread with the unreadable review silently missing.
+#[tokio::test]
+async fn a_review_that_does_not_decrypt_is_an_error_not_a_shorter_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let cipher = cipher();
+    let uid = Uid::from("team/proj".to_string());
+
+    let review = MrReview {
+        author: "bob".to_string(),
+        verdict: ReviewVerdict::Approved,
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+        ..Default::default()
+    };
+    add_mr_review(backend.as_ref(), &cipher, &uid, 1, &review)
+        .await
+        .unwrap();
+
+    let reviews = s3db::Collection::new_owned(format!("repos/{uid}/merges/1/reviews"));
+    let key = reviews.key("zzz-corrupt").unwrap();
+    backend
+        .put_cas(&key, b"not a sealed object".to_vec(), None)
+        .await
+        .unwrap();
+
+    assert!(list_mr_reviews(&backend, &cipher, &uid, 1).await.is_err());
+}

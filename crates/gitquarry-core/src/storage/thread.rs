@@ -5,7 +5,7 @@
 
 use super::{Backend, Cas};
 use crate::crypto::Cipher;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use s3db::Collection;
 use serde::Serialize;
 use std::sync::Arc;
@@ -74,7 +74,10 @@ pub async fn list_thread<T: serde::de::DeserializeOwned + Default + Send + 'stat
     }
     let mut found = Vec::new();
     while let Some(result) = set.join_next().await {
-        if let Ok((index, key, Ok((Some(value), _etag)))) = result {
+        let (index, key, read) = result.context("a thread read task failed")?;
+        // An entry deleted between the listing and the read is a legitimate
+        // race; one that fails to open is not, and must not shorten the thread.
+        if let (Some(value), _etag) = read.with_context(|| format!("reading thread entry {key}"))? {
             found.push((index, key, value));
         }
     }
