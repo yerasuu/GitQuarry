@@ -1,11 +1,12 @@
-//! The publish-mirrors section: the entity's form, and the dry-run preview
-//! that is the only thing phase 0 can do with one. Repo-owner only, like
-//! the external mirrors, and nothing in it pushes.
+//! The publish-mirrors section: the entity's form, the dry-run preview,
+//! "publish now" and the run log. Repo-owner only, like the external
+//! mirrors; only "publish now" pushes.
 
 use crate::support::*;
 use axum::http::StatusCode;
+use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::entities::Permission;
-use gitquarry_mirror_external::publish::{self, FilterConfig, FilterMode, PublishMirror};
+use gitquarry_mirror_external::publish::{self, FilterConfig, FilterMode, MirrorToken, PublishMirror, Publisher};
 use gitquarry_test_support::{Work, git};
 
 async fn seed(gq: &Instance) -> PublishMirror {
@@ -160,4 +161,134 @@ async fn preview_without_the_csrf_token_is_refused() {
         )
         .await;
     assert_eq!(page.status, StatusCode::BAD_REQUEST);
+}
+
+const TOKEN: &str = "s3cr3t-publish-token";
+
+async fn set_extra_hosts(ctx: &AppContext, hosts: &[&str]) {
+    let (mut settings, etag) = gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+        .await
+        .unwrap();
+    settings.mirror_extra_hosts = hosts.iter().map(|h| h.to_string()).collect();
+    gitquarry_core::storage::settings::put_settings(ctx.backend().as_ref(), &settings, etag.as_deref(), &ctx.cipher)
+        .await
+        .unwrap();
+}
+
+/// A mirror saved while its host was allowed, whose host the instance admin
+/// then dropped from the allowlist: "publish now" must stop at the host gate
+/// at publish time, without reaching any network.
+async fn seed_on_a_host_since_disallowed(gq: &Instance) -> PublishMirror {
+    set_extra_hosts(&gq.ctx, &["example.invalid"]).await;
+    let uid = gq.resolved().await.uid;
+    let mirror = publish::create(
+        &gq.ctx,
+        &uid,
+        PublishMirror {
+            label: "public".to_string(),
+            remote_url: "https://example.invalid/acme/public.git".to_string(),
+            token: MirrorToken::new(TOKEN.to_string()),
+            enabled: true,
+            publisher: Some(Publisher {
+                name: "Acme".to_string(),
+                email: "publish@acme.example".to_string(),
+            }),
+            publish_branches: ["main".to_string()].into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    set_extra_hosts(&gq.ctx, &[]).await;
+    mirror
+}
+
+#[tokio::test]
+async fn publish_now_surfaces_the_error_to_the_click_and_logs_the_run() {
+    let gq = Instance::new().await;
+    let mirror = seed_on_a_host_since_disallowed(&gq).await;
+    let alice = gq.login("alice").await;
+
+    let page = gq
+        .save(
+            &alice,
+            &[("conf_action", "publish_mirror_now"), ("publish_mirror_id", &mirror.id)],
+        )
+        .await;
+
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let html = &page.body;
+    assert!(html.contains("flash-err"), "{html}");
+    assert!(
+        html.contains("example.invalid"),
+        "the host gate's reason reaches the click: {html}"
+    );
+    assert!(html.contains("last runs (1)"), "{html}");
+    assert!(html.contains("blocked"), "{html}");
+    assert!(html.contains(r#"value="publish_mirror_now""#), "{html}");
+    assert!(!html.contains(TOKEN), "the token is never rendered: {html}");
+    let log = publish::log::get(&gq.ctx, &gq.resolved().await.uid, &mirror.id)
+        .await
+        .unwrap();
+    assert!(log.last_error.unwrap().contains("example.invalid"));
+}
+
+#[tokio::test]
+async fn only_the_owner_can_publish_now_and_only_with_the_csrf_token() {
+    let gq = Instance::new().await;
+    let mirror = seed_on_a_host_since_disallowed(&gq).await;
+    gq.user_with_perm("maint", Permission::Maintainer).await;
+    let fields = [
+        ("conf_action", "publish_mirror_now"),
+        ("publish_mirror_id", mirror.id.as_str()),
+    ];
+
+    let maint = gq.login("maint").await;
+    assert_eq!(gq.save(&maint, &fields).await.status, StatusCode::FORBIDDEN);
+    let alice = gq.login("alice").await;
+    let forged = Session {
+        cookie: alice.cookie.clone(),
+        csrf: String::new(),
+    };
+    assert_eq!(gq.save(&forged, &fields).await.status, StatusCode::BAD_REQUEST);
+
+    let log = publish::log::get(&gq.ctx, &gq.resolved().await.uid, &mirror.id)
+        .await
+        .unwrap();
+    assert!(log.runs.is_empty(), "neither refused click ran anything");
+}
+
+#[tokio::test]
+async fn an_edit_with_a_blank_token_keeps_the_stored_one() {
+    let gq = Instance::new().await;
+    let mirror = seed_on_a_host_since_disallowed(&gq).await;
+    set_extra_hosts(&gq.ctx, &["example.invalid"]).await;
+    let uid = gq.resolved().await.uid;
+    let (_, etag) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    let alice = gq.login("alice").await;
+
+    let page = gq
+        .save(
+            &alice,
+            &[
+                ("conf_action", "edit_publish_mirror"),
+                ("publish_mirror_id", &mirror.id),
+                ("publish_mirror_etag", &etag),
+                ("label", "renamed"),
+                ("remote_url", "https://example.invalid/acme/public.git"),
+                ("token", ""),
+                ("publish_run_mode", "snapshot"),
+                ("publish_publisher_name", "Acme"),
+                ("publish_publisher_email", "publish@acme.example"),
+                ("publish_branches", "main"),
+            ],
+        )
+        .await;
+
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(!page.body.contains(TOKEN), "{}", page.body);
+    let (stored, _) = publish::get(&gq.ctx, &uid, &mirror.id).await.unwrap().unwrap();
+    assert_eq!(stored.label, "renamed");
+    assert_eq!(stored.token.expose(), TOKEN);
+    assert!(!stored.enabled, "an unchecked box turns the sweep off");
 }

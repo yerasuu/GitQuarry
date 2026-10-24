@@ -1,12 +1,12 @@
-//! A repo's "publish mirrors" settings section and its dry-run preview
-//! (`docs/publish-mirror-concept.md`, phase 0: nothing is pushed).
+//! A repo's "publish mirrors" settings section: the form, the dry-run
+//! preview, "publish now" and the run log (`docs/publish-mirror-concept.md`).
 
 use super::super::{Locale, msg};
 
 msg!(heading() { Locale::Es => "espejos de publicación", Locale::En => "publish mirrors" });
 msg!(prose() {
-    Locale::Es => "Publica una versión filtrada de este repo privado en un remoto público. Fase 0: solo configuración y vista previa; desde aquí no se empuja nada a ningún sitio.",
-    Locale::En => "Publishes a filtered version of this private repo to a public remote. Phase 0: configuration and preview only; nothing is pushed anywhere from here.",
+    Locale::Es => "Publica una versión filtrada de este repo privado en un remoto público. Modo snapshot: cada publicación es un único commit con el árbol filtrado de cada rama publicada, sin la historia privada, siempre en fast-forward sobre el anterior. Todas las puertas se comprueban antes de empujar nada; la vista previa no empuja.",
+    Locale::En => "Publishes a filtered version of this private repo to a public remote. Snapshot mode: each publish is one commit holding the filtered tree of each published branch, without the private history, always a fast-forward on the previous one. Every gate is checked before anything is pushed; the preview pushes nothing.",
 });
 msg!(none_hint() { Locale::Es => "(sin espejos de publicación)", Locale::En => "(no publish mirrors yet)" });
 msg!(add_heading() { Locale::Es => "nuevo espejo de publicación", Locale::En => "new publish mirror" });
@@ -22,6 +22,21 @@ msg!(added() { Locale::Es => "espejo de publicación creado.", Locale::En => "pu
 msg!(updated() { Locale::Es => "espejo de publicación guardado.", Locale::En => "publish mirror saved." });
 msg!(removed() { Locale::Es => "espejo de publicación eliminado.", Locale::En => "publish mirror removed." });
 msg!(previewed() { Locale::Es => "vista previa calculada; no se ha empujado nada.", Locale::En => "preview computed; nothing was pushed." });
+msg!(published() { Locale::Es => "publicado.", Locale::En => "published." });
+msg!(published_unchanged() {
+    Locale::Es => "nada que publicar: el árbol público ya está al día.",
+    Locale::En => "nothing to publish: the public tree is already up to date.",
+});
+msg!(publish_button() { Locale::Es => "publicar ahora", Locale::En => "publish now" });
+msg!(publish_confirm(label: &str) {
+    Locale::Es => "¿publicar ahora '{label}' en su remoto público?",
+    Locale::En => "publish '{label}' to its public remote now?",
+});
+msg!(publisher_incomplete() {
+    Locale::Es => "la identidad de publicación necesita nombre y email, o ninguno de los dos",
+    Locale::En => "the publisher identity needs both a name and an email, or neither",
+});
+msg!(bad_run_mode(mode: &str) { Locale::Es => "modo de publicación desconocido: {mode}", Locale::En => "unknown publish mode: {mode}" });
 msg!(bad_identity_line(line: &str) {
     Locale::Es => "línea de identidad no válida (se espera «privado público [nombre]»): {line}",
     Locale::En => "invalid identity line (expected \"private public [name]\"): {line}",
@@ -29,6 +44,20 @@ msg!(bad_identity_line(line: &str) {
 
 msg!(field_label() { Locale::Es => "etiqueta", Locale::En => "label" });
 msg!(field_remote_url() { Locale::Es => "URL pública", Locale::En => "public URL" });
+msg!(field_token() { Locale::Es => "token", Locale::En => "token" });
+msg!(token_placeholder_new() { Locale::Es => "token de acceso del remoto público", Locale::En => "access token for the public remote" });
+msg!(token_placeholder_keep() { Locale::Es => "sin cambios (dejar en blanco)", Locale::En => "unchanged (leave blank)" });
+msg!(field_enabled() {
+    Locale::Es => "publicar en cada barrido periódico",
+    Locale::En => "publish on every periodic sweep",
+});
+msg!(field_run_mode() { Locale::Es => "publicación", Locale::En => "publishing" });
+msg!(run_mode_snapshot() {
+    Locale::Es => "snapshot (un commit por publicación, sin historia; solo ramas)",
+    Locale::En => "snapshot (one commit per publish, no history; branches only)",
+});
+msg!(field_publisher_name() { Locale::Es => "nombre del publicador", Locale::En => "publisher name" });
+msg!(field_publisher_email() { Locale::Es => "email del publicador", Locale::En => "publisher email" });
 msg!(field_mode() { Locale::Es => "modo", Locale::En => "mode" });
 msg!(mode_allowlist() { Locale::Es => "lista de inclusión (recomendado)", Locale::En => "allowlist (recommended)" });
 msg!(mode_exclude() { Locale::Es => "exclusión", Locale::En => "exclude" });
@@ -61,6 +90,28 @@ msg!(table_label() { Locale::Es => "etiqueta", Locale::En => "label" });
 msg!(table_remote() { Locale::Es => "remoto", Locale::En => "remote" });
 msg!(table_refs() { Locale::Es => "refs", Locale::En => "refs" });
 msg!(table_actions() { Locale::Es => "acciones", Locale::En => "actions" });
+msg!(table_status() { Locale::Es => "estado", Locale::En => "status" });
+msg!(disabled() { Locale::Es => "deshabilitado", Locale::En => "disabled" });
+msg!(last_error() { Locale::Es => "publicación fallida", Locale::En => "publish failed" });
+
+msg!(runs_heading(count: usize) { Locale::Es => "últimas publicaciones ({count})", Locale::En => "last runs ({count})" });
+msg!(runs_none() { Locale::Es => "(todavía no se ha publicado)", Locale::En => "(never published yet)" });
+msg!(run_started() { Locale::Es => "inicio", Locale::En => "started" });
+msg!(run_outcome() { Locale::Es => "resultado", Locale::En => "outcome" });
+msg!(run_refs() { Locale::Es => "refs: head privado → público", Locale::En => "refs: private head → public" });
+msg!(run_gates() { Locale::Es => "puertas", Locale::En => "gates" });
+msg!(run_duration() { Locale::Es => "duración", Locale::En => "duration" });
+msg!(run_duration_ms(ms: u64) { Locale::Es => "{ms} ms", Locale::En => "{ms} ms" });
+msg!(run_counts(published: usize, excluded: usize) {
+    Locale::Es => "({published} publicados, {excluded} excluidos)",
+    Locale::En => "({published} published, {excluded} excluded)",
+});
+msg!(findings_omitted(count: usize) { Locale::Es => "y {count} más", Locale::En => "and {count} more" });
+msg!(outcome_published() { Locale::Es => "publicado", Locale::En => "published" });
+msg!(outcome_unchanged() { Locale::Es => "sin cambios", Locale::En => "unchanged" });
+msg!(outcome_blocked() { Locale::Es => "bloqueado", Locale::En => "blocked" });
+msg!(outcome_diverged() { Locale::Es => "rama pública movida", Locale::En => "public branch moved" });
+msg!(outcome_failed() { Locale::Es => "fallido", Locale::En => "failed" });
 
 msg!(preview_heading(label: &str) { Locale::Es => "vista previa de «{label}»", Locale::En => "preview of \"{label}\"" });
 msg!(preview_verdict_pass() {

@@ -91,8 +91,12 @@ fn needs_owner_tier(form: &RepoConfForm) -> bool {
         "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => true,
         // Same decision one step further: what of this repo becomes public.
         // The preview is included because it renders the repo's whole file
-        // list and its secret-scan findings.
-        "add_publish_mirror" | "edit_publish_mirror" | "delete_publish_mirror" | "preview_publish_mirror" => true,
+        // list and its secret-scan findings, "publish now" because it pushes.
+        "add_publish_mirror"
+        | "edit_publish_mirror"
+        | "delete_publish_mirror"
+        | "preview_publish_mirror"
+        | "publish_mirror_now" => true,
         "set_perm" => matches!(form.perm.as_str(), "maintainer" | "owner"),
         _ => false,
     }
@@ -300,7 +304,11 @@ pub(crate) async fn handler_repo_conf_post(
         "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => {
             mirrors::save_mirror(&ctx, &resolved, &name, &form, &actor, locale).await?
         }
-        "add_publish_mirror" | "edit_publish_mirror" | "delete_publish_mirror" | "preview_publish_mirror" => {
+        "add_publish_mirror"
+        | "edit_publish_mirror"
+        | "delete_publish_mirror"
+        | "preview_publish_mirror"
+        | "publish_mirror_now" => {
             let (outcome, preview) =
                 publish_mirrors::save_publish_mirror(&ctx, &resolved, &name, &form, &actor, locale).await?;
             shown_preview = preview;
@@ -350,7 +358,7 @@ pub(crate) async fn handler_repo_conf_post(
     let granted = access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
     let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
     let mr_links_by_mirror = mirrors::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
-    let publish_mirrors_list = gitquarry_mirror_external::publish::list_with_etags(&ctx, &resolved.uid).await?;
+    let publish_mirrors_list = publish_mirrors::list_publish_mirrors(&ctx, &resolved.uid).await?;
     // Async (`data-async-target="#mirrors-section"`, see `super::ASYNC_HEADER`'s
     // own doc comment): `sync_mirror_now`/`delete_mirror` only ever change
     // this one section, and everything `render_mirrors_section` needs is
@@ -586,7 +594,7 @@ pub(crate) struct RepoConfForm {
     #[serde(default)]
     branch_patterns: String,
     /// Only read by `edit_publish_mirror`/`delete_publish_mirror`/
-    /// `preview_publish_mirror`.
+    /// `preview_publish_mirror`/`publish_mirror_now`.
     #[serde(default)]
     publish_mirror_id: String,
     /// Only read by `edit_publish_mirror` — its CAS guard.
@@ -623,6 +631,13 @@ pub(crate) struct RepoConfForm {
     /// `sha [path]` per line.
     #[serde(default)]
     publish_secret_allowlist: String,
+    /// `PublishMirror::mode`; `publish_mode` above is the filter's.
+    #[serde(default)]
+    publish_run_mode: String,
+    #[serde(default)]
+    publish_publisher_name: String,
+    #[serde(default)]
+    publish_publisher_email: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every
@@ -641,6 +656,7 @@ pub(crate) struct Namespaces<'a> {
 /// `pub(crate)` item right here" convention every other name reaching
 /// outside this module already follows.
 pub(crate) use mirrors::fetch_mr_links_by_mirror;
+pub(crate) use publish_mirrors::list_publish_mirrors;
 
 /// `manifest`/`granted` always travel together into [`render_settings_section`]
 /// too — this repo's own live branch list and its own permission grants —
@@ -656,7 +672,7 @@ pub(crate) struct RepoState<'a> {
     /// `mirrors::fetch_mr_links_by_mirror`.
     pub mr_links: &'a std::collections::HashMap<String, Vec<gitquarry_mirror_external::access::ExternalPrLink>>,
     /// Each publish mirror with its etag, the edit form's CAS guard.
-    pub publish_mirrors: &'a [(gitquarry_mirror_external::publish::PublishMirror, String)],
+    pub publish_mirrors: &'a [publish_mirrors::ListedPublishMirror],
 }
 
 /// `csrf`/`message`/`locale` bundled so [`render_settings_section`] doesn't
@@ -703,9 +719,11 @@ fn section_for_action(action: &str) -> &'static str {
         "set_lfs_max_blob_size" => "settings_lfs",
         "set_perm" => "settings_permissions",
         "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => "settings_mirrors",
-        "add_publish_mirror" | "edit_publish_mirror" | "delete_publish_mirror" | "preview_publish_mirror" => {
-            "settings_publish"
-        }
+        "add_publish_mirror"
+        | "edit_publish_mirror"
+        | "delete_publish_mirror"
+        | "preview_publish_mirror"
+        | "publish_mirror_now" => "settings_publish",
         "move_repo" => "settings_move",
         "delete_repo" | "purge_repo" => "settings_danger_zone",
         _ => "settings",

@@ -779,7 +779,7 @@ pub(crate) async fn handler_repo(
         let (manifest, _etag) = resolved.remote.get_manifest().await?;
         let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
         let mr_links_by_mirror = repo_settings::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
-        let publish_mirrors_list = gitquarry_mirror_external::publish::list_with_etags(&ctx, &resolved.uid).await?;
+        let publish_mirrors_list = repo_settings::list_publish_mirrors(&ctx, &resolved.uid).await?;
         let body = repo_settings::render_settings_section(
             view,
             &name,

@@ -233,7 +233,7 @@ pub(super) async fn save_mirror(
     }
 }
 
-fn ref_status_pill(ref_name: &str, status: &RefSyncStatus, locale: gitquarry_i18n::Locale) -> Markup {
+pub(super) fn ref_status_pill(ref_name: &str, status: &RefSyncStatus, locale: gitquarry_i18n::Locale) -> Markup {
     use gitquarry_i18n::web::repo_settings as t;
     let (text, title, class) = match status {
         RefSyncStatus::InSync => (t::ref_status_in_sync(locale), None, "badge ok"),

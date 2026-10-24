@@ -1,23 +1,46 @@
 //! Publish mirrors — a private repo published, filtered, to a public remote
-//! (`docs/publish-mirror-concept.md`). Phase 0: the entity's form and the
-//! dry-run preview. There is no action here that pushes, and none that
-//! could be added without a publish engine that doesn't exist yet: the only
-//! thing the preview action calls is `publish::preview::preview`, which
-//! reads the local mirror and computes object ids in memory.
+//! (`docs/publish-mirror-concept.md`): the entity's form, the dry-run
+//! preview, "publish now" and the record of the last runs. No publish logic
+//! lives here; the one action that pushes calls
+//! `publish::run::publish_mirror_now`, which runs every gate first.
 
 use super::{FlashOutcome, RepoConfForm};
 use crate::webui::{AppError, non_empty, repo_link, settings_section};
+use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::Cas;
+use gitquarry_core::storage::uid::Uid;
 use gitquarry_i18n::Locale;
 use gitquarry_i18n::web::publish_mirrors as t;
 use gitquarry_mirror_external::publish::audit::{Finding, Gate, GateReport};
 use gitquarry_mirror_external::publish::filter::ExcludedBy;
+use gitquarry_mirror_external::publish::log::{GateRecord, PublishLog, PublishRun, RunOutcome};
 use gitquarry_mirror_external::publish::preview::{Preview, RefPreview};
 use gitquarry_mirror_external::publish::rewrite::IdentRole;
 use gitquarry_mirror_external::publish::{
-    self, FilterConfig, FilterMode, IdentityMapping, PublishMirror, SecretAllow, UnmappedPolicy,
+    self, FilterConfig, FilterMode, IdentityMapping, MirrorToken, PublishMirror, PublishMode, Publisher, SecretAllow,
+    UnmappedPolicy,
 };
 use maud::{Markup, PreEscaped, html};
+
+/// One mirror as the section shows it: the entity, its etag (the edit
+/// form's CAS guard) and its run log.
+pub(crate) struct ListedPublishMirror {
+    pub mirror: PublishMirror,
+    pub etag: String,
+    pub log: PublishLog,
+}
+
+/// Every publish mirror of the repo with its log: one small GET per mirror
+/// and one per log, the same tradeoff as the external mirrors' listing.
+pub(crate) async fn list_publish_mirrors(ctx: &AppContext, uid: &Uid) -> anyhow::Result<Vec<ListedPublishMirror>> {
+    let mirrors = publish::list_with_etags(ctx, uid).await?;
+    let mut listed = Vec::with_capacity(mirrors.len());
+    for (mirror, etag) in mirrors {
+        let log = publish::log::get(ctx, uid, &mirror.id).await?;
+        listed.push(ListedPublishMirror { mirror, etag, log });
+    }
+    Ok(listed)
+}
 
 /// A preview just computed for one mirror, rendered once in the response to
 /// the click that asked for it and never stored.
@@ -27,7 +50,7 @@ pub(crate) struct ShownPreview {
 }
 
 /// Dispatches `add_publish_mirror`/`edit_publish_mirror`/
-/// `delete_publish_mirror`/`preview_publish_mirror`.
+/// `delete_publish_mirror`/`preview_publish_mirror`/`publish_mirror_now`.
 pub(super) async fn save_publish_mirror(
     ctx: &gitquarry_core::app::AppContext,
     resolved: &gitquarry_core::app::ResolvedRepo,
@@ -97,6 +120,27 @@ pub(super) async fn save_publish_mirror(
             audit("publish_mirror.delete", form.publish_mirror_id.clone()).await;
             Ok((FlashOutcome::Ok(t::removed(locale)), None))
         }
+        "publish_mirror_now" => {
+            let Some((mirror, _etag)) = publish::get(ctx, &resolved.uid, &form.publish_mirror_id)
+                .await
+                .map_err(AppError::from)?
+            else {
+                return Err(AppError::not_found(anyhow::anyhow!("no such publish mirror")));
+            };
+            // Inline, like the external mirrors' "sync now": the click asked
+            // for this run, so it waits for it and hears how it ended. The
+            // error is already redacted and capped by the run.
+            let run = match publish::run::publish_mirror_now(ctx, resolved, &mirror).await {
+                Ok(run) => run,
+                Err(e) => return Ok((FlashOutcome::Invalid(e.to_string()), None)),
+            };
+            audit("publish_mirror.publish", mirror.label).await;
+            let message = match run.outcome {
+                RunOutcome::Unchanged => t::published_unchanged(locale),
+                _ => t::published(locale),
+            };
+            Ok((FlashOutcome::Ok(message), None))
+        }
         _ => {
             // "preview_publish_mirror", the only other action routed here.
             let Some((mirror, _etag)) = publish::get(ctx, &resolved.uid, &form.publish_mirror_id)
@@ -125,6 +169,24 @@ pub(super) async fn save_publish_mirror(
 fn mirror_from_form(mut mirror: PublishMirror, form: &RepoConfForm, locale: Locale) -> Result<PublishMirror, String> {
     mirror.label = form.label.trim().to_string();
     mirror.remote_url = form.remote_url.trim().to_string();
+    // Blank keeps the stored one: the form never shows a token back.
+    if !form.token.trim().is_empty() {
+        mirror.token = MirrorToken::new(form.token.trim().to_string());
+    }
+    mirror.enabled = form.mirror_enabled == "1";
+    mirror.mode = match form.publish_run_mode.as_str() {
+        "snapshot" | "" => PublishMode::Snapshot,
+        other => return Err(t::bad_run_mode(locale, other)),
+    };
+    let (name, email) = (form.publish_publisher_name.trim(), form.publish_publisher_email.trim());
+    mirror.publisher = match (name.is_empty(), email.is_empty()) {
+        (true, true) => None,
+        (false, false) => Some(Publisher {
+            name: name.to_string(),
+            email: email.to_string(),
+        }),
+        _ => return Err(t::publisher_incomplete(locale)),
+    };
     mirror.filter = FilterConfig {
         mode: match form.publish_mode.as_str() {
             "exclude" => FilterMode::Exclude,
@@ -214,6 +276,23 @@ fn render_form(repo_name: &str, existing: Option<(&PublishMirror, &str)>, csrf: 
                 (t::field_remote_url(locale)) " "
                 input type="url" name="remote_url" value=(mirror.remote_url) required size="40";
             }
+            label {
+                (t::field_token(locale)) " "
+                input type="password" name="token" size="24" autocomplete="off"
+                    placeholder=(if existing.is_some() && !mirror.token.is_empty() { t::token_placeholder_keep(locale) } else { t::token_placeholder_new(locale) });
+            }
+            label {
+                input type="checkbox" name="mirror_enabled" value="1" checked[mirror.enabled];
+                " " (t::field_enabled(locale))
+            }
+            label {
+                (t::field_run_mode(locale)) " "
+                select name="publish_run_mode" {
+                    option value="snapshot" selected[mirror.mode == PublishMode::Snapshot] { (t::run_mode_snapshot(locale)) }
+                }
+            }
+            label { (t::field_publisher_name(locale)) " " input name="publish_publisher_name" value=(mirror.publisher.as_ref().map_or("", |p| p.name.as_str())) size="24"; }
+            label { (t::field_publisher_email(locale)) " " input type="email" name="publish_publisher_email" value=(mirror.publisher.as_ref().map_or("", |p| p.email.as_str())) size="30"; }
             label {
                 (t::field_mode(locale)) " "
                 select name="publish_mode" {
@@ -388,9 +467,101 @@ fn render_preview(label: &str, preview: &Preview, locale: Locale) -> Markup {
     }
 }
 
+fn outcome_badge(outcome: RunOutcome, locale: Locale) -> Markup {
+    let (text, class) = match outcome {
+        RunOutcome::Published => (t::outcome_published(locale), "badge ok"),
+        RunOutcome::Unchanged => (t::outcome_unchanged(locale), "badge"),
+        RunOutcome::Blocked => (t::outcome_blocked(locale), "badge danger"),
+        RunOutcome::Diverged => (t::outcome_diverged(locale), "badge warn"),
+        RunOutcome::Failed => (t::outcome_failed(locale), "badge danger"),
+    };
+    html! { span class=(class) { (text) } }
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+fn render_gate_record(record: &GateRecord, locale: Locale) -> Markup {
+    html! {
+        li {
+            (gate_label(record.gate, locale)) ": "
+            @if record.passed() {
+                (t::gate_pass(locale))
+            } @else {
+                strong { (t::gate_blocked(locale)) }
+                ul {
+                    @for finding in &record.findings { li { (finding_text(finding, locale)) } }
+                    @if record.omitted > 0 { li { em { (t::findings_omitted(locale, record.omitted)) } } }
+                }
+            }
+        }
+    }
+}
+
+fn render_runs(runs: &[PublishRun], locale: Locale) -> Markup {
+    html! {
+        details {
+            summary { (t::runs_heading(locale, runs.len())) }
+            @if runs.is_empty() {
+                p class="muted" { em { (t::runs_none(locale)) } }
+            } @else {
+                div class="scroll-x" {
+                    table class="list" {
+                        tr {
+                            th { (t::run_started(locale)) }
+                            th { (t::run_outcome(locale)) }
+                            th { (t::run_refs(locale)) }
+                            th { (t::run_gates(locale)) }
+                            th { (t::run_duration(locale)) }
+                        }
+                        @for run in runs {
+                            tr {
+                                td { (run.started_at) }
+                                td {
+                                    (outcome_badge(run.outcome, locale))
+                                    @if let Some(error) = &run.error { br; small { (error) } }
+                                }
+                                td {
+                                    @for r in &run.refs {
+                                        div {
+                                            code { (r.ref_name) } " "
+                                            code { (short(&r.private_head)) } " → "
+                                            @match &r.public_head {
+                                                Some(head) => code { (short(head)) },
+                                                None => em { "—" },
+                                            }
+                                            " " (t::run_counts(locale, r.published_files, r.excluded_entries))
+                                        }
+                                    }
+                                }
+                                td {
+                                    @if run.gates_passed() {
+                                        (t::gate_pass(locale))
+                                    } @else {
+                                        ul {
+                                            @if let Some(host) = &run.host { (render_gate_record(host, locale)) }
+                                            @for r in &run.refs {
+                                                @for gate in r.gates.iter().filter(|g| !g.passed()) {
+                                                    (render_gate_record(gate, locale))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                td { (t::run_duration_ms(locale, run.duration_ms)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn render_publish_mirrors_section(
     repo_name: &str,
-    mirrors: &[(PublishMirror, String)],
+    mirrors: &[ListedPublishMirror],
     shown: Option<&ShownPreview>,
     csrf: &str,
     locale: Locale,
@@ -403,21 +574,37 @@ pub(super) fn render_publish_mirrors_section(
             @if mirrors.is_empty() {
                 p { em { (t::none_hint(locale)) } }
             }
-            @for (mirror, etag) in mirrors {
+            @for ListedPublishMirror { mirror, etag, log } in mirrors {
                 div class="scroll-x" {
                     table class="list" {
                         tr {
                             th { (t::table_label(locale)) }
                             th { (t::table_remote(locale)) }
                             th { (t::table_refs(locale)) }
+                            th { (t::table_status(locale)) }
                             th { (t::table_actions(locale)) }
                         }
                         tr {
-                            td { (mirror.label) }
+                            td {
+                                (mirror.label)
+                                @if !mirror.enabled { " " span class="badge" { (t::disabled(locale)) } }
+                            }
                             td { code { (mirror.remote_url) } }
                             td {
                                 @for b in &mirror.publish_branches { code { "heads/" (b) } " " }
                                 @for tag in &mirror.publish_tags { code { "tags/" (tag) } " " }
+                            }
+                            td {
+                                @if let Some(error) = &log.last_error {
+                                    span class="badge danger" title=(error) { (t::last_error(locale)) }
+                                    " "
+                                }
+                                @if log.ref_status.is_empty() && log.last_error.is_none() {
+                                    em { "—" }
+                                }
+                                @for (ref_name, status) in &log.ref_status {
+                                    (super::mirrors::ref_status_pill(ref_name, status, locale))
+                                }
                             }
                             td {
                                 form method="post" action=(&action_url) class="inline-form" {
@@ -425,6 +612,13 @@ pub(super) fn render_publish_mirrors_section(
                                     input type="hidden" name="conf_action" value="preview_publish_mirror";
                                     input type="hidden" name="publish_mirror_id" value=(mirror.id);
                                     button type="submit" { (t::preview_button(locale)) }
+                                }
+                                " "
+                                form method="post" action=(&action_url) class="inline-form" data-confirm=(t::publish_confirm(locale, &mirror.label)) {
+                                    (PreEscaped(csrf))
+                                    input type="hidden" name="conf_action" value="publish_mirror_now";
+                                    input type="hidden" name="publish_mirror_id" value=(mirror.id);
+                                    button type="submit" { (t::publish_button(locale)) }
                                 }
                                 " "
                                 form method="post" action=(&action_url) class="inline-form" data-confirm=(t::delete_confirm(locale, &mirror.label)) {
@@ -437,6 +631,7 @@ pub(super) fn render_publish_mirrors_section(
                         }
                     }
                 }
+                (render_runs(&log.runs, locale))
                 @if let Some(shown) = shown.filter(|s| s.mirror_id == mirror.id) {
                     (render_preview(&mirror.label, &shown.preview, locale))
                 }
