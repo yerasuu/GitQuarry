@@ -95,7 +95,7 @@ fn now_secs() -> u64 {
 }
 
 /// `.conf/backups/<id>` — the directory every captured key hangs under.
-fn snapshot_prefix(id: &str) -> Result<String> {
+pub(crate) fn snapshot_prefix(id: &str) -> Result<String> {
     // `id` lands straight in an object key, so it goes through the same
     // check every caller-supplied name does: an id like `../repos` wouldn't
     // make an odd-looking snapshot, it would write into live data.
@@ -411,7 +411,7 @@ pub async fn restore(
     Ok(report)
 }
 
-async fn restore_one(
+pub(crate) async fn restore_one(
     snapshot: &dyn Backend,
     snapshot_cipher: &Cipher,
     dest: &dyn Backend,

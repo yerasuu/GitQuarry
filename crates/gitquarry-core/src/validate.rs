@@ -305,3 +305,17 @@ pub fn validate_backup_id(id: &str) -> Result<String> {
     }
     Ok(id.to_string())
 }
+
+/// Validates a repo uid typed by an operator (`gitquarry restore --repo
+/// <uid>`) before it becomes the `repos/<uid>/` key prefix every one of that
+/// repo's objects is read and written under. Only the shape
+/// [`Uid::new`](crate::storage::uid::Uid::new) mints is accepted: 32
+/// lowercase hex digits. Anything looser could name a prefix that isn't one
+/// repo — `""` is every repo, `a/b` reaches into another one's subtree.
+pub fn validate_repo_uid(uid: &str) -> Result<crate::storage::uid::Uid> {
+    let uid = uid.trim();
+    if uid.len() != 32 || !uid.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        bail!("invalid repo uid (expected 32 lowercase hex digits): {uid}");
+    }
+    Ok(crate::storage::uid::Uid::from(uid.to_string()))
+}

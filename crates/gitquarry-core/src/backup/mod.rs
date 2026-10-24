@@ -28,5 +28,6 @@ mod pager;
 pub mod prune;
 pub mod replica;
 pub mod report;
+pub mod restore_repo;
 pub mod schedule;
 pub mod snapshot;
