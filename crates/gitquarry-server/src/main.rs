@@ -25,7 +25,8 @@
 //!   [`gitquarry_core::migrations`].
 //! - `backup`: human-run (or cron-run), one backup now — see
 //!   [`gitquarry_domain::commands::backup`].
-//! - `restore`: human-run, writes a snapshot back over the live data — see
+//! - `restore`: human-run, writes a snapshot back over the live data, or one
+//!   repo back from the replica and a snapshot (`--repo`) — see
 //!   [`gitquarry_domain::commands::restore`].
 
 use anyhow::Result;

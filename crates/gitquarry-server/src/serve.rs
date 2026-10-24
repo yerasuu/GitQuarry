@@ -62,7 +62,8 @@ accumulated packs into one -- see that command with --help.
 same one /_settings/backup schedules -- see that command with --help.
 
 'gitquarry restore <snapshot-id> [--apply]' writes a snapshot back over the
-live data -- see that command with --help.";
+live data, and 'gitquarry restore --repo <uid> [--apply]' brings back one
+repo from the backup -- see that command with --help.";
 
 #[derive(Debug, Default)]
 struct Args {

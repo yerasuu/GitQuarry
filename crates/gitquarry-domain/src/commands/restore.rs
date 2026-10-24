@@ -1,4 +1,6 @@
-//! `gitquarry restore`: writes a snapshot back over the live data.
+//! `gitquarry restore`: writes a snapshot back over the live data, or brings
+//! back one repo (`--repo <uid>`) from the replica and a snapshot — see
+//! `gitquarry_core::backup::restore_repo`.
 //!
 //! Deliberately CLI-only, with no web equivalent. A restore overwrites live
 //! config, users, groups, permissions and repo metadata wholesale — it is
@@ -17,20 +19,30 @@
 //! there's a snapshot of when it wasn't.
 
 use anyhow::{Context, Result, bail};
-use gitquarry_core::backup::dest::{self, Dest, Source};
+use gitquarry_core::backup::dest::{self, Dest, Resolved, Source};
+use gitquarry_core::backup::restore_repo::{self, EntitySource};
 use gitquarry_core::backup::snapshot;
-use gitquarry_core::{config, storage};
+use gitquarry_core::crypto::Cipher;
+use gitquarry_core::storage::Backend;
+use gitquarry_core::storage::uid::Uid;
+use gitquarry_core::{config, storage, validate};
+use std::sync::Arc;
 use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
   gitquarry restore --list [--bucket NAME] [--from DEST]
   gitquarry restore <snapshot-id> [--bucket NAME] [--from DEST] [--apply]
+  gitquarry restore --repo UID [<snapshot-id>] [--bucket NAME] [--from DEST] [--apply]
 
 Writes a snapshot's objects back over the live data, at their original
 keys. Dry-run unless --apply is passed.
 
   --list        list the snapshots available and stop
+  --repo UID    restore only this repo (e.g. one purged by mistake): its
+                packs, refs, LFS objects and releases from the replica, its
+                config and other entities from <snapshot-id> (default: the
+                newest snapshot holding it). refs.json is written last.
   --from DEST   where the snapshots live, if not the configured backup
                 destination (bucket:<name> | path:/abs/dir | self)
 
@@ -50,6 +62,8 @@ pub struct Args {
     pub from: Option<String>,
     pub snapshot_id: Option<String>,
     pub list: bool,
+    /// Already validated: it becomes the `repos/<uid>/` key prefix.
+    pub repo: Option<Uid>,
     /// Dry-run unless this is set — a restore overwrites live data, so it
     /// takes two runs to do anything.
     pub apply: bool,
@@ -63,6 +77,10 @@ pub fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             "--bucket" => args.bucket = Some(it.next().cloned().context("--bucket needs a value")?),
             "--from" => args.from = Some(it.next().cloned().context("--from needs a value")?),
             "--list" => args.list = true,
+            "--repo" => {
+                let raw = it.next().context("--repo needs a repo uid")?;
+                args.repo = Some(validate::validate_repo_uid(raw)?);
+            }
             "--apply" => args.apply = true,
             "--help" | "-h" => {
                 println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
@@ -73,7 +91,10 @@ pub fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             other => bail!("unexpected argument: {other}\n\n{USAGE}"),
         }
     }
-    if !args.list && args.snapshot_id.is_none() {
+    if args.list && args.repo.is_some() {
+        bail!("--list and --repo don't go together: list first, then restore\n\n{USAGE}");
+    }
+    if !args.list && args.snapshot_id.is_none() && args.repo.is_none() {
         bail!("which snapshot? pass an id, or --list to see them\n\n{USAGE}");
     }
     Ok(Some(args))
@@ -88,6 +109,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         from,
         snapshot_id,
         list,
+        repo,
         apply,
     } = args;
 
@@ -125,6 +147,10 @@ pub async fn run(rest: &[String]) -> Result<()> {
         config_path: &config_path,
     };
     let resolved = dest::resolve(&target, &source).await?;
+
+    if let Some(uid) = repo {
+        return run_repo(&resolved, &backend, &cipher, &uid, snapshot_id.as_deref(), apply).await;
+    }
 
     let available = snapshot::list(&resolved.backend, &resolved.cipher).await?;
     if list {
@@ -188,5 +214,63 @@ pub async fn run(rest: &[String]) -> Result<()> {
     if !report.failures.is_empty() {
         bail!("{} object(s) failed to restore", report.failures.len());
     }
+    Ok(())
+}
+
+async fn run_repo(
+    resolved: &Resolved,
+    live: &Arc<dyn Backend>,
+    cipher: &Cipher,
+    uid: &Uid,
+    snapshot_id: Option<&str>,
+    apply: bool,
+) -> Result<()> {
+    if !resolved.replica {
+        bail!(
+            "restoring a repo needs the replica for its git data, and a 'self' backup destination \
+             holds only snapshots: pass --from with the replica's destination"
+        );
+    }
+    let report = restore_repo::restore_repo(&resolved.backend, live, cipher, uid, snapshot_id, !apply).await?;
+    let entities_from = match &report.entities_from {
+        EntitySource::Snapshot(id) => format!("snapshot {id}"),
+        EntitySource::Replica => "the replica (no snapshot holds this repo)".to_string(),
+    };
+    if !report.refs_restored && report.failures.is_empty() {
+        warn!("the replica holds no refs.json for repo {uid}: it comes back with no branches or tags");
+    }
+    if report.undeleted {
+        info!("the backed-up config marks repo {uid} as deleted; the restore clears that so it serves again");
+    }
+    if !apply {
+        info!(
+            "gitquarry: would restore repo {uid}: {} object(s) ({} bytes) from the replica and {} entity object(s) \
+             from {entities_from}, refs.json last.",
+            report.replica_objects, report.replica_bytes, report.entity_objects
+        );
+        info!("(dry-run -- run again with --apply to actually overwrite them)");
+        return Ok(());
+    }
+
+    info!(
+        "gitquarry: restored repo {uid}: {} object(s) ({} bytes) from the replica and {} entity object(s) from \
+         {entities_from}.",
+        report.replica_objects, report.replica_bytes, report.entity_objects
+    );
+    if !report.failures.is_empty() {
+        warn!("failures ({}):", report.failures.len());
+        for failure in &report.failures {
+            warn!("  - {failure}");
+        }
+        bail!(
+            "{} object(s) failed to restore, so refs.json was not written and the repo isn't usable yet; \
+             run the restore again",
+            report.failures.len()
+        );
+    }
+    // The repo's name claim and its owner/visible/permission indexes are
+    // derived and not part of a per-repo restore: without the backfill the
+    // repo exists but nothing resolves its name.
+    info!("next: run 'gitquarry backfill-repo-index --apply' so the repo's name and listings point at it again.");
     Ok(())
 }
