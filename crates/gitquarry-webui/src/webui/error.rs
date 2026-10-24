@@ -53,6 +53,10 @@ impl AppError {
         }
     }
 
+    pub(crate) fn is_server_error(&self) -> bool {
+        self.status.is_server_error()
+    }
+
     pub(crate) fn not_found(error: anyhow::Error) -> Self {
         AppError {
             status: StatusCode::NOT_FOUND,

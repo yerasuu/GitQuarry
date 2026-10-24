@@ -257,6 +257,8 @@ pub(crate) async fn handler_fork_post(
         Ok(owner) => owner,
         // Re-rendered as a form error rather than an error page, since the
         // namespace field is what led here and the form keeps what was typed.
+        // A storage failure is not a bad namespace: it stays a 5xx and reaches the log.
+        Err(e) if e.is_server_error() => return Err(e),
         Err(_) => {
             let msg = gitquarry_i18n::shared::repo::invalid_namespace(locale, namespace);
             return fork_error_page(&ctx, &headers, &me, &source, namespace, &form.name, &msg).await;
