@@ -625,6 +625,9 @@ pub(crate) struct ReviewForm {
     verdict: String,
     #[serde(default)]
     body: String,
+    /// The source head the page showed; empty when it showed none.
+    #[serde(default)]
+    head_sha: String,
     #[serde(default)]
     csrf: String,
 }
@@ -660,13 +663,23 @@ pub(crate) async fn handler_review_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
 
     let verdict = parse_verdict(form.verdict.trim());
+    let seen_head = match form.head_sha.trim() {
+        "" => None,
+        sha => {
+            validate::validate_sha(sha).map_err(AppError::bad_request)?;
+            Some(sha)
+        }
+    };
     domain::merge_request::add_review(
         &ctx,
         &resolved,
         form.number,
-        &me.username,
-        verdict,
-        form.body.trim(),
+        domain::merge_request::NewReview {
+            author: &me.username,
+            verdict,
+            body: form.body.trim(),
+            seen_head,
+        },
         locale,
     )
     .await

@@ -175,6 +175,17 @@ pub struct MrReview {
     pub body: String,
     #[serde(default)]
     pub created_at: String,
+    /// The source branch's head commit the reviewer was shown, so an
+    /// approval stops counting once the branch moves: otherwise a force-push
+    /// lands code nobody reviewed under an approval given to other code.
+    ///
+    /// `None` for a review stored before this field existed, sent by a peer
+    /// that predates it, or submitted while the source branch was gone.
+    /// Such a review stays in the thread as history but is never current:
+    /// nothing says which head it saw, so it approves nothing. A
+    /// `ChangesRequested` verdict blocks regardless of this field.
+    #[serde(default)]
+    pub head_sha: Option<String>,
 }
 
 /// One MR plus its comments, bundled — the wire shape both core's own
@@ -191,4 +202,9 @@ pub struct MrDetail {
     /// existed still deserializes — it just reports none.
     #[serde(default)]
     pub reviews: Vec<MrReview>,
+    /// The source branch's current head, which [`MrReview::head_sha`] is
+    /// compared against. `None` from a peer that predates this field or
+    /// when the branch is gone; a reader then counts no approval as current.
+    #[serde(default)]
+    pub head_sha: Option<String>,
 }

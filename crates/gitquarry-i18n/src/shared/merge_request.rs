@@ -104,6 +104,16 @@ msg!(
 );
 
 msg!(
+    /// `domain::merge_request::add_review`: the source branch moved after
+    /// the page the reviewer submitted from was rendered, so what they
+    /// reviewed is no longer what would be merged.
+    review_of_outdated_head() {
+        Locale::Es => "la rama origen cambio desde que cargaste la pagina: recarga y revisa el codigo actual",
+        Locale::En => "the source branch changed since you loaded the page: reload and review the current code",
+    }
+);
+
+msg!(
     /// Editing a comment is strictly author-only, no override at all.
     /// Deleting one is author-only too *unless* the actor is `Developer`+ on
     /// the repo (`domain::issue::delete_comment`'s own `is_moderator`

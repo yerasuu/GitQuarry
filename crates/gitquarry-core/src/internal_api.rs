@@ -296,7 +296,19 @@ pub async fn handler_mr_detail(
         Ok(reviews) => reviews,
         Err(e) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
     };
-    json_response(StatusCode::OK, &MrDetail { mr, comments, reviews })
+    let head_sha = match merge_request::source_head(&ctx, &target, &mr).await {
+        Ok(head_sha) => head_sha,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    json_response(
+        StatusCode::OK,
+        &MrDetail {
+            mr,
+            comments,
+            reviews,
+            head_sha,
+        },
+    )
 }
 
 #[derive(Deserialize)]

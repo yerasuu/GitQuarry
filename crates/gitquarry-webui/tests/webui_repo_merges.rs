@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
-use gitquarry_core::domain::merge_request::{self, NewMergeRequest};
+use gitquarry_core::domain::merge_request::{self, NewMergeRequest, NewReview};
 use gitquarry_core::domain::repo;
 use gitquarry_core::storage::entities::{OwnerRef, Visibility};
 use gitquarry_core::storage::merge_requests::{CommentAnchor, DiffSide, MergeStrategy, ReviewVerdict};
@@ -77,6 +77,10 @@ async fn add_user(ctx: &AppContext, username: &str, perm: Option<Permission>) {
 
 async fn login(app: &Router, username: &str) -> Session {
     Session::login(app, username).await
+}
+
+async fn feature_head(f: &Fixture) -> String {
+    git(f.work.path(), &["rev-parse", "refs/heads/feature"]).await
 }
 
 async fn detail(f: &Fixture, cookie: Option<&str>) -> String {
@@ -218,13 +222,54 @@ async fn merge_detail_shows_reviews_and_their_collapsed_state() {
     // Anonymous viewer: no review form.
     assert!(!html.contains(r#"action="/_merges/review/team/proj""#), "{html}");
 
-    merge_request::add_review(&f.ctx, &f.repo, 1, "bob", ReviewVerdict::Approved, "lgtm", Locale::En)
+    let head = feature_head(&f).await;
+    let new = NewReview {
+        author: "bob",
+        verdict: ReviewVerdict::Approved,
+        body: "lgtm",
+        seen_head: Some(&head),
+    };
+    merge_request::add_review(&f.ctx, &f.repo, 1, new, Locale::En)
         .await
         .unwrap();
     let html = detail(&f, None).await;
     assert!(html.contains("approved by: bob"), "{html}");
     assert!(html.contains("lgtm"), "{html}");
     assert!(!html.contains("no reviews yet"), "{html}");
+}
+
+/// The review form sends back the head its page showed, so a review
+/// submitted after the branch moved is refused rather than approving code
+/// the reviewer never saw.
+#[tokio::test]
+async fn the_review_form_carries_the_head_it_showed_and_a_stale_one_is_refused() {
+    let f = fixture().await;
+    open_mr(&f).await;
+    add_user(&f.ctx, "bob", None).await;
+    let bob = login(&f.app, "bob").await;
+    let uid = f.repo.uid.to_string();
+    let head = feature_head(&f).await;
+
+    let html = detail(&f, Some(&bob.cookie)).await;
+    assert!(html.contains(&format!(r#"name="head_sha" value="{head}""#)), "{html}");
+
+    f.work.commit(&[("f.txt", "hello\nmoved\n")], "move on").await;
+    f.work.push(&f.repo, "refs/heads/main").await;
+    let page = bob
+        .post(
+            &f.app,
+            "/_merges/review/team/proj",
+            &[
+                ("repo_uid", &uid),
+                ("number", "1"),
+                ("verdict", "approved"),
+                ("head_sha", &head),
+            ],
+        )
+        .await;
+    let flash = page.cookie("gq_flash");
+    assert!(flash.contains("changed+since+you+loaded"), "{flash}");
+    assert!(detail(&f, None).await.contains("no reviews yet"));
 }
 
 /// A hand-rolled POST can put anything in `verdict`; the worst it may get
@@ -236,6 +281,7 @@ async fn an_unrecognized_verdict_falls_back_to_the_neutral_one() {
     add_user(&f.ctx, "bob", None).await;
     let bob = login(&f.app, "bob").await;
     let uid = f.repo.uid.to_string();
+    let head = feature_head(&f).await;
 
     let page = bob
         .post(
@@ -246,6 +292,7 @@ async fn an_unrecognized_verdict_falls_back_to_the_neutral_one() {
                 ("number", "1"),
                 ("verdict", "APPROVED"),
                 ("body", "shouting"),
+                ("head_sha", &head),
             ],
         )
         .await;
@@ -258,7 +305,12 @@ async fn an_unrecognized_verdict_falls_back_to_the_neutral_one() {
     bob.post(
         &f.app,
         "/_merges/review/team/proj",
-        &[("repo_uid", &uid), ("number", "1"), ("verdict", "approved")],
+        &[
+            ("repo_uid", &uid),
+            ("number", "1"),
+            ("verdict", "approved"),
+            ("head_sha", &head),
+        ],
     )
     .await;
     assert!(detail(&f, None).await.contains("approved by: bob"));

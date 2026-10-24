@@ -231,11 +231,14 @@ async fn render_body(ctx: &AppContext, target: &ResolvedRepo, repo_name: &str, b
 
 /// `bodies` holds one pre-rendered body per entry of `reviews`, in the same
 /// order -- rendering one is async (it resolves `#123` mentions against
-/// storage) and this isn't.
+/// storage) and this isn't. `head_sha` is the source head the page's diff
+/// shows: approvals count against it, and the form sends it back as the
+/// head the reviewer saw.
 #[allow(clippy::too_many_arguments)]
 fn render_reviews(
     reviews: &[MrReview],
     bodies: &[String],
+    head_sha: Option<&str>,
     repo_name: &str,
     repo_uid: &gitquarry_core::storage::uid::Uid,
     number: u64,
@@ -244,7 +247,7 @@ fn render_reviews(
     headers: &HeaderMap,
     locale: Locale,
 ) -> Markup {
-    let summary = domain::merge_request::review_summary(reviews);
+    let summary = domain::merge_request::review_summary(reviews, head_sha);
     let is_own_mr = viewer == Some(mr_author);
 
     html! {
@@ -273,6 +276,7 @@ fn render_reviews(
                 (PreEscaped(csrf_field(headers)))
                 input type="hidden" name="repo_uid" value=(repo_uid);
                 input type="hidden" name="number" value=(number);
+                input type="hidden" name="head_sha" value=(head_sha.unwrap_or(""));
                 @if is_own_mr {
                     p class="muted" { (t::own_merge_request_review_hint(locale)) }
                     input type="hidden" name="verdict" value="commented";
@@ -777,7 +781,7 @@ pub(super) async fn render_merge_detail(
             None => div class="scroll-x full-bleed" { (side_by_side_diff(&d.diff)) },
         }
 
-        (render_reviews(&reviews, &review_htmls, repo_name, repo_uid, mr.number, viewer.as_deref(), &mr.author, headers, locale))
+        (render_reviews(&reviews, &review_htmls, d.head_sha.as_deref(), repo_name, repo_uid, mr.number, viewer.as_deref(), &mr.author, headers, locale))
 
         h4 { (t::comments_heading(locale)) }
         @if thread.is_empty() {

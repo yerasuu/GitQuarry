@@ -582,18 +582,53 @@ pub async fn delete_comment(
     Ok(())
 }
 
-/// `Err` if `number` doesn't exist, or if `author` is the MR's own author
+/// The commit `mr.source_branch` points at now, read from the source repo's
+/// manifest (the fork's, for a cross-fork MR) rather than a mirror, so it
+/// needs no mirror lock and is safe to call from any handler. `None` when
+/// the branch, or the fork holding it, is gone.
+pub async fn source_head(ctx: &AppContext, target: &ResolvedRepo, mr: &MergeRequestMeta) -> Result<Option<String>> {
+    let fork_remote;
+    let remote = if mr.source_repo == target.uid {
+        &target.remote
+    } else {
+        fork_remote = ctx.remote_for_uid(&mr.source_repo);
+        &fork_remote
+    };
+    let (mut manifest, _etag) = remote.get_manifest().await?;
+    Ok(manifest.refs.remove(&format!("refs/heads/{}", mr.source_branch)))
+}
+
+pub struct NewReview<'a> {
+    pub author: &'a str,
+    pub verdict: ReviewVerdict,
+    pub body: &'a str,
+    /// The source head the reviewer was shown ([`MrDiff::head_sha`]); `None`
+    /// if they were shown none because the branch was gone.
+    pub seen_head: Option<&'a str>,
+}
+
+/// Records a review of `number`, bound to the source head it was made on.
+///
+/// `Err` if `number` doesn't exist, if the author is the MR's own author
 /// submitting anything but the neutral [`ReviewVerdict::Commented`] — you
-/// don't get to approve your own work.
+/// don't get to approve your own work — or if `seen_head` is no longer the
+/// source head. That last one is a rejection rather than recording the
+/// review against `seen_head`: a review of a head that is already gone
+/// could never count, and storing it would let the reviewer believe they
+/// approved the current code. They reload and review what is there now.
 pub async fn add_review(
     ctx: &AppContext,
     target: &ResolvedRepo,
     number: u64,
-    author: &str,
-    verdict: ReviewVerdict,
-    body: &str,
+    new: NewReview<'_>,
     locale: gitquarry_i18n::Locale,
 ) -> Result<()> {
+    let NewReview {
+        author,
+        verdict,
+        body,
+        seen_head,
+    } = new;
     let Some(mr) = get(ctx, target, number).await? else {
         bail!(
             "{}",
@@ -606,11 +641,19 @@ pub async fn add_review(
             gitquarry_i18n::shared::merge_request::cannot_review_own_merge_request(locale)
         );
     }
+    let head_sha = source_head(ctx, target, &mr).await?;
+    if head_sha.as_deref() != seen_head {
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::review_of_outdated_head(locale)
+        );
+    }
     let review = MrReview {
         author: author.to_string(),
         verdict,
         body: body.to_string(),
         created_at: now_stamp(),
+        head_sha,
     };
     merge_requests::add_mr_review(ctx.backend().as_ref(), &ctx.cipher, &target.uid, number, &review).await
 }
@@ -634,18 +677,26 @@ pub struct ReviewSummary {
 /// review state has. A [`ReviewVerdict::Commented`] review counts for
 /// neither side, but still supersedes that reviewer's earlier verdict:
 /// it's an explicit "I no longer hold a position", not a no-op.
-pub fn review_summary(reviews: &[MrReview]) -> ReviewSummary {
-    let mut latest: std::collections::HashMap<&str, ReviewVerdict> = std::collections::HashMap::new();
+///
+/// An approval counts only if it is [`review_is_current`] for `head_sha`,
+/// the source head being judged: once the branch moves, every approval has
+/// to be given again. A change request blocks whatever head it was made on —
+/// pushing new commits is not how a request for changes gets dismissed; the
+/// reviewer does that with a later review.
+pub fn review_summary(reviews: &[MrReview], head_sha: Option<&str>) -> ReviewSummary {
+    let mut latest = std::collections::HashMap::new();
     for review in reviews {
-        latest.insert(review.author.as_str(), review.verdict);
+        latest.insert(review.author.as_str(), review);
     }
 
     let mut summary = ReviewSummary::default();
-    for (author, verdict) in latest {
-        match verdict {
-            ReviewVerdict::Approved => summary.approved_by.push(author.to_string()),
+    for (author, review) in latest {
+        match review.verdict {
+            ReviewVerdict::Approved if review_is_current(review, head_sha) => {
+                summary.approved_by.push(author.to_string())
+            }
+            ReviewVerdict::Approved | ReviewVerdict::Commented => {}
             ReviewVerdict::ChangesRequested => summary.changes_requested_by.push(author.to_string()),
-            ReviewVerdict::Commented => {}
         }
     }
     summary.approved_by.sort_unstable();
@@ -653,11 +704,24 @@ pub fn review_summary(reviews: &[MrReview]) -> ReviewSummary {
     summary
 }
 
+/// Whether `review` was made against `head_sha`, the source head being
+/// judged. A review with no recorded head (stored before reviews carried
+/// one, or from a peer that doesn't send it) is never current, and nothing
+/// is current against an unknown head: either way nothing proves the
+/// reviewer saw this code.
+pub fn review_is_current(review: &MrReview, head_sha: Option<&str>) -> bool {
+    head_sha.is_some() && review.head_sha.as_deref() == head_sha
+}
+
 #[derive(Default)]
 pub struct MrDiff {
     pub stat: String,
     pub diff: String,
     pub commits: Vec<git::browse::CommitInfo>,
+    /// The source head this diff was computed from, for a review form to
+    /// send back as the head the reviewer saw. `None` when the source
+    /// branch (or its fork) is gone.
+    pub head_sha: Option<String>,
 }
 
 /// Scratch ref a cross-fork MR's source objects land under, in the
@@ -711,14 +775,30 @@ pub async fn diff(
     git_dir: &std::path::Path,
     mr: &MergeRequestMeta,
 ) -> Result<MrDiff> {
-    let Some((base, head)) = diff_endpoints(ctx, target, git_dir, mr).await? else {
-        return Ok(MrDiff::default());
+    // Tolerated, not propagated: for a cross-fork merge request this opens
+    // the source fork's mirror and fetches from it, and that fork may be
+    // gone by now — which is the same "nothing to compare" case as a
+    // deleted branch, not a server error.
+    let head_sha = match fetch_source_ref(ctx, target, git_dir, mr).await.ok() {
+        Some(head_ref) => git::browse::resolve_commit(git_dir, &head_ref).await?,
+        None => None,
+    };
+    let Some((base, head)) = diff_endpoints(git_dir, mr, head_sha.as_deref()).await? else {
+        return Ok(MrDiff {
+            head_sha,
+            ..MrDiff::default()
+        });
     };
     let stat = git::browse::diffstat_range(git_dir, &base, &head).await?;
     let diff = git::browse::diff_range(git_dir, &base, &head).await?;
     let range = format!("{base}..{head}");
     let commits = git::browse::log(git_dir, &range, usize::MAX, None).await?;
-    Ok(MrDiff { stat, diff, commits })
+    Ok(MrDiff {
+        stat,
+        diff,
+        commits,
+        head_sha,
+    })
 }
 
 /// The `(base, head)` pair [`diff`] compares, or `None` when there is
@@ -742,18 +822,11 @@ pub async fn diff(
 /// closed *without* merging whose branch was then deleted has no surviving
 /// endpoint to reconstruct anything from.
 async fn diff_endpoints(
-    ctx: &AppContext,
-    target: &ResolvedRepo,
     git_dir: &std::path::Path,
     mr: &MergeRequestMeta,
+    head: Option<&str>,
 ) -> Result<Option<(String, String)>> {
-    // Tolerated, not propagated: for a cross-fork merge request this opens
-    // the source fork's mirror and fetches from it, and that fork may be
-    // gone by now — which is the same "nothing to compare" case as a
-    // deleted branch, not a server error.
-    let head = fetch_source_ref(ctx, target, git_dir, mr).await.ok();
     if let Some(head) = head
-        && git::browse::resolve_commit(git_dir, &head).await?.is_some()
         && git::browse::resolve_commit(git_dir, &mr.target_branch).await?.is_some()
         // A merged merge request whose branch outlived the merge is the one
         // case where the live pair says nothing: the source is now an
@@ -763,9 +836,9 @@ async fn diff_endpoints(
         // Only when it really is contained -- a rebase-merged branch keeps
         // its original commits, which aren't in the target under those
         // shas, and comparing them is still the truest answer available.
-        && !git::is_ancestor(git_dir, &head, &mr.target_branch).await.unwrap_or(false)
+        && !git::is_ancestor(git_dir, head, &mr.target_branch).await.unwrap_or(false)
     {
-        return Ok(Some((mr.target_branch.clone(), head)));
+        return Ok(Some((mr.target_branch.clone(), head.to_string())));
     }
     if let Some(merge) = mr.merge_commit_sha.as_deref()
         && git::browse::resolve_commit(git_dir, merge).await?.is_some()
@@ -1062,15 +1135,6 @@ pub async fn merge(
             gitquarry_i18n::shared::merge_request::merge_request_is_draft(locale)
         );
     }
-    let reviews = list_reviews(ctx, target, number).await?;
-    let summary = review_summary(&reviews);
-    if !summary.changes_requested_by.is_empty() {
-        bail!(
-            "{}",
-            gitquarry_i18n::shared::merge_request::merge_request_changes_requested_pending(locale)
-        );
-    }
-
     let mirror = ctx.open_mirror(target).await?;
     let git_dir = &mirror.path;
     let head_ref = fetch_source_ref(ctx, target, git_dir, &mr).await?;
@@ -1089,6 +1153,18 @@ pub async fn merge(
             gitquarry_i18n::shared::repo::not_a_branch(locale, &mr.source_branch)
         );
     };
+
+    // Judged against `head_sha`, the commit this call is about to land, not
+    // the head anyone saw earlier: an approval of any other head approves
+    // code that isn't the code being merged.
+    let reviews = list_reviews(ctx, target, number).await?;
+    let summary = review_summary(&reviews, Some(&head_sha));
+    if !summary.changes_requested_by.is_empty() {
+        bail!(
+            "{}",
+            gitquarry_i18n::shared::merge_request::merge_request_changes_requested_pending(locale)
+        );
+    }
 
     if let Some(missing) = missing_required_reviewers(target, git_dir, &mr, &target_sha, &head_sha, &summary).await? {
         bail!(

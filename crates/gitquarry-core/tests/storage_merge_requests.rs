@@ -137,8 +137,8 @@ async fn an_mrs_comments_and_reviews_are_never_listed_as_mrs() {
     let review = MrReview {
         author: "bob".to_string(),
         verdict: ReviewVerdict::Approved,
-        body: String::new(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
+        ..Default::default()
     };
     add_mr_review(backend.as_ref(), &cipher, &uid, n, &review)
         .await
@@ -244,8 +244,9 @@ async fn reviews_roundtrip_in_chronological_order_scoped_per_mr() {
         let review = MrReview {
             author: author.to_string(),
             verdict,
-            body: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
+            head_sha: Some("b".repeat(40)),
+            ..Default::default()
         };
         add_mr_review(backend.as_ref(), &cipher, &uid, 1, &review)
             .await
@@ -258,7 +259,35 @@ async fn reviews_roundtrip_in_chronological_order_scoped_per_mr() {
         vec!["bob", "carol"]
     );
     assert_eq!(reviews[0].verdict, ReviewVerdict::ChangesRequested);
+    assert_eq!(reviews[1].head_sha, Some("b".repeat(40)));
     assert!(list_mr_reviews(&backend, &cipher, &uid, 2).await.unwrap().is_empty());
+}
+
+/// Reviews already in a bucket were written before they recorded a head;
+/// they have to keep reading back, as history with no head, not vanish.
+#[tokio::test]
+async fn a_review_stored_without_a_head_reads_back_with_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = backend(dir.path());
+    let cipher = cipher();
+    let uid = Uid::from("team/proj".to_string());
+
+    let reviews = s3db::Collection::new_owned(format!("repos/{uid}/merges/1/reviews"));
+    let legacy = serde_json::json!({
+        "author": "bob",
+        "verdict": "Approved",
+        "body": "lgtm",
+        "created_at": "2024-01-01T00:00:00Z",
+    });
+    gitquarry_core::storage::thread::append_to_thread(&reviews, backend.as_ref(), &cipher, &legacy, "review")
+        .await
+        .unwrap();
+
+    let listed = list_mr_reviews(&backend, &cipher, &uid, 1).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].author, "bob");
+    assert_eq!(listed[0].verdict, ReviewVerdict::Approved);
+    assert_eq!(listed[0].head_sha, None);
 }
 
 #[tokio::test]
@@ -292,6 +321,7 @@ async fn reviews_and_comments_are_separate_threads() {
             verdict: ReviewVerdict::Approved,
             body: "lgtm".to_string(),
             created_at: "2024-01-01T00:00:01Z".to_string(),
+            ..Default::default()
         },
     )
     .await

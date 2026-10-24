@@ -226,6 +226,27 @@ async fn create_mr_authored_by_alice(ctx: &AppContext, target: &ResolvedRepo) {
     create(ctx, target, new, gitquarry_i18n::Locale::Es).await.unwrap();
 }
 
+/// Submits a review the way the merge-request page does: against the source
+/// head as it stands right now.
+async fn review_current_head(
+    ctx: &AppContext,
+    target: &ResolvedRepo,
+    number: u64,
+    author: &str,
+    verdict: ReviewVerdict,
+    body: &str,
+) -> anyhow::Result<()> {
+    let mr = get(ctx, target, number).await.unwrap().unwrap();
+    let head = source_head(ctx, target, &mr).await.unwrap();
+    let new = NewReview {
+        author,
+        verdict,
+        body,
+        seen_head: head.as_deref(),
+    };
+    add_review(ctx, target, number, new, gitquarry_i18n::Locale::En).await
+}
+
 #[tokio::test]
 async fn add_line_comment_rejects_a_malformed_anchor() {
     let dir = tempfile::tempdir().unwrap();
@@ -297,18 +318,16 @@ async fn add_review_rejects_a_nonexistent_number() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = ctx(dir.path());
     let target = test_target(&ctx);
+    let new = NewReview {
+        author: "bob",
+        verdict: ReviewVerdict::Approved,
+        body: "",
+        seen_head: None,
+    };
     assert!(
-        add_review(
-            &ctx,
-            &target,
-            999,
-            "bob",
-            ReviewVerdict::Approved,
-            "",
-            gitquarry_i18n::Locale::Es
-        )
-        .await
-        .is_err()
+        add_review(&ctx, &target, 999, new, gitquarry_i18n::Locale::Es)
+            .await
+            .is_err()
     );
 }
 
@@ -321,24 +340,48 @@ async fn an_author_may_comment_on_but_never_approve_their_own_mr() {
 
     for verdict in [ReviewVerdict::Approved, ReviewVerdict::ChangesRequested] {
         assert!(
-            add_review(&ctx, &target, 1, "alice", verdict, "", gitquarry_i18n::Locale::Es)
+            review_current_head(&ctx, &target, 1, "alice", verdict, "")
                 .await
                 .is_err()
         );
     }
     assert!(
-        add_review(
-            &ctx,
-            &target,
-            1,
-            "alice",
-            ReviewVerdict::Commented,
-            "ping",
-            gitquarry_i18n::Locale::Es
-        )
-        .await
-        .is_ok()
+        review_current_head(&ctx, &target, 1, "alice", ReviewVerdict::Commented, "ping")
+            .await
+            .is_ok()
     );
+}
+
+/// The page a reviewer submits from names the head it showed them; once the
+/// branch has moved on from it, what they reviewed is no longer what would
+/// merge, so the review is refused instead of being stored against either
+/// head.
+#[tokio::test]
+async fn a_review_of_a_head_the_branch_has_moved_on_from_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path());
+    let target = test_target(&ctx);
+    create_mr_authored_by_alice(&ctx, &target).await;
+    let seen = "b".repeat(40);
+    put_branch(&target, "feature", &"c".repeat(40)).await;
+
+    let stale = NewReview {
+        author: "bob",
+        verdict: ReviewVerdict::Approved,
+        body: "",
+        seen_head: Some(&seen),
+    };
+    let err = add_review(&ctx, &target, 1, stale, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("changed since you loaded"), "{err}");
+    assert!(list_reviews(&ctx, &target, 1).await.unwrap().is_empty());
+
+    review_current_head(&ctx, &target, 1, "bob", ReviewVerdict::Approved, "")
+        .await
+        .unwrap();
+    let reviews = list_reviews(&ctx, &target, 1).await.unwrap();
+    assert_eq!(reviews[0].head_sha, Some("c".repeat(40)));
 }
 
 #[tokio::test]
@@ -349,28 +392,12 @@ async fn add_review_then_list_reviews_roundtrips_chronologically() {
     create_mr_authored_by_alice(&ctx, &target).await;
 
     assert!(list_reviews(&ctx, &target, 1).await.unwrap().is_empty());
-    add_review(
-        &ctx,
-        &target,
-        1,
-        "bob",
-        ReviewVerdict::ChangesRequested,
-        "needs work",
-        gitquarry_i18n::Locale::Es,
-    )
-    .await
-    .unwrap();
-    add_review(
-        &ctx,
-        &target,
-        1,
-        "carol",
-        ReviewVerdict::Approved,
-        "",
-        gitquarry_i18n::Locale::Es,
-    )
-    .await
-    .unwrap();
+    review_current_head(&ctx, &target, 1, "bob", ReviewVerdict::ChangesRequested, "needs work")
+        .await
+        .unwrap();
+    review_current_head(&ctx, &target, 1, "carol", ReviewVerdict::Approved, "")
+        .await
+        .unwrap();
 
     let reviews = list_reviews(&ctx, &target, 1).await.unwrap();
     assert_eq!(
@@ -380,36 +407,68 @@ async fn add_review_then_list_reviews_roundtrips_chronologically() {
     assert_eq!(reviews[0].body, "needs work");
 }
 
-#[test]
-fn review_summary_keeps_only_each_reviewers_latest_verdict() {
-    let review = |author: &str, verdict| MrReview {
+const HEAD: &str = "1111111111111111111111111111111111111111";
+const OLD_HEAD: &str = "2222222222222222222222222222222222222222";
+
+fn review_on(author: &str, verdict: ReviewVerdict, head_sha: Option<&str>) -> MrReview {
+    MrReview {
         author: author.to_string(),
         verdict,
+        head_sha: head_sha.map(str::to_string),
         ..Default::default()
-    };
-    let summary = review_summary(&[
-        review("bob", ReviewVerdict::ChangesRequested),
-        review("carol", ReviewVerdict::Approved),
-        // Bob changed his mind — only this later verdict counts.
-        review("bob", ReviewVerdict::Approved),
-        review("dave", ReviewVerdict::ChangesRequested),
-    ]);
+    }
+}
+
+#[test]
+fn review_summary_keeps_only_each_reviewers_latest_verdict() {
+    let review = |author, verdict| review_on(author, verdict, Some(HEAD));
+    let summary = review_summary(
+        &[
+            review("bob", ReviewVerdict::ChangesRequested),
+            review("carol", ReviewVerdict::Approved),
+            // Bob changed his mind — only this later verdict counts.
+            review("bob", ReviewVerdict::Approved),
+            review("dave", ReviewVerdict::ChangesRequested),
+        ],
+        Some(HEAD),
+    );
     assert_eq!(summary.approved_by, vec!["bob".to_string(), "carol".to_string()]);
     assert_eq!(summary.changes_requested_by, vec!["dave".to_string()]);
 }
 
 #[test]
 fn a_later_neutral_review_drops_that_reviewer_from_both_sides() {
-    let review = |author: &str, verdict| MrReview {
-        author: author.to_string(),
-        verdict,
-        ..Default::default()
-    };
-    let summary = review_summary(&[
-        review("bob", ReviewVerdict::Approved),
-        review("bob", ReviewVerdict::Commented),
-    ]);
+    let review = |author, verdict| review_on(author, verdict, Some(HEAD));
+    let summary = review_summary(
+        &[
+            review("bob", ReviewVerdict::Approved),
+            review("bob", ReviewVerdict::Commented),
+        ],
+        Some(HEAD),
+    );
     assert_eq!(summary, ReviewSummary::default());
+}
+
+/// An approval is of the code at one head. One given on another head, one
+/// stored before reviews recorded a head, and any approval when the head is
+/// unknown all count for nothing; a change request still blocks whatever
+/// head it was made on.
+#[test]
+fn review_summary_counts_approvals_of_the_current_head_only() {
+    let summary = review_summary(
+        &[
+            review_on("bob", ReviewVerdict::Approved, Some(OLD_HEAD)),
+            review_on("carol", ReviewVerdict::Approved, None),
+            review_on("dave", ReviewVerdict::Approved, Some(HEAD)),
+            review_on("erin", ReviewVerdict::ChangesRequested, Some(OLD_HEAD)),
+        ],
+        Some(HEAD),
+    );
+    assert_eq!(summary.approved_by, vec!["dave".to_string()]);
+    assert_eq!(summary.changes_requested_by, vec!["erin".to_string()]);
+
+    let unknown_head = review_summary(&[review_on("dave", ReviewVerdict::Approved, Some(HEAD))], None);
+    assert!(unknown_head.approved_by.is_empty());
 }
 
 const TEST: (&str, &str) = ("Test", "test@example.com");
@@ -1301,17 +1360,9 @@ async fn merge_rejects_until_a_required_reviewer_approves() {
         .is_err()
     );
 
-    add_review(
-        &ctx,
-        &target,
-        1,
-        "carol",
-        ReviewVerdict::Approved,
-        "",
-        gitquarry_i18n::Locale::En,
-    )
-    .await
-    .unwrap();
+    review_current_head(&ctx, &target, 1, "carol", ReviewVerdict::Approved, "")
+        .await
+        .unwrap();
 
     assert!(matches!(
         merge(
@@ -1326,6 +1377,94 @@ async fn merge_rejects_until_a_required_reviewer_approves() {
         .unwrap(),
         MergeOutcome::Merged(_)
     ));
+}
+
+/// The attack an unbound approval allowed: get the required approval on
+/// harmless code, force-push something else over the branch, merge. The
+/// approval is of the old head, so it must stop counting; a new approval of
+/// the new head counts again.
+#[tokio::test]
+async fn an_approval_stops_counting_once_the_source_is_force_pushed() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path());
+    let target = test_target(&ctx);
+    let (main_sha, _feature_sha) = init_target_mirror(&ctx, &target, false).await;
+
+    let (mut config, etag) = target.remote.get_repo_config().await.unwrap();
+    config.required_reviewers.insert("carol".to_string());
+    gitquarry_core::storage::settings::put_repo_config(
+        ctx.backend().as_ref(),
+        target.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &ctx.cipher,
+    )
+    .await
+    .unwrap();
+    let new = NewMergeRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "Add widget",
+        description: "d",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::En).await.unwrap();
+    review_current_head(&ctx, &target, 1, "carol", ReviewVerdict::Approved, "")
+        .await
+        .unwrap();
+
+    // Not a descendant of the approved commit: a rewrite, not a follow-up.
+    let git_dir = ctx.mirrors_root.join(target.uid.as_str());
+    let rewritten = commit_file(
+        &git_dir,
+        "hello\nsomething else\n",
+        "",
+        Some(&main_sha),
+        "rewrite",
+        TEST,
+    )
+    .await;
+    git(&git_dir, &["update-ref", "refs/heads/feature", &rewritten]).await;
+    put_branch(&target, "feature", &rewritten).await;
+
+    match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    {
+        Err(e) => assert!(e.to_string().contains("carol"), "{e}"),
+        Ok(_) => panic!("an approval of the old head let the rewritten branch merge"),
+    }
+
+    review_current_head(&ctx, &target, 1, "carol", ReviewVerdict::Approved, "")
+        .await
+        .unwrap();
+    match merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    .unwrap()
+    {
+        MergeOutcome::Merged(sha) => {
+            assert!(
+                gitquarry_core::git::is_ancestor(&git_dir, &rewritten, &sha)
+                    .await
+                    .unwrap()
+            );
+        }
+        MergeOutcome::Conflict(paths) => panic!("unexpected conflict: {paths:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1413,17 +1552,9 @@ async fn merge_rejects_until_the_codeowner_of_a_touched_path_approves() {
         Ok(_) => panic!("expected the merge to be rejected for missing dave's approval"),
     }
 
-    add_review(
-        &ctx,
-        &target,
-        1,
-        "dave",
-        ReviewVerdict::Approved,
-        "",
-        gitquarry_i18n::Locale::En,
-    )
-    .await
-    .unwrap();
+    review_current_head(&ctx, &target, 1, "dave", ReviewVerdict::Approved, "")
+        .await
+        .unwrap();
 
     assert!(matches!(
         merge(
@@ -1900,14 +2031,13 @@ async fn merge_rejects_a_mr_with_pending_changes_requested() {
     let target = test_target(&ctx);
     init_target_mirror(&ctx, &target, false).await;
     let mr = create_test_mr(&ctx, &target).await;
-    add_review(
+    review_current_head(
         &ctx,
         &target,
         mr.number,
         "bob",
         ReviewVerdict::ChangesRequested,
         "please fix this",
-        gitquarry_i18n::Locale::En,
     )
     .await
     .unwrap();
@@ -1928,14 +2058,13 @@ async fn merge_rejects_a_mr_with_pending_changes_requested() {
     // A later approval from the same reviewer supersedes their own
     // rejection (only the latest verdict per reviewer counts), unblocking
     // the merge.
-    add_review(
+    review_current_head(
         &ctx,
         &target,
         mr.number,
         "bob",
         ReviewVerdict::Approved,
         "actually fine",
-        gitquarry_i18n::Locale::En,
     )
     .await
     .unwrap();

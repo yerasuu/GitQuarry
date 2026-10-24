@@ -154,6 +154,7 @@ pub(super) async fn render_remote_pull_detail(
         mr: pr,
         comments,
         reviews,
+        head_sha,
     } = fetch_remote_pull_request_detail(peer_web_base_url, repo_name, number, credential)
         .await
         .map_err(AppError::bad_request)?;
@@ -171,7 +172,7 @@ pub(super) async fn render_remote_pull_detail(
         // Read-only: only commenting is proxied cross-instance
         // (`/_remote_pulls/comment`), so a remote PR's reviews are shown as
         // the peer reports them, with no submit form of their own.
-        @let summary = gitquarry_core::domain::merge_request::review_summary(&reviews);
+        @let summary = gitquarry_core::domain::merge_request::review_summary(&reviews, head_sha.as_deref());
         h4 { (pulls_t::reviews_heading(locale)) }
         @if !summary.approved_by.is_empty() {
             p class="muted" { (pulls_t::approved_by_prefix(locale)) (summary.approved_by.join(", ")) }
