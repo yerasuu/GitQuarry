@@ -48,6 +48,20 @@ fn per_repo_entities_classify_as_entities() {
     assert_eq!(classify("repos/abc123/mirrors/m1/mr-links/x.json"), Class::Entities);
     assert_eq!(classify("repos/abc123/publish-mirrors/m1.json"), Class::Entities);
     assert_eq!(classify("repos/abc123/publish-log/m1.json"), Class::Entities);
+    assert_eq!(classify("repos/abc123/publish/m1/3/map/a7"), Class::Entities);
+    assert_eq!(classify("repos/abc123/publish/m1/3/excluded/a7"), Class::Entities);
+}
+
+#[test]
+fn a_publish_mirrors_own_packs_classify_as_git() {
+    assert_eq!(
+        classify("repos/abc123/publish/m1/3/objects/pack/pack-deadbeef.pack"),
+        Class::Git
+    );
+    assert_eq!(
+        classify("repos/abc123/publish/m1/3/objects/pack/pack-deadbeef.idx"),
+        Class::Git
+    );
 }
 
 #[test]

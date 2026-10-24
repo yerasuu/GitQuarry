@@ -151,6 +151,18 @@ fn classify_repo(rest: &str) -> Class {
     if tail.starts_with("releases/") {
         return Class::Releases;
     }
+    // A publish mirror's own bare repo and its private-to-public mapping,
+    // per epoch (`gitquarry_mirror_external::publish::mapping`). Carried
+    // rather than called derived: a rewrite is deterministic, but the
+    // private commits it was computed from can be force-pushed away, and
+    // then the mapping is the only record of what the public side holds.
+    if let Some(publish) = tail.strip_prefix("publish/") {
+        return if publish.contains("/objects/pack/") {
+            Class::Git
+        } else {
+            Class::Entities
+        };
+    }
     if tail == ".conf/config.json"
         || tail.starts_with("lfs-locks/")
         || tail.starts_with("lfs-lock-paths/")
