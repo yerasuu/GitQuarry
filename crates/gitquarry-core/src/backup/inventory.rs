@@ -151,8 +151,9 @@ fn classify_repo(rest: &str) -> Class {
     if tail.starts_with("releases/") {
         return Class::Releases;
     }
-    // A publish mirror's own bare repo and its private-to-public mapping,
-    // per epoch (`gitquarry_mirror_external::publish::mapping`). Carried
+    // A publish mirror's own bare repo, its private-to-public mapping and
+    // the inverse of that mapping, per epoch
+    // (`gitquarry_mirror_external::publish::{mapping, inverse}`). Carried
     // rather than called derived: a rewrite is deterministic, but the
     // private commits it was computed from can be force-pushed away, and
     // then the mapping is the only record of what the public side holds.

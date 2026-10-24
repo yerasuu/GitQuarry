@@ -50,6 +50,7 @@ fn per_repo_entities_classify_as_entities() {
     assert_eq!(classify("repos/abc123/publish-log/m1.json"), Class::Entities);
     assert_eq!(classify("repos/abc123/publish/m1/3/map/a7"), Class::Entities);
     assert_eq!(classify("repos/abc123/publish/m1/3/excluded/a7"), Class::Entities);
+    assert_eq!(classify("repos/abc123/publish/m1/3/inverse/a7"), Class::Entities);
 }
 
 #[test]
