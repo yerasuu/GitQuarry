@@ -14,6 +14,7 @@ pub mod audit;
 pub mod epoch;
 pub mod filter;
 mod history;
+pub mod inverse;
 pub mod log;
 mod mapping;
 mod objects;

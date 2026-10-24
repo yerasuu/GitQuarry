@@ -18,6 +18,7 @@ use super::build::{self, Built, Outgoing};
 use super::{Plan, Rewrite, fresh_entries};
 use crate::git_remote;
 use crate::publish::epoch::{Fingerprint, config_fingerprint, published_epoch};
+use crate::publish::inverse;
 use crate::publish::log::{self, GateRecord, PublicHead, PublishLog, PublishRun, RefRun, RunOutcome, stored_error};
 use crate::publish::mapping::{Table, epoch_prefix, pack_store};
 use crate::publish::objects::{Oid, count_reachable, from_hex, to_hex};
@@ -231,7 +232,11 @@ pub(in crate::publish) async fn execute(
 
     // Stored before the push, and in this order, so that the bucket never
     // describes an object it doesn't hold: the pack, the blobs the epoch has
-    // seen excluded, then the mapping that says which commits are done.
+    // seen excluded, the inverse, then the mapping that says which commits
+    // are done. The inverse goes before the mapping because a commit the
+    // mapping lists is seeded and never rewritten again, so its inverse entry
+    // would never be written if the run stopped in between; the other way
+    // round, a retry rewrites the commit and the union adds nothing new.
     let packed = {
         let (repo, stage, written) = (workspace.repo.clone(), workspace.stage.clone(), built.written.clone());
         tokio::task::spawn_blocking(move || pack_objects(&repo, &written, &stage))
@@ -244,6 +249,12 @@ pub(in crate::publish) async fn execute(
     Table::<0>::new(format!("{prefix}/excluded"))
         .store(ctx, &build::fresh_excluded(&rewrite))
         .await?;
+    inverse::store(
+        ctx,
+        &inverse::prefix(&prefix),
+        &inverse::fresh_entries(&rewrite.rewriter),
+    )
+    .await?;
     Table::<40>::new(format!("{prefix}/map"))
         .store(ctx, &fresh_entries(&rewrite.rewriter))
         .await?;

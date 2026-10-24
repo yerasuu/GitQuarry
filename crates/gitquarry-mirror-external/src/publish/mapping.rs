@@ -9,6 +9,8 @@
 //! - `excluded/<xx>`: every blob the rewrite met at an excluded path, the
 //!   history-wide half of the blob-set audit (note #46) that an incremental
 //!   run would otherwise only know for its own new commits.
+//! - `inverse/<xx>`: public commit → the private commits that map to it,
+//!   for the inbound side ([`super::inverse`]).
 //! - `objects/pack/`: the publish repo itself, one pack per run, through the
 //!   same [`Remote`] machinery as a repo's own packs.
 //!
@@ -35,7 +37,7 @@ const LOAD_CONCURRENCY: usize = 16;
 /// CAS attempts on one shard before a run gives up. Runs of one mirror are
 /// serialised by the sweep lock, so a conflict means another node; the
 /// entries are deterministic, so a retry only ever adds the same values.
-const STORE_ATTEMPTS: u32 = 8;
+pub(super) const STORE_ATTEMPTS: u32 = 8;
 
 /// Bytes of a stored shard before its entries: a format tag, so a future
 /// layout is refused instead of misread.
