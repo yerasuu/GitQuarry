@@ -176,6 +176,14 @@ msg!(finding_blob_also_excluded(sha: &str, published: &str, excluded: &str) {
     Locale::Es => "el contenido {sha} se publica en {published} y también está en la ruta excluida {excluded}",
     Locale::En => "content {sha} is published at {published} and also sits at the excluded path {excluded}",
 });
+msg!(finding_blob_already_public(sha: &str, excluded: &str) {
+    Locale::Es => "el contenido {sha} está en la ruta excluida {excluded} pero ya forma parte de la historia publicada",
+    Locale::En => "content {sha} sits at the excluded path {excluded} but is already in the published history",
+});
+msg!(finding_blob_excluded_earlier(sha: &str, published: &str) {
+    Locale::Es => "el contenido {sha} se publica en {published} y estuvo en una ruta excluida antes en la historia",
+    Locale::En => "content {sha} is published at {published} and sat at an excluded path earlier in the history",
+});
 msg!(finding_license_missing() {
     Locale::Es => "no hay LICENSE ni COPYING en la raíz del árbol publicado",
     Locale::En => "no LICENSE or COPYING at the root of the published tree",
@@ -207,6 +215,10 @@ msg!(finding_unmapped_author(email: &str, commits: usize, example: &str) {
 msg!(finding_unmapped_committer(email: &str, commits: usize, example: &str) {
     Locale::Es => "committer sin mapear {email} en {commits} commit(s), p. ej. {example}",
     Locale::En => "unmapped committer {email} on {commits} commit(s), e.g. {example}",
+});
+msg!(finding_unmapped_tagger(email: &str, tags: usize, example: &str) {
+    Locale::Es => "autor de tag sin mapear {email} en {tags} tag(s), p. ej. {example}",
+    Locale::En => "unmapped tagger {email} on {tags} tag(s), e.g. {example}",
 });
 msg!(finding_host_not_allowed(error: &str) { Locale::Es => "{error}", Locale::En => "{error}" });
 msg!(finding_publisher_missing() {

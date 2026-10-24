@@ -1,18 +1,21 @@
 //! One publish run (`docs/publish-mirror-concept.md` §4–§5): host gate →
-//! build and gate every branch locally ([`super::snapshot`]) → push → record.
+//! build and gate every ref locally ([`super::snapshot`], or
+//! [`super::history`] for a history mirror) → push → record.
 //!
-//! The order is the contract. Every gate of every branch has run, on the
+//! The order is the contract. Every gate of every ref has run, on the
 //! objects actually written, before anything leaves this machine; one
-//! blocked branch blocks the whole run, and the push of all branches is one
-//! atomic `git push`, so a run publishes everything or nothing. The public
-//! branch only ever moves by fast-forward: a snapshot's parent is the public
-//! head as the run found it, and nothing here ever forces.
+//! blocked ref blocks the whole run, and the push of all refs is one atomic
+//! `git push`, so a run publishes everything or nothing. A snapshot's
+//! public branch only ever moves by fast-forward: its parent is the public
+//! head as the run found it. A history run forces only onto a new epoch,
+//! and then only with a lease.
 //!
 //! Direction is push-only by construction: nothing in this module writes
 //! into the private repo or reads a public object back into it.
 
 use super::audit::{self, Finding, GateReport};
-use super::log::{self, GateRecord, PublicHead, PublishRun, RefRun, RunOutcome, stored_error};
+use super::epoch::{Fingerprint, config_fingerprint, repo_files_fingerprint};
+use super::log::{self, GateRecord, PublicHead, PublishLog, PublishRun, RefRun, RunOutcome, stored_error};
 use super::objects::{Oid, to_hex};
 use super::snapshot::{self, RefBuild, RefError, Snapshot};
 use super::{PublishMirror, PublishMode};
@@ -96,6 +99,11 @@ async fn publish_once(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &Publis
         ),
         duration_ms: 0,
         mode: mirror.mode,
+        epoch: Some(mirror.filter_epoch),
+        forced: false,
+        commits_rewritten: 0,
+        commits_reused: 0,
+        commits_collapsed: 0,
         host: None,
         refs: Vec::new(),
         outcome: RunOutcome::Failed,
@@ -112,29 +120,30 @@ async fn publish_once(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &Publis
         repo = %resolved.uid,
         mirror = %mirror.id,
         outcome = ?run.outcome,
+        epoch = mirror.filter_epoch,
+        forced = run.forced,
         duration_ms = run.duration_ms,
         "publish run finished"
     );
-    let recorded = record(ctx, resolved, mirror, &run).await;
+    let fingerprint = result.as_ref().ok().cloned();
+    let recorded = record(ctx, resolved, mirror, &run, fingerprint).await;
     match (result, recorded) {
         (Err(e), _) => Err(anyhow::anyhow!(
             run.error.unwrap_or_else(|| stored_error(&format!("{e:#}")))
         )),
-        (Ok(()), Err(e)) => Err(e.context("the run finished but couldn't be recorded")),
-        (Ok(()), Ok(())) => Ok(run),
+        (Ok(_), Err(e)) => Err(e.context("the run finished but couldn't be recorded")),
+        (Ok(_), Ok(())) => Ok(run),
     }
 }
 
-/// The run itself; sets `run`'s outcome, refs and host gate as it goes.
+/// The run itself; sets `run`'s outcome, refs and host gate as it goes, and
+/// returns the fingerprint of what the public side holds afterwards.
 async fn execute(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
     mirror: &PublishMirror,
     run: &mut PublishRun,
-) -> Result<()> {
-    match mirror.mode {
-        PublishMode::Snapshot => {}
-    }
+) -> Result<Fingerprint> {
     // The publish edge of the host allowlist: narrowing it after a mirror
     // was saved must stop the mirror, not wait for its next edit.
     let host = audit::host_gate(&mirror.remote_url, &super::allowed_hosts(ctx).await?);
@@ -153,7 +162,28 @@ async fn execute(
     // trip most likely to be slow must not hold up clones and pushes.
     let remote_refs = git_remote::ls_remote_refs(url, token).await?;
     let log = log::get(ctx, &resolved.uid, &mirror.id).await?;
+    match mirror.mode {
+        PublishMode::Snapshot => {
+            execute_snapshot(ctx, resolved, mirror, run, remote_refs, log).await?;
+            Ok(Fingerprint {
+                config: config_fingerprint(mirror),
+                repo_files: repo_files_fingerprint(None),
+            })
+        }
+        PublishMode::History => super::history::run::execute(ctx, resolved, mirror, run, &remote_refs, &log).await,
+    }
+}
 
+async fn execute_snapshot(
+    ctx: &AppContext,
+    resolved: &ResolvedRepo,
+    mirror: &PublishMirror,
+    run: &mut PublishRun,
+    remote_refs: std::collections::HashMap<String, String>,
+    log: PublishLog,
+) -> Result<()> {
+    let url = mirror.remote_url.as_str();
+    let token = mirror.token.expose();
     let scratch = gitquarry_core::git::scratch_dir(&std::env::temp_dir())?;
     let scratch_path = scratch.path().to_path_buf();
     let local = ctx.open_mirror_read(resolved).await?;
@@ -200,6 +230,7 @@ async fn execute(
                 head: PublicHead {
                     commit: to_hex(&commit),
                     tree: to_hex(&tree),
+                    private: Some(to_hex(&r.private_head)),
                 },
             }),
             _ => None,
@@ -287,7 +318,7 @@ fn settle_ref_outcomes(run: &mut PublishRun) {
     }
 }
 
-fn failed_gates(gates: &[GateReport]) -> String {
+pub(super) fn failed_gates(gates: &[GateReport]) -> String {
     gates
         .iter()
         .filter(|g| !g.passed())
@@ -324,12 +355,25 @@ async fn has_commit(repo: &Path, sha: &str) -> Result<bool> {
     Ok(status.success())
 }
 
-/// Stores the run and what it means for the mirror's state. Only a branch
-/// the public side now holds at a snapshot of this mirror moves `heads`, so
-/// a failed run can never make the next one build on something it didn't
-/// push.
-async fn record(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &PublishMirror, run: &PublishRun) -> Result<()> {
+/// Stores the run and what it means for the mirror's state. Only a ref the
+/// public side now holds at a commit of this mirror moves `heads`, so a
+/// failed run can never make the next one build on something it didn't
+/// push; and only a run that ended with the public side up to date moves
+/// the epoch and fingerprint the next run is checked against.
+async fn record(
+    ctx: &AppContext,
+    resolved: &ResolvedRepo,
+    mirror: &PublishMirror,
+    run: &PublishRun,
+    fingerprint: Option<Fingerprint>,
+) -> Result<()> {
     log::update(ctx, &resolved.uid, &mirror.id, |log| {
+        if let Some(fingerprint) = &fingerprint
+            && matches!(run.outcome, RunOutcome::Published | RunOutcome::Unchanged)
+        {
+            log.epoch = run.epoch;
+            log.fingerprint = Some(fingerprint.clone());
+        }
         for r in &run.refs {
             let status = match r.outcome {
                 RunOutcome::Published | RunOutcome::Unchanged => RefSyncStatus::InSync,
@@ -347,6 +391,7 @@ async fn record(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &PublishMirro
                     PublicHead {
                         commit: commit.clone(),
                         tree: tree.clone(),
+                        private: Some(r.private_head.clone()),
                     },
                 );
                 log.pending.remove(&r.ref_name);

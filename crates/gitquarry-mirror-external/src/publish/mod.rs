@@ -1,21 +1,26 @@
 //! Publish mirrors: a private repo published, filtered, to a public remote —
 //! `docs/publish-mirror-concept.md`. The entity, the filter, the gates, the
-//! dry-run preview (phase 0) and the snapshot publish run (phase 1, see
-//! [`run`]). The rewrite and the preview compute object ids in memory and
-//! write nothing; only [`run`] writes objects, into a scratch repository of
-//! its own, and pushes from there.
+//! dry-run preview (phase 0), the snapshot publish run (phase 1) and the
+//! history publish run (phase 2, [`history`]), both behind [`run`]. The
+//! rewrite and the preview compute object ids in memory and write nothing;
+//! only [`run`] writes objects, into a repository of its own, and pushes
+//! from there.
 //!
 //! Hand-built collection rather than `#[derive(Entity)]`, for the same
 //! reason as [`crate::access`]: the collection lives under the repo's own
 //! `Uid`, known only at runtime.
 
 pub mod audit;
+pub mod epoch;
 pub mod filter;
+mod history;
 pub mod log;
+mod mapping;
 mod objects;
 pub mod preview;
 pub mod rewrite;
 pub mod run;
+mod scratch;
 mod secrets;
 mod snapshot;
 
@@ -81,6 +86,12 @@ pub enum PublishMode {
     /// sensitive part. Branches only: `publish_tags` is not read.
     #[default]
     Snapshot,
+    /// The whole history reachable from the published refs, rewritten
+    /// commit by commit, deterministically: the same private history under
+    /// the same filter always gives the same public ids, so every publish
+    /// within one [`PublishMirror::filter_epoch`] is a fast-forward of the
+    /// last. Tags matching `publish_tags` are published too.
+    History,
 }
 
 /// The forge credential of a publish mirror. Its own type so that `Debug`
@@ -141,6 +152,11 @@ pub struct PublishMirror {
     pub enabled: bool,
     #[serde(default)]
     pub mode: PublishMode,
+    /// Bumped, by one and only through a confirmed edit, whenever what a
+    /// history publish outputs changes (see [`epoch`]). A new epoch
+    /// rewrites the whole history and is the only way a publish forces.
+    #[serde(default)]
+    pub filter_epoch: u32,
     /// `None` blocks every snapshot run at the identity gate.
     #[serde(default)]
     pub publisher: Option<Publisher>,
@@ -214,6 +230,7 @@ pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: PublishMirror) -> R
     validate_publish_mirror(&mirror)?;
     check_host_allowed(ctx, &mirror.remote_url).await?;
     mirror.id = crate::access::generate_mirror_id();
+    mirror.filter_epoch = 0;
     match publish_mirrors_collection(uid)
         .put(ctx.backend().as_ref(), &ctx.cipher, &mirror.id, &mirror, None)
         .await?
@@ -228,9 +245,19 @@ pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: PublishMirror) -> R
 
 /// `Ok(Cas::Conflict)` on a lost CAS race, like every other settings-tab
 /// save, so the web layer can show its "edited concurrently" flash.
+///
+/// # Errors
+///
+/// [`epoch::EpochBumpRequired`] for an edit that changes what a history
+/// publish outputs without bumping [`PublishMirror::filter_epoch`]; any
+/// validation or host-gate refusal; a bucket error.
 pub async fn update(ctx: &AppContext, uid: &Uid, mirror: &PublishMirror, expected_etag: &str) -> Result<Cas> {
     validate_publish_mirror(mirror)?;
     check_host_allowed(ctx, &mirror.remote_url).await?;
+    let Some((stored, _etag)) = get(ctx, uid, &mirror.id).await? else {
+        bail!("no such publish mirror");
+    };
+    epoch::check_update(&stored, mirror, &log::get(ctx, uid, &mirror.id).await?)?;
     let cas = publish_mirrors_collection(uid)
         .put(
             ctx.backend().as_ref(),

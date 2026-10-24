@@ -37,7 +37,10 @@ pub enum Finding {
         rule: ExcludedBy,
     },
     /// The same content is published at one path and excluded at another,
-    /// so the path filter didn't keep it private.
+    /// so the path filter didn't keep it private. A history run leaves a
+    /// path empty when that copy lies in history an earlier run of the
+    /// epoch handled: `published_path` for content already public,
+    /// `excluded_path` for content seen excluded before.
     BlobAlsoExcluded {
         sha: String,
         published_path: String,
@@ -100,7 +103,7 @@ pub(crate) struct PublishedSet {
     pub filter_findings: Vec<Finding>,
 }
 
-pub(crate) fn published_set(rewriter: &Rewriter<'_>, filter: &Filter) -> PublishedSet {
+pub(crate) fn published_set(rewriter: &Rewriter, filter: &Filter) -> PublishedSet {
     published_set_from(
         rewriter.published.iter().map(|commit| commit.tree),
         &rewriter.public_trees,
@@ -164,25 +167,32 @@ pub(crate) fn filter_gate(set: &PublishedSet, repo_filter_error: Option<String>)
 /// path. This is the one that catches a secret that once lived at a public
 /// path and was later moved under an excluded one (note #46): the path
 /// filter alone says nothing about the old copy.
-pub(crate) fn blob_set_gate(set: &PublishedSet, rewriter: &Rewriter<'_>) -> GateReport {
-    let mut leaked: Vec<(&String, &Oid, &String)> = set
-        .blobs
-        .iter()
-        .filter(|(oid, _)| **oid != EMPTY_BLOB)
-        .filter_map(|(oid, published_path)| {
-            rewriter
-                .excluded_blobs
-                .get(oid)
-                .map(|excluded_path| (published_path, oid, excluded_path))
-        })
+pub(crate) fn blob_set_gate(set: &PublishedSet, rewriter: &Rewriter) -> GateReport {
+    blob_set_gate_from(set.blobs.iter().filter_map(|(oid, published_path)| {
+        rewriter
+            .excluded_blobs
+            .get(oid)
+            .map(|excluded_path| (*oid, published_path.clone(), excluded_path.clone()))
+    }))
+}
+
+/// [`blob_set_gate`] over pairs found elsewhere: `(blob, published path,
+/// excluded path)`, either path empty when the copy is in a part of the
+/// history an earlier run handled. The empty blob is never a finding.
+pub(crate) fn blob_set_gate_from(pairs: impl IntoIterator<Item = (Oid, String, String)>) -> GateReport {
+    let mut leaked: Vec<(String, Oid, String)> = pairs
+        .into_iter()
+        .filter(|(oid, _, _)| *oid != EMPTY_BLOB)
+        .map(|(oid, published, excluded)| (published, oid, excluded))
         .collect();
     leaked.sort();
+    leaked.dedup();
     let findings = leaked
         .into_iter()
         .map(|(published_path, oid, excluded_path)| Finding::BlobAlsoExcluded {
-            sha: to_hex(oid),
-            published_path: published_path.clone(),
-            excluded_path: excluded_path.clone(),
+            sha: to_hex(&oid),
+            published_path,
+            excluded_path,
         })
         .collect();
     GateReport {
@@ -205,7 +215,7 @@ fn is_license_name(name: &str) -> bool {
 /// guessing from the licence text.
 pub(crate) fn license_gate(
     reader: &mut ObjectReader,
-    rewriter: &Rewriter<'_>,
+    rewriter: &Rewriter,
     head_tree: Option<Oid>,
     spdx: Option<&str>,
 ) -> Result<GateReport> {
@@ -314,12 +324,27 @@ pub(crate) fn secret_gate<'m>(
 /// Identity gate: with `unmapped = block`, every author and committer of a
 /// published commit resolves in the identity map. Collapsed commits never
 /// appear publicly and aren't checked.
-pub(crate) fn identity_gate(rewriter: &Rewriter<'_>, policy: UnmappedPolicy) -> GateReport {
+pub(crate) fn identity_gate(rewriter: &Rewriter, policy: UnmappedPolicy) -> GateReport {
+    identity_gate_over(
+        rewriter
+            .published
+            .iter()
+            .map(|commit| (commit.private, commit.unmapped.as_slice())),
+        policy,
+    )
+}
+
+/// [`identity_gate`] over any published objects: each private id with the
+/// identities the map didn't cover on it.
+pub(crate) fn identity_gate_over<'a>(
+    objects: impl IntoIterator<Item = (Oid, &'a [(IdentRole, String)])>,
+    policy: UnmappedPolicy,
+) -> GateReport {
     let mut findings = Vec::new();
     if policy == UnmappedPolicy::Block {
         // In order of first appearance; a handful of identities at most.
-        for commit in &rewriter.published {
-            for (role, email) in &commit.unmapped {
+        for (private, unmapped) in objects {
+            for (role, email) in unmapped {
                 let existing = findings.iter_mut().find_map(|f| match f {
                     Finding::UnmappedIdentity {
                         email: e,
@@ -335,7 +360,7 @@ pub(crate) fn identity_gate(rewriter: &Rewriter<'_>, policy: UnmappedPolicy) -> 
                         email: email.clone(),
                         role: *role,
                         commits: 1,
-                        example_commit: to_hex(&commit.private),
+                        example_commit: to_hex(&private),
                     }),
                 }
             }

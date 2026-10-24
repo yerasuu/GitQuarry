@@ -191,6 +191,29 @@ pub async fn push_atomic_to_remote_url(bare_repo: &Path, url: &str, token: &str,
     push(bare_repo, url, token, &[OsStr::new("--atomic")], refspecs).await
 }
 
+/// [`push_atomic_to_remote_url`] that may also replace the refs named in
+/// `leases`, each `(ref, expected)`: git moves such a ref, fast-forward or
+/// not, only if the remote still holds `expected` there when the push
+/// lands, and an empty `expected` means "must not exist". Never a bare
+/// `--force`: a ref somebody moved since `expected` was read refuses the
+/// whole atomic push. See
+/// [git-push: --force-with-lease](https://git-scm.com/docs/git-push#Documentation/git-push.txt---force-with-leaseltrefnamegtltexpectgt).
+pub async fn push_atomic_with_leases(
+    bare_repo: &Path,
+    url: &str,
+    token: &str,
+    leases: &[(String, String)],
+    refspecs: &[String],
+) -> Result<()> {
+    let flags: Vec<String> = leases
+        .iter()
+        .map(|(name, expected)| format!("--force-with-lease={name}:{expected}"))
+        .collect();
+    let mut all = vec![OsStr::new("--atomic")];
+    all.extend(flags.iter().map(OsStr::new));
+    push(bare_repo, url, token, &all, refspecs).await
+}
+
 async fn push(bare_repo: &Path, url: &str, token: &str, flags: &[&OsStr], refspecs: &[String]) -> Result<()> {
     let mut args: Vec<&OsStr> = vec![OsStr::new("push")];
     args.extend_from_slice(flags);

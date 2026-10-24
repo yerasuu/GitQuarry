@@ -10,6 +10,7 @@
 
 use super::PublishMode;
 use super::audit::{Finding, Gate, GateReport};
+use super::epoch::Fingerprint;
 use crate::access::{RefSyncStatus, cap_error};
 use crate::git_remote::redact_url;
 use anyhow::Result;
@@ -29,11 +30,16 @@ pub const MAX_RUNS: usize = 20;
 /// blocked a run, and a thousand secret-scan hits say no more than twenty.
 const MAX_FINDINGS_PER_GATE: usize = 20;
 
-/// A snapshot commit this mirror pushed to a public branch, and its tree.
+/// What this mirror pushed to a public ref: a snapshot or rewritten commit
+/// (or, for a history tag, the rewritten tag object), and its tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublicHead {
     pub commit: String,
     pub tree: String,
+    /// The private ref value it was published from. A history run starts
+    /// from what is new since these, which is what keeps it incremental.
+    #[serde(default)]
+    pub private: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,6 +59,15 @@ pub struct PublishLog {
     /// Why the last run failed or was blocked, `None` after one that wasn't.
     #[serde(default)]
     pub last_error: Option<String>,
+    /// The epoch of what [`Self::heads`] holds, `None` before the first
+    /// publish (see [`super::epoch::published_epoch`] for older logs).
+    #[serde(default)]
+    pub epoch: Option<u32>,
+    /// What that epoch's output was computed from. A history run in the
+    /// same epoch whose inputs no longer match refuses instead of pushing a
+    /// history that would not fast-forward.
+    #[serde(default)]
+    pub fingerprint: Option<Fingerprint>,
     /// Newest first, at most [`MAX_RUNS`].
     #[serde(default)]
     pub runs: Vec<PublishRun>,
@@ -130,6 +145,20 @@ pub struct PublishRun {
     pub started_at: String,
     pub duration_ms: u64,
     pub mode: PublishMode,
+    /// The mirror's epoch as the run read it.
+    #[serde(default)]
+    pub epoch: Option<u32>,
+    /// Whether the push was forced, with a lease, onto a new epoch.
+    #[serde(default)]
+    pub forced: bool,
+    /// History mode: commits rewritten by this run, commits it found
+    /// already rewritten, and how many of the rewritten ones collapsed.
+    #[serde(default)]
+    pub commits_rewritten: usize,
+    #[serde(default)]
+    pub commits_reused: usize,
+    #[serde(default)]
+    pub commits_collapsed: usize,
     /// `None` when the run stopped before reaching the host gate.
     pub host: Option<GateRecord>,
     pub refs: Vec<RefRun>,

@@ -15,17 +15,16 @@ use super::audit::{self, GateReport};
 use super::filter::Filter;
 use super::log::{PublicHead, PublishLog};
 use super::objects::{
-    Commit, ObjectKind, ObjectReader, Oid, encode_commit, encode_tree, from_hex, hash_object, parse_commit,
+    Commit, LocalRef, ObjectKind, ObjectReader, Oid, encode_commit, encode_tree, from_hex, hash_object, parse_commit,
     split_ident, to_hex,
 };
 use super::preview::{count_exclusions, load_repo_filter, published_paths, selected_refs};
 use super::rewrite::{EMPTY_TREE, Rewriter};
+use super::scratch::{init_scratch, write_objects, written_by};
 use super::{NEVER_PUBLISHED_REF_PREFIXES, PublishMirror, Publisher};
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 /// What a published branch's snapshot came to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -122,7 +121,12 @@ pub(super) fn build(
         excluded: HashSet::new(),
     };
     let mut refs = Vec::new();
-    for (ref_name, head) in selected_refs(private_git_dir, mirror)? {
+    for LocalRef {
+        name: ref_name,
+        commit: head,
+        ..
+    } in selected_refs(private_git_dir, mirror)?
+    {
         // Branches only: a snapshot is a new commit, and a tag that moves to
         // one is not a tag anybody can rely on.
         if !ref_name.starts_with("refs/heads/") || NEVER_PUBLISHED_REF_PREFIXES.iter().any(|p| ref_name.starts_with(p))
@@ -199,7 +203,7 @@ impl Builder<'_> {
         let head_commit = parse_commit(&self.reader.read_kind(&head, ObjectKind::Commit)?)?;
         let (repo_file, repo_file_error) = load_repo_filter(&mut self.reader, head_commit.tree)?;
         let filter = Filter::new(&mirror.filter, repo_file.as_ref());
-        let mut rewriter = Rewriter::new(&filter, &mirror.identities);
+        let mut rewriter = Rewriter::new(filter.clone(), mirror.identities.clone());
         // The whole history, not just the head: the blob-set audit has to
         // know every blob that ever sat at an excluded path, so that content
         // moved out of `deploy/` into a public path is caught (note #46).
@@ -260,7 +264,7 @@ impl Builder<'_> {
     /// Writes every tree under `root` and every blob they name. Blobs are
     /// read from the private repo only because a public tree names them, so
     /// nothing the filter dropped is ever read, let alone written.
-    fn write_tree_objects(&mut self, rewriter: &Rewriter<'_>, root: Oid) -> Result<()> {
+    fn write_tree_objects(&mut self, rewriter: &Rewriter, root: Oid) -> Result<()> {
         let mut trees = Vec::new();
         let mut blobs = Vec::new();
         let mut seen = HashSet::new();
@@ -383,114 +387,6 @@ fn snapshot_commit(
         other_headers: Vec::new(),
         message: message.as_bytes().to_vec(),
     }))
-}
-
-fn init_scratch(repo: &Path) -> Result<()> {
-    // SHA-1 named explicitly: the ids here are computed as SHA-1, and a
-    // global `init.defaultObjectFormat` must not change what gets written.
-    let out = Command::new("git")
-        .args(["init", "--bare", "--quiet", "--object-format=sha1", "--end-of-options"])
-        .arg(repo)
-        .output()
-        .context("couldn't run git init")?;
-    if !out.status.success() {
-        bail!("git init failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(())
-}
-
-/// Writes `objects` into `repo` through `git hash-object`, so git computes
-/// each id itself, and fails unless every id is the one computed here: the
-/// gates and the preview speak about the computed ids, and a mismatch would
-/// mean what gets pushed is not what was checked.
-fn write_objects(
-    repo: &Path,
-    stage: &Path,
-    kind: ObjectKind,
-    objects: impl IntoIterator<Item = (Oid, Vec<u8>)>,
-) -> Result<Vec<Oid>> {
-    let mut expected = Vec::new();
-    let mut paths = Vec::new();
-    for (i, (oid, body)) in objects.into_iter().enumerate() {
-        let path = stage.join(format!("{i}"));
-        std::fs::write(&path, &body).with_context(|| format!("staging object {}", to_hex(&oid)))?;
-        expected.push(oid);
-        paths.push(path);
-    }
-    if expected.is_empty() {
-        return Ok(expected);
-    }
-    let type_name = match kind {
-        ObjectKind::Blob => "blob",
-        ObjectKind::Tree => "tree",
-        ObjectKind::Commit => "commit",
-        ObjectKind::Tag => bail!("a snapshot never writes a tag"),
-    };
-    let mut child = Command::new("git")
-        .env("GIT_DIR", repo)
-        .args(["hash-object", "-w", "--no-filters", "--stdin-paths", "-t", type_name])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("couldn't run git hash-object")?;
-    // A writer thread, or a large batch fills the stdout pipe while this
-    // side is still blocked writing stdin.
-    let mut stdin = child.stdin.take().context("git hash-object started without stdin")?;
-    let list: Vec<u8> = paths
-        .iter()
-        .flat_map(|p| {
-            let mut line = p.to_string_lossy().into_owned().into_bytes();
-            line.push(b'\n');
-            line
-        })
-        .collect();
-    let feeder = std::thread::spawn(move || stdin.write_all(&list));
-    let out = child.wait_with_output().context("waiting for git hash-object")?;
-    feeder
-        .join()
-        .map_err(|_| anyhow::anyhow!("the git hash-object feeder panicked"))?
-        .context("writing to git hash-object")?;
-    for path in &paths {
-        let _ = std::fs::remove_file(path);
-    }
-    if !out.status.success() {
-        bail!(
-            "git hash-object failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let written: Vec<&str> = text.lines().collect();
-    if written.len() != expected.len() {
-        bail!(
-            "git hash-object wrote {} objects, {} were expected",
-            written.len(),
-            expected.len()
-        );
-    }
-    for (computed, written) in expected.iter().zip(written) {
-        if to_hex(computed) != written {
-            bail!(
-                "{type_name} computed as {} was written as {written}; refusing to publish what wasn't checked",
-                to_hex(computed)
-            );
-        }
-    }
-    Ok(expected)
-}
-
-/// Every object in `repo`, whatever put it there.
-fn written_by(repo: &Path) -> Result<HashSet<Oid>> {
-    let out = Command::new("git")
-        .env("GIT_DIR", repo)
-        .args(["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])
-        .output()
-        .context("couldn't run git cat-file")?;
-    if !out.status.success() {
-        bail!("git cat-file failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    String::from_utf8_lossy(&out.stdout).lines().map(from_hex).collect()
 }
 
 /// The last check before the push: the scratch repo holds exactly what

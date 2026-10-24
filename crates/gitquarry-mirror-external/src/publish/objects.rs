@@ -363,10 +363,18 @@ pub(crate) fn topo_order_newest(git_dir: &Path, tip: &Oid, limit: usize) -> Resu
     Ok((commits, truncated))
 }
 
-/// Every ref under `refs/heads/` and `refs/tags/`, with the commit it
-/// finally points at (an annotated tag peeled) — `None` for a ref that
-/// doesn't end at a commit.
-pub(crate) fn list_branches_and_tags(git_dir: &Path) -> Result<Vec<(String, Option<Oid>)>> {
+/// One ref under `refs/heads/` or `refs/tags/`.
+#[derive(Debug, Clone)]
+pub(crate) struct LocalRef {
+    pub name: String,
+    /// What the ref itself holds: a commit, or an annotated tag's object.
+    pub object: Oid,
+    /// The commit it finally points at (an annotated tag peeled); `None` for
+    /// a ref that doesn't end at a commit.
+    pub commit: Option<Oid>,
+}
+
+pub(crate) fn list_branches_and_tags(git_dir: &Path) -> Result<Vec<LocalRef>> {
     let out = Command::new("git")
         .env("GIT_DIR", git_dir)
         .args([
@@ -390,12 +398,69 @@ pub(crate) fn list_branches_and_tags(git_dir: &Path) -> Result<Vec<(String, Opti
         let [name, kind, oid, peeled_kind, peeled_oid] = fields.as_slice() else {
             continue;
         };
+        let object = from_hex(oid)?;
         let commit = match (*kind, *peeled_kind) {
-            ("commit", _) => Some(from_hex(oid)?),
+            ("commit", _) => Some(object),
             ("tag", "commit") => Some(from_hex(peeled_oid)?),
             _ => None,
         };
-        refs.push((name.to_string(), commit));
+        refs.push(LocalRef {
+            name: name.to_string(),
+            object,
+            commit,
+        });
     }
     Ok(refs)
+}
+
+/// Commits reachable from `tip` and from none of `known`, parents before
+/// children, each with its parents. A `known` id the repository no longer
+/// has (a private branch force-pushed and collected) is skipped rather than
+/// an error: it then simply excludes nothing.
+pub(crate) fn commits_since(git_dir: &Path, tip: &Oid, known: &[Oid]) -> Result<Vec<(Oid, Vec<Oid>)>> {
+    let out = Command::new("git")
+        .env("GIT_DIR", git_dir)
+        .args([
+            "rev-list",
+            "--topo-order",
+            "--reverse",
+            "--parents",
+            "--ignore-missing",
+            "--end-of-options",
+        ])
+        .arg(to_hex(tip))
+        .args(known.iter().map(|oid| format!("^{}", to_hex(oid))))
+        .output()
+        .context("couldn't run git rev-list")?;
+    if !out.status.success() {
+        bail!("git rev-list failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| {
+            let mut ids = line.split(' ').map(from_hex);
+            let commit = ids.next().context("empty line from git rev-list")??;
+            Ok((commit, ids.collect::<Result<Vec<_>>>()?))
+        })
+        .collect()
+}
+
+/// How many commits are reachable from any of `tips`.
+pub(crate) fn count_reachable(git_dir: &Path, tips: &[Oid]) -> Result<usize> {
+    if tips.is_empty() {
+        return Ok(0);
+    }
+    let out = Command::new("git")
+        .env("GIT_DIR", git_dir)
+        .args(["rev-list", "--count", "--end-of-options"])
+        .args(tips.iter().map(to_hex))
+        .output()
+        .context("couldn't run git rev-list")?;
+    if !out.status.success() {
+        bail!("git rev-list failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .context("git rev-list --count printed something else")
 }

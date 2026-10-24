@@ -19,28 +19,45 @@ use std::collections::{HashMap, HashSet};
 pub enum IdentRole {
     Author,
     Committer,
+    /// The tagger of an annotated tag.
+    Tagger,
 }
 
 /// A private commit that appears on the public side.
 #[derive(Debug)]
 pub(crate) struct PublishedCommit {
     pub private: Oid,
+    pub public: Oid,
     pub tree: Oid,
-    pub message: Vec<u8>,
+    /// The public commit object, exactly as hashed into [`Self::public`].
+    pub body: Vec<u8>,
+    message_at: usize,
     /// Emails the identity map didn't cover, passed through as they were.
     pub unmapped: Vec<(IdentRole, String)>,
+}
+
+impl PublishedCommit {
+    pub(crate) fn message(&self) -> &[u8] {
+        &self.body[self.message_at..]
+    }
 }
 
 /// One history rewrite under one filter. Memoized per private commit and per
 /// (path, private tree): the cache can't be keyed by tree id alone, as the
 /// concept document sketches, because an anchored pattern (`/deploy/**`)
 /// excludes a subtree at one path and not at another.
-pub(crate) struct Rewriter<'f> {
-    filter: &'f Filter,
-    identities: &'f [IdentityMapping],
+///
+/// Owns its filter so that a history run can carry it across the awaits
+/// between its blocking steps.
+pub(crate) struct Rewriter {
+    filter: Filter,
+    identities: Vec<IdentityMapping>,
     tree_cache: HashMap<(String, Oid, bool), Option<Oid>>,
     mapping: HashMap<Oid, Option<Oid>>,
     commit_trees: HashMap<Oid, Oid>,
+    /// Private commits rewritten here, as opposed to [`Self::seed`]ed from
+    /// an earlier run, in the order they were rewritten.
+    pub fresh: Vec<Oid>,
     /// Every public tree produced, by public id, with its entries.
     pub public_trees: HashMap<Oid, Vec<TreeEntry>>,
     /// Blobs met at an excluded path, with the first such path.
@@ -61,14 +78,15 @@ pub(crate) const EMPTY_TREE: Oid = [
     0x04,
 ];
 
-impl<'f> Rewriter<'f> {
-    pub(crate) fn new(filter: &'f Filter, identities: &'f [IdentityMapping]) -> Self {
+impl Rewriter {
+    pub(crate) fn new(filter: Filter, identities: Vec<IdentityMapping>) -> Self {
         Self {
             filter,
             identities,
             tree_cache: HashMap::new(),
             mapping: HashMap::new(),
             commit_trees: HashMap::new(),
+            fresh: Vec::new(),
             public_trees: HashMap::new(),
             excluded_blobs: HashMap::new(),
             excluded_trees_seen: HashSet::new(),
@@ -94,6 +112,36 @@ impl<'f> Rewriter<'f> {
 
     pub(crate) fn public_tree_of(&self, public_commit: &Oid) -> Option<Oid> {
         self.commit_trees.get(public_commit).copied()
+    }
+
+    pub(crate) fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    /// Records what an earlier run of the same epoch rewrote `private` to:
+    /// the public commit and its tree, or `None` when it and its ancestors
+    /// collapsed away. A seeded commit is never rewritten again, which is
+    /// what makes a run after a push rewrite only the new commits.
+    pub(crate) fn seed(&mut self, private: Oid, public: Option<(Oid, Oid)>) {
+        self.mapping.insert(private, public.map(|(commit, _)| commit));
+        if let Some((commit, tree)) = public {
+            self.commit_trees.insert(commit, tree);
+        }
+    }
+
+    /// `private`'s public commit and that commit's tree, once rewritten or
+    /// seeded: `Some(None)` when it collapsed away entirely.
+    pub(crate) fn public_of(&self, private: &Oid) -> Option<Option<(Oid, Oid)>> {
+        match *self.mapping.get(private)? {
+            None => Some(None),
+            Some(public) => self.commit_trees.get(&public).map(|tree| Some((public, *tree))),
+        }
+    }
+
+    /// The public tree of the private root tree `private`, computed (or
+    /// taken from the cache) so that [`Self::public_trees`] holds all of it.
+    pub(crate) fn rewrite_root(&mut self, reader: &mut ObjectReader, private: Oid) -> Result<Option<Oid>> {
+        self.rewrite_tree(reader, String::new(), private, false)
     }
 
     /// Rewrites `private`. Its parents must have been rewritten first, which
@@ -134,6 +182,7 @@ impl<'f> Rewriter<'f> {
             };
             if collapses {
                 self.mapping.insert(private, parents.first().copied());
+                self.fresh.push(private);
                 self.collapsed += 1;
                 return Ok(());
             }
@@ -153,13 +202,17 @@ impl<'f> Rewriter<'f> {
             other_headers: commit.other_headers,
             message: commit.message,
         };
-        let public = hash_object(ObjectKind::Commit, &encode_commit(&rewritten));
+        let body = encode_commit(&rewritten);
+        let public = hash_object(ObjectKind::Commit, &body);
         self.mapping.insert(private, Some(public));
+        self.fresh.push(private);
         self.commit_trees.insert(public, tree);
         self.published.push(PublishedCommit {
             private,
+            public,
             tree,
-            message: rewritten.message,
+            message_at: body.len() - rewritten.message.len(),
+            body,
             unmapped,
         });
         Ok(())
@@ -167,7 +220,7 @@ impl<'f> Rewriter<'f> {
 
     /// Author and committer dates pass through verbatim: they are part of
     /// what makes the rewrite deterministic.
-    fn map_ident(&self, value: &[u8], role: IdentRole, unmapped: &mut Vec<(IdentRole, String)>) -> Vec<u8> {
+    pub(crate) fn map_ident(&self, value: &[u8], role: IdentRole, unmapped: &mut Vec<(IdentRole, String)>) -> Vec<u8> {
         let Some(ident) = split_ident(value) else {
             unmapped.push((role, String::from_utf8_lossy(value).into_owned()));
             return value.to_vec();

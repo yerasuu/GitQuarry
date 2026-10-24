@@ -436,7 +436,11 @@ fn finding_text(finding: &Finding, locale: Locale) -> String {
             sha,
             published_path,
             excluded_path,
-        } => t::finding_blob_also_excluded(locale, sha, published_path, excluded_path),
+        } => match (published_path.is_empty(), excluded_path.is_empty()) {
+            (true, _) => t::finding_blob_already_public(locale, sha, excluded_path),
+            (false, true) => t::finding_blob_excluded_earlier(locale, sha, published_path),
+            (false, false) => t::finding_blob_also_excluded(locale, sha, published_path, excluded_path),
+        },
         Finding::LicenseMissing => t::finding_license_missing(locale),
         Finding::SpdxNotDeclared { expected } => t::finding_spdx_not_declared(locale, expected),
         Finding::SpdxMismatch { expected, found } => t::finding_spdx_mismatch(locale, expected, found),
@@ -457,6 +461,12 @@ fn finding_text(finding: &Finding, locale: Locale) -> String {
             commits,
             example_commit,
         } => t::finding_unmapped_committer(locale, email, *commits, example_commit),
+        Finding::UnmappedIdentity {
+            email,
+            role: IdentRole::Tagger,
+            commits,
+            example_commit,
+        } => t::finding_unmapped_tagger(locale, email, *commits, example_commit),
         Finding::HostNotAllowed { error } => t::finding_host_not_allowed(locale, error),
         Finding::PublisherMissing => t::finding_publisher_missing(locale),
     }

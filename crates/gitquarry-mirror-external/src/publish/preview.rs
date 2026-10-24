@@ -8,7 +8,7 @@ use super::audit::{self, GateReport};
 use super::filter::{Decision, ExcludedBy, Filter, REPO_FILTER_PATH, RepoFilterFile};
 use super::log::{self, PublishLog};
 use super::objects::{
-    Commit, ObjectKind, ObjectReader, Oid, list_branches_and_tags, parse_tree, to_hex, topo_order_newest,
+    Commit, LocalRef, ObjectKind, ObjectReader, Oid, list_branches_and_tags, parse_tree, to_hex, topo_order_newest,
 };
 use super::rewrite::{EMPTY_TREE, Rewriter, entry_kind, join};
 use super::snapshot::{Snapshot, plan_snapshot};
@@ -34,6 +34,14 @@ pub const MAX_PREVIEW_PATHS: usize = 2_000;
 pub struct Preview {
     pub host: GateReport,
     pub refs: Vec<RefPreview>,
+    /// The mirror's epoch, which a publish would run under.
+    pub epoch: u32,
+    /// History mode: a publish would replace public refs this mirror
+    /// published under an earlier epoch, with a force push.
+    pub force_push: bool,
+    /// History mode: the filter changed since this epoch was published, so
+    /// a publish would refuse until an epoch bump is confirmed.
+    pub epoch_bump_needed: bool,
 }
 
 impl Preview {
@@ -41,6 +49,7 @@ impl Preview {
     /// every ref clean, and at least one ref to publish.
     pub fn passed(&self) -> bool {
         self.host.passed()
+            && !self.epoch_bump_needed
             && !self.refs.is_empty()
             && self
                 .refs
@@ -77,6 +86,10 @@ pub struct RefPreview {
     pub published_commits: usize,
     /// Commits that only touched excluded paths and so never appear.
     pub collapsed_commits: usize,
+    /// History mode: commits a publish would rewrite now, and commits an
+    /// earlier publish of this epoch already rewrote.
+    pub commits_to_rewrite: usize,
+    pub commits_reused: usize,
     pub gates: Vec<GateReport>,
     /// Why this ref couldn't be previewed at all.
     pub error: Option<String>,
@@ -90,10 +103,6 @@ pub struct RefPreview {
 /// ref is reported on that ref's [`RefPreview::error`] instead.
 pub async fn preview(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &PublishMirror) -> Result<Preview> {
     let host = audit::host_gate(&mirror.remote_url, &super::allowed_hosts(ctx).await?);
-    let local = ctx.open_mirror_read(resolved).await?;
-    let mirror = mirror.clone();
-    // Thousands of synchronous pipe round trips, so off the async workers;
-    // `local` moves in with it so the repo lock is held until it's done.
     // A mirror that was never saved has no id to key a log by, and nothing
     // published either.
     let log = if mirror.id.is_empty() {
@@ -101,34 +110,64 @@ pub async fn preview(ctx: &AppContext, resolved: &ResolvedRepo, mirror: &Publish
     } else {
         log::get(ctx, &resolved.uid, &mirror.id).await?
     };
+    if mirror.mode == PublishMode::History {
+        let history = super::history::preview::preview(ctx, resolved, mirror, &log).await?;
+        return Ok(Preview {
+            host,
+            refs: history.refs,
+            epoch: mirror.filter_epoch,
+            force_push: history.force_push,
+            epoch_bump_needed: history.epoch_bump_needed,
+        });
+    }
+    let local = ctx.open_mirror_read(resolved).await?;
+    let epoch = mirror.filter_epoch;
+    let mirror = mirror.clone();
+    // Thousands of synchronous pipe round trips, so off the async workers;
+    // `local` moves in with it so the repo lock is held until it's done.
     let refs = tokio::task::spawn_blocking(move || preview_refs(&local.path, &mirror, &log))
         .await
         .context("the preview task panicked")??;
-    Ok(Preview { host, refs })
+    Ok(Preview {
+        host,
+        refs,
+        epoch,
+        force_push: false,
+        epoch_bump_needed: false,
+    })
 }
 
 /// The refs a mirror publishes: branches and tags matching its declared
 /// patterns, nothing else.
-pub(super) fn selected_refs(git_dir: &Path, mirror: &PublishMirror) -> Result<Vec<(String, Option<Oid>)>> {
-    let refs = list_branches_and_tags(git_dir)?;
-    Ok(refs
+pub(super) fn selected_refs(git_dir: &Path, mirror: &PublishMirror) -> Result<Vec<LocalRef>> {
+    Ok(list_branches_and_tags(git_dir)?
         .into_iter()
-        .filter(|(name, _)| !NEVER_PUBLISHED_REF_PREFIXES.iter().any(|p| name.starts_with(p)))
-        .filter(|(name, _)| {
-            let (short, patterns) = match (name.strip_prefix("refs/heads/"), name.strip_prefix("refs/tags/")) {
-                (Some(branch), _) => (branch, &mirror.publish_branches),
-                (None, Some(tag)) => (tag, &mirror.publish_tags),
-                (None, None) => return false,
-            };
-            patterns.iter().any(|p| segments_match(p, short))
-        })
+        .filter(|r| is_published_ref(mirror, &r.name))
         .collect())
 }
 
-fn preview_refs(git_dir: &Path, mirror: &PublishMirror, log: &PublishLog) -> Result<Vec<RefPreview>> {
+/// Whether `name` (a full ref name) is one `mirror` publishes.
+pub(super) fn is_published_ref(mirror: &PublishMirror, name: &str) -> bool {
+    if NEVER_PUBLISHED_REF_PREFIXES.iter().any(|p| name.starts_with(p)) {
+        return false;
+    }
+    let (short, patterns) = match (name.strip_prefix("refs/heads/"), name.strip_prefix("refs/tags/")) {
+        (Some(branch), _) => (branch, &mirror.publish_branches),
+        (None, Some(tag)) => (tag, &mirror.publish_tags),
+        (None, None) => return false,
+    };
+    patterns.iter().any(|p| segments_match(p, short))
+}
+
+pub(super) fn preview_refs(git_dir: &Path, mirror: &PublishMirror, log: &PublishLog) -> Result<Vec<RefPreview>> {
     let mut reader = ObjectReader::open(git_dir)?;
     let mut previews = Vec::new();
-    for (ref_name, head) in selected_refs(git_dir, mirror)? {
+    for LocalRef {
+        name: ref_name,
+        commit: head,
+        ..
+    } in selected_refs(git_dir, mirror)?
+    {
         let preview = match head {
             Some(head) => {
                 preview_ref(&mut reader, git_dir, mirror, log, &ref_name, head).unwrap_or_else(|e| RefPreview {
@@ -161,7 +200,7 @@ fn preview_ref(
     let (repo_file, repo_file_error) = load_repo_filter(reader, head_commit.tree)?;
     let filter = Filter::new(&mirror.filter, repo_file.as_ref());
     let (commits, history_truncated) = topo_order_newest(git_dir, &head, MAX_PREVIEW_COMMITS)?;
-    let mut rewriter = Rewriter::new(&filter, &mirror.identities);
+    let mut rewriter = Rewriter::new(filter.clone(), mirror.identities.clone());
     if history_truncated {
         rewriter = rewriter.windowed();
     }
@@ -172,6 +211,9 @@ fn preview_ref(
     let head_tree = full_head.and_then(|c| rewriter.public_tree_of(&c));
     let (public_head, unchanged) = match mirror.mode {
         PublishMode::Snapshot => snapshot_head(mirror, log, ref_name, &head_commit, head_tree)?,
+        // Only reached for a history too long to preview whole, where the
+        // window's ids are not the real public ones.
+        PublishMode::History => (None, false),
     };
 
     let set = audit::published_set(&rewriter, &filter);
@@ -182,7 +224,7 @@ fn preview_ref(
         audit::secret_gate(
             reader,
             &set,
-            rewriter.published.iter().map(|c| (c.private, c.message.as_slice())),
+            rewriter.published.iter().map(|c| (c.private, c.message())),
             &mirror.secret_allowlist,
         )?,
         audit::identity_gate(&rewriter, mirror.unmapped),
@@ -205,6 +247,7 @@ fn preview_ref(
         collapsed_commits: rewriter.collapsed,
         gates,
         error: None,
+        ..Default::default()
     })
 }
 
@@ -294,7 +337,7 @@ pub(super) fn count_exclusions(
     Ok(())
 }
 
-pub(super) fn published_paths(rewriter: &Rewriter<'_>, root: Oid) -> Vec<String> {
+pub(super) fn published_paths(rewriter: &Rewriter, root: Oid) -> Vec<String> {
     let mut paths = Vec::new();
     let mut stack = vec![(String::new(), root)];
     while let Some((dir, tree)) = stack.pop() {
