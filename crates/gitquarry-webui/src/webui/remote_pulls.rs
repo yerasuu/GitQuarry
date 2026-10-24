@@ -187,6 +187,15 @@ pub(super) async fn render_remote_pull_detail(
             div class="commit-meta" {
                 p class="muted" {
                     strong { (review.author) } " " (verdict_label(review.verdict, locale)) " — " (review.created_at)
+                    // A peer that predates `MrDetail::head_sha` sends none;
+                    // marking every review outdated then would only say the
+                    // peer is old.
+                    @if head_sha.is_some() && !gitquarry_core::domain::merge_request::review_is_current(review, head_sha.as_deref()) {
+                        " — " em { (pulls_t::outdated_review_marker(locale)) }
+                        @if let Some(sha) = &review.head_sha {
+                            " " code { (gitquarry_core::validate::short_sha(sha)) }
+                        }
+                    }
                 }
                 @if !review.body.is_empty() {
                     p { (review.body) }

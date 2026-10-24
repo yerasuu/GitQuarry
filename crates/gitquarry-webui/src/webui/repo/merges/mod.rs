@@ -265,6 +265,15 @@ fn render_reviews(
             div class="commit-meta" {
                 p class="muted" {
                     strong { (review.author) } " " (verdict_label(review.verdict, locale)) " — " (review.created_at)
+                    // With no head to compare against (the branch is gone)
+                    // every review would read as outdated, which says
+                    // nothing; the marker is for a branch that moved on.
+                    @if head_sha.is_some() && !domain::merge_request::review_is_current(review, head_sha) {
+                        " — " em { (t::outdated_review_marker(locale)) }
+                        @if let Some(sha) = &review.head_sha {
+                            " " code { (gitquarry_core::validate::short_sha(sha)) }
+                        }
+                    }
                 }
                 @if !review.body.is_empty() {
                     div class="readme plain" { (PreEscaped(&bodies[i])) }

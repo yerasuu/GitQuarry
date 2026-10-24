@@ -90,6 +90,10 @@ msg!(changes_requested_by_prefix() {
     Locale::Es => "cambios pedidos por: ",
     Locale::En => "changes requested by: ",
 });
+msg!(outdated_review_marker() {
+    Locale::Es => "desactualizada: sobre un commit anterior de la rama",
+    Locale::En => "outdated: on an earlier commit of the branch",
+});
 msg!(review_verdict_label() { Locale::Es => "veredicto", Locale::En => "verdict" });
 msg!(submit_review_button() { Locale::Es => "enviar revision", Locale::En => "submit review" });
 msg!(own_merge_request_review_hint() {

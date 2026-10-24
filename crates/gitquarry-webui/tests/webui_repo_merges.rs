@@ -272,6 +272,33 @@ async fn the_review_form_carries_the_head_it_showed_and_a_stale_one_is_refused()
     assert!(detail(&f, None).await.contains("no reviews yet"));
 }
 
+/// An approval of a head the branch has since moved on from stays in the
+/// thread as history, marked outdated, and drops out of "approved by".
+#[tokio::test]
+async fn an_approval_of_an_earlier_head_is_shown_as_outdated() {
+    let f = fixture().await;
+    open_mr(&f).await;
+    let head = feature_head(&f).await;
+    let new = NewReview {
+        author: "bob",
+        verdict: ReviewVerdict::Approved,
+        body: "lgtm",
+        seen_head: Some(&head),
+    };
+    merge_request::add_review(&f.ctx, &f.repo, 1, new, Locale::En)
+        .await
+        .unwrap();
+    assert!(!detail(&f, None).await.contains("outdated"));
+
+    f.work.commit(&[("f.txt", "hello\nmoved\n")], "move on").await;
+    f.work.push(&f.repo, "refs/heads/main").await;
+    let html = detail(&f, None).await;
+    assert!(!html.contains("approved by: bob"), "{html}");
+    assert!(html.contains("<strong>bob</strong> approved"), "{html}");
+    assert!(html.contains("outdated: on an earlier commit of the branch"), "{html}");
+    assert!(html.contains(&head[..12]), "{html}");
+}
+
 /// A hand-rolled POST can put anything in `verdict`; the worst it may get
 /// is a review that says less than intended, never an approval.
 #[tokio::test]
