@@ -14,7 +14,11 @@ s3db = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
+# The secret scan's detectors. Already in the lock through the AWS SDK.
+regex-lite = "0.1.9"
 serde = { workspace = true }
+# Publish-mirror object ids are computed in memory, never written.
+sha1 = { workspace = true }
 # `.gitquarry/publish.toml`.
 toml = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }

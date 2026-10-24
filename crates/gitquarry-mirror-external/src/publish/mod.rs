@@ -8,7 +8,12 @@
 //! reason as [`crate::access`]: the collection lives under the repo's own
 //! `Uid`, known only at runtime.
 
+pub mod audit;
 pub mod filter;
+mod objects;
+pub mod preview;
+pub mod rewrite;
+mod secrets;
 
 use crate::validate::{
     validate_identity_email, validate_identity_name, validate_mirror_label, validate_mirror_url,
@@ -23,6 +28,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub use filter::{FilterConfig, FilterMode};
+
+/// Ref namespaces that are never published, whatever a mirror declares.
+/// [`PublishMirror::publish_branches`]/[`PublishMirror::publish_tags`] only
+/// ever match under `refs/heads/` and `refs/tags/`, so none of these is
+/// reachable through them; the list is checked again on every selected ref
+/// so that a future change to that matching can't open one by accident.
+pub const NEVER_PUBLISHED_REF_PREFIXES: [&str; 3] = ["refs/merge-requests/", "refs/notes/", "refs/gitquarry/"];
 
 /// What an author or committer whose email isn't in the identity map gets.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
