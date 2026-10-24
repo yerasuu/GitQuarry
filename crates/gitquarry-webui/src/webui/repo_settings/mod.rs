@@ -43,6 +43,7 @@ mod move_repo;
 mod permissions;
 mod protected_branches;
 mod protected_tags;
+mod publish_mirrors;
 mod require_signed_commits;
 mod required_reviewers;
 mod topics;
@@ -88,6 +89,10 @@ fn needs_owner_tier(form: &RepoConfForm) -> bool {
         // too: it's the one action that reaches the external side
         // immediately, without waiting for a sweep.
         "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => true,
+        // Same decision one step further: what of this repo becomes public.
+        // The preview is included because it renders the repo's whole file
+        // list and its secret-scan findings.
+        "add_publish_mirror" | "edit_publish_mirror" | "delete_publish_mirror" | "preview_publish_mirror" => true,
         "set_perm" => matches!(form.perm.as_str(), "maintainer" | "owner"),
         _ => false,
     }
@@ -194,6 +199,7 @@ pub(crate) async fn handler_repo_conf_post(
         .map(|u| u.username)
         .unwrap_or_default();
 
+    let mut shown_preview = None;
     let (outcome, pending_mirror_token) = match form.action.as_str() {
         "delete_repo" if form.confirm_name.trim() != name => (
             FlashOutcome::Invalid(gitquarry_i18n::shared::repo::type_name_to_confirm_deletion(
@@ -294,6 +300,12 @@ pub(crate) async fn handler_repo_conf_post(
         "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => {
             mirrors::save_mirror(&ctx, &resolved, &name, &form, &actor, locale).await?
         }
+        "add_publish_mirror" | "edit_publish_mirror" | "delete_publish_mirror" | "preview_publish_mirror" => {
+            let (outcome, preview) =
+                publish_mirrors::save_publish_mirror(&ctx, &resolved, &name, &form, &actor, locale).await?;
+            shown_preview = preview;
+            (outcome, None)
+        }
         _ => (general::save_conf(&ctx, &resolved, &name, &form, &actor).await?, None),
     };
     let is_async = headers.contains_key(super::ASYNC_HEADER);
@@ -338,6 +350,7 @@ pub(crate) async fn handler_repo_conf_post(
     let granted = access::list_repo_permissions(&ctx.backend(), &ctx.cipher, &resolved.uid).await?;
     let mirrors_list = gitquarry_mirror_external::domain::list_with_etags(&ctx, &resolved.uid).await?;
     let mr_links_by_mirror = mirrors::fetch_mr_links_by_mirror(&ctx, &resolved.uid, &mirrors_list).await?;
+    let publish_mirrors_list = gitquarry_mirror_external::publish::list_with_etags(&ctx, &resolved.uid).await?;
     // Async (`data-async-target="#mirrors-section"`, see `super::ASYNC_HEADER`'s
     // own doc comment): `sync_mirror_now`/`delete_mirror` only ever change
     // this one section, and everything `render_mirrors_section` needs is
@@ -390,11 +403,13 @@ pub(crate) async fn handler_repo_conf_post(
                     granted: &granted,
                     mirrors: &mirrors_list,
                     mr_links: &mr_links_by_mirror,
+                    publish_mirrors: &publish_mirrors_list,
                 },
                 PageChrome {
                     csrf: &csrf_field(&headers),
                     message: Some(flash),
                     pending_mirror_token: pending_mirror_token.as_ref(),
+                    publish_preview: shown_preview.as_ref(),
                     retry: retry_form,
                     locale,
                 },
@@ -435,11 +450,13 @@ pub(crate) async fn handler_repo_conf_post(
             granted: &granted,
             mirrors: &mirrors_list,
             mr_links: &mr_links_by_mirror,
+            publish_mirrors: &publish_mirrors_list,
         },
         PageChrome {
             csrf: &csrf_field(&headers),
             message: Some(flash),
             pending_mirror_token: pending_mirror_token.as_ref(),
+            publish_preview: shown_preview.as_ref(),
             retry: retry_form,
             locale,
         },
@@ -568,6 +585,44 @@ pub(crate) struct RepoConfForm {
     /// `ExternalMirror::branch_patterns`.
     #[serde(default)]
     branch_patterns: String,
+    /// Only read by `edit_publish_mirror`/`delete_publish_mirror`/
+    /// `preview_publish_mirror`.
+    #[serde(default)]
+    publish_mirror_id: String,
+    /// Only read by `edit_publish_mirror` — its CAS guard.
+    #[serde(default)]
+    publish_mirror_etag: String,
+    /// The fields below are only read by `add_publish_mirror`/
+    /// `edit_publish_mirror` (`label`/`remote_url` above are shared with the
+    /// external-mirror form). Multi-line ones take one entry per line.
+    #[serde(default)]
+    publish_mode: String,
+    #[serde(default)]
+    publish_include: String,
+    #[serde(default)]
+    publish_exclude: String,
+    /// Checkbox, present ("1") only if checked.
+    #[serde(default)]
+    publish_exclude_submodules: String,
+    /// Checkbox, present ("1") only if checked.
+    #[serde(default)]
+    publish_strip_empty_dirs: String,
+    /// Comma-separated.
+    #[serde(default)]
+    publish_branches: String,
+    /// Comma-separated.
+    #[serde(default)]
+    publish_tags: String,
+    /// `private public [name]` per line.
+    #[serde(default)]
+    publish_identities: String,
+    #[serde(default)]
+    publish_unmapped: String,
+    #[serde(default)]
+    publish_spdx: String,
+    /// `sha [path]` per line.
+    #[serde(default)]
+    publish_secret_allowlist: String,
 }
 
 /// `users`/`group_names` always travel together on this page — every
@@ -600,6 +655,8 @@ pub(crate) struct RepoState<'a> {
     /// Track B: every mirror's linked MRs, keyed by mirror id — see
     /// `mirrors::fetch_mr_links_by_mirror`.
     pub mr_links: &'a std::collections::HashMap<String, Vec<gitquarry_mirror_external::access::ExternalPrLink>>,
+    /// Each publish mirror with its etag, the edit form's CAS guard.
+    pub publish_mirrors: &'a [(gitquarry_mirror_external::publish::PublishMirror, String)],
 }
 
 /// `csrf`/`message`/`locale` bundled so [`render_settings_section`] doesn't
@@ -615,6 +672,9 @@ pub(crate) struct PageChrome<'a> {
     /// of storage just to redisplay it) — same "shown once" discipline
     /// `auth::web::security`'s `pending_totp_secret` already established.
     pub pending_mirror_token: Option<&'a (String, String)>,
+    /// The preview a `preview_publish_mirror` click just computed, shown in
+    /// that one response only: it is never stored.
+    pub(crate) publish_preview: Option<&'a publish_mirrors::ShownPreview>,
     /// `Some(&form)` only when the just-submitted action was rejected or
     /// hit a CAS conflict — lets whichever single sub-form actually failed
     /// re-render the user's own typed values instead of the stale stored
@@ -643,6 +703,9 @@ fn section_for_action(action: &str) -> &'static str {
         "set_lfs_max_blob_size" => "settings_lfs",
         "set_perm" => "settings_permissions",
         "add_mirror" | "edit_mirror" | "delete_mirror" | "sync_mirror_now" => "settings_mirrors",
+        "add_publish_mirror" | "edit_publish_mirror" | "delete_publish_mirror" | "preview_publish_mirror" => {
+            "settings_publish"
+        }
         "move_repo" => "settings_move",
         "delete_repo" | "purge_repo" => "settings_danger_zone",
         _ => "settings",
@@ -655,13 +718,13 @@ fn section_for_action(action: &str) -> &'static str {
 /// `.settings-layout` too — same CSS, a second instance). Used to render as
 /// `project_subnav`'s horizontal tab row instead, which read fine for
 /// account settings' 6 entries but wrapped badly (or forced `table.tabs`'s
-/// own horizontal scroll) at this page's 13.
+/// own horizontal scroll) at this page's 14.
 /// `"settings"`, not `"settings_general"`: it's also `header_bar`'s
 /// top-level "Settings" tab target, so a bare `?view=settings` link (the
 /// tab itself, [`handler_repo_conf_post`]'s `restore_repo` redirect) lands
 /// on a real section instead of a dead end that'd need its own
 /// default-redirect.
-fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'static str, String, String); 13] {
+fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'static str, String, String); 14] {
     use gitquarry_i18n::web::repo_settings as t;
     let link = |view: &str| repo_link(repo_name, view, "").to_string();
     [
@@ -700,6 +763,11 @@ fn settings_sections(repo_name: &str, locale: gitquarry_i18n::Locale) -> [(&'sta
             t::permissions_heading(locale),
         ),
         ("settings_mirrors", link("settings_mirrors"), t::mirrors_heading(locale)),
+        (
+            "settings_publish",
+            link("settings_publish"),
+            gitquarry_i18n::web::publish_mirrors::heading(locale),
+        ),
         ("settings_move", link("settings_move"), t::move_repo_heading(locale)),
         (
             "settings_danger_zone",
@@ -741,11 +809,13 @@ pub(crate) fn render_settings_section(
         granted,
         mirrors,
         mr_links,
+        publish_mirrors,
     } = state;
     let PageChrome {
         csrf,
         message,
         pending_mirror_token,
+        publish_preview,
         retry,
         locale,
     } = chrome;
@@ -822,6 +892,9 @@ pub(crate) fn render_settings_section(
         "settings_mirrors" => {
             mirrors::render_mirrors_section(repo_name, mirrors, mr_links, csrf, pending_mirror_token, locale)
         }
+        "settings_publish" => {
+            publish_mirrors::render_publish_mirrors_section(repo_name, publish_mirrors, publish_preview, csrf, locale)
+        }
         "settings_move" => {
             move_repo::render_move_repo_form(repo_name, users, group_names, csrf, retry_for("move_repo"), locale)
         }
@@ -844,7 +917,7 @@ pub(crate) fn render_settings_section(
         // Vertical sidebar instead of `project_subnav`'s horizontal tab
         // row — same `.settings-layout`/`.settings-sidebar`/
         // `.settings-content` `account_settings_page` already uses for its
-        // own 6-section nav, reused as-is rather than a new look: 13
+        // own 6-section nav, reused as-is rather than a new look: 14
         // sections is too many for one horizontal row on anything but a
         // wide viewport without either wrapping badly or forcing
         // `table.tabs`'s own horizontal scroll just to reach "delete repo".

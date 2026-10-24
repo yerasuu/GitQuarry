@@ -46,6 +46,7 @@ async fn sub_nav_lists_every_section_with_its_own_label() {
         "size limit (LFS)",
         "per-user permissions",
         "external mirrors",
+        "publish mirrors",
         "move repo",
         "delete repo",
     ] {

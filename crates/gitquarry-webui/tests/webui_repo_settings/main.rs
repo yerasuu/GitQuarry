@@ -10,6 +10,7 @@ mod mirrors;
 mod move_repo;
 mod permissions;
 mod protected_branches;
+mod publish_mirrors;
 mod required_reviewers;
 mod sections;
 mod support;
