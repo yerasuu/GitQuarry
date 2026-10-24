@@ -13,6 +13,7 @@ pub mod domain;
 pub mod engine;
 pub mod git_remote;
 mod mr_sync;
+pub mod publish;
 // Lives in the forge clients, whose `since` cutoff needs the same
 // comparison and can't depend on this crate without a cycle.
 pub use gitquarry_forge_clients::stamp;

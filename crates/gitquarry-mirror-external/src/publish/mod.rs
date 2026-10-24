@@ -1,0 +1,203 @@
+//! Publish mirrors: a private repo published, filtered, to a public remote —
+//! `docs/publish-mirror-concept.md`. Phase 0 of that document only: the
+//! entity, the filter, the gates and a dry-run preview. Nothing in this
+//! module can push, write a ref or write an object anywhere; the rewrite
+//! computes object ids in memory (see [`rewrite`]).
+//!
+//! Hand-built collection rather than `#[derive(Entity)]`, for the same
+//! reason as [`crate::access`]: the collection lives under the repo's own
+//! `Uid`, known only at runtime.
+
+pub mod filter;
+
+use crate::validate::{
+    validate_identity_email, validate_identity_name, validate_mirror_label, validate_mirror_url,
+    validate_publish_patterns, validate_publish_ref_pattern, validate_sha, validate_spdx_id, validate_tree_path,
+};
+use anyhow::{Result, bail};
+use gitquarry_core::app::AppContext;
+use gitquarry_core::storage::uid::Uid;
+use gitquarry_core::storage::{Cas, REPOS_PREFIX};
+use s3db::Collection;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+pub use filter::{FilterConfig, FilterMode};
+
+/// What an author or committer whose email isn't in the identity map gets.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnmappedPolicy {
+    Passthrough,
+    /// The default: the module exists for "public licence, private company",
+    /// where an internal address on a public commit is itself a leak.
+    #[default]
+    Block,
+}
+
+/// One private identity and what it becomes on the public side. Matched on
+/// `private`, case-insensitively; `name`, when set, replaces the name too.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityMapping {
+    pub private: String,
+    pub public: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// A secret-scan finding dismissed once as a false positive, keyed by the
+/// exact content it was raised on: a later change to the same path is a new
+/// blob and is scanned again. `path` is empty for a commit message, whose
+/// `sha` is then the private commit's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SecretAllow {
+    pub path: String,
+    pub sha: String,
+}
+
+/// One publish mirror of a repo. There is deliberately no token and no
+/// `enabled` flag yet: phase 0 can't push, so storing a credential for a
+/// push that can't happen would only be a secret at rest for nothing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PublishMirror {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    /// The public remote, checked against the instance's host allowlist at
+    /// save time and again at every preview (and, later, every publish).
+    #[serde(default)]
+    pub remote_url: String,
+    /// The authoritative half of the filter; `.gitquarry/publish.toml` in the
+    /// source ref can only add to it (see [`filter::RepoFilterFile`]).
+    #[serde(default)]
+    pub filter: FilterConfig,
+    /// Short branch names or `*`/`**` globs, matched under `refs/heads/`.
+    #[serde(default)]
+    pub publish_branches: BTreeSet<String>,
+    /// Short tag names or globs, matched under `refs/tags/`.
+    #[serde(default)]
+    pub publish_tags: BTreeSet<String>,
+    #[serde(default)]
+    pub identities: Vec<IdentityMapping>,
+    #[serde(default)]
+    pub unmapped: UnmappedPolicy,
+    /// The SPDX expression the published tree must declare, if any.
+    #[serde(default)]
+    pub spdx: Option<String>,
+    #[serde(default)]
+    pub secret_allowlist: Vec<SecretAllow>,
+}
+
+/// Every field of `mirror` that came from a form, checked before it is stored.
+pub fn validate_publish_mirror(mirror: &PublishMirror) -> Result<()> {
+    validate_mirror_url(&mirror.remote_url)?;
+    validate_mirror_label(&mirror.label)?;
+    validate_publish_patterns(&mirror.filter.include)?;
+    validate_publish_patterns(&mirror.filter.exclude)?;
+    for pattern in mirror.publish_branches.iter().chain(&mirror.publish_tags) {
+        validate_publish_ref_pattern(pattern)?;
+    }
+    let mut seen = BTreeSet::new();
+    for identity in &mirror.identities {
+        validate_identity_email(&identity.private)?;
+        validate_identity_email(&identity.public)?;
+        if let Some(name) = &identity.name {
+            validate_identity_name(name)?;
+        }
+        if !seen.insert(identity.private.to_ascii_lowercase()) {
+            bail!("identity {} is mapped twice", identity.private);
+        }
+    }
+    if let Some(spdx) = &mirror.spdx {
+        validate_spdx_id(spdx)?;
+    }
+    for allow in &mirror.secret_allowlist {
+        validate_tree_path(&allow.path)?;
+        validate_sha(&allow.sha)?;
+    }
+    Ok(())
+}
+
+fn publish_mirrors_collection(uid: &Uid) -> Collection {
+    Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/publish-mirrors"))
+}
+
+/// Creates a new publish mirror, minting its id: whatever `mirror.id` held
+/// is overwritten, so this can never overwrite an existing one.
+pub async fn create(ctx: &AppContext, uid: &Uid, mut mirror: PublishMirror) -> Result<PublishMirror> {
+    validate_publish_mirror(&mirror)?;
+    check_host_allowed(ctx, &mirror.remote_url).await?;
+    mirror.id = crate::access::generate_mirror_id();
+    match publish_mirrors_collection(uid)
+        .put(ctx.backend().as_ref(), &ctx.cipher, &mirror.id, &mirror, None)
+        .await?
+    {
+        Cas::Ok => Ok(mirror),
+        Cas::Conflict => bail!("publish mirror id collision, try again"),
+    }
+}
+
+/// `Ok(Cas::Conflict)` on a lost CAS race, like every other settings-tab
+/// save, so the web layer can show its "edited concurrently" flash.
+pub async fn update(ctx: &AppContext, uid: &Uid, mirror: &PublishMirror, expected_etag: &str) -> Result<Cas> {
+    validate_publish_mirror(mirror)?;
+    check_host_allowed(ctx, &mirror.remote_url).await?;
+    publish_mirrors_collection(uid)
+        .put(
+            ctx.backend().as_ref(),
+            &ctx.cipher,
+            &mirror.id,
+            mirror,
+            Some(expected_etag),
+        )
+        .await
+}
+
+pub async fn get(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<Option<(PublishMirror, String)>> {
+    let (mirror, etag) = publish_mirrors_collection(uid)
+        .get(ctx.backend().as_ref(), &ctx.cipher, mirror_id)
+        .await?;
+    Ok(mirror.zip(etag))
+}
+
+/// Every publish mirror of the repo with its etag, sorted by label. A repo
+/// has a handful at most, so this is one small GET per mirror.
+pub async fn list_with_etags(ctx: &AppContext, uid: &Uid) -> Result<Vec<(PublishMirror, String)>> {
+    let collection = publish_mirrors_collection(uid);
+    let backend = ctx.backend();
+    let ids = collection.list_names(backend.as_ref()).await?;
+    let mut mirrors = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let (Some(mirror), Some(etag)) = collection
+            .get::<PublishMirror>(backend.as_ref(), &ctx.cipher, &id)
+            .await?
+        {
+            mirrors.push((mirror, etag));
+        }
+    }
+    mirrors.sort_by(|(a, _), (b, _)| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
+    Ok(mirrors)
+}
+
+/// # Errors
+///
+/// Fails if the bucket refuses the delete; a mirror that is already gone is
+/// not an error.
+pub async fn delete(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<()> {
+    publish_mirrors_collection(uid)
+        .delete(ctx.backend().as_ref(), &ctx.cipher, mirror_id)
+        .await
+}
+
+/// The host gate (`docs/publish-mirror-concept.md` §5): the same instance
+/// allowlist and the same rule as an external mirror.
+async fn check_host_allowed(ctx: &AppContext, remote_url: &str) -> Result<()> {
+    crate::validate::check_host_allowed(remote_url, &allowed_hosts(ctx).await?)
+}
+
+async fn allowed_hosts(ctx: &AppContext) -> Result<Vec<String>> {
+    let (settings, _etag) =
+        gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher).await?;
+    Ok(crate::validate::effective_allowed_hosts(&settings))
+}

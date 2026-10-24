@@ -156,6 +156,7 @@ fn classify_repo(rest: &str) -> Class {
         || tail.starts_with("lfs-lock-paths/")
         || tail.starts_with("merges/")
         || tail.starts_with("mirrors/")
+        || tail.starts_with("publish-mirrors/")
     {
         return Class::Entities;
     }
