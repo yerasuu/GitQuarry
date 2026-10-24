@@ -299,6 +299,16 @@ pub fn validate_spdx_id(spdx: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validates a mirror id as [`crate::access::generate_mirror_id`] mints
+/// it: 16 lowercase hex digits. A publish mirror's id ends up in its bucket
+/// keys (`repos/<uid>/publish/<id>/…`), so nothing else may pass for one.
+pub fn validate_mirror_id(id: &str) -> Result<()> {
+    if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        bail!("invalid mirror id (16 lowercase hex characters): {id:?}");
+    }
+    Ok(())
+}
+
 /// Validates a full 40-hex SHA-1 object id.
 pub fn validate_sha(sha: &str) -> Result<()> {
     if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {

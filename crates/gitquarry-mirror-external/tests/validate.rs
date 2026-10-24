@@ -136,3 +136,18 @@ fn a_plain_local_path_isnt_subject_to_the_allowlist() {
     // one, and it names a path rather than any egress.
     assert!(check_host_allowed("/srv/git/repo.git", &[]).is_ok());
 }
+
+#[test]
+fn a_mirror_id_is_exactly_what_generate_mirror_id_mints() {
+    assert!(validate_mirror_id(&gitquarry_mirror_external::access::generate_mirror_id()).is_ok());
+    for bad in [
+        "",
+        "0123456789abcde",
+        "0123456789ABCDEF",
+        "0123456789abcdef0",
+        "../../0123456789",
+        "0123456789abcde/",
+    ] {
+        assert!(validate_mirror_id(bad).is_err(), "{bad:?}");
+    }
+}

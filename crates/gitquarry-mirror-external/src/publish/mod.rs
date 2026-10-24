@@ -13,6 +13,7 @@
 pub mod audit;
 pub mod epoch;
 pub mod filter;
+pub mod gc;
 mod history;
 pub mod inverse;
 pub mod log;
