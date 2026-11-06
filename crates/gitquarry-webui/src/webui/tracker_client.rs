@@ -77,6 +77,8 @@ async fn error_body(resp: reqwest::Response) -> String {
     let status = resp.status();
     match resp.json::<ErrorBody>().await {
         Ok(body) => body.error,
+        // A body that isn't tracker's JSON error shape (a proxy's page, a
+        // dropped connection) still has a status worth reporting.
         Err(_) => format!("gitquarry-tracker returned {status}"),
     }
 }

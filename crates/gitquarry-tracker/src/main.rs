@@ -10,11 +10,18 @@ use gitquarry_tracker::core_client::CoreClient;
 use gitquarry_tracker::state::TrackerState;
 use gitquarry_tracker::web;
 use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    // `RUST_LOG` overrides; otherwise `info`, the same default `gitquarry`
+    // and `gitquarry-federation` use, so every process logs alike.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
     if let Err(e) = run().await {
-        eprintln!("gitquarry-tracker: fatal: {e:#}");
+        tracing::error!(target: "gitquarry_tracker", error = %format!("{e:#}"), "fatal");
         std::process::exit(1);
     }
 }

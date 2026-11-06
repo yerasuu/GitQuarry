@@ -496,7 +496,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             if let Err(e) =
                 gitquarry_core::tracker_api::run_server(&internal_bind, internal_ctx, tracker.internal_token).await
             {
-                eprintln!("gitquarry: fatal: internal API server (tracker) failed: {e:#}");
+                tracing::error!(error = %format!("{e:#}"), "fatal: internal API server (tracker) failed");
                 std::process::exit(1);
             }
         });

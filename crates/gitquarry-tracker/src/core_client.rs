@@ -117,7 +117,7 @@ impl CoreClient {
     pub async fn push_event(&self, event: &gitquarry_wire::tracker::TrackerEvent) {
         let url = self.url("/tracker/event");
         if let Err(e) = self.post_request(&url).json(event).send().await {
-            eprintln!("gitquarry-tracker: warning: couldn't push event to core at {url}: {e:#}");
+            tracing::warn!(target: "gitquarry_tracker::core_client", %url, error = %format!("{e:#}"), "couldn't push event to core");
         }
     }
 }

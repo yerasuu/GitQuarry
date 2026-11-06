@@ -867,6 +867,8 @@ pub(crate) async fn handler_edit_metadata_post(
             }
             Some(n)
         }
+        // Not a number at all (blank included) means "no milestone"; only a
+        // number naming no milestone is the caller's mistake.
         Err(_) => None,
     };
     #[cfg(not(feature = "tracker"))]
