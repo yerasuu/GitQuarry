@@ -21,11 +21,37 @@ use tokio::process::Command;
 /// every clone/push of the repo — for as long as the process lives.
 const GIT_OP_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// The only variables of this process's environment [`isolate`] lets through
+/// besides `PATH`.
+const PASSTHROUGH_ENV: [&str; 8] = [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+];
+
 /// Strips `cmd` to what a git touching untrusted objects may see (§4): none
-/// of this process's environment but `PATH` (its other credentials, a `GIT_*`
-/// variable, proxy or askpass settings), and no user or system git config, so
-/// only the flags and `GIT_DIR` the caller sets next configure it. Call it
-/// before setting anything else on `cmd`, since it clears the environment.
+/// of this process's environment but `PATH` and [`PASSTHROUGH_ENV`] (its
+/// other credentials, a `GIT_*` variable, askpass settings), and no user or
+/// system git config, so only the flags and `GIT_DIR` the caller sets next
+/// configure it. Call it before setting anything else on `cmd`, since it
+/// clears the environment.
+///
+/// [`PASSTHROUGH_ENV`] holds the proxy and TLS-trust settings that libcurl,
+/// which git's HTTP transport uses, reads from the environment: without them an
+/// instance behind a proxy or with a private CA can't fetch at all. The
+/// lowercase proxy forms are listed because curl takes them over the
+/// uppercase ones, and `http_proxy` exists only in lowercase
+/// ([curl: environment](https://curl.se/docs/manpage.html), proxy section);
+/// `SSL_CERT_FILE`/`SSL_CERT_DIR` are the CA bundle locations curl accepts
+/// ([curl: CA certificates](https://curl.se/docs/sslcerts.html)).
+/// A proxy URL can carry credentials: they are the operator's own
+/// configuration and go to git only, so nothing here or in the callers logs
+/// an environment value.
 ///
 /// `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL`:
 /// [git-config](https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGNOSYSTEM).
@@ -50,6 +76,11 @@ pub(crate) fn isolate(cmd: &mut std::process::Command) -> Result<()> {
         .env("GIT_TERMINAL_PROMPT", "0");
     if let Some(path) = std::env::var_os("PATH") {
         cmd.env("PATH", path);
+    }
+    for name in PASSTHROUGH_ENV {
+        if let Some(value) = std::env::var_os(name) {
+            cmd.env(name, value);
+        }
     }
     Ok(())
 }
@@ -321,8 +352,8 @@ pub enum Fetched {
 /// so a remote could otherwise fill the disk for as long as the timeout
 /// lets it.
 ///
-/// git runs with none of this process's environment but `PATH`, and with no
-/// user or system config: only the flags set here configure it.
+/// git runs with none of this process's environment but `PATH` and the proxy
+/// and TLS settings [`isolate`] passes, and with no user or system config: only the flags set here configure it.
 ///
 /// Same out-of-band credential as [`fetch_ref_from_remote_url`].
 pub async fn fetch_untrusted(

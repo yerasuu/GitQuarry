@@ -737,6 +737,103 @@ async fn dry_run_in_a_poisoned_environment() {
     assert_eq!(translated(&out).private_base, start);
 }
 
+const PROXY_QUARANTINE: &str = "GITQUARRY_TEST_PROXY_QUARANTINE";
+
+/// A stand-in proxy: answers the first request with a 502 so the fetch that
+/// went through it ends, and yields that request's head.
+fn fake_proxy() -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+    let seen = tokio::spawn(async move {
+        let (mut conn, _) = listener.accept().await.unwrap();
+        let mut head = vec![0u8; 1024];
+        let n = conn.read(&mut head).await.unwrap();
+        conn.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&head[..n]).into_owned()
+    });
+    (addr, seen)
+}
+
+/// Runs the HTTP fetch of `proxied_fetch_in_a_child` with `var` set to a
+/// stand-in proxy, and yields what that proxy was asked, if anything.
+async fn request_seen_by_proxy(var: &str) -> Option<String> {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "--quiet", "--bare"]).await;
+    let (addr, seen) = fake_proxy();
+    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args(["--exact", "--ignored", "--nocapture", "proxied_fetch_in_a_child"])
+        .env(PROXY_QUARANTINE, dir.path());
+    for ambient in [
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ] {
+        child.env_remove(ambient);
+    }
+    let out = child
+        .env(var, format!("http://{addr}"))
+        .env("AWS_SECRET_ACCESS_KEY", "do-not-leak")
+        .output()
+        .await
+        .unwrap();
+    let report = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{report}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(report.contains("1 passed"), "the child test didn't run: {report}");
+    if seen.is_finished() {
+        return Some(seen.await.unwrap());
+    }
+    seen.abort();
+    None
+}
+
+/// The proxy settings of the server's environment reach the git that fetches
+/// a pull request, and nothing else of it does: the test binary is run again
+/// to fetch over plain HTTP from a host that doesn't resolve, so the only way
+/// the request gets anywhere is through a proxy it was told about. `http_proxy`
+/// is on the allowlist, `ALL_PROXY` (which curl also honours) is not.
+#[tokio::test]
+async fn the_untrusted_fetch_gets_the_proxy_settings_and_nothing_else_of_the_environment() {
+    let through = request_seen_by_proxy("http_proxy").await;
+    let head = through.expect("the allowlisted proxy variable didn't reach git");
+    assert!(
+        head.starts_with("GET http://gitquarry-proxy-test.invalid/"),
+        "git asked the proxy for something else: {head}"
+    );
+
+    let through = request_seen_by_proxy("ALL_PROXY").await;
+    assert!(
+        through.is_none(),
+        "a variable off the allowlist reached git: {through:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "run by the_untrusted_fetch_gets_the_proxy_settings_and_nothing_else_of_the_environment, in the environment it sets"]
+async fn proxied_fetch_in_a_child() {
+    let Some(quarantine) = std::env::var_os(PROXY_QUARANTINE) else {
+        return;
+    };
+    let refspecs = ["+refs/heads/main:refs/inbound/head".to_string()];
+    let fetched = fetch_untrusted(
+        Path::new(&quarantine),
+        "http://gitquarry-proxy-test.invalid/r.git",
+        "t",
+        &refspecs,
+        1 << 30,
+    )
+    .await;
+    assert!(fetched.is_err(), "nothing serves that host");
+}
+
 #[test]
 fn the_dry_run_command_takes_validated_arguments_only() {
     let args = |list: &[&str]| parse_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
