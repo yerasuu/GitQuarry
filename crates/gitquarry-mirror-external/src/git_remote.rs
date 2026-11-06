@@ -253,15 +253,110 @@ pub async fn fetch_ref_from_remote_url(bare_repo: &Path, url: &str, token: &str,
     Ok(())
 }
 
+/// How often [`fetch_untrusted`] measures the quarantine while git writes
+/// into it: what git can write between two looks is all it can overshoot by.
+const QUARANTINE_POLL: Duration = Duration::from_millis(50);
+
+/// What [`fetch_untrusted`] did with the size budget it was given.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+pub enum Fetched {
+    Done,
+    /// The quarantine went over the budget, during the fetch or by the end
+    /// of it. git was killed, and the refs the refspecs name may be missing
+    /// or point at objects that never arrived: the quarantine is only fit
+    /// to be thrown away.
+    OverBudget,
+}
+
 /// Fetches `refspecs` from `url` into `quarantine`, a bare repo of its own,
 /// for content nobody has vetted yet (a public pull request,
 /// `docs/publish-mirror-inbound-concept.md` §3.1 and §3.12): every object is
 /// fsck'd as it arrives, no hook can run, and neither tags nor submodules
-/// come along. Bounded only by [`GIT_OP_TIMEOUT`]; a caller with a tighter
-/// budget wraps the future in its own timeout, and dropping it kills git.
+/// come along. Bounded in time only by [`GIT_OP_TIMEOUT`]; a caller with a
+/// tighter budget wraps the future in its own timeout, and dropping it kills
+/// git.
+///
+/// Bounded in disk by `max_bytes`, everything under `quarantine` counted,
+/// watched while git runs: git has no client-side cap on what a fetch takes
+/// in (`receive.maxInputSize` binds only the receiving end of a push,
+/// [git-config](https://git-scm.com/docs/git-config#Documentation/git-config.txt-receivemaxInputSize)),
+/// so a remote could otherwise fill the disk for as long as the timeout
+/// lets it.
 ///
 /// Same out-of-band credential as [`fetch_ref_from_remote_url`].
-pub async fn fetch_untrusted(quarantine: &Path, url: &str, token: &str, refspecs: &[String]) -> Result<()> {
+pub async fn fetch_untrusted(
+    quarantine: &Path,
+    url: &str,
+    token: &str,
+    refspecs: &[String],
+    max_bytes: u64,
+) -> Result<Fetched> {
+    let fetch = fetch_untrusted_unbounded(quarantine, url, token, refspecs);
+    let watch = async {
+        let mut tick = tokio::time::interval(QUARANTINE_POLL);
+        loop {
+            tick.tick().await;
+            if quarantine_bytes(quarantine).await? > max_bytes {
+                return anyhow::Ok(());
+            }
+        }
+    };
+    // Losing the race drops the fetch future, and with it the child: kill_on_drop
+    // kills `git fetch`, and the `index-pack` it feeds dies on the early EOF.
+    tokio::select! {
+        fetched = fetch => fetched?,
+        over = watch => {
+            over?;
+            return Ok(Fetched::OverBudget);
+        }
+    }
+    if quarantine_bytes(quarantine).await? > max_bytes {
+        return Ok(Fetched::OverBudget);
+    }
+    Ok(Fetched::Done)
+}
+
+async fn quarantine_bytes(quarantine: &Path) -> Result<u64> {
+    let dir = quarantine.to_path_buf();
+    tokio::task::spawn_blocking(move || bytes_on_disk(&dir))
+        .await
+        .context("the quarantine size walk panicked")?
+}
+
+/// Bytes under `dir`, every file counted by its own size. Symlinks are
+/// counted as links and never followed: git writes none in a bare repo,
+/// and one would otherwise let the count wander outside it. An entry that
+/// vanishes mid-walk is git renaming or dropping a temporary file, not an
+/// error.
+fn bytes_on_disk(dir: &Path) -> Result<u64> {
+    let gone = |error: &std::io::Error| error.kind() == std::io::ErrorKind::NotFound;
+    let mut total = 0u64;
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if gone(&error) => continue,
+            Err(error) => return Err(error).with_context(|| format!("listing {}", dir.display())),
+        };
+        for entry in entries {
+            let entry = entry.with_context(|| format!("listing {}", dir.display()))?;
+            let meta = match std::fs::symlink_metadata(entry.path()) {
+                Ok(meta) => meta,
+                Err(error) if gone(&error) => continue,
+                Err(error) => return Err(error).with_context(|| format!("reading {}", entry.path().display())),
+            };
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
+async fn fetch_untrusted_unbounded(quarantine: &Path, url: &str, token: &str, refspecs: &[String]) -> Result<()> {
     let mut args: Vec<&OsStr> = [
         "-c",
         "core.hooksPath=/dev/null",

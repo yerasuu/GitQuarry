@@ -15,27 +15,6 @@ use std::process::{Command, Stdio};
 pub(super) const HEAD_REF: &str = "refs/inbound/head";
 pub(super) const BASE_REF: &str = "refs/inbound/base";
 
-/// Bytes under `dir`, every file counted by its own size. Symlinks are
-/// counted as links and never followed: git writes none in a bare repo,
-/// and one would otherwise let the count wander outside it.
-pub(super) fn bytes_on_disk(dir: &Path) -> Result<u64> {
-    let mut total = 0u64;
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        for entry in std::fs::read_dir(&dir).with_context(|| format!("listing {}", dir.display()))? {
-            let entry = entry.with_context(|| format!("listing {}", dir.display()))?;
-            let meta = std::fs::symlink_metadata(entry.path())
-                .with_context(|| format!("reading {}", entry.path().display()))?;
-            if meta.is_dir() {
-                pending.push(entry.path());
-            } else {
-                total = total.saturating_add(meta.len());
-            }
-        }
-    }
-    Ok(total)
-}
-
 /// The pull request as the quarantine repo has it.
 pub(super) struct PublicRange {
     pub head: Oid,

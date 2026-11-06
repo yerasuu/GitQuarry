@@ -57,8 +57,9 @@ pub const MAX_CHANGED_FILES: usize = 3_000;
 pub const MAX_BLOB_BYTES: u64 = 16 * 1024 * 1024;
 /// Every blob the pull request adds, together.
 pub const MAX_PR_BYTES: u64 = 64 * 1024 * 1024;
-/// The quarantine repo after the fetch: the public history the pull request
-/// sits on comes along with it, so this bounds that too.
+/// The quarantine repo, watched while the fetch writes into it: the public
+/// history the pull request sits on comes along with it, so this bounds that
+/// too.
 pub const MAX_QUARANTINE_BYTES: u64 = 1024 * 1024 * 1024;
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -251,13 +252,19 @@ impl Job<'_> {
             format!("+{pull_ref}:{}", quarantine::HEAD_REF),
             format!("+{base_ref}:{}", quarantine::BASE_REF),
         ];
-        let fetch = git_remote::fetch_untrusted(&self.quarantine, &self.mirror.remote_url, token.expose(), &refspecs);
+        let fetch = git_remote::fetch_untrusted(
+            &self.quarantine,
+            &self.mirror.remote_url,
+            token.expose(),
+            &refspecs,
+            MAX_QUARANTINE_BYTES,
+        );
         match tokio::time::timeout(FETCH_TIMEOUT, fetch).await {
             Err(_elapsed) => return Err(refuse(Reason::TooLarge(Cap::FetchTime), None, None)),
-            Ok(fetched) => fetched.context("fetching the pull request")?,
-        }
-        if quarantine::bytes_on_disk(&self.quarantine)? > MAX_QUARANTINE_BYTES {
-            return Err(refuse(Reason::TooLarge(Cap::FetchBytes), None, None));
+            Ok(fetched) => match fetched.context("fetching the pull request")? {
+                git_remote::Fetched::Done => {}
+                git_remote::Fetched::OverBudget => return Err(refuse(Reason::TooLarge(Cap::FetchBytes), None, None)),
+            },
         }
 
         let range = {

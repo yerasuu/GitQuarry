@@ -8,6 +8,7 @@
 use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::storage::list_all_keys;
 use gitquarry_mirror_external::access::ExternalMirrorProvider;
+use gitquarry_mirror_external::git_remote::{Fetched, fetch_untrusted};
 use gitquarry_mirror_external::publish::filter::{FilterConfig, FilterMode};
 use gitquarry_mirror_external::publish::inbound::command::{parse_args, provider_for, render};
 use gitquarry_mirror_external::publish::inbound::{
@@ -494,6 +495,56 @@ async fn a_translation_that_publishes_differently_fails_the_round_trip() {
     let refusal = refused(&out);
     assert_eq!(refusal.reason, Reason::RoundTripMismatch);
     assert_eq!(refusal.public_commit.as_deref(), Some(commit.as_str()));
+}
+
+/// A repo whose `main` holds `size` bytes git can't compress, and an empty
+/// bare quarantine to fetch it into.
+async fn incompressible_remote(size: usize) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let quarantine = dir.path().join("quarantine.git");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&quarantine).unwrap();
+    git(&source, &["init", "--quiet", "-b", "main"]).await;
+    git(&quarantine, &["init", "--quiet", "--bare"]).await;
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut noise = Vec::with_capacity(size + 8);
+    while noise.len() < size {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        noise.extend_from_slice(&state.to_le_bytes());
+    }
+    std::fs::write(source.join("noise.bin"), &noise).unwrap();
+    git(&source, &["add", "noise.bin"]).await;
+    git(&source, &["commit", "--quiet", "-m", "noise"]).await;
+    (dir, source, quarantine)
+}
+
+#[tokio::test]
+async fn a_fetch_over_its_disk_budget_is_stopped_before_it_lands() {
+    let (_dir, source, quarantine) = incompressible_remote(32 * 1024 * 1024).await;
+    let refspecs = ["+refs/heads/main:refs/inbound/head".to_string()];
+
+    let fetched = fetch_untrusted(&quarantine, &source.to_string_lossy(), "t", &refspecs, 1024 * 1024)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched, Fetched::OverBudget);
+    // git was killed mid-transfer, so it never got as far as writing the ref.
+    let head = tokio::process::Command::new("git")
+        .env("GIT_DIR", &quarantine)
+        .args(["rev-parse", "--verify", "--quiet", "refs/inbound/head"])
+        .output()
+        .await
+        .unwrap();
+    assert!(!head.status.success(), "the fetch ran to the end");
+
+    let fetched = fetch_untrusted(&quarantine, &source.to_string_lossy(), "t", &refspecs, 1 << 30)
+        .await
+        .unwrap();
+    assert_eq!(fetched, Fetched::Done);
+    git(&quarantine, &["rev-parse", "--verify", "refs/inbound/head"]).await;
 }
 
 #[test]
