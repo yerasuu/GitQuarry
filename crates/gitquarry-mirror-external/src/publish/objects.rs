@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result, bail};
 use sha1::{Digest, Sha1};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -32,6 +33,10 @@ pub(crate) struct ObjectReader {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    /// Objects computed here and never written, answered before the
+    /// repository is asked: what lets the rewrite read back an inbound
+    /// translation that exists nowhere (`super::inbound`).
+    overlay: HashMap<Oid, (ObjectKind, Vec<u8>)>,
 }
 
 impl ObjectReader {
@@ -52,10 +57,22 @@ impl ObjectReader {
             child,
             stdin,
             stdout: BufReader::new(stdout),
+            overlay: HashMap::new(),
         })
     }
 
+    /// Makes `body` readable as an object of `kind` without writing it
+    /// anywhere, and returns the id git would give it.
+    pub(crate) fn insert(&mut self, kind: ObjectKind, body: Vec<u8>) -> Oid {
+        let oid = hash_object(kind, &body);
+        self.overlay.entry(oid).or_insert((kind, body));
+        oid
+    }
+
     pub(crate) fn read(&mut self, oid: &Oid) -> Result<(ObjectKind, Vec<u8>)> {
+        if let Some((kind, body)) = self.overlay.get(oid) {
+            return Ok((*kind, body.clone()));
+        }
         let hex = to_hex(oid);
         writeln!(self.stdin, "{hex}").context("writing to git cat-file")?;
         self.stdin.flush().context("writing to git cat-file")?;

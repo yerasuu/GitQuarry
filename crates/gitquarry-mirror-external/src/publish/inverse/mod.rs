@@ -34,7 +34,8 @@ use gitquarry_core::app::AppContext;
 use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_core::storage::{Backend, Cas};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Distinct from the forward map's tag, so a shard of one is never decoded
 /// as the other.
@@ -138,6 +139,39 @@ pub async fn private_commits(
         .get(&oid)
         .map(|privates| privates.iter().map(to_hex).collect())
         .unwrap_or_default())
+}
+
+/// Lookups in one epoch's inverse, each shard read from the bucket at most
+/// once. Same reading rules as [`private_commits`]: one epoch only, nothing
+/// rebuilt, a corrupt shard refused whole.
+pub(crate) struct Lookup {
+    prefix: String,
+    shards: HashMap<u8, Shard>,
+}
+
+impl Lookup {
+    pub(crate) fn new(epoch_prefix: &str) -> Self {
+        Self {
+            prefix: prefix(epoch_prefix),
+            shards: HashMap::new(),
+        }
+    }
+
+    /// The private commits listed under `public`; empty when none are.
+    ///
+    /// # Errors
+    ///
+    /// Fails on a bucket error or a shard that doesn't open or decode.
+    pub(crate) async fn get(&mut self, backend: &dyn Backend, cipher: &Cipher, public: &Oid) -> Result<BTreeSet<Oid>> {
+        let shard = match self.shards.entry(public[0]) {
+            Entry::Occupied(loaded) => loaded.into_mut(),
+            Entry::Vacant(slot) => {
+                let key = shard_key(&self.prefix, public[0]);
+                slot.insert(read_shard(backend, cipher, &key).await?.0)
+            }
+        };
+        Ok(shard.get(public).cloned().unwrap_or_default())
+    }
 }
 
 async fn read_shard(backend: &dyn Backend, cipher: &Cipher, key: &str) -> Result<(Shard, Option<String>)> {

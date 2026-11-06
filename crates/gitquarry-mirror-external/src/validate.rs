@@ -328,3 +328,82 @@ pub fn validate_tree_path(path: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Largest pull request number accepted: every forge numbers them from 1,
+/// and the number ends up in a ref name the public remote is asked for.
+const MAX_PR_NUMBER: u64 = u32::MAX as u64;
+const MAX_BRANCH_NAME_LEN: usize = 200;
+/// Deeper than any real tree, shallow enough that walking it never recurses
+/// far on hostile input.
+pub const MAX_INBOUND_PATH_DEPTH: usize = 64;
+
+/// Validates a public pull request number as typed by an operator: decimal
+/// digits only, no sign, no leading zero.
+pub fn validate_pr_number(raw: &str) -> Result<u64> {
+    let valid = !raw.is_empty() && raw.len() <= 10 && raw.bytes().all(|b| b.is_ascii_digit()) && !raw.starts_with('0');
+    match raw.parse::<u64>() {
+        Ok(n) if valid && n <= MAX_PR_NUMBER => Ok(n),
+        _ => bail!("invalid pull request number: {raw:?}"),
+    }
+}
+
+/// Validates a short branch name that becomes part of a refspec sent to the
+/// public remote (`refs/heads/<name>`): a conservative subset of what
+/// [git-check-ref-format](https://git-scm.com/docs/git-check-ref-format)
+/// allows, so no refspec syntax (`:`, `+`, `*`, `^`, `~`) and no option can
+/// be smuggled in.
+pub fn validate_branch_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > MAX_BRANCH_NAME_LEN {
+        bail!("empty or too-long branch name (max {MAX_BRANCH_NAME_LEN})");
+    }
+    let charset = name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/'));
+    let segments_ok = name
+        .split('/')
+        .all(|seg| !seg.is_empty() && !seg.starts_with('.') && !seg.ends_with(".lock") && !seg.ends_with('.'));
+    if !charset || !segments_ok || name.starts_with('-') || name.contains("..") {
+        bail!("invalid branch name: {name:?}");
+    }
+    Ok(())
+}
+
+/// Validates a path a public pull request changes, before it is looked at
+/// any further (`docs/publish-mirror-inbound-concept.md` §3.12, "Path
+/// traversal and `.git` tricks"). Stricter than [`validate_tree_path`] and
+/// than git's own fsck, because the path is about to sit in a private tree
+/// that maintainers check out on any filesystem: no segment that is `.git`
+/// once case-folded and stripped of the code points HFS+ ignores, no 8.3
+/// alias `git~1`, no `\`, no `:` (NTFS streams, drive letters), no segment
+/// ending in `.` or a space (Windows drops them), no control character.
+pub fn validate_inbound_path(path: &str) -> Result<()> {
+    validate_tree_path(path)?;
+    let segments: Vec<&str> = path.split('/').collect();
+    if path.is_empty() || segments.len() > MAX_INBOUND_PATH_DEPTH {
+        bail!("invalid path: {path:?}");
+    }
+    for seg in segments {
+        let folded: String = seg
+            .chars()
+            .filter(|c| !is_hfs_ignorable(*c))
+            .collect::<String>()
+            .to_lowercase();
+        let unsafe_segment = seg.is_empty()
+            || seg == "."
+            || seg.ends_with(['.', ' '])
+            || seg.contains(['\\', ':'])
+            || folded == ".git"
+            || folded == "git~1";
+        if unsafe_segment {
+            bail!("invalid path: {path:?}");
+        }
+    }
+    Ok(())
+}
+
+/// The code points HFS+ drops when it compares names, so that `.g\u{200c}it`
+/// opens `.git` on a Mac (git's own list, `is_hfs_dot_generic` in
+/// `utf8.c`).
+fn is_hfs_ignorable(c: char) -> bool {
+    matches!(c, '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}')
+}

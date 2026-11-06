@@ -15,8 +15,9 @@ use crate::access::{RefSyncStatus, cap_error};
 use crate::git_remote::redact_url;
 use anyhow::Result;
 use gitquarry_core::app::AppContext;
-use gitquarry_core::storage::REPOS_PREFIX;
+use gitquarry_core::crypto::Cipher;
 use gitquarry_core::storage::uid::Uid;
+use gitquarry_core::storage::{Backend, REPOS_PREFIX};
 use s3db::{Collection, Update};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -194,8 +195,14 @@ pub(super) fn log_collection(uid: &Uid) -> Collection {
 
 /// The mirror's log, empty for one that has never run.
 pub async fn get(ctx: &AppContext, uid: &Uid, mirror_id: &str) -> Result<PublishLog> {
+    read(ctx.backend().as_ref(), &ctx.cipher, uid, mirror_id).await
+}
+
+/// [`get`] for a caller with a bucket and no [`AppContext`], such as an
+/// operator command.
+pub(crate) async fn read(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, mirror_id: &str) -> Result<PublishLog> {
     let (log, _etag) = log_collection(uid)
-        .get::<PublishLog>(ctx.backend().as_ref(), &ctx.cipher, mirror_id)
+        .get::<PublishLog>(backend, cipher, mirror_id)
         .await?;
     Ok(log.unwrap_or_default())
 }

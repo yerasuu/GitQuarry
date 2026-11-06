@@ -253,6 +253,40 @@ pub async fn fetch_ref_from_remote_url(bare_repo: &Path, url: &str, token: &str,
     Ok(())
 }
 
+/// Fetches `refspecs` from `url` into `quarantine`, a bare repo of its own,
+/// for content nobody has vetted yet (a public pull request,
+/// `docs/publish-mirror-inbound-concept.md` §3.1 and §3.12): every object is
+/// fsck'd as it arrives, no hook can run, and neither tags nor submodules
+/// come along. Bounded only by [`GIT_OP_TIMEOUT`]; a caller with a tighter
+/// budget wraps the future in its own timeout, and dropping it kills git.
+///
+/// Same out-of-band credential as [`fetch_ref_from_remote_url`].
+pub async fn fetch_untrusted(quarantine: &Path, url: &str, token: &str, refspecs: &[String]) -> Result<()> {
+    let mut args: Vec<&OsStr> = [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "fetch.fsckObjects=true",
+        "-c",
+        "transfer.fsckObjects=true",
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--no-write-fetch-head",
+        "--end-of-options",
+    ]
+    .into_iter()
+    .map(OsStr::new)
+    .collect();
+    args.push(OsStr::new(url));
+    args.extend(refspecs.iter().map(OsStr::new));
+    run_authed(Some(quarantine), token, &args)
+        .await
+        .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;
+    Ok(())
+}
+
 /// [`fetch_ref_from_remote_url`] at depth 1: only the tip commit and its
 /// tree, enough for a local commit built on top of it to be pushed as a
 /// fast-forward without the remote's whole history.

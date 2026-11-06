@@ -15,6 +15,7 @@ pub mod epoch;
 pub mod filter;
 pub mod gc;
 mod history;
+pub mod inbound;
 pub mod inverse;
 pub mod log;
 mod mapping;

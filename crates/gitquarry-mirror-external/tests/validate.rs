@@ -151,3 +151,45 @@ fn a_mirror_id_is_exactly_what_generate_mirror_id_mints() {
         assert!(validate_mirror_id(bad).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn an_inbound_path_is_refused_when_some_filesystem_would_misread_it() {
+    for ok in ["src/main.rs", "docs/a b.md", ".github-like/x", "a/.gitkeep"] {
+        assert!(validate_inbound_path(ok).is_ok(), "{ok} refused");
+    }
+    for bad in [
+        "",
+        ".git/config",
+        "src/.GIT/hooks/x",
+        "a/.g\u{200c}it/config",
+        "GIT~1/config",
+        "a\\b",
+        "c:/x",
+        "file.txt:stream",
+        "trailing.",
+        "trailing ",
+        "a/../b",
+        "a//b",
+        "/abs",
+        "bell\u{7}",
+    ] {
+        assert!(validate_inbound_path(bad).is_err(), "{bad:?} accepted");
+    }
+    assert!(validate_inbound_path(&vec!["d"; MAX_INBOUND_PATH_DEPTH + 1].join("/")).is_err());
+}
+
+#[test]
+fn a_pr_number_and_a_branch_name_carry_no_refspec_or_option_syntax() {
+    assert_eq!(validate_pr_number("42").unwrap(), 42);
+    for bad in ["", "0", "042", "-1", "+1", "1e3", "99999999999", "4294967296"] {
+        assert!(validate_pr_number(bad).is_err(), "{bad:?} accepted");
+    }
+    for ok in ["main", "release/1.2", "feature_x-y"] {
+        assert!(validate_branch_name(ok).is_ok(), "{ok} refused");
+    }
+    for bad in [
+        "", "-main", "a..b", "a:b", "+main", "a*", "a^", "x.lock", ".hidden", "a/", "a//b", "a b",
+    ] {
+        assert!(validate_branch_name(bad).is_err(), "{bad:?} accepted");
+    }
+}

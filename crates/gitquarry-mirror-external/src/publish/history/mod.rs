@@ -24,7 +24,7 @@ mod tags;
 use super::epoch::{Fingerprint, config_fingerprint, repo_files_fingerprint};
 use super::filter::{Filter, RepoFilterFile};
 use super::mapping::{MapValue, Table, from_map_value};
-use super::objects::{ObjectKind, ObjectReader, Oid, commits_since, parse_commit, to_hex};
+use super::objects::{LocalRef, ObjectKind, ObjectReader, Oid, commits_since, parse_commit, to_hex};
 use super::preview::{count_exclusions, load_repo_filter, published_paths, selected_refs};
 use super::rewrite::{EMPTY_TREE, Rewriter};
 use super::{IdentityMapping, PublishMirror};
@@ -102,30 +102,7 @@ impl Plan {
 pub(super) fn plan(git_dir: &Path, mirror: &PublishMirror, known: &[Oid]) -> Result<Plan> {
     let mut reader = ObjectReader::open(git_dir)?;
     let selected = selected_refs(git_dir, mirror)?;
-    let mut excludes = BTreeSet::new();
-    let mut found_file = false;
-    let mut exclude_submodules = false;
-    let mut strip_empty_dirs = false;
-    let mut errors = Vec::new();
-    for r in &selected {
-        let Some(commit) = r.commit else { continue };
-        let head = parse_commit(&reader.read_kind(&commit, ObjectKind::Commit)?)?;
-        let (file, error) = load_repo_filter(&mut reader, head.tree)?;
-        if let Some(error) = error {
-            errors.push(format!("{}: {error}", r.name));
-        }
-        if let Some(file) = file {
-            found_file = true;
-            excludes.extend(file.exclude);
-            exclude_submodules |= file.exclude_submodules;
-            strip_empty_dirs |= file.strip_empty_dirs;
-        }
-    }
-    let joined = found_file.then(|| RepoFilterFile {
-        exclude: excludes.into_iter().collect(),
-        exclude_submodules,
-        strip_empty_dirs,
-    });
+    let effective = effective_filter(&mut reader, &selected, mirror)?;
     let mut seen = HashSet::new();
     let mut refs = Vec::with_capacity(selected.len());
     for r in selected {
@@ -145,6 +122,59 @@ pub(super) fn plan(git_dir: &Path, mirror: &PublishMirror, known: &[Oid]) -> Res
     }
     Ok(Plan {
         refs,
+        filter: effective.filter,
+        repo_file_error: effective.repo_file_error,
+        fingerprint: effective.fingerprint,
+    })
+}
+
+/// The filter a history run of `mirror` would use over the private repo at
+/// `git_dir` right now, and its fingerprint, without planning any commit.
+///
+/// # Errors
+///
+/// Fails when the private repo can't be read.
+pub(in crate::publish) fn current_filter(git_dir: &Path, mirror: &PublishMirror) -> Result<EffectiveFilter> {
+    let mut reader = ObjectReader::open(git_dir)?;
+    effective_filter(&mut reader, &selected_refs(git_dir, mirror)?, mirror)
+}
+
+pub(in crate::publish) struct EffectiveFilter {
+    pub filter: Filter,
+    pub repo_file_error: Option<String>,
+    pub fingerprint: Fingerprint,
+}
+
+fn effective_filter(
+    reader: &mut ObjectReader,
+    selected: &[LocalRef],
+    mirror: &PublishMirror,
+) -> Result<EffectiveFilter> {
+    let mut excludes = BTreeSet::new();
+    let mut found_file = false;
+    let mut exclude_submodules = false;
+    let mut strip_empty_dirs = false;
+    let mut errors = Vec::new();
+    for r in selected {
+        let Some(commit) = r.commit else { continue };
+        let head = parse_commit(&reader.read_kind(&commit, ObjectKind::Commit)?)?;
+        let (file, error) = load_repo_filter(reader, head.tree)?;
+        if let Some(error) = error {
+            errors.push(format!("{}: {error}", r.name));
+        }
+        if let Some(file) = file {
+            found_file = true;
+            excludes.extend(file.exclude);
+            exclude_submodules |= file.exclude_submodules;
+            strip_empty_dirs |= file.strip_empty_dirs;
+        }
+    }
+    let joined = found_file.then(|| RepoFilterFile {
+        exclude: excludes.into_iter().collect(),
+        exclude_submodules,
+        strip_empty_dirs,
+    });
+    Ok(EffectiveFilter {
         filter: Filter::new(&mirror.filter, joined.as_ref()),
         repo_file_error: (!errors.is_empty()).then(|| errors.join("; ")),
         fingerprint: Fingerprint {
