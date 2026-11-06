@@ -47,7 +47,8 @@ pub enum Reason {
     Gitlink,
     /// A tree entry mode other than a regular or an executable file.
     UnsupportedMode,
-    /// Two names in one directory that differ only by ASCII case.
+    /// Two names in one directory that collide after Unicode normalisation
+    /// and case mapping (`translate::collision_key`).
     CaseCollision,
     /// The public side's old version of a path is not what the private tree
     /// holds there (§3.3 step 2.4).
