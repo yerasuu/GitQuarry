@@ -11,6 +11,55 @@ modules, functions, constants, deploy steps — is in
 [`tag-changelog/vX.Y.Z.md`](tag-changelog/), which is also what `/_changelog`
 serves for the running version.
 
+## [0.6.1] — 2026-11-06
+
+### Added
+
+- Publish mirrors. A repo's settings gain a "publish mirrors" section to
+  publish a private repo, filtered, to a public remote: by include/exclude
+  patterns (plus a `.gitquarry/publish.toml` in the repo that can only
+  exclude more), with a dry-run preview, a secret scan, an identity map,
+  an optional SPDX check and a "publish now" button. Enabled mirrors also
+  run on the periodic sweep.
+- Two publish modes: snapshot (one commit per publish with the filtered
+  tree, no private history) and history (the whole history rewritten
+  deterministically, tags included). A change that alters what a history
+  publish outputs needs a confirmed epoch bump on save.
+- `gitquarry publish-gc` deletes the data of publish epochs abandoned longer
+  than a grace period (30 days by default); `gitquarry
+  publish-inverse-backfill` rebuilds the public-to-private commit index for
+  epochs published before it existed. Both only list unless given `--apply`.
+- `gitquarry publish-inbound-dry-run` says whether a public pull request of a
+  history publish mirror could be turned into private commits, and which
+  rule refuses it if not, without writing anything. Mirrors take an optional
+  read-only `inbound_token` for it.
+- `gitquarry restore --repo UID` brings back a single repo, for instance one
+  purged by mistake, from the backup replica and a snapshot. Run
+  `gitquarry backfill-repo-index --apply` afterwards.
+- A merge-request review made on an earlier head of the source branch is
+  marked as outdated.
+
+### Changed
+
+- Publish mirror data is included in backups and left out of forks and
+  copies of a repo.
+
+### Fixed
+
+- Reading a merge-request thread fails with an error when an entry can't be
+  opened, instead of showing a shorter thread.
+- Forking into a namespace answers with a server error, not a "bad
+  namespace" message, when the storage lookup itself fails.
+
+### Security
+
+- Merge-request approvals are tied to the commit the reviewer saw: pushing
+  to the source branch withdraws them, and a review of a head that has
+  already moved is refused. Approvals recorded before this version no
+  longer count, so reviewers need to approve again; a request for changes
+  still blocks as before.
+- Publish mirror credentials never reach forks or copies of a repo.
+
 ## [0.6.0] — 2026-10-15
 
 ### Breaking
@@ -516,6 +565,7 @@ First public release.
 - Idle- and size-based eviction of local repo mirrors, and graceful
   shutdown.
 
+[0.6.1]: tag-changelog/v0.6.1.md
 [0.6.0]: tag-changelog/v0.6.0.md
 [0.5.1]: tag-changelog/v0.5.1.md
 [0.5.0]: tag-changelog/v0.5.0.md
