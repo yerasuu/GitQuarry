@@ -68,12 +68,10 @@ gitquarry-test-support = { workspace = true }
 # Captures `webui::bootstrap::print_hint`'s log line, the only public way to
 # learn the bootstrap token -- same version `gitquarry-server` installs.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt"] }
-# Only for the issues/board/milestones tests: a real `gitquarry-tracker`
-# server (its own `web::router` + `TrackerState`) bound to 127.0.0.1:0,
-# exercised over the loopback exactly like a real deploy would. Never a
-# production dependency (see [dependencies] above).
+# Seeds tracker data straight through `gitquarry_tracker::domain::*` in the
+# issues/board/milestones tests; never a production dependency (see
+# [dependencies] above).
 gitquarry-tracker = { path = "../gitquarry-tracker" }
-tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

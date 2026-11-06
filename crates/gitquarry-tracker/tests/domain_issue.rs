@@ -189,8 +189,8 @@ async fn edit_updates_title_body_labels_and_assignees() {
     let dir = tempfile::tempdir().unwrap();
     let (state, fake) = test_state(dir.path()).await;
     let target = test_target();
-    fake.add_label("bug");
-    fake.add_user("bob");
+    fake.labels.lock().unwrap().insert("bug".to_string());
+    fake.users.lock().unwrap().insert("bob".to_string());
     let issue = create(&state, &target, "Old title", "old body", "alice").await.unwrap();
 
     let cas = edit(

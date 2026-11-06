@@ -1,9 +1,6 @@
 //! The merge-request list and detail pages, and the `/_merges/*` mutation
 //! targets, driven through `webui::router` the way a browser reaches them.
 
-#[cfg(feature = "tracker")]
-mod common;
-
 use axum::Router;
 use axum::http::StatusCode;
 use gitquarry_core::app::{AppContext, ResolvedRepo};
@@ -127,8 +124,7 @@ async fn merge_detail_404s_for_a_nonexistent_number() {
 async fn merge_detail_links_a_hash_mention_that_resolves_to_an_issue() {
     let dir = tempfile::tempdir().unwrap();
     let base = gitquarry_test_support::ctx(dir.path());
-    let (tracker_state, link) =
-        common::tracker::spawn_tracker(Arc::clone(&base.backend), Arc::clone(&base.cipher)).await;
+    let (tracker_state, link) = gitquarry_test_support::spawn_tracker(&base).await;
     let f = fixture_on(
         dir,
         AppContext {
@@ -401,6 +397,7 @@ async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
             labels_csv: "bug",
             assignees_csv: "bob",
             reviewers_csv: "carol",
+            milestone: None,
         },
         Locale::En,
     )

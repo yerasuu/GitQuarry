@@ -20,18 +20,6 @@ pub struct FakeCore {
     pub merge_requests: Arc<Mutex<HashSet<u64>>>,
 }
 
-impl FakeCore {
-    pub fn add_label(&self, name: &str) {
-        self.labels.lock().unwrap().insert(name.to_string());
-    }
-    pub fn add_user(&self, username: &str) {
-        self.users.lock().unwrap().insert(username.to_string());
-    }
-    pub fn add_merge_request(&self, number: u64) {
-        self.merge_requests.lock().unwrap().insert(number);
-    }
-}
-
 async fn handler_labels(
     State(fake): State<FakeCore>,
     Query(_params): Query<HashMap<String, String>>,
@@ -89,7 +77,7 @@ pub async fn fake_core() -> (CoreClient, FakeCore) {
 pub fn test_backend_and_cipher(root: &std::path::Path) -> (Arc<dyn s3db::Backend>, Arc<s3db_crypto::Cipher>) {
     let backend = s3db::LocalBackend::new(&s3db::LocalParams {
         bucket: root.to_string_lossy().to_string(),
-        engine: s3db::LocalEngine::Files,
+        engine: s3db::LocalEngine::Redb,
     });
     let cipher = s3db_crypto::Cipher::derive("test passphrase", &[13u8; s3db_crypto::SALT_LEN]).unwrap();
     (Arc::new(backend), Arc::new(cipher))

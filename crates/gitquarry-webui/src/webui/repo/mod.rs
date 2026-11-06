@@ -17,24 +17,18 @@
 mod activity;
 pub(crate) mod blame;
 pub(crate) mod blob;
-#[cfg(all(feature = "tracker", any(test, feature = "test-util")))]
-pub mod board;
-#[cfg(all(feature = "tracker", not(any(test, feature = "test-util"))))]
+#[cfg(feature = "tracker")]
 pub(crate) mod board;
 pub(crate) mod branches;
 pub(crate) mod commit;
 mod compare;
 pub(crate) mod components;
 mod diff;
-#[cfg(all(feature = "tracker", any(test, feature = "test-util")))]
-pub mod issues;
-#[cfg(all(feature = "tracker", not(any(test, feature = "test-util"))))]
+#[cfg(feature = "tracker")]
 pub(crate) mod issues;
 pub(crate) mod log;
 pub(crate) mod merges;
-#[cfg(all(feature = "tracker", any(test, feature = "test-util")))]
-pub mod milestones;
-#[cfg(all(feature = "tracker", not(any(test, feature = "test-util"))))]
+#[cfg(feature = "tracker")]
 pub(crate) mod milestones;
 mod refs;
 pub(crate) mod releases;

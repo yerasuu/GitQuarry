@@ -259,9 +259,6 @@ pub async fn render_board(
     .into_string())
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod handlers;
-#[cfg(not(any(test, feature = "test-util")))]
 mod handlers;
 
 pub(crate) use handlers::{

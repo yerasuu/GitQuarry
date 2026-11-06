@@ -18,9 +18,6 @@ use s3db::BackendConfig;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[cfg(any(test, feature = "test-util"))]
-pub const CONFIG_NAME: &str = "gitquarry-tracker.toml";
-#[cfg(not(any(test, feature = "test-util")))]
 const CONFIG_NAME: &str = "gitquarry-tracker.toml";
 
 #[derive(Debug, Deserialize)]

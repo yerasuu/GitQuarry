@@ -1,14 +1,16 @@
 //! Fixtures every crate's `tests/` shares: a local redb bucket and the
-//! `AppContext` over it, real git history, HTTP helpers for routers, and a
-//! software WebAuthn authenticator.
+//! `AppContext` over it, real git history, HTTP helpers for routers, a real
+//! tracker process, and a software WebAuthn authenticator.
 //! Built only on the crates' public APIs, so a test using this still tests
 //! exactly the shipped surface. Never a dependency of anything but tests.
 
 pub mod authenticator;
 mod git;
+mod tracker;
 mod web;
 
 pub use git::{Work, git};
+pub use tracker::{TrackerFixture, spawn_tracker, tracker_fixture};
 pub use web::{Page, Session, post_form, send};
 
 use gitquarry_core::app::AppContext;

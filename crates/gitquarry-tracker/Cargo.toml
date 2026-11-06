@@ -25,17 +25,8 @@ anyhow = { workspace = true }
 dirs = { workspace = true }
 rand = { workspace = true }
 
-[features]
-# Un-gates this crate's own #[cfg(test)] items for its tests/*.rs — see
-# gitquarry-core's Cargo.toml for why plain #[cfg(test)] isn't enough
-# across the crate boundary that external integration tests are.
-test-util = []
-
 [dev-dependencies]
-tempfile = "3.27.0"
-# Self-dependency so `cargo test` enables this crate's own `test-util`
-# automatically for its tests/*.rs.
-gitquarry-tracker = { path = ".", features = ["test-util"] }
+tempfile = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

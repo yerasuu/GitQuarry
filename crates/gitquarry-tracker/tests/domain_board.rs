@@ -88,7 +88,7 @@ async fn add_card_accepts_a_real_merge_request() {
     let dir = tempfile::tempdir().unwrap();
     let (state, fake) = test_state(dir.path()).await;
     let target = test_target();
-    fake.add_merge_request(7);
+    fake.merge_requests.lock().unwrap().insert(7);
     add_column(&state, &target, "todo").await.unwrap();
 
     add_card(&state, &target, 0, CardRef::MergeRequest(7), gitquarry_i18n::Locale::En)

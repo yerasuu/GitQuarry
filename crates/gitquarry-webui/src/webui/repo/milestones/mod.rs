@@ -222,9 +222,6 @@ pub fn render_milestone_select(
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub mod handlers;
-#[cfg(not(any(test, feature = "test-util")))]
 mod handlers;
 
 pub(crate) use handlers::{
