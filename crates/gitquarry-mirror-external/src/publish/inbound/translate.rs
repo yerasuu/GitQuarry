@@ -427,6 +427,8 @@ fn collision_key(name: &[u8]) -> Vec<u8> {
             .normalize(&name.to_uppercase().to_lowercase())
             .into_owned()
             .into_bytes(),
+        // `Utf8Error` has no variant worth telling apart: any non-UTF-8 name
+        // gets the same byte comparison, since Unicode folding cannot apply.
         Err(_) => name.to_ascii_lowercase(),
     }
 }
