@@ -5,7 +5,7 @@
 //! request's base back into a private commit
 //! (`docs/publish-mirror-inbound-concept.md` §3.2).
 //!
-//! Not a [`super::mapping::Table`]: that one holds one value per key and
+//! Not a [`crate::publish::mapping::Table`]: that one holds one value per key and
 //! refuses a second, which is right for the forward map and wrong here.
 //! Several private commits collapse onto one public commit (those that only
 //! touch excluded paths, a merge whose sides collapse to one), and two
@@ -17,10 +17,17 @@
 //! `public (20 bytes) | n (u32, big-endian, ≥ 1) | n private ids (20 bytes
 //! each, strictly ascending)`. Anything else, including trailing bytes, is
 //! refused as corrupt rather than read in part.
+//!
+//! An epoch published before this index existed has none; [`backfill`]
+//! rebuilds it from the forward map, and [`command`] is the operator command
+//! that runs it over the bucket.
 
-use super::mapping::{STORE_ATTEMPTS, epoch_prefix};
-use super::objects::{Oid, from_hex, to_hex};
-use super::rewrite::Rewriter;
+pub mod backfill;
+pub mod command;
+
+use crate::publish::mapping::{STORE_ATTEMPTS, epoch_prefix};
+use crate::publish::objects::{Oid, from_hex, to_hex};
+use crate::publish::rewrite::Rewriter;
 use crate::validate::validate_sha;
 use anyhow::{Context, Result, bail};
 use gitquarry_core::app::AppContext;

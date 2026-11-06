@@ -7,6 +7,8 @@ use gitquarry_core::app::{AppContext, ResolvedRepo};
 use gitquarry_core::crypto::CompressionStrategy;
 use gitquarry_core::storage::{Cas, list_all_keys};
 use gitquarry_mirror_external::publish::filter::{FilterConfig, FilterMode};
+use gitquarry_mirror_external::publish::inverse::backfill::{self, Backfill};
+use gitquarry_mirror_external::publish::inverse::command::parse_args;
 use gitquarry_mirror_external::publish::inverse::private_commits;
 use gitquarry_mirror_external::publish::log::{PublishRun, RunOutcome};
 use gitquarry_mirror_external::publish::run::publish_mirror_now;
@@ -92,6 +94,17 @@ impl Fixture {
             &self.mirror.id,
             self.mirror.filter_epoch,
             public,
+        )
+        .await
+    }
+
+    async fn plan_backfill(&self) -> anyhow::Result<Backfill> {
+        backfill::plan(
+            self.ctx.backend().as_ref(),
+            &self.ctx.cipher,
+            &self.repo.uid,
+            &self.mirror.id,
+            self.mirror.filter_epoch,
         )
         .await
     }
@@ -305,4 +318,102 @@ async fn a_private_commit_mapped_to_two_public_commits_in_one_epoch_is_a_hard_er
         won.refs[0].public_head,
         "the public side holds the winner's history only"
     );
+}
+
+/// An epoch published before the index existed, stood in for by one whose
+/// inverse shards were deleted: the backfill brings back what the runs
+/// wrote, collapsed commits included, from the forward map alone.
+#[tokio::test]
+async fn a_backfill_rebuilds_a_missing_inverse_from_the_mapping() {
+    let fx = Fixture::new().await;
+    let start = start(&fx).await;
+    fx.publish().await.unwrap();
+    let rotate = excluded_only(&fx, "internal: rotated\n").await;
+    let a = fx.work.commit(&[("src/a.rs", "pub fn a() {}\n")], "a\n").await;
+    fx.publish().await.unwrap();
+    let public_start = fx.public_rev("refs/heads/main^").await;
+    let public_a = fx.public_rev("refs/heads/main").await;
+    let written = fx.plan_backfill().await.unwrap();
+    assert_eq!((written.mapped(), written.missing()), (3, 0));
+
+    for (key, _) in fx.raw("inverse").await {
+        fx.ctx.backend().delete(&key).await.unwrap();
+    }
+    assert!(fx.inverse(&public_start).await.unwrap().is_empty());
+    let planned = fx.plan_backfill().await.unwrap();
+    assert_eq!((planned.mapped(), planned.missing()), (3, 3));
+    assert!(fx.raw("inverse").await.is_empty(), "planning writes nothing");
+
+    backfill::apply(fx.ctx.backend().as_ref(), &fx.ctx.cipher, &planned)
+        .await
+        .unwrap();
+    assert_eq!(fx.inverse(&public_start).await.unwrap(), sorted(vec![start, rotate]));
+    assert_eq!(fx.inverse(&public_a).await.unwrap(), [a]);
+    assert_eq!(fx.plan_backfill().await.unwrap().missing(), 0);
+
+    // The index the next run adds to is the backfilled one, and the public
+    // history it publishes is unchanged by it.
+    let b = fx.work.commit(&[("src/b.rs", "pub fn b() {}\n")], "b\n").await;
+    fx.publish().await.unwrap();
+    assert_eq!(fx.public_rev("refs/heads/main^").await, public_a);
+    assert_eq!(fx.inverse(&fx.public_rev("refs/heads/main").await).await.unwrap(), [b]);
+}
+
+#[tokio::test]
+async fn a_backfill_over_a_complete_inverse_rewrites_nothing() {
+    let fx = Fixture::new().await;
+    start(&fx).await;
+    excluded_only(&fx, "internal: rotated\n").await;
+    fx.publish().await.unwrap();
+    let before = fx.raw("inverse").await;
+
+    let planned = fx.plan_backfill().await.unwrap();
+    assert_eq!(planned.missing(), 0);
+    backfill::apply(fx.ctx.backend().as_ref(), &fx.ctx.cipher, &planned)
+        .await
+        .unwrap();
+
+    // A resealed shard would differ: sealing draws a fresh nonce.
+    assert_eq!(fx.raw("inverse").await, before);
+}
+
+#[tokio::test]
+async fn a_backfill_refuses_a_corrupt_inverse_shard() {
+    let fx = Fixture::new().await;
+    start(&fx).await;
+    fx.publish().await.unwrap();
+    let head = fx.public_rev("refs/heads/main").await;
+    fx.overwrite_inverse_shard(
+        &head,
+        |mut plain| {
+            plain.pop();
+            plain
+        },
+        true,
+    )
+    .await;
+
+    let err = fx.plan_backfill().await.unwrap_err();
+    assert!(format!("{err:#}").contains("not a valid inverse shard"), "{err:#}");
+}
+
+#[tokio::test]
+async fn an_epoch_with_no_mapping_plans_nothing() {
+    let fx = Fixture::new().await;
+    let planned = fx.plan_backfill().await.unwrap();
+    assert_eq!((planned.mapped(), planned.missing()), (0, 0));
+}
+
+#[test]
+fn the_backfill_command_is_a_dry_run_unless_asked_to_apply() {
+    let args = |list: &[&str]| parse_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+
+    let defaults = args(&[]).unwrap().unwrap();
+    assert!(!defaults.apply && defaults.repo.is_none() && defaults.bucket.is_none());
+    let uid = "0123456789abcdef0123456789abcdef";
+    let full = args(&["--repo", uid, "--bucket", "b", "--apply"]).unwrap().unwrap();
+    assert_eq!(full.repo.as_ref().map(|u| u.to_string()).as_deref(), Some(uid));
+    assert!(full.apply);
+    assert!(args(&["--repo", "../etc"]).is_err());
+    assert!(args(&["--force"]).is_err());
 }

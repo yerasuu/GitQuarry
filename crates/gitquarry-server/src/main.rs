@@ -1,6 +1,6 @@
 //! One binary, one unified server, plus one entry point that only git
 //! invokes (not run by a human), plus the operator maintenance commands
-//! (see [`gitquarry_domain::commands`], and `publish-gc` below):
+//! (see [`gitquarry_domain::commands`], and the `publish-*` ones below):
 //! - `gitquarry --bucket NAME [--web-bind ...] [--ssh-bind ...]`: starts
 //!   the ssh:// server and the web UI (browsing + git smart-HTTP) together,
 //!   in the same process. [`serve`] builds that from [`gitquarry_core`]
@@ -31,6 +31,9 @@
 //! - `publish-gc`: human-run, deletes publish-mirror epochs abandoned past
 //!   their grace period — see [`gitquarry_mirror_external::publish::gc`],
 //!   which holds the command because only that crate reads publish mirrors.
+//! - `publish-inverse-backfill`: human-run, rebuilds the inverse index of
+//!   publish epochs from their mapping — see
+//!   [`gitquarry_mirror_external::publish::inverse::backfill`].
 
 use anyhow::Result;
 use gitquarry::serve;
@@ -43,7 +46,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> ExitCode {
     // The one place this initializes: every subcommand below (server, hooks,
-    // fsck/repack/backfill/migrate/backup/restore/publish-gc) shares this
+    // fsck/repack/backfill/migrate/backup/restore/publish-*) shares this
     // process and this filter. `RUST_LOG` overrides; otherwise `info` — errors/warnings
     // plus the normal lifecycle events, not per-item debug noise.
     //
@@ -77,6 +80,7 @@ async fn dispatch() -> Result<()> {
         Some("backup") => commands::backup::run(&args[2..]).await,
         Some("restore") => commands::restore::run(&args[2..]).await,
         Some("publish-gc") => gitquarry_mirror_external::publish::gc::command::run(&args[2..]).await,
+        Some("publish-inverse-backfill") => gitquarry_mirror_external::publish::inverse::command::run(&args[2..]).await,
         _ => serve::run(&args[1..]).await,
     }
 }

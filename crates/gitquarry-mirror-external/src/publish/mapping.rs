@@ -155,6 +155,11 @@ impl<const N: usize> Table<N> {
         self.shards.get(&key[0])?.get(key)
     }
 
+    /// Every entry of the loaded shards, in no particular order.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&Oid, &[u8; N])> {
+        self.shards.values().flatten()
+    }
+
     /// Adds `entries` to the bucket, shard by shard under CAS, and to the
     /// loaded view. A key already stored with a different value is a hard
     /// error: within one epoch the rewrite is deterministic, so two values

@@ -22,7 +22,7 @@
 //! never consolidated here.
 
 pub mod command;
-mod keys;
+pub(super) mod keys;
 
 use super::epoch::published_epoch;
 use super::log::{PublishLog, log_collection, unix_now};
