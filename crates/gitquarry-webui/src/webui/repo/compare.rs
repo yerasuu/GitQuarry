@@ -50,7 +50,7 @@ pub(super) async fn render_compare(
         @if !stat.trim().is_empty() {
             div class="scroll-x" { pre class="diff" { (stat) } }
         }
-        p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view))) }
+        p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view, locale))) }
         @match diff_view {
             DiffView::Unified => div class="scroll-x" { pre class="diff" { (PreEscaped(color_diff(&diff))) } },
             DiffView::Split => div class="scroll-x full-bleed" { (side_by_side_diff(&diff)) },

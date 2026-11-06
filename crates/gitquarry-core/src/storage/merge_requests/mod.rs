@@ -102,9 +102,10 @@ pub async fn put_merge_request(
 }
 
 /// Every MR currently stored for this repo, newest-number-first. Skips
-/// [`COUNTER_KEY`] explicitly rather than relying on it failing to parse as
-/// a [`MergeRequestMeta`] (every field here defaults, so it would parse —
-/// just to a bogus all-defaults entry).
+/// [`COUNTER_KEY`] and every nested name (an MR's own `<n>/comments/…` and
+/// `<n>/reviews/…` threads, which `list_names` walks into) explicitly rather
+/// than relying on them failing to parse as a [`MergeRequestMeta`]: every
+/// field here defaults, so each would parse — to a bogus all-defaults MR #0.
 pub async fn list_merge_requests(
     backend: &Arc<dyn Backend>,
     cipher: &Arc<Cipher>,
@@ -115,7 +116,7 @@ pub async fn list_merge_requests(
         .list_names(backend.as_ref())
         .await?
         .into_iter()
-        .filter(|name| name != COUNTER_KEY)
+        .filter(|name| name != COUNTER_KEY && !name.contains('/'))
         .collect();
 
     let mut set = tokio::task::JoinSet::new();

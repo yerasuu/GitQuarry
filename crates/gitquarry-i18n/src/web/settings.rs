@@ -19,6 +19,15 @@ msg!(settings_source_link_label() { Locale::Es => "enlace de codigo fuente", Loc
 msg!(settings_network_heading() { Locale::Es => "red", Locale::En => "network" });
 msg!(settings_web_bind_label() { Locale::Es => "web-bind", Locale::En => "web-bind" });
 msg!(settings_ssh_bind_label() { Locale::Es => "ssh-bind", Locale::En => "ssh-bind" });
+msg!(settings_public_url_label() { Locale::Es => "URL pública", Locale::En => "public URL" });
+msg!(settings_public_url_hint() {
+    Locale::Es => "La dirección con la que se llega a esta instancia. Las passkeys quedan ligadas a su dominio y siguen desactivadas mientras esté vacía. Si empieza por https://, las cookies llevan siempre Secure aunque el proxy no envíe X-Forwarded-Proto.",
+    Locale::En => "The address this instance is reached at. Passkeys are bound to its domain and stay off while it is empty. If it starts with https://, cookies always carry Secure even when the proxy sends no X-Forwarded-Proto.",
+});
+msg!(settings_public_url_invalid() {
+    Locale::Es => "la URL pública debe ser https:// (o http://localhost) y nombrar un dominio, no una dirección IP",
+    Locale::En => "the public URL must be https:// (or http://localhost) and name a domain, not an IP address",
+});
 
 msg!(settings_mirrors_cache_heading() { Locale::Es => "cache de mirrors", Locale::En => "mirrors cache" });
 msg!(settings_mirrors_dir_label() { Locale::Es => "mirrors-dir", Locale::En => "mirrors-dir" });
@@ -35,6 +44,14 @@ msg!(settings_mirrors_max_size_label() { Locale::Es => "mirrors-max-size", Local
 msg!(settings_mirrors_max_size_placeholder() {
     Locale::Es => "5G (numero + B/K/M/G)",
     Locale::En => "5G (number + B/K/M/G)",
+});
+msg!(settings_mirrors_large_repo_threshold_label() {
+    Locale::Es => "mirrors-large-repo-threshold",
+    Locale::En => "mirrors-large-repo-threshold",
+});
+msg!(settings_mirrors_large_repo_threshold_placeholder() {
+    Locale::Es => "1G (numero + B/K/M/G) — exento de expulsion por edad",
+    Locale::En => "1G (number + B/K/M/G) — exempt from age-based eviction",
 });
 
 msg!(settings_external_mirrors_heading() {
@@ -95,7 +112,7 @@ msg!(settings_client_secret_placeholder_unset() {
     Locale::Es => "sin configurar",
     Locale::En => "not set",
 });
-msg!(settings_redirect_base_url_label() { Locale::Es => "redirect base url", Locale::En => "redirect base url" });
+msg!(settings_redirect_base_url_label() { Locale::Es => "url base de redireccion", Locale::En => "redirect base url" });
 msg!(settings_redirect_base_url_placeholder() {
     Locale::Es => "https://git.example.com (publica, sin barra final)",
     Locale::En => "https://git.example.com (public, no trailing slash)",

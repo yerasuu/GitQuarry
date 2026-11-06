@@ -35,15 +35,7 @@ use anyhow::Result;
 /// `acme` with a repo whose name contains a slash (nothing can create that —
 /// `RepoConfig::full_name` is always `<namespace>/<slug>` with a
 /// single-segment slug).
-#[cfg(any(test, feature = "test-util"))]
-pub fn effective_permission(user: &User, chain: &[Group], repo: &str, repo_uid: &Uid) -> Option<Permission> {
-    effective_permission_impl(user, chain, repo, repo_uid)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn effective_permission(user: &User, chain: &[Group], repo: &str, repo_uid: &Uid) -> Option<Permission> {
-    effective_permission_impl(user, chain, repo, repo_uid)
-}
-fn effective_permission_impl(user: &User, chain: &[Group], repo: &str, repo_uid: &Uid) -> Option<Permission> {
     if let Some(perm) = user.repos.get(repo_uid) {
         return Some(*perm);
     }

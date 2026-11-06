@@ -10,7 +10,6 @@ pub mod thread;
 pub mod uid;
 
 use crate::config::BucketConfig;
-use std::sync::Arc;
 
 /// Every repo lives under this top-level S3 prefix — `repos/<owner>/<name>`,
 /// not `<owner>/<name>` at the bucket root — so a repo's namespace (a
@@ -45,7 +44,12 @@ pub use s3db::{Backend, Cas, get_json, list_all_keys, put_json};
 /// can't accidentally bypass it by calling `s3db::build_backend` directly.
 /// Metrics are a [`s3db::NoopMetrics`] sink for now — nothing in gitquarry
 /// reads `MeteredBackend`'s counters yet.
-pub fn build_backend(cfg: &BucketConfig) -> anyhow::Result<Arc<dyn Backend>> {
+///
+/// The returned `spool` is `Some` for a remote driver. Only the long-lived
+/// server drives its `recover_pending`; a short-lived process (a git hook, a
+/// CLI command) just writes through it, and the server's sweep adopts
+/// whatever such a process left behind.
+pub fn build_backend(cfg: &BucketConfig) -> anyhow::Result<s3db::ResilientBackend> {
     let raw = s3db::build_backend(&cfg.backend)?;
     Ok(s3db::build_resilient_backend(
         raw,
@@ -69,15 +73,4 @@ pub async fn cas_retry_backoff(attempt: u32) {
     let backoff = BASE.saturating_mul(1u32 << attempt.min(6)).min(MAX);
     let jitter = Duration::from_millis(rand::random::<u64>() % 15);
     tokio::time::sleep(backoff + jitter).await;
-}
-
-/// Test-only shim: `s3db::LocalBackend` under its old path, so existing
-/// `#[cfg(test)]` helpers across the tree don't all need editing for a
-/// module that only moved crates, not shape. `feature = "test-util"` also
-/// enables it: `gitquarry-webui`'s own tests build the same kind of local
-/// test fixture, and `#[cfg(test)]` alone only applies to this crate's own
-/// test build, not a downstream crate's.
-#[cfg(any(test, feature = "test-util"))]
-pub mod local {
-    pub use s3db::LocalBackend;
 }

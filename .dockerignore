@@ -1,0 +1,8 @@
+target/
+.git/
+crates/*/target/
+*.tar.gz
+node_modules/
+.env
+# Holds the bucket passphrase and S3 credentials, so it must never land in an image layer.
+gitquarry.toml

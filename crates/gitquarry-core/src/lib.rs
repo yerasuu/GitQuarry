@@ -18,4 +18,5 @@ pub mod internal_api;
 pub mod migrations;
 pub mod mirror;
 pub mod storage;
+pub mod tracker_api;
 pub mod validate;

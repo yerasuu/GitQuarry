@@ -1,10 +1,9 @@
-//! The loopback-IPC transport wrapper both legs of the core↔tracker pair
-//! (core↔tracker and webui→tracker) share verbatim: the `X-Internal-Token`
-//! header + [`crate::WIRE_VERSION_HEADER`] pair every outbound call
-//! carries, and the axum middleware every loopback listener enforces them
-//! with. Extracted here (not duplicated per crate) after near-identical
-//! copies of both sides accumulated across `gitquarry-core::internal_api`
-//! and `gitquarry-tracker`'s own `web` modules — nothing about the wire
+//! The loopback-IPC transport wrapper every core↔optional-module pair
+//! shares verbatim: the `X-Internal-Token` header + [`crate::WIRE_VERSION_HEADER`]
+//! pair every outbound call carries, and the axum middleware every loopback
+//! listener enforces them with. Extracted here (not duplicated per crate)
+//! after near-identical copies accumulated across `gitquarry-core::internal_api`
+//! and each optional module's own `core_client.rs` — nothing about the wire
 //! shape changes, this only stops the same ~40 lines from being free to
 //! drift out of sync.
 
@@ -13,16 +12,18 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use subtle::ConstantTimeEq;
 
 /// Header carrying the shared secret every loopback call authenticates
 /// with — same value every existing copy already used.
 pub const INTERNAL_TOKEN_HEADER: &str = "x-internal-token";
 
+/// Constant-time over the token bytes, so a caller probing the loopback
+/// port can't recover the shared secret byte by byte from response timing.
 pub fn token_matches(headers: &HeaderMap, expected: &str) -> bool {
     headers
         .get(INTERNAL_TOKEN_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|got| got == expected)
+        .is_some_and(|got| bool::from(got.as_bytes().ct_eq(expected.as_bytes())))
 }
 
 /// `true` unless the caller's `gitquarry-wire` build doesn't match this
@@ -44,12 +45,9 @@ struct ApiError<'a> {
 }
 
 /// A JSON `{"error": "..."}` body at `status` — the shape every existing
-/// `/_internal/*`-style error response already used (or, for the three
-/// crates whose middleware used a plain-text body instead, the shape their
-/// own route handlers already used everywhere else) — standardized here so
-/// a client's JSON-error-body parse (e.g. `gitquarry-webui`'s
-/// `tracker_client::error_body`) works uniformly regardless of which layer
-/// rejected the request.
+/// `/_internal/*`-style error response already used, standardized here so
+/// a client's JSON-error-body parse works uniformly regardless of which
+/// layer rejected the request.
 pub fn json_error(status: StatusCode, message: &str) -> Response {
     let bytes = serde_json::to_vec(&ApiError { error: message }).unwrap_or_else(|_| b"{}".to_vec());
     (status, [(axum::http::header::CONTENT_TYPE, "application/json")], bytes).into_response()
@@ -73,8 +71,7 @@ pub async fn require_internal_token(expected: &str, req: Request, next: Next) ->
 
 /// Adds the [`INTERNAL_TOKEN_HEADER`] + [`crate::WIRE_VERSION_HEADER`] pair
 /// every outbound loopback call needs — the one-liner every `core_client.rs`
-/// (`gitquarry-tracker`) and `gitquarry-webui::tracker_client` repeated at
-/// every single call site before this existed.
+/// repeated at every single call site before this existed.
 pub trait SignedRequestBuilderExt {
     fn signed(self, internal_token: &str) -> Self;
 }

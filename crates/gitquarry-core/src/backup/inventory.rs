@@ -99,8 +99,8 @@ impl Class {
 /// Indexes `gitquarry backfill-repo-index` can rebuild from the entities
 /// they point at. Deliberately *only* these four: the command's own usage
 /// text names exactly them, and every other index under `.conf/index/`
-/// (`namespace`, `pubkey`, `secondary-email`, `pat-owner`, `mirrors-enabled`,
-/// `repo-deleted`) has no rebuild path at all — an instance restored without
+/// (`namespace`, `pubkey`, `secondary-email`, `pat-owner`, `passkey-owner`,
+/// `mirrors-enabled`, `repo-deleted`) has no rebuild path at all — an instance restored without
 /// `pubkey`/`namespace` can't authenticate anyone, which is a correctness
 /// problem, not a cost tradeoff. Those stay [`Class::Entities`], and they're
 /// small enough that carrying them always costs nothing worth measuring.
@@ -153,6 +153,7 @@ fn classify_repo(rest: &str) -> Class {
     }
     if tail == ".conf/config.json"
         || tail.starts_with("lfs-locks/")
+        || tail.starts_with("lfs-lock-paths/")
         || tail.starts_with("merges/")
         || tail.starts_with("mirrors/")
         || tail == "board"
@@ -178,7 +179,18 @@ fn classify_conf(rest: &str) -> Class {
     ) {
         return Class::Entities;
     }
-    if rest.starts_with("users/") || rest.starts_with("groups/") || rest.starts_with("pat/") {
+    if rest.starts_with("users/")
+        || rest.starts_with("groups/")
+        || rest.starts_with("pat/")
+        || rest.starts_with("passkeys/")
+    {
+        return Class::Entities;
+    }
+    // `gitquarry-federation`'s own entities (`Peer`/`AccessToken`) and its
+    // hand-rolled `peer-tokens/<uid>` claim index — federation has no
+    // storage crate of its own, everything it persists lives under core's
+    // `.conf/` namespace, same as every other optional module.
+    if rest.starts_with("peers") || rest.starts_with("tokens") || rest.starts_with("peer-tokens/") {
         return Class::Entities;
     }
     if rest.starts_with("audit/") {

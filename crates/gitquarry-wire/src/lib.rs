@@ -1,24 +1,31 @@
-//! Plain serde DTOs crossing the core↔tracker loopback IPC boundary —
-//! deliberately minimal, no business logic. Anything that stays
-//! single-sourced in one binary (`Permission`, `User`, `OwnerRef`, ...) does
-//! not belong here; the other side reaches it only through an explicit IPC
-//! call.
+//! Plain serde DTOs shared across 2+ of the boundaries a gitquarry
+//! deployment can have (core-internal IPC with federation or tracker,
+//! federation's public API, peer-to-peer gossip) — deliberately minimal, no business logic. Anything that
+//! stays single-sourced in one binary (`Permission`, `User`, `OwnerRef`,
+//! `Peer`, `AccessToken`, `PeerOrigin`, ...) does not belong here; the other
+//! side reaches it only through an explicit IPC call.
 
+mod instance;
 pub mod ipc;
 mod merge_request;
+mod repo;
 pub mod tracker;
 mod uid;
 
+pub use instance::InstanceInfo;
 pub use merge_request::{
-    CommentAnchor, DiffSide, MergeRequestMeta, MergeStrategy, MrComment, MrReview, MrStatus, ReviewVerdict,
+    CommentAnchor, DiffSide, MergeRequestMeta, MergeStrategy, MrComment, MrDetail, MrReview, MrStatus, ReviewVerdict,
 };
+pub use repo::RepoSummary;
 pub use uid::Uid;
 
 /// Bumped whenever a DTO in this crate changes shape in a way that isn't
 /// backward-compatible (a field removed/renamed/re-typed — adding a new
 /// `#[serde(default)]` field doesn't count). Sent as [`WIRE_VERSION_HEADER`]
-/// on every core↔tracker loopback call in both directions
-/// (`gitquarry-tracker::core_client::CoreClient` and
+/// on every core↔federation and core↔tracker loopback call in both
+/// directions (`gitquarry-federation::core_client::CoreClient`,
+/// `gitquarry-webui::webui::federation_proxy::send`,
+/// `gitquarry-tracker::core_client::CoreClient` and
 /// `gitquarry-webui::webui::tracker_client`) and checked by both
 /// sides' `require_internal_token` middleware — a mismatch means one binary
 /// got upgraded without the other, which would otherwise show up as a

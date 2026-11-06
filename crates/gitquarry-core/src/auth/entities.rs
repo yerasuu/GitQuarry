@@ -141,6 +141,13 @@ pub struct User {
     /// `repos`/group membership regardless of this flag.
     #[serde(default)]
     pub is_admin: bool,
+    /// Manage linked federation peers (`/_peers`: link/unlink/ban/
+    /// access-level) without full `is_admin` — a separate, narrower
+    /// delegation (`docs/federation-binary-split-concept.md` section 6).
+    /// `#[serde(default)]` so existing stored records deserialize as
+    /// `false`, same pattern `is_admin` itself would need if added today.
+    #[serde(default)]
+    pub is_federation_moderator: bool,
     /// Repo uids this user starred — purely a personal bookmark list, no
     /// bearing on `repos`/visibility/anything else. Doesn't need to stay in
     /// sync with reality: a starred repo that gets deleted just fails to
@@ -251,20 +258,17 @@ impl User {
     /// Fingerprints of this user's pubkeys. A pubkey string that fails to
     /// parse is skipped rather than erroring the whole user out — it just
     /// can't match anything, same as if it weren't there.
-    // pub, not pub(crate): also used directly by the integration tests in
-    // `tests/auth_access_pubkey.rs`, which link against this crate as an
-    // external consumer and can't see pub(crate) items. Genuine production
-    // callers (`access::pubkey::resolve_by_fingerprint`, `claim_pubkey`)
-    // need this unconditionally, so it isn't cfg-gated like a pure
-    // test-only accessor would be.
-    pub fn fingerprints(&self) -> impl Iterator<Item = String> + '_ {
+    pub(crate) fn fingerprints(&self) -> impl Iterator<Item = String> + '_ {
         self.pubkeys.iter().filter_map(|k| key_fingerprint(k).ok())
     }
 }
 
-/// A long-lived, locally-scoped credential for git-smart-HTTP clone/push.
-/// `scopes` is never empty (explicit repos only, never all) and carries a
-/// full [`Permission`] ceiling
+/// A long-lived, locally-scoped credential for git-smart-HTTP clone/push —
+/// separate from federation's own fine-grained `AccessToken` (`.conf/tokens`,
+/// owned by `gitquarry-federation`, resolved via loopback): this one lives
+/// entirely in core, so it works with no `[federation]` config at all.
+/// `scopes` is never empty — same "explicit repos only, never all" rule
+/// federation's tokens follow — but carries a full [`Permission`] ceiling
 /// per repo instead of a single read/write bool, since core already has
 /// [`Permission`]'s 5 tiers and [`User::repos`] already uses this exact map
 /// shape. The ceiling never grants more than `owner_uid`'s real, current
@@ -305,6 +309,46 @@ pub struct PersonalAccessToken {
     /// expiry.
     #[serde(default)]
     pub expires_at: Option<String>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+}
+
+/// One WebAuthn credential (passkey) a user registered — a second factor
+/// after the password, and, being a discoverable credential, a way to sign
+/// in on its own. Keyed by [`Self::key`] (a digest of the credential id,
+/// see `access::passkey_key`) rather than the id itself: an id may run to
+/// 1023 bytes, which base64-encoded no longer fits an S3 key.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Entity)]
+#[entity(collection = ".conf/passkeys")]
+pub struct Passkey {
+    #[serde(default)]
+    #[entity(key)]
+    pub key: String,
+    /// The credential id as the browser sends it (base64url) — compared
+    /// against the one a sign-in names before this record is trusted, so a
+    /// digest collision can't hand one user's record to another's key.
+    #[serde(default)]
+    pub credential_id: String,
+    /// [`User::uid`], not username, so a renamed owner keeps the passkey.
+    #[serde(default)]
+    pub owner_uid: Uid,
+    /// The COSE_Key as registered, base64url — re-parsed on every sign-in.
+    #[serde(default)]
+    pub public_key: String,
+    /// The authenticator's signature counter after its last use; a value
+    /// that doesn't move forward is refused (see `webauthn::verify_assertion`).
+    #[serde(default)]
+    pub sign_count: u32,
+    /// Display-only, chosen by the owner — never parsed.
+    #[serde(default)]
+    pub label: String,
+    /// A synced (multi-device) passkey rather than one bound to a single
+    /// hardware key. Shown to the owner, never used to decide anything.
+    #[serde(default)]
+    pub backup_eligible: bool,
+    /// `format_unix_secs`-formatted.
+    #[serde(default)]
+    pub created_at: String,
     #[serde(default)]
     pub last_used_at: Option<String>,
 }

@@ -1,4 +1,5 @@
 use gitquarry_core::git::browse::*;
+use gitquarry_test_support::Work;
 
 #[test]
 fn parses_log_line_with_decoration() {
@@ -26,49 +27,13 @@ fn parses_shortlog_counts() {
     assert_eq!(counts, vec![(12, "Jane Doe".to_string()), (3, "John Roe".to_string())]);
 }
 
-fn init_repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let work = dir.path();
-    let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    run(&["init", "--quiet", "--initial-branch=main"]);
-    dir
-}
-
 #[tokio::test]
 async fn log_page_with_stats_reports_a_multi_file_change() {
-    let dir = init_repo();
-    let work = dir.path();
-    std::fs::write(work.join("a.txt"), "one\n").unwrap();
-    std::fs::write(work.join("b.txt"), "two\nthree\n").unwrap();
-    std::process::Command::new("git")
-        .current_dir(work)
-        .args(["add", "."])
-        .status()
-        .unwrap();
-    std::process::Command::new("git")
-        .current_dir(work)
-        .env("GIT_AUTHOR_NAME", "Test Author")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test Author")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .args(["commit", "--quiet", "-m", "add two files"])
-        .status()
-        .unwrap();
+    let work = Work::new().await;
+    work.commit(&[("a.txt", "one\n"), ("b.txt", "two\nthree\n")], "add two files")
+        .await;
 
-    let rows = log_page_with_stats(&work.join(".git"), "HEAD", 10, 0, None)
-        .await
-        .unwrap();
+    let rows = log_page_with_stats(&work.git_dir(), "HEAD", 10, 0, None).await.unwrap();
     assert_eq!(rows.len(), 1);
     let (commit, stats) = &rows[0];
     assert_eq!(commit.subject, "add two files");
@@ -80,30 +45,12 @@ async fn log_page_with_stats_reports_a_multi_file_change() {
 
 #[tokio::test]
 async fn log_page_with_stats_handles_a_rename_only_commit() {
-    let dir = init_repo();
-    let work = dir.path();
-    let commit = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    std::fs::write(work.join("old.txt"), "content\n").unwrap();
-    commit(&["add", "."]);
-    commit(&["commit", "--quiet", "-m", "add file"]);
-    std::fs::rename(work.join("old.txt"), work.join("new.txt")).unwrap();
-    commit(&["add", "-A"]);
-    commit(&["commit", "--quiet", "-m", "rename file"]);
+    let work = Work::new().await;
+    work.commit(&[("old.txt", "content\n")], "add file").await;
+    std::fs::rename(work.path().join("old.txt"), work.path().join("new.txt")).unwrap();
+    work.commit(&[], "rename file").await;
 
-    let rows = log_page_with_stats(&work.join(".git"), "HEAD", 1, 0, None)
-        .await
-        .unwrap();
+    let rows = log_page_with_stats(&work.git_dir(), "HEAD", 1, 0, None).await.unwrap();
     assert_eq!(rows.len(), 1);
     let (commit_info, stats) = &rows[0];
     assert_eq!(commit_info.subject, "rename file");
@@ -124,28 +71,11 @@ async fn log_page_with_stats_handles_a_rename_only_commit() {
 
 #[tokio::test]
 async fn search_log_with_stats_matches_the_grep_and_still_reports_stats() {
-    let dir = init_repo();
-    let work = dir.path();
-    let commit = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    std::fs::write(work.join("a.txt"), "one\n").unwrap();
-    commit(&["add", "."]);
-    commit(&["commit", "--quiet", "-m", "unrelated change"]);
-    std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
-    commit(&["add", "."]);
-    commit(&["commit", "--quiet", "-m", "fix the bug"]);
+    let work = Work::new().await;
+    work.commit(&[("a.txt", "one\n")], "unrelated change").await;
+    work.commit(&[("a.txt", "one\ntwo\n")], "fix the bug").await;
 
-    let rows = search_log_with_stats(&work.join(".git"), "HEAD", "bug", 10, None)
+    let rows = search_log_with_stats(&work.git_dir(), "HEAD", "bug", 10, None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);

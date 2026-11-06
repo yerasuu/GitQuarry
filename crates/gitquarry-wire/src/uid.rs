@@ -6,9 +6,13 @@
 //! across all three entity kinds rather than three phantom-typed newtypes,
 //! since this codebase doesn't parameterize IDs by kind anywhere else and a
 //! misplaced user-uid-where-a-repo-uid-is-expected is a logic bug either
-//! way. Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/MR
-//! reference crosses the core/tracker IPC boundary and needs to be the
-//! identical type on both sides.
+//! way, not something a marker type would catch for free without every
+//! call site threading it through.
+//!
+//! Lives in `gitquarry-wire`, not `gitquarry-core`, because a repo/MR
+//! reference crosses the core/federation IPC boundary (fork-from-remote,
+//! merge-request wire types) and needs to be the identical type on both
+//! sides rather than a lookalike newtype per crate.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

@@ -66,28 +66,7 @@ async fn resolve_repo_by_name(
 /// resolves to *something else entirely*. Treated the same as the repo
 /// simply not existing any more from that page's point of view, rather than
 /// silently acting on whatever now holds the name.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn resolve_target(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-    repo: &str,
-    expected_uid: &str,
-    locale: Locale,
-) -> Result<(ResolvedRepo, String), AppError> {
-    resolve_target_impl(ctx, headers, repo, expected_uid, locale).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 async fn resolve_target(
-    ctx: &AppContext,
-    headers: &HeaderMap,
-    repo: &str,
-    expected_uid: &str,
-    locale: Locale,
-) -> Result<(ResolvedRepo, String), AppError> {
-    resolve_target_impl(ctx, headers, repo, expected_uid, locale).await
-}
-
-async fn resolve_target_impl(
     ctx: &AppContext,
     headers: &HeaderMap,
     repo: &str,
@@ -207,7 +186,7 @@ pub(crate) async fn handler_create_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -373,7 +352,7 @@ pub(crate) async fn handler_close_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -413,7 +392,7 @@ pub(crate) async fn handler_reopen_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -495,7 +474,7 @@ pub(crate) async fn handler_comment_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -524,7 +503,7 @@ pub(crate) async fn handler_comment_post(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct EditPrCommentForm {
+pub(crate) struct EditMrCommentForm {
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -541,11 +520,11 @@ pub(crate) async fn handler_comment_edit_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<EditPrCommentForm>,
+    Form(form): Form<EditMrCommentForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -582,7 +561,7 @@ pub(crate) async fn handler_comment_edit_post(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct DeletePrCommentForm {
+pub(crate) struct DeleteMrCommentForm {
     repo_uid: String,
     number: u64,
     comment_id: String,
@@ -598,11 +577,11 @@ pub(crate) async fn handler_comment_delete_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<DeletePrCommentForm>,
+    Form(form): Form<DeleteMrCommentForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -652,16 +631,7 @@ pub(crate) struct ReviewForm {
 /// POST) falls back to the neutral verdict rather than 400ing: the worst
 /// case is a review that says less than intended, never one that approves
 /// something it shouldn't.
-#[cfg(any(test, feature = "test-util"))]
-pub fn parse_verdict(raw: &str) -> ReviewVerdict {
-    parse_verdict_impl(raw)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn parse_verdict(raw: &str) -> ReviewVerdict {
-    parse_verdict_impl(raw)
-}
-
-fn parse_verdict_impl(raw: &str) -> ReviewVerdict {
     match raw {
         "approved" => ReviewVerdict::Approved,
         "changes_requested" => ReviewVerdict::ChangesRequested,
@@ -681,7 +651,7 @@ pub(crate) async fn handler_review_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -758,7 +728,7 @@ pub(crate) async fn handler_merge_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -801,7 +771,18 @@ pub(crate) async fn handler_merge_post(
                 let _ = domain::repo::delete_branch(&resolved, &branch, locale).await;
             }
         }
-        domain::merge_request::MergeOutcome::Conflict(_) => {
+        domain::merge_request::MergeOutcome::Conflict(paths) => {
+            // An async submit swaps `#mr-actions` with whatever comes back,
+            // so a redirect's full page would land inside it; a real error
+            // status instead reaches `style/app.js`'s toast, and the notice
+            // with the paths renders on the next load of the MR page.
+            if headers.contains_key(ASYNC_HEADER) {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}: {}",
+                    gitquarry_i18n::web::repo::merges::conflicts_heading(locale),
+                    paths.join(", ")
+                )));
+            }
             // Back to the MR, which now renders the conflicting files and
             // how to resolve them (`merges::render_conflict_notice`) — the
             // `400` this used to return put that same list on a page the
@@ -853,7 +834,7 @@ pub(crate) async fn handler_edit_metadata_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -933,7 +914,7 @@ pub(crate) async fn handler_mark_draft_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -973,7 +954,7 @@ pub(crate) async fn handler_mark_ready_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
@@ -1005,19 +986,36 @@ pub(crate) async fn handler_mark_ready_post(
     Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
-#[derive(serde::Deserialize)]
-pub(crate) struct BulkPrActionForm {
+/// Read by hand from the raw body rather than through axum's `Form`:
+/// `serde_urlencoded` can't collect a key repeated once per checked row into
+/// a `Vec`, so every submission with a selection was a 422.
+#[derive(Default)]
+struct BulkPrActionForm {
     repo_uid: String,
     /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
-    /// repeated once per selected row — same shape
-    /// `issues::handlers::BulkIssueActionForm` already uses.
-    #[serde(default)]
+    /// one per selected row. A value that isn't a number names no MR, so it
+    /// is dropped rather than failing the whole batch.
     numbers: Vec<u64>,
     /// `"close"` or `"reopen"` — anything else is rejected up front, before
     /// touching any MR.
     action: String,
-    #[serde(default)]
     csrf: String,
+}
+
+impl BulkPrActionForm {
+    fn parse(body: &[u8]) -> Self {
+        let mut form = Self::default();
+        for (key, value) in form_urlencoded::parse(body) {
+            match key.as_ref() {
+                "repo_uid" => form.repo_uid = value.into_owned(),
+                "numbers" => form.numbers.extend(value.parse::<u64>().ok()),
+                "action" => form.action = value.into_owned(),
+                "csrf" => form.csrf = value.into_owned(),
+                _ => {}
+            }
+        }
+        form
+    }
 }
 
 /// Best-effort per MR, same tolerance `issues::handlers::handler_bulk_post`
@@ -1028,11 +1026,12 @@ pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<BulkPrActionForm>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
+    let form = BulkPrActionForm::parse(&body);
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;

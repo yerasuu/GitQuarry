@@ -96,3 +96,27 @@ fn empty_codeowners_matches_nothing() {
     assert!(rules.is_empty());
     assert!(owners_for_path(&rules, "anything").is_empty());
 }
+
+#[test]
+fn segments_match_wildcards_one_segment_at_a_time() {
+    assert!(segments_match("release/*", "release/1.0"));
+    assert!(!segments_match("release/*", "team/release/1.0"), "* never crosses a /");
+    assert!(!segments_match("release/*", "release/1.0/hotfix"));
+}
+
+#[test]
+fn segments_match_double_star_spans_segments() {
+    assert!(segments_match("**/release/*", "team/release/1.0"));
+    assert!(
+        segments_match("**/release/*", "release/1.0"),
+        "** matches zero segments too"
+    );
+}
+
+#[test]
+fn segments_match_has_no_codeowners_basename_special_case() {
+    // Unlike `matches`, a slash-free pattern is anchored to the whole
+    // (single-segment) candidate, never any path's last segment.
+    assert!(segments_match("main", "main"));
+    assert!(!segments_match("main", "team/main"));
+}

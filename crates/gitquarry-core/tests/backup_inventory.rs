@@ -29,6 +29,7 @@ fn lfs_objects_and_locks_are_different_classes() {
     // `lfs-locks/` is live state, not a content-addressed blob -- it must
     // not ride along with the LFS toggle.
     assert_eq!(classify("repos/abc123/lfs-locks/some-lock.json"), Class::Entities);
+    assert_eq!(classify("repos/abc123/lfs-lock-paths/YS5wc2Q.json"), Class::Entities);
 }
 
 #[test]
@@ -171,6 +172,7 @@ fn placeholder_samples() -> BTreeMap<&'static str, &'static str> {
         ("uid", "sampleuid"),
         ("repo_uid", "sampleuid"),
         ("owner_uid", "sampleuid"),
+        ("owner", "sampleowner"),
         ("parent_uid", "sampleuid"),
         ("user_uid", "sampleuid"),
         ("mirror_id", "samplemirror"),

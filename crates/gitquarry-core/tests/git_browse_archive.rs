@@ -2,6 +2,7 @@
 // module's doc comment); its public items are re-exported at
 // `git::browse::*`, which is the path visible from outside the crate.
 use gitquarry_core::git::browse::*;
+use gitquarry_test_support::{Work, git};
 use std::io::Read;
 
 #[test]
@@ -17,27 +18,13 @@ fn archive_filename_flattens_a_slash_in_the_rev() {
 
 #[tokio::test]
 async fn archive_pair_zip_matches_a_native_git_archive_zip() {
-    let dir = tempfile::tempdir().unwrap();
-    let work = dir.path();
-    let git_dir = work.join(".git");
-    let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    run(&["init", "--quiet", "--initial-branch=main"]);
-    std::fs::create_dir(work.join("sub")).unwrap();
-    std::fs::write(work.join("sub/nested.txt"), "hello from a subdir\n").unwrap();
-    std::fs::write(work.join("top.txt"), "top level\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "--quiet", "-m", "c"]);
+    let work = Work::new().await;
+    work.commit(
+        &[("sub/nested.txt", "hello from a subdir\n"), ("top.txt", "top level\n")],
+        "c",
+    )
+    .await;
+    let git_dir = work.git_dir();
 
     let (tar_gz, zip_bytes) = archive_pair(&git_dir, "main").await.unwrap();
     assert!(!tar_gz.is_empty());
@@ -74,25 +61,9 @@ async fn archive_pair_zip_matches_a_native_git_archive_zip() {
 
 #[tokio::test]
 async fn archive_one_matches_archive_pair_for_each_format() {
-    let dir = tempfile::tempdir().unwrap();
-    let work = dir.path();
-    let git_dir = work.join(".git");
-    let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    run(&["init", "--quiet", "--initial-branch=main"]);
-    std::fs::write(work.join("f.txt"), "content\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "--quiet", "-m", "c"]);
+    let work = Work::new().await;
+    work.commit(&[("f.txt", "content\n")], "c").await;
+    let git_dir = work.git_dir();
 
     // Same mechanism, so a normal branch's on-demand download
     // (`archive_one`, one format at a time) and a release's generated
@@ -131,61 +102,32 @@ async fn archive_one_matches_archive_pair_for_each_format() {
     assert!(archive_one(&git_dir, "main", "rar").await.is_err());
 }
 
-/// The cap has to stop the read, not just complain afterwards — an archive
-/// bigger than the ceiling must never be fully buffered first. Exercised
-/// through `run_capped` directly (an actual 512 MiB tree is not a test
-/// fixture); `git::browse::archive` is the one caller, always with
-/// `MAX_ARCHIVE_BYTES`.
+// The cap has to stop the read, not just complain afterwards: an archive
+// bigger than MAX_ARCHIVE_BYTES must never be fully buffered first. The
+// fixture is a sparse 513 MiB file of zeros, streamed into a pack by
+// `hash-object` (it's over git's default 512 MiB `core.bigFileThreshold`) so
+// neither disk nor git ever holds it uncompressed; `archive` still reads
+// 512 MiB of tar output before the cap trips.
 #[tokio::test]
-async fn run_capped_rejects_output_over_the_ceiling() {
-    use std::ffi::OsStr;
-
+async fn archive_rejects_output_over_max_archive_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    let work = dir.path();
-    let git_dir = work.join(".git");
-    let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    run(&["init", "--quiet", "--initial-branch=main"]);
-    std::fs::write(work.join("top.txt"), "top level\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "--quiet", "-m", "c"]);
+    let work = Work::new().await;
+    let big = dir.path().join("big.bin");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(MAX_ARCHIVE_BYTES + (1 << 20))
+        .unwrap();
+    let blob = git(work.path(), &["hash-object", "-w", "--", big.to_str().unwrap()]).await;
+    std::fs::remove_file(&big).unwrap();
+    // Staged straight from the object store, so the blob is never checked
+    // out (or rehashed) at full size.
+    let cacheinfo = format!("100644,{blob},big.bin");
+    git(work.path(), &["update-index", "--add", "--cacheinfo", &cacheinfo]).await;
+    let tree = git(work.path(), &["write-tree"]).await;
+    let commit = git(work.path(), &["commit-tree", "-m", "big", &tree]).await;
+    git(work.path(), &["update-ref", "refs/heads/main", &commit]).await;
+    let git_dir = work.git_dir();
 
-    // The same archive that succeeds uncapped fails under a 1-byte ceiling.
-    let uncapped = gitquarry_core::git::run_capped(
-        Some(&git_dir),
-        &[
-            OsStr::new("archive"),
-            OsStr::new("--format=tar"),
-            OsStr::new("--end-of-options"),
-            OsStr::new("main"),
-        ],
-        1 << 20,
-    )
-    .await
-    .unwrap();
-    assert!(!uncapped.is_empty());
-
-    let err = gitquarry_core::git::run_capped(
-        Some(&git_dir),
-        &[
-            OsStr::new("archive"),
-            OsStr::new("--format=tar"),
-            OsStr::new("--end-of-options"),
-            OsStr::new("main"),
-        ],
-        1,
-    )
-    .await
-    .unwrap_err();
+    let err = archive(&git_dir, "main", "tar").await.unwrap_err();
     assert!(err.to_string().contains("limit"), "unexpected error: {err}");
 }

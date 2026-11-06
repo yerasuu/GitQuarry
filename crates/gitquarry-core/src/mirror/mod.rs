@@ -10,9 +10,6 @@
 
 pub mod deleted_repo_sweep;
 pub mod gc;
-#[cfg(any(test, feature = "test-util"))]
-pub mod hook;
-#[cfg(not(any(test, feature = "test-util")))]
 mod hook;
 pub mod policy;
 pub mod recent;
@@ -132,11 +129,6 @@ pub async fn ensure_bare_repo(bare_repo: &Path, exe_path: &Path) -> Result<()> {
 
 /// POSIX sh-style single-quoting, to put an arbitrary path into the hook
 /// script without a `'` or a space breaking (or injecting into) the command.
-#[cfg(any(test, feature = "test-util"))]
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
@@ -239,6 +231,52 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
     }
 
     Ok(())
+}
+
+/// Syncs a peer-repo mirror via a real `git fetch` against the peer's own
+/// URL, instead of S3 — federation layer 2 (`docs/federation-concept.md`),
+/// [`sync_bare_repo_from_s3`]'s counterpart for
+/// [`crate::app::AppContext::open_remote_mirror`]. Thin wrapper: all the
+/// actual git plumbing (`--prune`, HEAD-symref discovery) lives in
+/// [`git::fetch_remote_url`].
+pub async fn sync_bare_repo_from_remote_url(bare_repo: &Path, url: &str) -> Result<()> {
+    git::fetch_remote_url(bare_repo, url).await
+}
+
+/// How a local bare mirror gets its refs/packs made current — the one seam
+/// between `AppContext::open_mirror`/`open_remote_mirror_at` (both otherwise
+/// identical: validate path, lock, [`ensure_bare_repo`], sync, `gc::touch_last_access`)
+/// and which of the two real sync mechanisms this codebase already has
+/// applies. Not `#[async_trait]`/`dyn`-boxed: both call sites know their
+/// concrete strategy at compile time, so a plain generic parameter is
+/// enough — no need for the extra indirection [`crate::mirror::external::forge::ForgeApi`]'s
+/// dynamic dispatch earns itself (there, the provider is only known at
+/// runtime from `ExternalMirror.provider`).
+pub(crate) trait SyncStrategy {
+    async fn sync(&self, bare_repo: &Path) -> Result<()>;
+}
+
+/// [`AppContext::open_mirror`]'s strategy: this bucket's own S3 manifest.
+pub(crate) struct FromBucket<'a> {
+    pub remote: &'a crate::storage::remote::Remote,
+}
+
+impl SyncStrategy for FromBucket<'_> {
+    async fn sync(&self, bare_repo: &Path) -> Result<()> {
+        sync_bare_repo_from_s3(self.remote, bare_repo).await
+    }
+}
+
+/// [`AppContext::open_remote_mirror_at`]'s strategy: a real `git fetch`
+/// against a linked peer's own URL.
+pub(crate) struct FromRemoteUrl<'a> {
+    pub url: &'a str,
+}
+
+impl SyncStrategy for FromRemoteUrl<'_> {
+    async fn sync(&self, bare_repo: &Path) -> Result<()> {
+        sync_bare_repo_from_remote_url(bare_repo, self.url).await
+    }
 }
 
 /// A repo's display name and uid, always passed down to a spawned git

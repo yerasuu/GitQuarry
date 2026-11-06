@@ -42,9 +42,15 @@ pub fn url_encode(s: &str) -> String {
 /// slip past a naive `starts_with("//")` check and still resolve to
 /// `//evil.com`. Shared by every `return_to`-style redirect target
 /// ([`crate::auth::web::login`], [`crate::auth::web::favorites`], and the preference
-/// toggles) so the check only needs fixing in one place.
+/// toggles) so the check only needs fixing in one place. Also rejects any
+/// control character or whitespace: the URL parser strips tab/CR/LF before
+/// resolving, so `/\t/evil.com` would otherwise reach the browser as
+/// `//evil.com`, and no legitimate local path carries a raw one.
 pub(crate) fn is_local_redirect(s: &str) -> bool {
-    s.starts_with('/') && !s.starts_with("//") && !s.contains('\\')
+    s.starts_with('/')
+        && !s.starts_with("//")
+        && !s.contains('\\')
+        && !s.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
 pub fn non_empty(s: String) -> Option<String> {

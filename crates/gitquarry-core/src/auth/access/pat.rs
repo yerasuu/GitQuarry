@@ -17,9 +17,6 @@ use s3db::{Backend, Cipher, Collection};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(any(test, feature = "test-util"))]
-pub const MAX_PAT_LABEL_LEN: usize = 128;
-#[cfg(not(any(test, feature = "test-util")))]
 const MAX_PAT_LABEL_LEN: usize = 128;
 
 pub(crate) fn now_secs() -> u64 {

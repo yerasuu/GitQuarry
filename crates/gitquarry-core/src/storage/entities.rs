@@ -33,6 +33,14 @@ pub struct ServerSettings {
     /// `crate::mirror::gc::parse_size` syntax (`"5G"`, `"512M"`, ...).
     #[serde(default)]
     pub mirrors_max_size: Option<String>,
+    /// `crate::mirror::gc::parse_size` syntax (`"1G"`, ...). A mirror at or
+    /// above this size is exempt from age-based eviction — re-deriving a
+    /// large mirror from the bucket is real decrypt-and-reconstruct work,
+    /// so going untouched for a while shouldn't throw it away for free. It
+    /// still fully participates in the size-based pass, so
+    /// `mirrors_max_size` is never bypassed.
+    #[serde(default)]
+    pub mirrors_large_repo_threshold: Option<String>,
     /// OIDC login for the web UI (admin pages + reading `private` repos as a
     /// matching [`crate::auth::entities::User`]). All four fields are required
     /// together — see [`gitquarry_auth_crypto::oidc::discover`] — or OIDC stays off and
@@ -142,6 +150,13 @@ pub struct ServerSettings {
     /// varies too much per deployment to default to anything real.
     #[serde(default)]
     pub source_link: Option<String>,
+    /// The URL people reach this instance at (`https://git.example.com`).
+    /// Passkeys are bound to its host (the WebAuthn relying-party id) and
+    /// signed for its origin, so they stay off until this is set: deriving
+    /// either from a request's own `Host` header would let any name the
+    /// server answers to mint credentials for itself.
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// Pijul-Nest/Forgejo-style repo visibility. The two git protocol
@@ -263,8 +278,8 @@ pub struct RepoConfig {
     #[serde(default)]
     pub last_push_commits: Option<u32>,
     /// Short name (`refs/heads/` stripped) of the branch [`Self::last_push`]
-    /// landed on — always the repo's default branch, since that's the only
-    /// branch this ever fires for, but stored rather than re-derived so the
+    /// landed on — any branch, not only the default one (the default wins
+    /// when one push moves several). Stored rather than re-derived so the
     /// home page's activity line doesn't need its own `Manifest` fetch just
     /// to name it.
     #[serde(default)]
@@ -363,6 +378,14 @@ pub struct RepoConfig {
     /// to leave with no existence check at all.
     #[serde(default)]
     pub forked_from: Option<Uid>,
+    /// Set instead of `forked_from` when the source repo lives on a linked
+    /// peer instance (federation layer 2, `docs/federation-concept.md`) —
+    /// there's no local `Uid` for a repo this bucket never created. Additive
+    /// field, `#[serde(default)]`: every `RepoConfig` written before this
+    /// existed just deserializes with `None` here, same as any other field
+    /// added over time on this struct.
+    #[serde(default)]
+    pub forked_from_peer: Option<PeerOrigin>,
     /// How many repos have this one as their `forked_from`. Maintained
     /// incrementally (best-effort CAS bump on the source repo each time
     /// `webui::fork` creates a new fork — see there) rather than computed by
@@ -416,4 +439,15 @@ pub struct RepoConfig {
 pub struct Label {
     pub name: String,
     pub color: String,
+}
+
+/// Where a peer-forked repo came from — the peer's `Peer::name` (not its
+/// `web_base_url`: the peer might get re-linked at a different URL later,
+/// the name is the stable label) plus the repo's full name on that peer at
+/// fork time. Display-only, same as a plain `forked_from` link: never
+/// re-resolved live, never a basis for any permission decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerOrigin {
+    pub peer: String,
+    pub repo: String,
 }

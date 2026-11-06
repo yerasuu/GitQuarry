@@ -77,40 +77,10 @@ pub async fn resolve_repo_name(backend: &dyn Backend, cipher: &Cipher, full_name
     Ok(pointer.map(|p| p.uid))
 }
 
-/// CAS-writes the `full_name -> uid` claim. `expected_etag = None` for a
-/// fresh claim (fails with `Cas::Conflict` if the name is already taken);
-/// `Some(etag)` from a prior [`resolve_repo_name`] to reclaim a name whose
-/// existing claim has been confirmed stale (its uid's own repo data no
-/// longer exists) — that confirmation needs a live `Remote`, which this
-/// module doesn't depend on, so it's the caller's job (see
-/// `AppContext::create_repo`), not this function's.
-///
-/// Test-only: real code always goes through [`claim_repo_name_self_healing`]
-/// (`AppContext::create_repo`'s only caller), which never falls back to this
-/// plain CAS-create directly.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn claim_repo_name(
-    backend: &dyn Backend,
-    cipher: &Cipher,
-    full_name: &str,
-    uid: &Uid,
-    expected_etag: Option<&str>,
-) -> Result<Cas> {
-    REPO_NAME_INDEX
-        .put_raw(
-            backend,
-            cipher,
-            full_name,
-            &RepoUidPointer { uid: uid.clone() },
-            expected_etag,
-        )
-        .await
-}
-
 /// Best-effort delete of a repo-name claim — call only after the repo
 /// itself is gone (`delete_repo`) or once a `move_repo` has finished
 /// pointing `full_name` at its new value. A failure here just leaves a
-/// stale hint the next [`claim_repo_name`] conflict self-heals through.
+/// stale hint the next [`claim_repo_name_self_healing`] conflict self-heals through.
 pub async fn release_repo_name(backend: &dyn Backend, full_name: &str) {
     let _ = REPO_NAME_INDEX.release(backend, full_name).await;
 }
@@ -233,12 +203,36 @@ pub async fn bump_pack_bytes(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, 
 /// Same as [`bump_pack_bytes`], for `RepoConfig::lfs_bytes` — called once
 /// per genuinely new LFS object upload (the caller only calls this when
 /// the oid didn't already exist, see that field's own doc comment).
+///
+/// Unlike [`bump_pack_bytes`] it retries a lost CAS: an upload usually
+/// lands right after a push, whose out-of-process hook has just rewritten
+/// this config behind the server's read cache, so the first attempt almost
+/// always conflicts — and a dropped bump here is an LFS object never
+/// counted against the owner's quota. A failure that survives the retries
+/// is logged, not returned, since the object itself is already stored.
 pub async fn bump_lfs_bytes(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, delta_bytes: u64) {
-    let Ok((mut config, etag)) = get_repo_config(backend, uid.as_str(), cipher).await else {
-        return;
-    };
-    config.lfs_bytes = config.lfs_bytes.saturating_add(delta_bytes);
-    let _ = put_repo_config(backend, uid.as_str(), &config, etag.as_deref(), cipher).await;
+    const MAX_ATTEMPTS: u32 = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        // A `Conflict` evicts the cached copy, so this re-read is fresh.
+        let (mut config, etag) = match get_repo_config(backend, uid.as_str(), cipher).await {
+            Ok((_, None)) => return,
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!(repo = %uid, delta_bytes, error = %e, "couldn't read repo config to count LFS bytes");
+                return;
+            }
+        };
+        config.lfs_bytes = config.lfs_bytes.saturating_add(delta_bytes);
+        match put_repo_config(backend, uid.as_str(), &config, etag.as_deref(), cipher).await {
+            Ok(Cas::Ok) => return,
+            Ok(Cas::Conflict) => super::cas_retry_backoff(attempt).await,
+            Err(e) => {
+                tracing::warn!(repo = %uid, delta_bytes, error = %e, "couldn't write repo config to count LFS bytes");
+                return;
+            }
+        }
+    }
+    tracing::warn!(repo = %uid, delta_bytes, "LFS bytes left uncounted: repo config kept changing concurrently");
 }
 
 /// Stamps [`RepoConfig::last_push`]/[`RepoConfig::last_push_commits`] with

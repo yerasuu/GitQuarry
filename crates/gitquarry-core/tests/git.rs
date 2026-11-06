@@ -1,27 +1,13 @@
 use gitquarry_core::git::*;
+use gitquarry_test_support::git;
 use std::path::Path;
 
-fn run_git(git_dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .env("GIT_DIR", git_dir)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
-}
-
-fn capture_git(git_dir: &Path, args: &[&str], stdin: &str) -> String {
+/// `git` with `stdin` piped in, kept local because the shared `git` can't
+/// feed `hash-object --stdin`/`mktree`.
+fn git_with_stdin(git_dir: &Path, args: &[&str], stdin: &str) -> String {
     use std::io::Write;
     let mut child = std::process::Command::new("git")
         .env("GIT_DIR", git_dir)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -38,13 +24,13 @@ fn capture_git(git_dir: &Path, args: &[&str], stdin: &str) -> String {
 /// build genuinely diverging branches (different files touched, or the
 /// same file with non-overlapping edits) instead of a trivial
 /// fast-forward.
-fn commit_with_files(git_dir: &Path, parent: Option<&str>, files: &[(&str, &str)], message: &str) -> String {
+async fn commit_with_files(git_dir: &Path, parent: Option<&str>, files: &[(&str, &str)], message: &str) -> String {
     let mut tree_input = String::new();
     for (name, content) in files {
-        let blob = capture_git(git_dir, &["hash-object", "-w", "--stdin"], content);
+        let blob = git_with_stdin(git_dir, &["hash-object", "-w", "--stdin"], content);
         tree_input.push_str(&format!("100644 blob {blob}\t{name}\n"));
     }
-    let tree = capture_git(git_dir, &["mktree"], &tree_input);
+    let tree = git_with_stdin(git_dir, &["mktree"], &tree_input);
     let mut args = vec!["commit-tree", tree.as_str()];
     if let Some(p) = parent {
         args.push("-p");
@@ -52,7 +38,7 @@ fn commit_with_files(git_dir: &Path, parent: Option<&str>, files: &[(&str, &str)
     }
     args.push("-m");
     args.push(message);
-    capture_git(git_dir, &args, "")
+    git(git_dir, &args).await
 }
 
 #[tokio::test]
@@ -60,15 +46,16 @@ async fn merge_tree_is_clean_when_the_branches_touch_different_files() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
-    let base = commit_with_files(&git_dir, None, &[("f.txt", "line1\n")], "base");
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
+    let base = commit_with_files(&git_dir, None, &[("f.txt", "line1\n")], "base").await;
     let ours = commit_with_files(
         &git_dir,
         Some(&base),
         &[("f.txt", "line1\n"), ("g.txt", "ours file\n")],
         "ours",
-    );
-    let theirs = commit_with_files(&git_dir, Some(&base), &[("f.txt", "line1\nmore\n")], "theirs");
+    )
+    .await;
+    let theirs = commit_with_files(&git_dir, Some(&base), &[("f.txt", "line1\nmore\n")], "theirs").await;
 
     match merge_tree(&git_dir, &ours, &theirs, None).await.unwrap() {
         MergeTreeOutcome::Clean(tree) => assert!(!tree.is_empty()),
@@ -81,10 +68,10 @@ async fn merge_tree_reports_conflicted_paths() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
-    let base = commit_with_files(&git_dir, None, &[("f.txt", "line one\n")], "base");
-    let ours = commit_with_files(&git_dir, Some(&base), &[("f.txt", "ours version\n")], "ours");
-    let theirs = commit_with_files(&git_dir, Some(&base), &[("f.txt", "theirs version\n")], "theirs");
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
+    let base = commit_with_files(&git_dir, None, &[("f.txt", "line one\n")], "base").await;
+    let ours = commit_with_files(&git_dir, Some(&base), &[("f.txt", "ours version\n")], "ours").await;
+    let theirs = commit_with_files(&git_dir, Some(&base), &[("f.txt", "theirs version\n")], "theirs").await;
 
     match merge_tree(&git_dir, &ours, &theirs, None).await.unwrap() {
         MergeTreeOutcome::Conflicted(paths) => assert_eq!(paths, vec!["f.txt".to_string()]),
@@ -97,15 +84,16 @@ async fn commit_tree_writes_a_commit_with_the_given_parents_and_message() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
-    let base = commit_with_files(&git_dir, None, &[("f.txt", "line1\n")], "base");
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
+    let base = commit_with_files(&git_dir, None, &[("f.txt", "line1\n")], "base").await;
     let ours = commit_with_files(
         &git_dir,
         Some(&base),
         &[("f.txt", "line1\n"), ("g.txt", "ours file\n")],
         "ours",
-    );
-    let theirs = commit_with_files(&git_dir, Some(&base), &[("f.txt", "line1\nmore\n")], "theirs");
+    )
+    .await;
+    let theirs = commit_with_files(&git_dir, Some(&base), &[("f.txt", "line1\nmore\n")], "theirs").await;
 
     let tree = match merge_tree(&git_dir, &ours, &theirs, None).await.unwrap() {
         MergeTreeOutcome::Clean(tree) => tree,
@@ -128,10 +116,10 @@ async fn commit_tree_writes_a_commit_with_the_given_parents_and_message() {
     .unwrap();
     assert_eq!(merge_sha.len(), 40);
 
-    let parents = capture_git(&git_dir, &["log", "-1", "--format=%P", &merge_sha], "");
+    let parents = git(&git_dir, &["log", "-1", "--format=%P", &merge_sha]).await;
     assert!(parents.contains(&ours[..8]), "{parents}");
     assert!(parents.contains(&theirs[..8]), "{parents}");
-    let subject = capture_git(&git_dir, &["log", "-1", "--format=%s", &merge_sha], "");
+    let subject = git(&git_dir, &["log", "-1", "--format=%s", &merge_sha]).await;
     assert_eq!(subject, "-merge message");
 }
 
@@ -140,13 +128,14 @@ async fn oversized_new_blobs_flags_only_the_blob_over_the_limit() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
     let sha = commit_with_files(
         &git_dir,
         None,
         &[("small.txt", "hi\n"), ("big.bin", &"x".repeat(200))],
         "init",
-    );
+    )
+    .await;
 
     let oversized = oversized_new_blobs(&git_dir, &sha, &[], 100).await.unwrap();
     assert_eq!(oversized.len(), 1);
@@ -159,8 +148,8 @@ async fn oversized_new_blobs_is_empty_under_the_limit() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
-    let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init");
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
+    let sha = commit_with_files(&git_dir, None, &[("f.txt", "hello\n")], "init").await;
 
     let oversized = oversized_new_blobs(&git_dir, &sha, &[], 100).await.unwrap();
     assert!(oversized.is_empty());
@@ -171,9 +160,9 @@ async fn oversized_new_blobs_ignores_a_blob_already_covered_by_have_tips() {
     let dir = tempfile::tempdir().unwrap();
     let git_dir = dir.path().join("repo.git");
     std::fs::create_dir_all(&git_dir).unwrap();
-    run_git(&git_dir, &["init", "--quiet", "--bare"]);
-    let base = commit_with_files(&git_dir, None, &[("big.bin", &"x".repeat(200))], "base");
-    let next = commit_with_files(&git_dir, Some(&base), &[("big.bin", &"x".repeat(200))], "next");
+    git(&git_dir, &["init", "--quiet", "--bare"]).await;
+    let base = commit_with_files(&git_dir, None, &[("big.bin", &"x".repeat(200))], "base").await;
+    let next = commit_with_files(&git_dir, Some(&base), &[("big.bin", &"x".repeat(200))], "next").await;
 
     // `base` already has the oversized blob; a push moving the tip from
     // `base` to `next` introduces no new blob at all.

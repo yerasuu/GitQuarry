@@ -20,3 +20,15 @@ access_key_id = "gitquarry"
 secret_access_key = "gitquarry-test-only"
 path_style = true
 passphrase = "local-test-passphrase-not-secret"
+
+## Optional: only needed to run a `gitquarry-federation` process alongside
+## this one (peer discovery, remote browse/fork, PR-proxy, fine-grained
+## tokens). Absent entirely = core runs standalone, no federation routes
+## registered at all. `internal_token` here must match the same key in
+## deploy/gitquarry-federation.minio-test.toml.example exactly -- it's the
+## shared secret both sides use to authenticate loopback calls to each
+## other, never auto-generated or synced between the two config files.
+# [federation]
+# internal_bind = "127.0.0.1:8091"
+# internal_token = "local-test-internal-token-not-secret"
+# federation_url = "http://127.0.0.1:8181"

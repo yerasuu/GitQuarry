@@ -1,0 +1,63 @@
+## Throwaway config for running gitquarry-federation against the same local
+## MinIO test bucket gitquarry-core uses (see
+## deploy/gitquarry.minio-test.toml.example) -- both binaries share the
+## same bucket+passphrase, different code owning different S3 key prefixes
+## (see CLAUDE.md's Storage section). Copy to
+## gitquarry-federation.minio-test.toml (gitignored, same as the core one)
+## and point GITQUARRY_FEDERATION_CONFIG at it:
+##
+##   cp deploy/gitquarry-federation.minio-test.toml.example deploy/gitquarry-federation.minio-test.toml
+##   GITQUARRY_FEDERATION_CONFIG=./deploy/gitquarry-federation.minio-test.toml cargo run -p gitquarry-federation
+##
+## `passphrase` must match the target bucket's own passphrase in
+## gitquarry.toml exactly -- federation bootstraps against the same
+## encryption key core already established for this bucket, it never picks
+## its own. `internal_token` must match core's own `[federation].internal_token`
+## exactly -- the shared secret both sides use to authenticate loopback
+## calls to each other.
+
+driver = "s3"
+bucket = "gitquarry-test"
+endpoint_url = "http://localhost:9090"
+region = "us-east-1"
+access_key_id = "gitquarry"
+secret_access_key = "gitquarry-test-only"
+path_style = true
+passphrase = "local-test-passphrase-not-secret"
+
+## Federation's own loopback bind -- core's [federation].federation_url
+## points here. 127.0.0.1 only, never a public listener of its own (see
+## CLAUDE.md's IPC section).
+listen = "127.0.0.1:8181"
+
+## Where core's own /_internal/* API listens -- matches core's
+## [federation].internal_bind exactly.
+core_internal_url = "http://127.0.0.1:8091"
+
+internal_token = "local-test-internal-token-not-secret"
+
+## Optional: only needed to let this instance initiate gossip (it always
+## answers an incoming announce regardless). Set both to this instance's
+## own real public address to identify itself to peers it gossips with.
+# own_web_base_url = "http://localhost:8080"
+# own_git_base_url = "http://localhost:8080"
+# seed_peers = ["http://some-other-instance.example"]
+
+## Rate limiting (inbound, public unauthenticated requests -- gossip,
+## /_api/*). Defaults shown below; uncomment to change.
+# rate_limit_public_max = 60
+# rate_limit_public_window_secs = 60
+# rate_limit_token_max = 120
+# rate_limit_token_window_secs = 60
+
+## A moderator can set a per-peer `rate_limit_override` on /_peers to raise
+## or lower one specific linked peer's ceiling. Attributing an inbound
+## request to that peer is a caller-IP-vs-stored-host text match, not a
+## cryptographic guarantee -- anyone sharing the peer's egress IP gets the
+## same treatment, and the peer itself could evade its own override by
+## calling from elsewhere. Default true: the override is opt-in and
+## moderator-set to begin with, so this only ever affects a peer someone
+## already chose to single out. Set false to ignore every
+## `rate_limit_override` and always use the plain ceiling above, with no
+## per-peer exceptions at all.
+# rate_limit_peer_override_by_ip = true

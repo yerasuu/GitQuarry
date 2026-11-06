@@ -10,7 +10,7 @@
 //! binary, one process — the crate boundary is compile-time, not a second
 //! service to run.
 
-pub mod auth;
-pub mod search;
-pub mod settings;
+pub(crate) mod auth;
+pub(crate) mod search;
+pub(crate) mod settings;
 pub mod webui;

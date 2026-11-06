@@ -6,60 +6,36 @@
 //! creates itself every time a merge request is merged.
 
 use gitquarry_core::git::browse::{diffstat, show_commit};
+use gitquarry_test_support::{Work, git};
 
 /// A repo whose `main` has a real merge commit at its tip: `main` and
 /// `feature` each add their own file, then `main` merges `feature`.
 /// Deliberately a *clean* merge — that is the case the combined diff
 /// (`--cc`) would still render empty, and the overwhelmingly common one.
-fn repo_with_a_merge() -> (tempfile::TempDir, String) {
-    let dir = tempfile::tempdir().unwrap();
-    let work = dir.path().to_path_buf();
-    let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .current_dir(&work)
-            .env("GIT_AUTHOR_NAME", "Test Author")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test Author")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    };
-    run(&["init", "--quiet", "--initial-branch=main"]);
-    std::fs::write(work.join("base.txt"), "base\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "--quiet", "-m", "base"]);
+async fn repo_with_a_merge() -> (Work, String) {
+    let work = Work::new().await;
+    work.commit(&[("base.txt", "base\n")], "base").await;
 
-    run(&["switch", "--quiet", "-c", "feature"]);
-    std::fs::write(work.join("from-feature.txt"), "feature side\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "--quiet", "-m", "feature work"]);
+    git(work.path(), &["switch", "--quiet", "-c", "feature"]).await;
+    work.commit(&[("from-feature.txt", "feature side\n")], "feature work")
+        .await;
 
-    run(&["switch", "--quiet", "main"]);
-    std::fs::write(work.join("from-main.txt"), "main side\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "--quiet", "-m", "main work"]);
-    run(&["merge", "--quiet", "--no-ff", "-m", "Merge merge request #1", "feature"]);
-
-    let sha = String::from_utf8(
-        std::process::Command::new("git")
-            .current_dir(&work)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .unwrap()
-            .stdout,
+    git(work.path(), &["switch", "--quiet", "main"]).await;
+    work.commit(&[("from-main.txt", "main side\n")], "main work").await;
+    git(
+        work.path(),
+        &["merge", "--quiet", "--no-ff", "-m", "Merge merge request #1", "feature"],
     )
-    .unwrap()
-    .trim()
-    .to_string();
-    (dir, sha)
+    .await;
+
+    let sha = git(work.path(), &["rev-parse", "HEAD"]).await;
+    (work, sha)
 }
 
 #[tokio::test]
 async fn a_merge_commit_shows_what_it_brought_onto_the_branch() {
-    let (dir, sha) = repo_with_a_merge();
-    let git_dir = dir.path().join(".git");
+    let (work, sha) = repo_with_a_merge().await;
+    let git_dir = work.git_dir();
 
     let (info, patch) = show_commit(&git_dir, &sha).await.unwrap();
 
@@ -78,8 +54,8 @@ async fn a_merge_commit_shows_what_it_brought_onto_the_branch() {
 /// or a merge page claims changes it then doesn't render.
 #[tokio::test]
 async fn a_merge_commits_stat_matches_its_patch() {
-    let (dir, sha) = repo_with_a_merge();
-    let git_dir = dir.path().join(".git");
+    let (work, sha) = repo_with_a_merge().await;
+    let git_dir = work.git_dir();
 
     let stat = diffstat(&git_dir, &sha).await.unwrap();
 
@@ -91,19 +67,9 @@ async fn a_merge_commits_stat_matches_its_patch() {
 /// changes nothing when there is only one parent to diff against.
 #[tokio::test]
 async fn an_ordinary_commit_still_shows_its_own_change() {
-    let (dir, _) = repo_with_a_merge();
-    let git_dir = dir.path().join(".git");
-    let sha = String::from_utf8(
-        std::process::Command::new("git")
-            .current_dir(dir.path())
-            .args(["rev-parse", "HEAD^"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_string();
+    let (work, _) = repo_with_a_merge().await;
+    let git_dir = work.git_dir();
+    let sha = git(work.path(), &["rev-parse", "HEAD^"]).await;
 
     let (info, patch) = show_commit(&git_dir, &sha).await.unwrap();
 

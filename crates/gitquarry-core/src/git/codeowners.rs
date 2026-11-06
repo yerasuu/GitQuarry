@@ -51,6 +51,21 @@ pub fn owners_for_path<'a>(rules: &'a [Rule], path: &str) -> &'a [String] {
         .unwrap_or(&[])
 }
 
+/// Whole-string, `/`-segmented glob match — `*` within one segment, `**`
+/// spanning zero or more segments — with none of [`matches`]'s CODEOWNERS-
+/// specific rules (leading-`/` stripping, a trailing `/` meaning "everything
+/// under this directory", a slash-free pattern matching any path's *last*
+/// segment repo-wide). Every segment of `pattern` is matched positionally
+/// against `candidate`: `release/*` matches `release/1.0` but not
+/// `team/release/1.0` (use `**/release/*` for that) — the predictable
+/// behavior a caller matching whole names (e.g. branch names, not file
+/// paths) wants, rather than CODEOWNERS' own path conventions.
+pub fn segments_match(pattern: &str, candidate: &str) -> bool {
+    let pattern_segs: Vec<&str> = pattern.split('/').collect();
+    let candidate_segs: Vec<&str> = candidate.split('/').collect();
+    match_segments(&pattern_segs, &candidate_segs)
+}
+
 fn matches(pattern: &str, path: &str) -> bool {
     let pattern = pattern.strip_prefix('/').unwrap_or(pattern);
     if let Some(dir) = pattern.strip_suffix('/') {

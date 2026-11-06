@@ -9,8 +9,8 @@
 use super::login;
 use crate::settings::web::require_admin;
 use crate::webui::{
-    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme, layout,
-    non_empty, render_flash, require_csrf,
+    AppError, Flash, State_, admin_header, csrf_field, effective_density, effective_locale, effective_theme,
+    federation_ui_active, layout, non_empty, render_flash, require_csrf,
 };
 use anyhow::Result;
 use axum::extract::{Form, Query, State};
@@ -44,7 +44,7 @@ pub(crate) async fn handler_users_get(
     let body = render_users_page(&users, &repo_names, &csrf_field(&headers), None, &q, locale).into_string();
     Ok(axum::response::Html(layout(
         "users",
-        &admin_header("users", locale),
+        &admin_header("users", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,
@@ -97,8 +97,7 @@ pub struct UsersForm {
     /// got the `<input>` element instead of the URL, 404-ing. Every form on
     /// this page shares this one struct/field, so the rename applies even
     /// to the few plain ones too. Rust field name unchanged -- this only
-    /// affects the wire (`Form<UsersForm>`) deserialization, not the
-    /// struct-literal construction the test suite already uses.
+    /// affects the wire (`Form<UsersForm>`) deserialization.
     #[serde(rename = "user_action")]
     pub action: String,
     #[serde(default)]
@@ -207,14 +206,16 @@ pub(crate) async fn handler_users_post(
     };
     // `action_result` is `Ok` past this point (both error arms above
     // already returned). Two targets, by action: everything whose whole
-    // effect stays contained inside one user's own card (`is_admin`
-    // badge, pubkey/repo-perm tables, email, password, quota, TOTP button)
-    // swaps just that card; `add_user`/`delete_user` change *which* cards
-    // exist at all, so those swap the whole `#users-list`.
+    // effect stays contained inside one user's own card (`is_admin`/
+    // `is_federation_moderator` badge, pubkey/repo-perm tables, email,
+    // password, quota, TOTP button) swaps just that card; `add_user`/
+    // `delete_user` change *which* cards exist at all, so those swap the
+    // whole `#users-list`.
     if is_async
         && matches!(
             form.action.as_str(),
             "toggle_admin"
+                | "toggle_federation_moderator"
                 | "remove_pubkey"
                 | "add_pubkey"
                 | "remove_repo_perm"
@@ -249,7 +250,7 @@ pub(crate) async fn handler_users_post(
     let body = render_users_page(&users, &repo_names, &csrf_field(&headers), Some(flash), "", locale).into_string();
     Ok(axum::response::Html(layout(
         "users",
-        &admin_header("users", locale),
+        &admin_header("users", federation_ui_active(&ctx), locale),
         &body,
         &topnav,
         effective_theme(&ctx, &headers).await,
@@ -271,11 +272,7 @@ pub(crate) async fn handler_users_post(
 /// exceptional errors (backend/storage via bare `?`) — this whole route is
 /// already admin-gated by the caller, so there's no separate authorization
 /// class to keep apart here the way `groups::apply_groups_action` does.
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `AppError` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub async fn apply_users_action(
+pub(crate) async fn apply_users_action(
     ctx: &gitquarry_core::app::AppContext,
     form: &UsersForm,
     locale: gitquarry_i18n::Locale,
@@ -334,6 +331,9 @@ pub async fn apply_users_action(
         "toggle_admin" => domain::user::toggle_admin(ctx, &form.username, locale)
             .await
             .map_err(|e| e.to_string()),
+        "toggle_federation_moderator" => domain::user::toggle_federation_moderator(ctx, &form.username, locale)
+            .await
+            .map_err(|e| e.to_string()),
         // No re-auth check here (unlike the self-service action in
         // `auth::web::security`) — this admin action IS the account-recovery path
         // for a user who lost their TOTP device: this app has no other one
@@ -371,11 +371,7 @@ pub async fn apply_users_action(
     })
 }
 
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub fn render_users_page(
+pub(crate) fn render_users_page(
     users: &[User],
     repo_names: &HashMap<Uid, (String, String)>,
     csrf: &str,
@@ -578,6 +574,14 @@ pub fn render_user(
                 input type="hidden" name="user_action" value="toggle_admin";
                 input type="hidden" name="username" value=(user.username);
                 button type="submit" { (if user.is_admin { t::remove_admin_button(locale) } else { t::make_admin_button(locale) }) }
+            }
+            form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) {
+                (PreEscaped(csrf))
+                input type="hidden" name="user_action" value="toggle_federation_moderator";
+                input type="hidden" name="username" value=(user.username);
+                button type="submit" {
+                    (if user.is_federation_moderator { t::remove_federation_moderator_button(locale) } else { t::make_federation_moderator_button(locale) })
+                }
             }
             @if user.totp_enabled {
                 form method="post" action="/_users" class="inline-form" data-async data-async-target=(card_target) data-confirm=(t::disable_totp_confirm(locale, &user.username)) {

@@ -11,7 +11,7 @@
 use super::uid::Uid;
 use super::{Backend, Cas, REPOS_PREFIX};
 use crate::crypto::Cipher;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use s3db::Collection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -84,23 +84,109 @@ pub async fn get_lock(
     lfs_locks_collection(uid).get(backend, cipher, &id.to_string()).await
 }
 
-/// Create-only CAS (`expected_etag: None`) — the caller
-/// (`git::lfs::create_lock_response`) has already checked no other lock
-/// claims the same path, so a conflict here only ever means an id collision
-/// (impossible with a freshly minted one) or a genuine race, both of which
-/// should fail loudly rather than silently overwrite.
-pub async fn put_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, lock: &LfsLock) -> Result<Cas> {
-    lfs_locks_collection(uid)
-        .put(backend, cipher, &lock.id.to_string(), lock, None)
-        .await
+/// Which lock id holds a path — the create-only CAS on this object is what
+/// makes "one lock per path" atomic, since lock records themselves are
+/// keyed by id and two creators racing on one path would otherwise both
+/// pass a list-then-put check.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct PathClaim {
+    #[serde(default)]
+    id: u64,
 }
 
-pub async fn delete_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, id: u64) {
-    let _ = lfs_locks_collection(uid).delete(backend, cipher, &id.to_string()).await;
+fn lock_paths_collection(uid: &Uid) -> Collection {
+    Collection::new_owned(format!("{REPOS_PREFIX}/{uid}/lfs-lock-paths"))
+}
+
+/// Base64 because a repo path carries `/`, which would split one claim
+/// across key segments.
+fn path_claim_name(path: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path)
+}
+
+pub enum CreatedLock {
+    Created(LfsLock),
+    /// Someone else's lock already holds the path.
+    Held(LfsLock),
+}
+
+/// Takes `path` for `owner` under a freshly minted id, atomically per path.
+///
+/// The lock record is written before its path claim, so a claim always
+/// points at a record that existed: a claim whose record is gone (a crash
+/// mid-unlock) is stale and gets taken over by CAS against its own etag,
+/// while a live one is returned as [`CreatedLock::Held`] and this call's
+/// own record is removed again.
+pub async fn create_lock(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    uid: &Uid,
+    path: String,
+    owner: String,
+    locked_at: String,
+) -> Result<CreatedLock> {
+    let lock = LfsLock {
+        id: next_lock_id(backend, cipher, uid).await?,
+        path,
+        owner,
+        locked_at,
+    };
+    let locks = lfs_locks_collection(uid);
+    match locks.put(backend, cipher, &lock.id.to_string(), &lock, None).await? {
+        Cas::Ok => {}
+        Cas::Conflict => bail!("lock id {} already taken", lock.id),
+    }
+
+    let claims = lock_paths_collection(uid);
+    let claim_name = path_claim_name(&lock.path);
+    let ours = PathClaim { id: lock.id };
+    for attempt in 1..=COUNTER_MAX_RETRIES {
+        if claims.put(backend, cipher, &claim_name, &ours, None).await? == Cas::Ok {
+            return Ok(CreatedLock::Created(lock));
+        }
+        let (claim, etag) = claims.get::<PathClaim>(backend, cipher, &claim_name).await?;
+        if let Some(claim) = claim {
+            match get_lock(backend, cipher, uid, claim.id).await?.0 {
+                Some(held) if held.path == lock.path => {
+                    delete_lock_record(backend, cipher, uid, lock.id).await?;
+                    return Ok(CreatedLock::Held(held));
+                }
+                _ => {
+                    if claims.put(backend, cipher, &claim_name, &ours, etag.as_deref()).await? == Cas::Ok {
+                        return Ok(CreatedLock::Created(lock));
+                    }
+                }
+            }
+        }
+        super::cas_retry_backoff(attempt).await;
+    }
+    delete_lock_record(backend, cipher, uid, lock.id).await?;
+    bail!("too many CAS conflicts claiming lock path (giving up after {COUNTER_MAX_RETRIES} attempts)")
+}
+
+/// Releases `lock`'s path claim before its record, so the path never looks
+/// free while the record is still listed. The claim is only removed while
+/// it still names this lock: a claim pointing elsewhere belongs to a lock
+/// that took the path over after this one's claim went stale.
+pub async fn delete_lock(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, lock: &LfsLock) -> Result<()> {
+    let claims = lock_paths_collection(uid);
+    let claim_name = path_claim_name(&lock.path);
+    if let (Some(claim), _etag) = claims.get::<PathClaim>(backend, cipher, &claim_name).await?
+        && claim.id == lock.id
+    {
+        claims.delete(backend, cipher, &claim_name).await?;
+    }
+    delete_lock_record(backend, cipher, uid, lock.id).await
+}
+
+async fn delete_lock_record(backend: &dyn Backend, cipher: &Cipher, uid: &Uid, id: u64) -> Result<()> {
+    lfs_locks_collection(uid).delete(backend, cipher, &id.to_string()).await
 }
 
 /// Every lock currently held on this repo. Skips [`COUNTER_KEY`], same
-/// reasoning as `issues::list_issues`.
+/// reasoning as `issues::list_issues`. `Err` if any lock fails to load:
+/// leaving one out would tell a client its path is free when it isn't.
 pub async fn list_locks(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, uid: &Uid) -> Result<Vec<LfsLock>> {
     let collection = lfs_locks_collection(uid);
     let names: Vec<String> = collection
@@ -119,7 +205,8 @@ pub async fn list_locks(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, uid: &
     }
     let mut locks = Vec::new();
     while let Some(result) = set.join_next().await {
-        if let Ok(Ok((Some(lock), _etag))) = result {
+        // `None` is a lock unlocked between the listing and this read.
+        if let (Some(lock), _etag) = result.context("lock read task failed")?? {
             locks.push(lock);
         }
     }

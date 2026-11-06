@@ -103,6 +103,15 @@ msg!(
 );
 
 msg!(
+    /// `webui::repo::releases::handler_upload_asset_post`: a text field
+    /// (`tag`/`csrf`/`signature`) exceeded its in-memory cap.
+    text_field_too_large(field: &str, limit_bytes: usize) {
+        Locale::Es => "el campo '{field}' supera {limit_bytes} bytes",
+        Locale::En => "field '{field}' exceeds {limit_bytes} bytes",
+    }
+);
+
+msg!(
     /// `webui::repo::releases::handler_upload_asset_post`: the scratch
     /// tempfile for the uploaded asset couldn't be created.
     creating_temp_file(error: impl std::fmt::Display) {

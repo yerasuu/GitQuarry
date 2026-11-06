@@ -15,6 +15,7 @@
 pub mod codeberg;
 pub mod github;
 pub mod gitlab;
+pub mod stamp;
 
 use anyhow::{Result, bail};
 

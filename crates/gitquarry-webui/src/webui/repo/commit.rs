@@ -38,6 +38,7 @@ pub async fn render_commit(
     .await?;
     let signature = info.signature_status;
     let diff_view = effective_diff_view(headers);
+    let locale = crate::webui::effective_locale(ctx, headers).await;
     let return_to = repo_link(repo_name, "commit", "").sha(&info.sha).to_string();
 
     Ok(html! {
@@ -83,7 +84,7 @@ pub async fn render_commit(
                 " has all of it"
             }
         }
-        p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view))) }
+        p { (PreEscaped(render_diff_view_buttons(&return_to, diff_view, locale))) }
         @match diff_view {
             DiffView::Unified => div class="scroll-x" { pre class="diff" { (PreEscaped(super::components::color_diff(diff))) } },
             DiffView::Split => div class="scroll-x full-bleed" { (super::components::side_by_side_diff(diff)) },
@@ -107,16 +108,6 @@ pub async fn render_commit(
 /// a `gpg` fork per commit (see `git::browse::CommitInfo::signature_status`),
 /// so the letter is now just signed/unsigned and the only real verdict is
 /// the one above it.
-#[cfg(any(test, feature = "test-util"))]
-pub fn signature_badge(status: char) -> Markup {
-    html! {
-        @match status {
-            'N' => {} // unsigned, no badge
-            _ => { " " span class="muted" { "unverified signature (missing key)" } }
-        }
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn signature_badge(status: char) -> Markup {
     html! {
         @match status {

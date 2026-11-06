@@ -35,14 +35,21 @@ use tracing::{info, warn};
 /// a path) but that round trip can't happen: an imported comment carries
 /// `origin`, and `origin.is_some()` is exactly what the export filter
 /// skips.
-///
-/// Not `#[cfg]`-gated: called unconditionally from [`sync_one_linked_mr`]'s
-/// production comment-export path, not just from tests.
-pub fn export_body(comment: &MrComment) -> String {
+fn export_body(comment: &MrComment) -> String {
     match &comment.anchor {
         Some(anchor) => format!("`{}:{}`\n\n{}", anchor.path, anchor.line, comment.body),
         None => comment.body.clone(),
     }
+}
+
+/// How an external forge login is stored as a local MR/comment author:
+/// `host/login`. Local usernames can't contain `/`
+/// (`auth::access::validate_username`), so an imported author can never
+/// equal a local one — otherwise a same-named local user would get author
+/// rights over the imported MR and be barred from reviewing it.
+fn imported_author(mirror: &ExternalMirror, login: &str) -> String {
+    let host = crate::validate::mirror_host(&mirror.remote_url).unwrap_or_else(|| "external".to_string());
+    format!("{host}/{login}")
 }
 
 /// `Other` is the only provider tag with no real [`ForgeApi`] impl — it's a
@@ -82,18 +89,9 @@ pub async fn sync_merge_requests_once(
     sync_merge_requests_once_with(ctx, resolved, mirror, forge.as_ref()).await
 }
 
-/// [`sync_merge_requests_once`]'s real logic, taking `forge` directly rather
-/// than building it from `mirror.provider` — split out so tests can drive
-/// it with an in-memory fake forge instead of a real GitHub/GitLab/Codeberg
-/// account, per `docs/external-mirror-concept.md`'s own verification
-/// section ("el trait `ForgeApi` permite mockear GitHub... suficientemente
-/// pura para testear sin llamada real a la API").
-///
-/// Not `#[cfg]`-gated behind `test-util` like a true test-only item: this
-/// is also [`sync_merge_requests_once`]'s real production entry point, so it
-/// must stay compiled in every build — only its visibility is widened here,
-/// for the moved integration tests in `tests/mr_sync.rs`.
-pub async fn sync_merge_requests_once_with(
+/// Takes `forge` separately from `mirror` so the provider-specific client is
+/// built once per pass in [`sync_merge_requests_once`].
+async fn sync_merge_requests_once_with(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
     mirror: &ExternalMirror,
@@ -102,12 +100,15 @@ pub async fn sync_merge_requests_once_with(
     let uid = &resolved.uid;
 
     let links = access::list_mr_links(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id).await?;
-    let cursor = links
-        .iter()
-        .map(|l| l.remote_updated_cursor.as_str())
-        .filter(|c| !c.is_empty())
-        .reduce(crate::stamp::max)
-        .map(str::to_string);
+    let cursor = match mirror.mr_discovery_cursor.as_str() {
+        "" => links
+            .iter()
+            .map(|l| l.remote_updated_cursor.as_str())
+            .filter(|c| !c.is_empty())
+            .reduce(crate::stamp::max)
+            .map(str::to_string),
+        stored => Some(stored.to_string()),
+    };
 
     let mut linked_by_external: HashMap<u64, u64> = links.iter().map(|l| (l.external_number, l.local_number)).collect();
     // `BTreeSet`, not `HashSet`: the per-MR pass below walks this, and a
@@ -125,6 +126,7 @@ pub async fn sync_merge_requests_once_with(
     let (manifest, _etag) = resolved.remote.get_manifest().await?;
     let mirrored_branch = |branch: &str| manifest.refs.contains_key(&format!("refs/heads/{branch}"));
     let mut unmirrored_branches = 0usize;
+    let mut oldest_failed: Option<&str> = None;
     for remote_mr in &remote_mrs {
         if linked_by_external.contains_key(&remote_mr.number) || !mirror.direction.allows_pull() {
             continue;
@@ -133,15 +135,36 @@ pub async fn sync_merge_requests_once_with(
             unmirrored_branches += 1;
             continue;
         }
-        match create_local_mr_from_remote(ctx, resolved, &mirror.id, remote_mr).await {
+        match create_local_mr_from_remote(ctx, resolved, mirror, remote_mr).await {
             Ok(local_number) => {
                 linked_by_external.insert(remote_mr.number, local_number);
                 linked_locals.insert(local_number);
             }
-            Err(e) => warn!(
-                "couldn't mirror external MR #{} (mirror '{}') locally: {e:#}",
-                remote_mr.number, mirror.label
-            ),
+            Err(e) => {
+                warn!(
+                    "couldn't mirror external MR #{} (mirror '{}') locally: {e:#}",
+                    remote_mr.number, mirror.label
+                );
+                let updated = remote_mr.updated_at.as_str();
+                oldest_failed =
+                    Some(oldest_failed.map_or(updated, |o| if crate::stamp::later(o, updated) { updated } else { o }));
+            }
+        }
+    }
+    if mirror.direction.allows_pull() {
+        let newest = remote_mrs
+            .iter()
+            .map(|m| m.updated_at.as_str())
+            .reduce(crate::stamp::max);
+        let next = oldest_failed.or(newest.map(|n| cursor.as_deref().map_or(n, |c| crate::stamp::max(c, n))));
+        if let Some(next) = next.filter(|n| *n != mirror.mr_discovery_cursor)
+            && let Err(e) =
+                access::set_mr_discovery_cursor(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, next).await
+        {
+            warn!(
+                "couldn't record the MR discovery cursor (mirror '{}'): {e:#}",
+                mirror.label
+            );
         }
     }
 
@@ -155,6 +178,15 @@ pub async fn sync_merge_requests_once_with(
     let local_mrs = merge_requests::list_merge_requests(&ctx.backend(), &ctx.cipher, uid).await?;
     for mr in &local_mrs {
         if linked_locals.contains(&mr.number) || !mirror.direction.allows_push() {
+            continue;
+        }
+        // Only open MRs between this repo's own branches: a fork MR's head
+        // lives in a repo the external side never sees, and a closed or
+        // merged one would be opened there as if it were live.
+        if mr.status != MrStatus::Open || mr.source_repo != *uid {
+            continue;
+        }
+        if mirror.mr_export_failures.get(&mr.number).copied().unwrap_or(0) >= access::MAX_MR_EXPORT_ATTEMPTS {
             continue;
         }
         match forge
@@ -192,10 +224,21 @@ pub async fn sync_merge_requests_once_with(
                 linked_by_external.insert(created.number, mr.number);
                 linked_locals.insert(mr.number);
             }
-            Err(e) => warn!(
-                "couldn't create MR #{} (mirror '{}') on the external side: {e:#}",
-                mr.number, mirror.label
-            ),
+            Err(e) => {
+                warn!(
+                    "couldn't create MR #{} (mirror '{}') on the external side: {e:#}",
+                    mr.number, mirror.label
+                );
+                if let Err(e) =
+                    access::record_mr_export_failure(ctx.backend().as_ref(), &ctx.cipher, uid, &mirror.id, mr.number)
+                        .await
+                {
+                    warn!(
+                        "couldn't record the failed export of MR #{} (mirror '{}'): {e:#}",
+                        mr.number, mirror.label
+                    );
+                }
+            }
         }
     }
 
@@ -219,9 +262,10 @@ pub async fn sync_merge_requests_once_with(
 async fn create_local_mr_from_remote(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
-    mirror_id: &str,
+    mirror: &ExternalMirror,
     remote_mr: &RemoteMr,
 ) -> Result<u64> {
+    let author = imported_author(mirror, &remote_mr.author);
     let mr = merge_request::create(
         ctx,
         resolved,
@@ -231,7 +275,7 @@ async fn create_local_mr_from_remote(
             target_branch: &remote_mr.target_branch,
             title: &remote_mr.title,
             description: &remote_mr.body,
-            author: &remote_mr.author,
+            author: &author,
         },
         gitquarry_i18n::Locale::DEFAULT,
     )
@@ -254,7 +298,7 @@ async fn create_local_mr_from_remote(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &resolved.uid,
-        mirror_id,
+        &mirror.id,
         &link,
         None,
     )
@@ -309,11 +353,7 @@ async fn record_synced_comment(
 /// endpoint, never a plain field patch), then — only if neither side just
 /// merged this tick — ordinary title/description/open-closed last-write-wins
 /// against the link's `remote_updated_cursor`, then comments both ways.
-///
-/// Not `#[cfg]`-gated: called unconditionally from
-/// [`sync_merge_requests_once_with`]'s production loop over linked MRs, not
-/// just from tests.
-pub async fn sync_one_linked_mr(
+async fn sync_one_linked_mr(
     ctx: &AppContext,
     resolved: &ResolvedRepo,
     mirror: &ExternalMirror,
@@ -458,7 +498,7 @@ pub async fn sync_one_linked_mr(
         // No anchor: the forge APIs this imports from expose issue-style
         // comments, which carry no diff position of their own.
         let comment = MrComment {
-            author: rc.author.clone(),
+            author: imported_author(mirror, &rc.author),
             body: rc.body.clone(),
             created_at: rc.created_at.clone(),
             origin: Some(mirror.id.clone()),

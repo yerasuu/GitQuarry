@@ -104,10 +104,9 @@ async fn load_or_create_host_key(backend: &dyn Backend, cipher: &Cipher) -> Resu
 
 /// `Some(io_err)` if `error` is `russh::Error::IO` wrapping one of the
 /// handful of `std::io::ErrorKind`s a client hanging up mid-connection
-/// actually produces — split out from [`SshServer::handle_session_error`]
-/// so the classification itself stays unit-testable without a live
-/// `russh` session.
-pub fn benign_disconnect_reason(error: &anyhow::Error) -> Option<&std::io::Error> {
+/// actually produces — the ones [`SshServer::handle_session_error`] logs
+/// quietly instead of as a server error.
+fn benign_disconnect_reason(error: &anyhow::Error) -> Option<&std::io::Error> {
     use std::io::ErrorKind;
     let russh::Error::IO(io_err) = error.downcast_ref::<russh::Error>()? else {
         return None;
@@ -310,16 +309,6 @@ impl ConnHandler {
             bail!("repo '{name}' doesn't exist");
         }
 
-        // Snapshot taken before the push so the post-push block can diff
-        // against it — the ref-update data the `pre-receive` hook parses
-        // never reaches this process, it runs as a separate subprocess (see
-        // `events::diff_refs`'s own doc comment).
-        let before_refs = if git_subcmd == "receive-pack" {
-            resolved.remote.get_manifest().await.ok().map(|(m, _)| m.refs)
-        } else {
-            None
-        };
-
         // Reads only, same reasoning as `git::http`'s own call: pulling
         // from the external side immediately before accepting a push is how
         // a valid push gets rejected as stale.
@@ -332,6 +321,15 @@ impl ConnHandler {
             self.ctx.open_mirror(&resolved).await?
         } else {
             self.ctx.open_mirror_read(&resolved).await?
+        };
+        // Snapshot taken before the push so the post-push block can diff
+        // against it — the ref-update data the `pre-receive` hook parses
+        // never reaches this process, it runs as a separate subprocess (see
+        // `events::diff_refs`'s own doc comment).
+        let before_refs = if git_subcmd == "receive-pack" {
+            crate::events::mirror_refs(&mirror.path).await
+        } else {
+            None
         };
         let mut child = spawn_git_subcommand(
             &self.ctx,
@@ -359,7 +357,6 @@ impl ConnHandler {
         let language_uid = resolved.uid.clone();
         let event_ctx = Arc::clone(&self.ctx);
         let event_uid = resolved.uid.clone();
-        let event_remote = resolved.remote.clone();
         let pusher = username.clone();
         tokio::spawn(async move {
             let (_, _, status) = tokio::join!(
@@ -369,6 +366,9 @@ impl ConnHandler {
             );
 
             if git_subcmd == "receive-pack" && matches!(&status, Ok(s) if s.success()) {
+                // Taken before the re-sync below, which reads the same
+                // possibly-stale manifest and could only blur the diff.
+                let after_refs = crate::events::mirror_refs(&mirror.path).await;
                 // the pre-receive hook already synced S3; refresh the
                 // mirror just in case (another concurrent push, deleted
                 // refs, etc), same as git smart-HTTP does after a push.
@@ -390,22 +390,16 @@ impl ConnHandler {
                 // Detached, same reasoning as the language/search-index
                 // updates above: webhook/CI delivery must never make the
                 // pusher wait.
-                if let Some(before_refs) = before_refs {
-                    tokio::spawn(async move {
-                        if let Ok((after, _etag)) = event_remote.get_manifest().await {
-                            let refs = crate::events::diff_refs(&before_refs, &after.refs);
-                            if !refs.is_empty() {
-                                crate::events::emit(
-                                    &event_ctx,
-                                    crate::events::RepoEvent::Push {
-                                        repo_uid: event_uid,
-                                        refs,
-                                        pusher: Some(pusher),
-                                    },
-                                );
-                            }
-                        }
-                    });
+                if let (Some(before_refs), Some(after_refs)) = (before_refs, after_refs) {
+                    let refs = crate::events::diff_refs(&before_refs, &after_refs);
+                    if !refs.is_empty() {
+                        let event = crate::events::RepoEvent::Push {
+                            repo_uid: event_uid,
+                            refs,
+                            pusher: Some(pusher),
+                        };
+                        tokio::spawn(async move { crate::events::emit(&event_ctx, event) });
+                    }
                 }
             }
 
@@ -456,7 +450,7 @@ async fn pump_extended_data(handle: &Handle, channel: ChannelId, mut r: impl Asy
 /// rights at all" per [`Permission`]'s own doc comment) could still clone
 /// over SSH, even though HTTP/web both require at least `Reporter` for the
 /// same repo.
-pub fn required_permission(git_subcmd: &str) -> Permission {
+fn required_permission(git_subcmd: &str) -> Permission {
     if git_subcmd == "receive-pack" {
         Permission::Developer
     } else {
@@ -469,7 +463,7 @@ pub fn required_permission(git_subcmd: &str) -> Permission {
 /// path usually comes in POSIX sh-style single quotes (mirroring the
 /// `shell_quote` `mirror/mod.rs` already uses for the hook); if it doesn't
 /// come quoted it's used as-is (`validate::sanitize_path` validates the result).
-pub fn parse_exec_command(raw: &[u8]) -> Result<(&'static str, String)> {
+fn parse_exec_command(raw: &[u8]) -> Result<(&'static str, String)> {
     let s = std::str::from_utf8(raw).context("ssh command isn't utf8")?.trim();
     let (cmd, rest) = s
         .split_once(' ')

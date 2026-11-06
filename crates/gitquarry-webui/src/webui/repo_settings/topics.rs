@@ -36,7 +36,7 @@ pub(super) async fn save_topics(
                 non_empty(topics.iter().cloned().collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("topics updated.")
+            FlashOutcome::Ok("topics updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

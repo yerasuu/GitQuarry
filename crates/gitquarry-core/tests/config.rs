@@ -1,5 +1,12 @@
 use gitquarry_core::config::*;
 
+fn load(toml: &str) -> anyhow::Result<Config> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gitquarry.toml");
+    std::fs::write(&path, toml).unwrap();
+    Config::load_from(&path)
+}
+
 #[test]
 fn parses_an_s3_bucket_with_driver_tag() {
     let toml = r#"
@@ -11,8 +18,8 @@ fn parses_an_s3_bucket_with_driver_tag() {
         secret_access_key = "secret"
         passphrase = "hunter2"
     "#;
-    let raw: RawConfig = toml::from_str(toml).unwrap();
-    let cfg = raw.buckets.get("main").unwrap();
+    let config = load(toml).unwrap();
+    let cfg = config.bucket("main").unwrap();
     assert_eq!(cfg.passphrase, "hunter2");
     let BackendConfig::S3(params) = &cfg.backend else {
         panic!("expected driver s3");
@@ -32,8 +39,8 @@ fn parses_an_r2_bucket_deriving_endpoint_from_account_id() {
         secret_access_key = "secret"
         passphrase = "hunter2"
     "#;
-    let raw: RawConfig = toml::from_str(toml).unwrap();
-    let cfg = raw.buckets.get("cache").unwrap();
+    let config = load(toml).unwrap();
+    let cfg = config.bucket("cache").unwrap();
     let BackendConfig::R2(params) = &cfg.backend else {
         panic!("expected driver r2");
     };
@@ -53,7 +60,7 @@ fn rejects_a_bucket_missing_the_driver_tag() {
         secret_access_key = "secret"
         passphrase = "hunter2"
     "#;
-    assert!(toml::from_str::<RawConfig>(toml).is_err());
+    assert!(load(toml).is_err());
 }
 
 /// Two buckets is the normal shape once one exists purely as a backup
@@ -144,4 +151,40 @@ fn rejects_a_default_bucket_naming_nothing() {
     .unwrap();
     let err = Config::load_from(&path).unwrap_err().to_string();
     assert!(err.contains("default_bucket"), "unexpected error: {err}");
+}
+
+/// s3db's relative `./local` default would follow each process's cwd (a git
+/// hook runs inside the mirror) and be shared by every bucket in the file;
+/// each bucket must get its own fixed spool directory instead.
+#[test]
+fn each_bucket_gets_its_own_absolute_spool_dir_by_default() {
+    let toml = r#"
+        [buckets.main]
+        driver = "local"
+        bucket = "/srv/main"
+        passphrase = "hunter2"
+
+        [buckets.backup]
+        driver = "local"
+        bucket = "/srv/backup"
+        passphrase = "hunter2"
+    "#;
+    let config = load(toml).unwrap();
+    let main = &config.bucket("main").unwrap().resilience.local_dir;
+    let backup = &config.bucket("backup").unwrap().resilience.local_dir;
+    assert!(main.is_absolute(), "{}", main.display());
+    assert_ne!(main, backup);
+}
+
+#[test]
+fn a_relative_spool_dir_resolves_against_the_config_file() {
+    let config_path = std::path::Path::new("/etc/gitquarry/gitquarry.toml");
+    assert_eq!(
+        resolve_local_dir("main", std::path::Path::new("state"), config_path),
+        std::path::Path::new("/etc/gitquarry/state")
+    );
+    assert_eq!(
+        resolve_local_dir("main", std::path::Path::new("/var/lib/gq"), config_path),
+        std::path::Path::new("/var/lib/gq")
+    );
 }

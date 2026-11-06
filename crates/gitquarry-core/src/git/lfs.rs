@@ -16,7 +16,7 @@
 
 use crate::crypto::Cipher;
 use crate::storage::Backend;
-use crate::storage::lfs_locks::{self, LfsLock};
+use crate::storage::lfs_locks::{self, CreatedLock, LfsLock};
 use crate::storage::remote::Remote;
 use crate::storage::uid::Uid;
 use crate::validate;
@@ -39,9 +39,6 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub const BATCH_CONTENT_TYPE: &str = "application/vnd.git-lfs+json";
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) const BATCH_CONTENT_TYPE: &str = "application/vnd.git-lfs+json";
 
 #[derive(Deserialize)]
@@ -54,7 +51,8 @@ struct BatchRequest {
 /// unrecognized fields by default) — read once, before the whole request is
 /// authorized, so [`required_permission`] knows whether this needs `Read` or
 /// `Write` without fully parsing (and validating) the request twice. An
-/// unparseable body defaults to `"download"` (the less-privileged read):
+/// unparseable body reads as an empty operation, which needs only the
+/// less-privileged `Read`:
 /// [`batch_response`]'s own full parse rejects it with a clear error right
 /// after, so this never grants more than the caller could get anyway.
 #[derive(Deserialize)]
@@ -62,13 +60,6 @@ struct OperationOnly {
     operation: String,
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn peek_operation(body: &[u8]) -> String {
-    serde_json::from_slice::<OperationOnly>(body)
-        .map(|o| o.operation)
-        .unwrap_or_default()
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn peek_operation(body: &[u8]) -> String {
     serde_json::from_slice::<OperationOnly>(body)
         .map(|o| o.operation)
@@ -130,7 +121,7 @@ struct TopLevelError {
     message: String,
 }
 
-fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
+pub(super) fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
     let body = TopLevelError {
         message: message.into(),
     };
@@ -149,21 +140,6 @@ fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
 /// (same as plain git-http), so a 401 still carries `WWW-Authenticate` —
 /// LFS clients that support Basic auth look for it the same way git itself
 /// does.
-#[cfg(any(test, feature = "test-util"))]
-pub fn denial_response(reason: super::http::Denial) -> Response {
-    match reason {
-        super::http::Denial::Unauthorized => {
-            let mut resp = error_response(StatusCode::UNAUTHORIZED, "credentials required");
-            resp.headers_mut().insert(
-                header::WWW_AUTHENTICATE,
-                "Basic realm=\"gitquarry\"".parse().expect("valid header"),
-            );
-            resp
-        }
-        super::http::Denial::Forbidden => error_response(StatusCode::FORBIDDEN, "no permission"),
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn denial_response(reason: super::http::Denial) -> Response {
     match reason {
         super::http::Denial::Unauthorized => {
@@ -183,16 +159,6 @@ pub(super) fn denial_response(reason: super::http::Denial) -> Response {
 /// these two) needs `Reporter`. Parsed once, before any object is touched,
 /// so a malformed `operation` fails the whole batch with one clear error
 /// rather than a confusing per-object one.
-#[cfg(any(test, feature = "test-util"))]
-pub fn required_permission(operation: &str) -> crate::auth::entities::Permission {
-    use crate::auth::entities::Permission;
-    if operation == "upload" {
-        Permission::Developer
-    } else {
-        Permission::Reporter
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn required_permission(operation: &str) -> crate::auth::entities::Permission {
     use crate::auth::entities::Permission;
     if operation == "upload" {
@@ -213,16 +179,6 @@ pub(super) fn required_permission(operation: &str) -> crate::auth::entities::Per
 /// through a proxy that terminates TLS without adding the header, at which
 /// point the mismatch is visible immediately (LFS actions simply fail),
 /// not a silent security issue.
-#[cfg(any(test, feature = "test-util"))]
-pub fn base_url(headers: &HeaderMap) -> Option<String> {
-    let host = headers.get(header::HOST)?.to_str().ok()?;
-    let scheme = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("http");
-    Some(format!("{scheme}://{host}"))
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn base_url(headers: &HeaderMap) -> Option<String> {
     let host = headers.get(header::HOST)?.to_str().ok()?;
     let scheme = headers
@@ -232,21 +188,12 @@ fn base_url(headers: &HeaderMap) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub async fn batch_response(remote: &Remote, repo_path: &str, headers: &HeaderMap, body: Bytes) -> Result<Response> {
-    batch_response_impl(remote, repo_path, headers, body).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn batch_response(
     remote: &Remote,
     repo_path: &str,
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
-    batch_response_impl(remote, repo_path, headers, body).await
-}
-
-async fn batch_response_impl(remote: &Remote, repo_path: &str, headers: &HeaderMap, body: Bytes) -> Result<Response> {
     let req: BatchRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -314,15 +261,7 @@ async fn batch_response_impl(remote: &Remote, repo_path: &str, headers: &HeaderM
 /// Lowercase hex, no new dependency for what's a two-line loop — `hex` is
 /// only in this binary transitively (via other crates' internals), not a
 /// direct dependency this module can rely on staying available.
-#[cfg(any(test, feature = "test-util"))]
-pub fn encode_hex(bytes: &[u8]) -> String {
-    encode_hex_impl(bytes)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn encode_hex(bytes: &[u8]) -> String {
-    encode_hex_impl(bytes)
-}
-fn encode_hex_impl(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
         let _ = write!(s, "{b:02x}");
@@ -339,15 +278,7 @@ fn encode_hex_impl(bytes: &[u8]) -> String {
 /// early-return error path — so the caller (`git::http`, which already
 /// knows whether this `oid` was new) can bump `RepoConfig::lfs_bytes`
 /// without this module needing an `AppContext`/uid of its own.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn upload_object(remote: &Remote, oid: &str, req: Request) -> Result<(Response, u64)> {
-    upload_object_impl(remote, oid, req).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn upload_object(remote: &Remote, oid: &str, req: Request) -> Result<(Response, u64)> {
-    upload_object_impl(remote, oid, req).await
-}
-async fn upload_object_impl(remote: &Remote, oid: &str, req: Request) -> Result<(Response, u64)> {
     let tmp = tempfile::Builder::new()
         .prefix(".gitquarry-lfs-")
         .tempfile()
@@ -388,15 +319,7 @@ async fn upload_object_impl(remote: &Remote, oid: &str, req: Request) -> Result<
 /// separate lookup (the backend only knows the ciphertext's length, which
 /// includes encryption overhead — see [`Remote::lfs_object_exists`]'s doc
 /// comment).
-#[cfg(any(test, feature = "test-util"))]
-pub async fn download_object(remote: &Remote, oid: &str) -> Result<Response> {
-    download_object_impl(remote, oid).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn download_object(remote: &Remote, oid: &str) -> Result<Response> {
-    download_object_impl(remote, oid).await
-}
-async fn download_object_impl(remote: &Remote, oid: &str) -> Result<Response> {
     if !remote.lfs_object_exists(oid).await? {
         return Ok(error_response(StatusCode::NOT_FOUND, "object doesn't exist"));
     }
@@ -498,39 +421,18 @@ struct UnlockRequest {
     force: bool,
 }
 
-/// Tiny local copy of `git::http`'s own `query_param` — that one is
-/// module-private outside test builds, and duplicating five lines beats
-/// widening its visibility just to reach across for this.
-fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query.split('&').find_map(|pair| {
-        let (k, v) = pair.split_once('=')?;
-        (k == key).then_some(v)
-    })
+/// Percent- and `+`-decoded, unlike `git::http`'s own `query_param`: git-lfs
+/// encodes `?path=` (`dir%2Fa.psd`), so comparing the raw value against a
+/// stored path never matches anything below the repo root.
+fn query_param(query: &str, key: &str) -> Option<String> {
+    form_urlencoded::parse(query.as_bytes()).find_map(|(k, v)| (k == key).then(|| v.into_owned()))
 }
 
 /// `GET .../info/lfs/locks`: every current lock, optionally narrowed by the
 /// spec's `path`/`id` query params (`cursor`/`limit`/`refspec` are accepted
 /// by clients but ignored — there's no pagination to page through at the
 /// scale a single repo's lock list actually reaches).
-#[cfg(any(test, feature = "test-util"))]
-pub async fn list_locks_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    query: &str,
-) -> Result<Response> {
-    list_locks_response_impl(backend, cipher, uid, query).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn list_locks_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    query: &str,
-) -> Result<Response> {
-    list_locks_response_impl(backend, cipher, uid, query).await
-}
-async fn list_locks_response_impl(
     backend: &Arc<dyn Backend>,
     cipher: &Arc<Cipher>,
     uid: &Uid,
@@ -556,27 +458,7 @@ async fn list_locks_response_impl(
 /// 409 with the existing lock's own JSON if someone already holds it, per
 /// spec — first claim wins, no queueing, no stacking a second lock on the
 /// same path even for the same owner.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn create_lock_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    owner: &str,
-    body: Bytes,
-) -> Result<Response> {
-    create_lock_response_impl(backend, cipher, uid, owner, body).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn create_lock_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    owner: &str,
-    body: Bytes,
-) -> Result<Response> {
-    create_lock_response_impl(backend, cipher, uid, owner, body).await
-}
-async fn create_lock_response_impl(
     backend: &Arc<dyn Backend>,
     cipher: &Arc<Cipher>,
     uid: &Uid,
@@ -596,60 +478,49 @@ async fn create_lock_response_impl(
         return Ok(error_response(StatusCode::UNPROCESSABLE_ENTITY, "invalid path"));
     }
 
+    // Still checked by listing, not only by the path claim, because locks
+    // taken before path claims existed have no claim to collide with.
     let existing = lfs_locks::list_locks(backend, cipher, uid).await?;
-    if let Some(conflict) = existing.iter().find(|l| l.path == req.path) {
-        let body = serde_json::to_vec(&LockConflictResponse {
-            lock: LockJson::from(conflict),
-            message: "already locked".to_string(),
-        })
-        .context("serializing lock conflict response")?;
-        return Ok((StatusCode::CONFLICT, [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)], body).into_response());
-    }
-
-    let id = lfs_locks::next_lock_id(backend.as_ref(), cipher.as_ref(), uid).await?;
-    let lock = LfsLock {
-        id,
-        path: req.path,
-        owner: owner.to_string(),
-        locked_at: crate::storage::audit::format_unix_secs(now_secs()),
+    let held = match existing.into_iter().find(|l| l.path == req.path) {
+        Some(held) => held,
+        None => match lfs_locks::create_lock(
+            backend.as_ref(),
+            cipher.as_ref(),
+            uid,
+            req.path,
+            owner.to_string(),
+            crate::storage::audit::format_unix_secs(now_secs()),
+        )
+        .await?
+        {
+            CreatedLock::Held(held) => held,
+            CreatedLock::Created(lock) => {
+                let resp_body = serde_json::to_vec(&LockResponse {
+                    lock: LockJson::from(&lock),
+                })
+                .context("serializing lock response")?;
+                return Ok((
+                    StatusCode::CREATED,
+                    [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)],
+                    resp_body,
+                )
+                    .into_response());
+            }
+        },
     };
-    lfs_locks::put_lock(backend.as_ref(), cipher.as_ref(), uid, &lock).await?;
-
-    let resp_body = serde_json::to_vec(&LockResponse {
-        lock: LockJson::from(&lock),
+    let body = serde_json::to_vec(&LockConflictResponse {
+        lock: LockJson::from(&held),
+        message: "already locked".to_string(),
     })
-    .context("serializing lock response")?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)],
-        resp_body,
-    )
-        .into_response())
+    .context("serializing lock conflict response")?;
+    Ok((StatusCode::CONFLICT, [(header::CONTENT_TYPE, BATCH_CONTENT_TYPE)], body).into_response())
 }
 
 /// `POST .../info/lfs/locks/verify`: every current lock split into `ours`
 /// (owned by `actor`) and `theirs` — `actor` is `None` only for an
 /// anonymous caller on a `Public` repo (this endpoint only needs
 /// `Permission::Reporter`), in which case everything is `theirs`.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn verify_locks_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    actor: Option<&str>,
-) -> Result<Response> {
-    verify_locks_response_impl(backend, cipher, uid, actor).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn verify_locks_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    actor: Option<&str>,
-) -> Result<Response> {
-    verify_locks_response_impl(backend, cipher, uid, actor).await
-}
-async fn verify_locks_response_impl(
     backend: &Arc<dyn Backend>,
     cipher: &Arc<Cipher>,
     uid: &Uid,
@@ -670,29 +541,7 @@ async fn verify_locks_response_impl(
 /// breaking someone else's lock is allowed for anyone with push access
 /// (this endpoint already requires `Permission::Developer`), not just the
 /// repo owner.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn unlock_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    id: &str,
-    requester: &str,
-    body: Bytes,
-) -> Result<Response> {
-    unlock_response_impl(backend, cipher, uid, id, requester, body).await
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn unlock_response(
-    backend: &Arc<dyn Backend>,
-    cipher: &Arc<Cipher>,
-    uid: &Uid,
-    id: &str,
-    requester: &str,
-    body: Bytes,
-) -> Result<Response> {
-    unlock_response_impl(backend, cipher, uid, id, requester, body).await
-}
-async fn unlock_response_impl(
     backend: &Arc<dyn Backend>,
     cipher: &Arc<Cipher>,
     uid: &Uid,
@@ -722,7 +571,7 @@ async fn unlock_response_impl(
     if lock.owner != requester && !req.force {
         return Ok(error_response(StatusCode::FORBIDDEN, "locked by another user"));
     }
-    lfs_locks::delete_lock(backend.as_ref(), cipher.as_ref(), uid, id).await;
+    lfs_locks::delete_lock(backend.as_ref(), cipher.as_ref(), uid, &lock).await?;
 
     let resp_body = serde_json::to_vec(&LockResponse {
         lock: LockJson::from(&lock),

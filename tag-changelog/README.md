@@ -1,9 +1,9 @@
 # Per-tag changelogs
 
 One file per released tag, each listing only what that tag added over the
-previous one. `../CHANGELOG.md` is the other half of the pair and stays
-grouped by area rather than by release: it answers "what can this thing
-do", these answer "what changed when".
+previous one. `../CHANGELOG.md` is the other half of the pair: the same
+releases in Keep a Changelog form, worded for whoever runs or uses the
+server. These are the technical record behind each of its entries.
 
 Entries come from the conventional-commit subjects in the tag's own range
 (`git log <previous>..<tag> --no-merges`), grouped by type and with the

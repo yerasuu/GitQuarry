@@ -1,0 +1,32 @@
+[package]
+name = "gitquarry-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared fixtures for the workspace's integration tests, built only on the crates' public APIs"
+license.workspace = true
+publish = false
+
+[dependencies]
+gitquarry-auth-crypto = { workspace = true }
+ciborium = { workspace = true }
+ed25519-dalek = { workspace = true }
+p256 = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+gitquarry-core = { workspace = true }
+gitquarry-federation = { path = "../gitquarry-federation" }
+gitquarry-i18n = { workspace = true }
+s3db = { workspace = true }
+s3db-crypto = { workspace = true }
+axum = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+form_urlencoded = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -37,7 +37,7 @@ pub(super) async fn save_protected_branches(
                 non_empty(branches.iter().cloned().collect::<Vec<_>>().join(", ")),
             )
             .await;
-            FlashOutcome::Ok("protected branches updated.")
+            FlashOutcome::Ok("protected branches updated.".to_string())
         }
         Cas::Conflict => FlashOutcome::Conflict,
     })

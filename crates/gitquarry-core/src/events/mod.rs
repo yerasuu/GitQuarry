@@ -50,6 +50,24 @@ pub fn diff_refs(before: &BTreeMap<String, String>, after: &BTreeMap<String, Str
         .collect()
 }
 
+/// The refs of a push's mirror, for [`diff_refs`] on either side of a
+/// `receive-pack`. Read off the mirror held under the exclusive lock, never
+/// the bucket manifest: the manifest is rewritten by the out-of-process
+/// `pre-receive` hook, so this process's caching backends (the per-request
+/// cache over HTTP, `CachedBackend`'s TTL over SSH) keep serving the
+/// pre-push copy, and an "after" read through them diffs to nothing.
+/// `None` when the mirror can't be listed, so no event is emitted from a
+/// half-read snapshot.
+pub(crate) async fn mirror_refs(mirror: &std::path::Path) -> Option<BTreeMap<String, String>> {
+    match crate::git::list_refs_with_oids(mirror).await {
+        Ok(refs) => Some(refs.into_iter().collect()),
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn't list the mirror's refs for the push event");
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeRequestAction {
     Opened,

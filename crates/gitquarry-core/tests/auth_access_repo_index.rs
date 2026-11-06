@@ -3,10 +3,7 @@
 // `auth::access::*`, which is the path visible from outside the crate.
 use gitquarry_core::auth::access::*;
 use gitquarry_core::auth::entities::{Permission, User};
-use gitquarry_core::crypto::Cipher;
-use gitquarry_core::storage::Backend;
 use gitquarry_core::storage::uid::Uid;
-use std::sync::Arc;
 
 fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
     User {
@@ -20,6 +17,7 @@ fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
         password_hash: None,
         is_admin: false,
         session_epoch: 0,
+        is_federation_moderator: false,
         starred: Default::default(),
         watched: Default::default(),
         text_size_default: String::new(),
@@ -37,21 +35,11 @@ fn user_with_repos(username: &str, repos: &[(&str, Permission)]) -> User {
     }
 }
 
-fn test_backend_and_cipher(root: &std::path::Path) -> (gitquarry_core::storage::local::LocalBackend, Cipher) {
-    let backend = gitquarry_core::storage::local::LocalBackend::new(&gitquarry_core::config::LocalParams {
-        bucket: root.to_string_lossy().to_string(),
-        engine: gitquarry_core::config::LocalEngine::Files,
-    });
-    let cipher = Cipher::derive("test passphrase", &[9u8; gitquarry_core::crypto::SALT_LEN]).unwrap();
-    (backend, cipher)
-}
-
 #[tokio::test]
 async fn repo_permission_index_lists_only_the_granted_user() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = gitquarry_test_support::backend(dir.path());
+    let cipher = gitquarry_test_support::cipher();
     let repo_uid = Uid::new();
 
     let mut alice = user_with_repos("alice", &[]);
@@ -73,9 +61,8 @@ async fn repo_permission_index_lists_only_the_granted_user() {
 #[tokio::test]
 async fn removing_a_permission_drops_it_from_the_index() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = gitquarry_test_support::backend(dir.path());
+    let cipher = gitquarry_test_support::cipher();
     let repo_uid = Uid::new();
     let alice = user_with_repos("alice", &[]);
     add_repo_permission_index(backend.as_ref(), &cipher, &repo_uid, &alice.uid).await;
@@ -91,9 +78,8 @@ async fn removing_a_permission_drops_it_from_the_index() {
 #[tokio::test]
 async fn clear_repo_permission_index_drops_every_entry_for_that_repo() {
     let dir = tempfile::tempdir().unwrap();
-    let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let backend: Arc<dyn Backend> = Arc::new(backend);
-    let cipher = Arc::new(cipher);
+    let backend = gitquarry_test_support::backend(dir.path());
+    let cipher = gitquarry_test_support::cipher();
     let repo_uid = Uid::new();
     let alice = user_with_repos("alice", &[]);
     let bob = user_with_repos("bob", &[]);

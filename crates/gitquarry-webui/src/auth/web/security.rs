@@ -13,10 +13,10 @@
 //! doc comment). `is_admin` isn't editable here: it stays an admin-only
 //! grant, same as always.
 
-use super::{login, reauth};
+use super::{login, passkey, reauth};
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
-    field, layout, non_empty, render_flash, require_csrf, require_login, settings_section,
+    federation_ui_active, field, layout, non_empty, render_flash, require_csrf, require_login, settings_section,
 };
 use axum::extract::{Form, State};
 use axum::http::HeaderMap;
@@ -31,12 +31,14 @@ use maud::{Markup, PreEscaped, html};
 pub(crate) async fn handler_security_get(State(ctx): State_, headers: HeaderMap) -> Result<Response, AppError> {
     let user = match require_login(&ctx, &headers, "/_account/security").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     let topnav = login::topnav(&ctx, &headers).await;
     let locale = effective_locale(&ctx, &headers).await;
-    let content = render_security_page(&user, &csrf_field(&headers), None, None, None, locale);
-    let body = account_settings_page("security", content, locale).into_string();
+    let csrf = csrf_field(&headers);
+    let passkeys = passkey::render_section(&ctx, &user, &csrf, locale).await?;
+    let content = render_security_page(&user, &csrf, None, None, None, &passkeys, locale);
+    let body = account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
         "",
@@ -88,12 +90,15 @@ pub(crate) async fn handler_security_post(
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, "/_account/security").await {
         Ok(u) => u,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
     let topnav = login::topnav(&ctx, &headers).await;
     let csrf = csrf_field(&headers);
+    // Nothing below touches passkeys, so the section rendered up front is
+    // still current for every re-render of this page.
+    let passkeys = passkey::render_section(&ctx, &me, &csrf, locale).await?;
 
     // Every action here is scoped to `me.username` (never a form-submitted
     // one, see this module's own doc comment) — same domain::user functions
@@ -108,14 +113,14 @@ pub(crate) async fn handler_security_post(
     // than just showing the error where the user can retry.
     macro_rules! fail {
         ($msg:expr) => {{
-            let content = render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, locale);
+            let content = render_security_page(&me, &csrf, Some(Flash::Err(&$msg)), None, None, &passkeys, locale);
             if headers.contains_key(crate::webui::ASYNC_HEADER) {
                 return Ok(axum::response::Html(content.into_string()).into_response());
             }
             return Ok(axum::response::Html(layout(
                 "security",
                 "",
-                &account_settings_page("security", content, locale).into_string(),
+                &account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string(),
                 &topnav,
                 effective_theme(&ctx, &headers).await,
                 effective_density(&ctx, &headers).await,
@@ -123,6 +128,24 @@ pub(crate) async fn handler_security_post(
             ))
             .into_response());
         }};
+    }
+
+    // Ends this very session too, so there's no page left to re-render:
+    // straight to the login page.
+    if form.action == "revoke_sessions" {
+        if let Err(e) = domain::user::revoke_sessions(&ctx, &me.username, locale).await {
+            fail!(e.to_string());
+        }
+        gitquarry_core::storage::audit::record(
+            ctx.backend().as_ref(),
+            &ctx.cipher,
+            &me.username,
+            "user.revoke_sessions",
+            &me.username,
+            None,
+        )
+        .await;
+        return Ok(axum::response::Redirect::to("/_login").into_response());
     }
 
     let mut pending_totp_secret = None;
@@ -198,6 +221,7 @@ pub(crate) async fn handler_security_post(
         Some(flash),
         pending_totp_secret.as_deref(),
         revealed_recovery_codes.as_deref(),
+        &passkeys,
         locale,
     );
     // Async (`data-async-target="#security-body"`, see `crate::webui::ASYNC_HEADER`'s
@@ -207,7 +231,7 @@ pub(crate) async fn handler_security_post(
     if headers.contains_key(crate::webui::ASYNC_HEADER) {
         return Ok(axum::response::Html(content.into_string()).into_response());
     }
-    let body = account_settings_page("security", content, locale).into_string();
+    let body = account_settings_page("security", content, federation_ui_active(&ctx), locale).into_string();
     Ok(axum::response::Html(layout(
         "security",
         "",
@@ -226,16 +250,13 @@ pub(crate) async fn handler_security_post(
 /// codes) or change which of the three 2FA forms even exists, so a submit
 /// has to refresh the whole wrapper, not just the form that fired it. Same
 /// reasoning `render_appearance_page`'s own doc comment gives.
-/// `pub` only for cross-crate `tests/*.rs` under `test-util`; `Flash` goes
-/// `pub(crate)` outside that config, which is what makes plain `cargo
-/// check` flag this as exposing a private type.
-#[cfg_attr(not(any(test, feature = "test-util")), allow(private_interfaces))]
-pub fn render_security_page(
+pub(crate) fn render_security_page(
     user: &User,
     csrf: &str,
     message: Option<Flash>,
     pending_totp_secret: Option<&str>,
     revealed_recovery_codes: Option<&[String]>,
+    passkeys: &Markup,
     locale: gitquarry_i18n::Locale,
 ) -> Markup {
     use gitquarry_i18n::web::auth::security as t;
@@ -346,6 +367,17 @@ pub fn render_security_page(
                 }
             }))
         }
+
+        (passkeys)
+
+        (settings_section(&t::sessions_heading(locale), None, html! {
+            p class="muted" { (t::sessions_hint(locale)) }
+            form method="post" action=(action_url) data-confirm=(t::revoke_sessions_confirm(locale)) {
+                (PreEscaped(csrf))
+                input type="hidden" name="security_action" value="revoke_sessions";
+                button type="submit" { (t::revoke_sessions_button(locale)) }
+            }
+        }))
       }
     }
 }

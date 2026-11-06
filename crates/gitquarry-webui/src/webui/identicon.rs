@@ -21,11 +21,6 @@ use sha2::{Digest, Sha256};
 /// under both densities and all three text sizes. The one call site that
 /// needs a fixed pixel size asks for it explicitly, via
 /// [`account_avatar_sized`].
-#[cfg(any(test, feature = "test-util"))]
-pub fn identicon(seed: &str) -> Markup {
-    identicon_impl(seed, None)
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) fn identicon(seed: &str) -> Markup {
     identicon_impl(seed, None)
 }

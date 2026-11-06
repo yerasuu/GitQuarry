@@ -1,14 +1,19 @@
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use gitquarry_wire::ipc::{INTERNAL_TOKEN_HEADER, token_matches, wire_version_matches};
 
-#[test]
-fn token_matches_requires_an_exact_header_match() {
+fn with_token(token: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    assert!(!token_matches(&headers, "secret"));
-    headers.insert(INTERNAL_TOKEN_HEADER, "wrong".parse().unwrap());
-    assert!(!token_matches(&headers, "secret"));
-    headers.insert(INTERNAL_TOKEN_HEADER, "secret".parse().unwrap());
-    assert!(token_matches(&headers, "secret"));
+    headers.insert(INTERNAL_TOKEN_HEADER, HeaderValue::from_str(token).unwrap());
+    headers
+}
+
+#[test]
+fn token_matches_only_the_exact_secret() {
+    assert!(token_matches(&with_token("s3cret-token"), "s3cret-token"));
+    assert!(!token_matches(&with_token("s3cret-tokeN"), "s3cret-token"));
+    assert!(!token_matches(&with_token("s3cret"), "s3cret-token"));
+    assert!(!token_matches(&with_token("s3cret-token-and-more"), "s3cret-token"));
+    assert!(!token_matches(&HeaderMap::new(), "s3cret-token"));
 }
 
 #[test]

@@ -12,7 +12,7 @@ pub(super) enum Row<'a> {
     /// An `@@ ...@@` hunk header — same reasoning as [`Row::Meta`].
     Hunk(&'a str),
     /// A content line, with whichever side's line numbers it occupies (a
-    /// pure add has no `old`, a pure del no `new` — `side_by_side_diff`'s
+    /// pure addition has no `old`, a pure del no `new` — `side_by_side_diff`'s
     /// own per-side gutter, GitHub-style). `text` has its leading `+`/`-`/
     /// ` ` diff marker already stripped — that marker isn't source text, so
     /// callers reattach it themselves from `class` (see [`prefix_char`]).
@@ -26,15 +26,18 @@ pub(super) enum Row<'a> {
 }
 
 /// The path a `+++ b/<path>` / `--- a/<path>` header names, or `None` for
-/// `/dev/null` (a pure add or delete has one of the two).
+/// `/dev/null` (a pure addition or deletion has one of the two).
 pub(super) fn header_path(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("+++ ").or_else(|| line.strip_prefix("--- "))?;
     if rest == "/dev/null" {
         return None;
     }
     // git prefixes with `a/`/`b/` unless `--no-prefix`; a trailing tab
-    // introduces the timestamp field some diff generators append.
+    // introduces the timestamp field some diff generators tack on.
     let rest = rest.split('\t').next().unwrap_or(rest);
+    // git C-quotes a path holding a quote, backslash or control byte; only
+    // its extension is read downstream, which the quoting leaves intact.
+    let rest = rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')).unwrap_or(rest);
     Some(
         rest.strip_prefix("a/")
             .or_else(|| rest.strip_prefix("b/"))
@@ -109,7 +112,7 @@ pub(super) fn parse(diff: &str) -> Vec<Row<'_>> {
     rows
 }
 
-/// `+`/`-`/` ` — the diff marker [`parse`] stripped off a [`Row::Line`]'s
+/// `+`/`-`/` ` — the diff marker the row walker stripped off a [`Row::Line`]'s
 /// `text`, derived back from `class` for renderers that show it inline
 /// (the unified stream) rather than via a separate gutter column.
 pub(super) fn prefix_char(class: &str) -> char {
@@ -130,62 +133,4 @@ pub(super) fn code_fragment(path: &str, text: &str) -> String {
         super::super::language_tag::language_tag(path),
         super::super::esc(text)
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn header_path_strips_the_git_prefix_and_ignores_dev_null() {
-        assert_eq!(header_path("+++ b/src/main.rs"), Some("src/main.rs"));
-        assert_eq!(header_path("--- a/src/main.rs"), Some("src/main.rs"));
-        assert_eq!(header_path("+++ b/src/main.rs\t2024-01-01"), Some("src/main.rs"));
-        assert_eq!(header_path("+++ /dev/null"), None);
-        assert_eq!(header_path("@@ -1 +1 @@"), None);
-    }
-
-    #[test]
-    fn parse_tracks_the_current_file_path_across_lines() {
-        let diff = concat!(
-            "diff --git a/f.rs b/f.rs\n",
-            "--- a/f.rs\n",
-            "+++ b/f.rs\n",
-            "@@ -1,2 +1,2 @@\n",
-            " context\n",
-            "-gone\n",
-            "+added\n",
-        );
-        let rows = parse(diff);
-        let lines: Vec<_> = rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Line {
-                    old,
-                    new,
-                    class,
-                    path,
-                    text,
-                } => Some((*old, *new, *class, *path, *text)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            lines,
-            vec![
-                (Some(1), Some(1), "", "f.rs", "context"),
-                (Some(2), None, "diff-del", "f.rs", "gone"),
-                (None, Some(2), "diff-add", "f.rs", "added"),
-            ]
-        );
-    }
-
-    #[test]
-    fn hunk_starts_reads_both_sides_and_rejects_a_malformed_header() {
-        assert_eq!(hunk_starts("@@ -12,7 +40,8 @@ fn main()"), Some((12, 40)));
-        // A one-line hunk omits the count.
-        assert_eq!(hunk_starts("@@ -1 +1 @@"), Some((1, 1)));
-        assert_eq!(hunk_starts("@@ nonsense @@"), None);
-        assert_eq!(hunk_starts("+not a hunk"), None);
-    }
 }

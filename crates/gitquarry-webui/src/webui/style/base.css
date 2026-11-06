@@ -615,13 +615,13 @@ table.diff-annotated tr.diff-comment td { white-space: normal; padding: var(--pa
    set inline (per-language, can't be precomputed into a class) — same
    "dynamic value stays inline, shape stays in CSS" split `.bar` already
    uses for its own width. */
-.lang-bar { display: flex; height: 0.9em; border-radius: 999px; overflow: hidden; margin: 0.3em 0; }
+.lang-bar { display: flex; height: 0.5em; border-radius: 999px; overflow: hidden; margin: 0.3em 0; }
 .lang-swatch { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 50%; vertical-align: -0.05em; margin-right: 0.3em; }
 /* Wraps each legend entry's dot+name+percentage as one unit so a narrow
    viewport wraps *between* languages, never between a dot and its own
    label — `render_language_bar`'s own doc comment. */
 .lang-key-item { white-space: nowrap; }
-.bar { display: inline-block; height: 0.9em; background: var(--accent); border-radius: 2px; vertical-align: middle; }
+.bar { display: inline-block; height: 0.5em; background: var(--accent); border-radius: 2px; vertical-align: middle; }
 /* `overflow-wrap: break-word` — inherited by every descendant (paragraphs,
    list items, inline `code` spans, ...): a long unbroken token (a URL, a
    long identifier in backticks) has nothing to wrap on by default, so

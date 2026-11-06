@@ -26,31 +26,6 @@ use std::path::Path as FsPath;
 /// address actually bound at startup either way). Shared with
 /// [`super::empty_repo_body`]: an empty repo needs the exact same URLs to
 /// push to, not just an existing one to clone from.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn render_clone_urls(ctx: &AppContext, repo_name: &str, headers: &HeaderMap) -> Result<Markup> {
-    let locale = effective_locale(ctx, headers).await;
-    // The `Host` header of this very request already carries the host:port
-    // the browser used to reach the web server — the same port git
-    // smart-HTTP is served on, since it's the same axum router.
-    let host_with_port = headers
-        .get(axum::http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("<host>");
-    let host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.split(':').next())
-        .unwrap_or("<host>");
-    let ssh_port = ctx.ssh_bind.rsplit_once(':').map(|(_, p)| p).unwrap_or(&ctx.ssh_bind);
-    Ok(html! {
-        h3 { (t::clone_heading(locale)) }
-        table class="commit-meta" {
-            tr { td { "http" } td { code { "http://" (host_with_port) "/" (repo_name) } } }
-            tr { td { "ssh" } td { code { "ssh://" (host) ":" (ssh_port) "/" (repo_name) } } }
-        }
-    })
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) async fn render_clone_urls(ctx: &AppContext, repo_name: &str, headers: &HeaderMap) -> Result<Markup> {
     let locale = effective_locale(ctx, headers).await;
     // The `Host` header of this very request already carries the host:port
@@ -158,6 +133,15 @@ pub(super) async fn render_about(
                     @if let Some((source_name, source_label)) = &forked_from {
                         p class="muted" { (t::forked_from_label(locale)) " " a href=(format!("/{}", url_encode(source_name))) { (source_label) } }
                     }
+                    @if let Some(origin) = &config.forked_from_peer {
+                        p class="muted" {
+                            (t::forked_from_label(locale)) " "
+                            a href=(format!("/_remote/{}/{}", url_encode(&origin.peer), url_encode(&origin.repo))) {
+                                (origin.peer) "/" (origin.repo)
+                            }
+                            " (" (origin.peer) ")"
+                        }
+                    }
 
                     @if let Some(readme) = &readme {
                         (PreEscaped(readme))
@@ -258,60 +242,6 @@ async fn detect_license_kind(bare_repo: &FsPath, rev: &str, name: &str) -> Resul
     Ok(license_kind_from_text(text))
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub fn license_kind_from_text(text: &str) -> Option<&'static str> {
-    let t = text.to_ascii_lowercase();
-    let has = |s: &str| t.contains(s);
-
-    if has("gnu affero general public license") {
-        return Some(if has("version 3") { "AGPL-3.0" } else { "AGPL" });
-    }
-    if has("gnu lesser general public license") {
-        return Some(if has("version 3") {
-            "LGPL-3.0"
-        } else if has("version 2.1") {
-            "LGPL-2.1"
-        } else {
-            "LGPL"
-        });
-    }
-    if has("gnu general public license") {
-        return Some(if has("version 3") {
-            "GPL-3.0"
-        } else if has("version 2") {
-            "GPL-2.0"
-        } else {
-            "GPL"
-        });
-    }
-    if has("mozilla public license") && has("2.0") {
-        return Some("MPL-2.0");
-    }
-    if has("apache license") && has("version 2.0") {
-        return Some("Apache-2.0");
-    }
-    if has("this is free and unencumbered software released into the public domain") {
-        return Some("Unlicense");
-    }
-    if has("cc0") && has("1.0 universal") {
-        return Some("CC0-1.0");
-    }
-    if has("permission is hereby granted, free of charge") {
-        return Some("MIT");
-    }
-    if has("permission to use, copy, modify, and/or distribute this software") {
-        return Some("ISC");
-    }
-    if has("redistribution and use in source and binary forms") {
-        return Some(if has("neither the name") && has("endorse or promote") {
-            "BSD-3-Clause"
-        } else {
-            "BSD-2-Clause"
-        });
-    }
-    None
-}
-#[cfg(not(any(test, feature = "test-util")))]
 fn license_kind_from_text(text: &str) -> Option<&'static str> {
     let t = text.to_ascii_lowercase();
     let has = |s: &str| t.contains(s);
@@ -363,19 +293,6 @@ fn license_kind_from_text(text: &str) -> Option<&'static str> {
         });
     }
     None
-}
-
-/// Renders the root README as markdown (`.md`/`.markdown`) or as preformatted
-/// text otherwise. `None` if the repo has no README at `rev`'s root, it's too
-/// big, or it isn't valid UTF-8.
-///
-/// Only called from cross-crate `tests/*.rs` (`render_about` calls
-/// [`render_readme_from_entries`] directly instead, sharing one `ls_tree`)
-/// — dead outside `test-util`, which is what `cargo check` flags.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn render_readme(bare_repo: &FsPath, rev: &str) -> Result<Option<String>> {
-    let root_entries = git::browse::ls_tree(bare_repo, rev, "").await?;
-    render_readme_from_entries(bare_repo, rev, &root_entries).await
 }
 
 /// [`render_readme`]'s body, taking an already-fetched root listing so
@@ -620,19 +537,10 @@ fn known_language_slug(name: &str) -> Option<&'static str> {
 /// stable, distinct colour instead of a missing one. Twelve and not one
 /// per hue because every one of them is a rule in `style/utilities.css`
 /// (see [`known_language_slug`] on why this can't be a `style` attribute).
-#[cfg(any(test, feature = "test-util"))]
-pub fn language_class(name: &str) -> String {
-    language_class_impl(name)
-}
-#[cfg(not(any(test, feature = "test-util")))]
-pub(super) fn language_class(name: &str) -> String {
-    language_class_impl(name)
-}
-
 /// How many `.lang-c-h*` fallback hues `style/utilities.css` defines.
 const FALLBACK_HUES: u32 = 12;
 
-fn language_class_impl(name: &str) -> String {
+pub(super) fn language_class(name: &str) -> String {
     if let Some(slug) = known_language_slug(name) {
         return format!("lang-c-{slug}");
     }
@@ -649,33 +557,6 @@ fn language_class_impl(name: &str) -> String {
 /// entry's dot+name+percentage sits inside its own `.lang-key-item` (also
 /// `base.css`) so wrapping at a narrow width breaks between languages, not
 /// between a dot and the label it belongs to.
-#[cfg(any(test, feature = "test-util"))]
-pub fn render_language_bar(languages: &[(String, u64)], locale: gitquarry_i18n::Locale) -> Markup {
-    let total: u64 = languages.iter().map(|(_, n)| n).sum();
-    html! {
-        @if total == 0 {
-            p { em { (t::languages_empty_hint(locale)) } }
-        } @else {
-            div class="lang-bar" {
-                @for (lang, bytes) in languages {
-                    span
-                        class=(format!("{} {}", width_class(100.0 * *bytes as f64 / total as f64), language_class(lang)))
-                        title=(lang) {}
-                }
-            }
-            p class="muted" {
-                @for (i, (lang, bytes)) in languages.iter().enumerate() {
-                    @if i > 0 { " " }
-                    span class="lang-key-item" {
-                        span class=(format!("lang-swatch {}", language_class(lang))) {}
-                        (lang) " " (format!("{:.1}%", 100.0 * *bytes as f64 / total as f64))
-                    }
-                }
-            }
-        }
-    }
-}
-#[cfg(not(any(test, feature = "test-util")))]
 pub(super) fn render_language_bar(languages: &[(String, u64)], locale: gitquarry_i18n::Locale) -> Markup {
     let total: u64 = languages.iter().map(|(_, n)| n).sum();
     html! {
