@@ -57,10 +57,10 @@ pub(in crate::publish) async fn preview(
     let mut plan = plan(&git_dir, mirror, known.clone()).await?;
     let mut map = Table::<40>::new(format!("{}/map", epoch_prefix(&resolved.uid, &mirror.id, epoch)));
     if !mirror.id.is_empty() {
-        map.load(ctx, plan.shards()).await?;
+        map.load(ctx.backend().as_ref(), &ctx.cipher, plan.shards()).await?;
         if !known.is_empty() && !plan.closed_over(&map) {
             plan = self::plan(&git_dir, mirror, Vec::new()).await?;
-            map.load_all(ctx).await?;
+            map.load_all(ctx.backend().as_ref(), &ctx.cipher).await?;
         }
     }
     let epoch_bump_needed = !new_epoch && log.fingerprint.as_ref() != Some(&plan.fingerprint);

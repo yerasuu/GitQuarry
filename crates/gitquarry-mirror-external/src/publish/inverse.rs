@@ -24,9 +24,9 @@ use super::rewrite::Rewriter;
 use crate::validate::validate_sha;
 use anyhow::{Context, Result, bail};
 use gitquarry_core::app::AppContext;
-use gitquarry_core::crypto::CompressionStrategy;
-use gitquarry_core::storage::Cas;
+use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::uid::Uid;
+use gitquarry_core::storage::{Backend, Cas};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Distinct from the forward map's tag, so a shard of one is never decoded
@@ -67,20 +67,20 @@ pub(crate) fn fresh_entries(rewriter: &Rewriter) -> Shard {
 ///
 /// Fails on a corrupt shard, a bucket error, or when another writer keeps
 /// winning the CAS race past [`STORE_ATTEMPTS`].
-pub(crate) async fn store(ctx: &AppContext, prefix: &str, entries: &Shard) -> Result<()> {
+pub(crate) async fn store(backend: &dyn Backend, cipher: &Cipher, prefix: &str, entries: &Shard) -> Result<()> {
     let mut by_shard: BTreeMap<u8, Vec<(&Oid, &BTreeSet<Oid>)>> = BTreeMap::new();
     for (public, privates) in entries {
         by_shard.entry(public[0]).or_default().push((public, privates));
     }
     for (shard, new) in by_shard {
-        store_shard(ctx, &shard_key(prefix, shard), &new).await?;
+        store_shard(backend, cipher, &shard_key(prefix, shard), &new).await?;
     }
     Ok(())
 }
 
-async fn store_shard(ctx: &AppContext, key: &str, new: &[(&Oid, &BTreeSet<Oid>)]) -> Result<()> {
+async fn store_shard(backend: &dyn Backend, cipher: &Cipher, key: &str, new: &[(&Oid, &BTreeSet<Oid>)]) -> Result<()> {
     for _ in 0..STORE_ATTEMPTS {
-        let (mut entries, etag) = read_shard(ctx, key).await?;
+        let (mut entries, etag) = read_shard(backend, cipher, key).await?;
         let mut changed = false;
         for (public, privates) in new {
             let stored = entries.entry(**public).or_default();
@@ -91,8 +91,8 @@ async fn store_shard(ctx: &AppContext, key: &str, new: &[(&Oid, &BTreeSet<Oid>)]
         if !changed {
             return Ok(());
         }
-        let sealed = ctx.cipher.seal(key, &encode(&entries)?, CompressionStrategy::None)?;
-        match ctx.backend().put_cas(key, sealed, etag.as_deref()).await? {
+        let sealed = cipher.seal(key, &encode(&entries)?, CompressionStrategy::None)?;
+        match backend.put_cas(key, sealed, etag.as_deref()).await? {
             Cas::Ok => return Ok(()),
             Cas::Conflict => continue,
         }
@@ -126,20 +126,19 @@ pub async fn private_commits(
     validate_sha(public)?;
     let oid = from_hex(public)?;
     let key = shard_key(&prefix(&epoch_prefix(uid, mirror_id, epoch)), oid[0]);
-    let (entries, _etag) = read_shard(ctx, &key).await?;
+    let (entries, _etag) = read_shard(ctx.backend().as_ref(), &ctx.cipher, &key).await?;
     Ok(entries
         .get(&oid)
         .map(|privates| privates.iter().map(to_hex).collect())
         .unwrap_or_default())
 }
 
-async fn read_shard(ctx: &AppContext, key: &str) -> Result<(Shard, Option<String>)> {
-    let (sealed, etag) = ctx.backend().get(key).await?;
+async fn read_shard(backend: &dyn Backend, cipher: &Cipher, key: &str) -> Result<(Shard, Option<String>)> {
+    let (sealed, etag) = backend.get(key).await?;
     if etag.is_none() {
         return Ok((Shard::new(), None));
     }
-    let plain = ctx
-        .cipher
+    let plain = cipher
         .open(key, &sealed)
         .with_context(|| format!("{key} doesn't open under this bucket's key"))?;
     Ok((

@@ -24,15 +24,15 @@ use super::objects::Oid;
 use anyhow::{Context, Result, bail};
 use futures::{StreamExt, TryStreamExt};
 use gitquarry_core::app::AppContext;
-use gitquarry_core::crypto::CompressionStrategy;
+use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::remote::Remote;
 use gitquarry_core::storage::uid::Uid;
-use gitquarry_core::storage::{Cas, REPOS_PREFIX, list_all_keys};
+use gitquarry_core::storage::{Backend, Cas, REPOS_PREFIX, list_all_keys};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Shards fetched at once. A full rewrite reads all 256; one at a time that
 /// is 256 sequential round trips to the bucket.
-const LOAD_CONCURRENCY: usize = 16;
+pub(super) const LOAD_CONCURRENCY: usize = 16;
 
 /// CAS attempts on one shard before a run gives up. Runs of one mirror are
 /// serialised by the sweep lock, so a conflict means another node; the
@@ -105,9 +105,9 @@ impl<const N: usize> Table<N> {
 
     /// The shards that exist in the bucket, from one listing: lets a run
     /// skip a GET for every shard nobody ever wrote.
-    pub(crate) async fn existing(&self, ctx: &AppContext) -> Result<BTreeSet<u8>> {
+    pub(crate) async fn existing(&self, backend: &dyn Backend) -> Result<BTreeSet<u8>> {
         let prefix = format!("{}/", self.prefix);
-        Ok(list_all_keys(ctx.backend().as_ref(), &prefix)
+        Ok(list_all_keys(backend, &prefix)
             .await?
             .iter()
             .filter_map(|key| key.strip_prefix(&prefix))
@@ -117,13 +117,18 @@ impl<const N: usize> Table<N> {
 
     /// Loads every shard of `wanted` not loaded yet. A shard missing from
     /// the bucket loads as empty.
-    pub(crate) async fn load(&mut self, ctx: &AppContext, wanted: impl IntoIterator<Item = u8>) -> Result<()> {
+    pub(crate) async fn load(
+        &mut self,
+        backend: &dyn Backend,
+        cipher: &Cipher,
+        wanted: impl IntoIterator<Item = u8>,
+    ) -> Result<()> {
         let missing: BTreeSet<u8> = wanted.into_iter().filter(|s| !self.shards.contains_key(s)).collect();
         let loaded: Vec<(u8, BTreeMap<Oid, [u8; N]>)> = futures::stream::iter(missing)
             .map(|shard| {
                 let key = self.key(shard);
                 async move {
-                    let (entries, _etag) = read_shard::<N>(ctx, &key).await?;
+                    let (entries, _etag) = read_shard::<N>(backend, cipher, &key).await?;
                     Ok::<_, anyhow::Error>((shard, entries))
                 }
             })
@@ -135,9 +140,9 @@ impl<const N: usize> Table<N> {
     }
 
     /// Every shard that exists in the bucket.
-    pub(crate) async fn load_all(&mut self, ctx: &AppContext) -> Result<()> {
-        let existing = self.existing(ctx).await?;
-        self.load(ctx, existing).await?;
+    pub(crate) async fn load_all(&mut self, backend: &dyn Backend, cipher: &Cipher) -> Result<()> {
+        let existing = self.existing(backend).await?;
+        self.load(backend, cipher, existing).await?;
         // The rest exist nowhere: loaded as empty, so a later `load` doesn't
         // ask the bucket for them again.
         for shard in 0..=u8::MAX {
@@ -159,14 +164,19 @@ impl<const N: usize> Table<N> {
     ///
     /// Fails on such a conflict, on a bucket error, or when another writer
     /// keeps winning the CAS race past [`STORE_ATTEMPTS`].
-    pub(crate) async fn store(&mut self, ctx: &AppContext, entries: &BTreeMap<Oid, [u8; N]>) -> Result<()> {
+    pub(crate) async fn store(
+        &mut self,
+        backend: &dyn Backend,
+        cipher: &Cipher,
+        entries: &BTreeMap<Oid, [u8; N]>,
+    ) -> Result<()> {
         let mut by_shard: BTreeMap<u8, Vec<(&Oid, &[u8; N])>> = BTreeMap::new();
         for (key, value) in entries {
             by_shard.entry(key[0]).or_default().push((key, value));
         }
         for (shard, new) in by_shard {
             let key = self.key(shard);
-            let merged = store_shard::<N>(ctx, &key, &new).await?;
+            let merged = store_shard::<N>(backend, cipher, &key, &new).await?;
             self.shards.insert(shard, merged);
         }
         Ok(())
@@ -174,12 +184,13 @@ impl<const N: usize> Table<N> {
 }
 
 async fn store_shard<const N: usize>(
-    ctx: &AppContext,
+    backend: &dyn Backend,
+    cipher: &Cipher,
     key: &str,
     new: &[(&Oid, &[u8; N])],
 ) -> Result<BTreeMap<Oid, [u8; N]>> {
     for _ in 0..STORE_ATTEMPTS {
-        let (mut entries, etag) = read_shard::<N>(ctx, key).await?;
+        let (mut entries, etag) = read_shard::<N>(backend, cipher, key).await?;
         let mut changed = false;
         for (oid, value) in new {
             match entries.get(*oid) {
@@ -198,10 +209,8 @@ async fn store_shard<const N: usize>(
         if !changed {
             return Ok(entries);
         }
-        let sealed = ctx
-            .cipher
-            .seal(key, &encode::<N>(&entries), CompressionStrategy::None)?;
-        match ctx.backend().put_cas(key, sealed, etag.as_deref()).await? {
+        let sealed = cipher.seal(key, &encode::<N>(&entries), CompressionStrategy::None)?;
+        match backend.put_cas(key, sealed, etag.as_deref()).await? {
             Cas::Ok => return Ok(entries),
             Cas::Conflict => continue,
         }
@@ -209,12 +218,16 @@ async fn store_shard<const N: usize>(
     bail!("{key}: lost the write race {STORE_ATTEMPTS} times in a row")
 }
 
-async fn read_shard<const N: usize>(ctx: &AppContext, key: &str) -> Result<(BTreeMap<Oid, [u8; N]>, Option<String>)> {
-    let (sealed, etag) = ctx.backend().get(key).await?;
+async fn read_shard<const N: usize>(
+    backend: &dyn Backend,
+    cipher: &Cipher,
+    key: &str,
+) -> Result<(BTreeMap<Oid, [u8; N]>, Option<String>)> {
+    let (sealed, etag) = backend.get(key).await?;
     if etag.is_none() {
         return Ok((BTreeMap::new(), None));
     }
-    let plain = ctx.cipher.open(key, &sealed)?;
+    let plain = cipher.open(key, &sealed)?;
     Ok((
         decode::<N>(&plain).with_context(|| format!("{key} is not a valid shard"))?,
         etag,

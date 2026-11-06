@@ -90,7 +90,7 @@ pub(in crate::publish) async fn execute(
     let local = ctx.open_mirror_read(resolved).await?;
     let git_dir = Arc::new(local.path.clone());
     let mut plan = plan(&git_dir, mirror, known.clone()).await?;
-    map.load(ctx, plan.shards()).await?;
+    map.load(ctx.backend().as_ref(), &ctx.cipher, plan.shards()).await?;
     if !known.is_empty() && !plan.closed_over(&map) {
         warn!(
             target: "publish",
@@ -100,7 +100,7 @@ pub(in crate::publish) async fn execute(
             "mapping incomplete for the new commits, rewriting from the root"
         );
         plan = self::plan(&git_dir, mirror, Vec::new()).await?;
-        map.load_all(ctx).await?;
+        map.load_all(ctx.backend().as_ref(), &ctx.cipher).await?;
     }
     if !new_epoch && log.fingerprint.as_ref() != Some(&plan.fingerprint) {
         run.outcome = RunOutcome::Blocked;
@@ -162,7 +162,9 @@ pub(in crate::publish) async fn execute(
             .await
             .context("the publish task panicked")??
     };
-    excluded.load(ctx, build::excluded_shards(&outgoing)).await?;
+    excluded
+        .load(ctx.backend().as_ref(), &ctx.cipher, build::excluded_shards(&outgoing))
+        .await?;
     let excluded = Arc::new(excluded);
     let built = {
         let step = WriteStep {
@@ -247,16 +249,17 @@ pub(in crate::publish) async fn execute(
         store.upload_pack(base, pack, idx).await?;
     }
     Table::<0>::new(format!("{prefix}/excluded"))
-        .store(ctx, &build::fresh_excluded(&rewrite))
+        .store(ctx.backend().as_ref(), &ctx.cipher, &build::fresh_excluded(&rewrite))
         .await?;
     inverse::store(
-        ctx,
+        ctx.backend().as_ref(),
+        &ctx.cipher,
         &inverse::prefix(&prefix),
         &inverse::fresh_entries(&rewrite.rewriter),
     )
     .await?;
     Table::<40>::new(format!("{prefix}/map"))
-        .store(ctx, &fresh_entries(&rewrite.rewriter))
+        .store(ctx.backend().as_ref(), &ctx.cipher, &fresh_entries(&rewrite.rewriter))
         .await?;
 
     if pushing.is_empty() {
