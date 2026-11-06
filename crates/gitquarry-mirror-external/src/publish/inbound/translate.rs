@@ -15,6 +15,7 @@ use crate::publish::objects::{
 use crate::publish::rewrite::{Rewriter, join};
 use crate::publish::secrets::{Scan, scan_blob, scan_text};
 use crate::validate::{MAX_INBOUND_PATH_DEPTH, validate_inbound_path};
+use icu_normalizer::ComposingNormalizerBorrowed;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -407,8 +408,31 @@ fn git_order(a: &TreeEntry, b: &TreeEntry) -> Ordering {
     key(a).cmp(&key(b))
 }
 
-/// Whether the directory `dir` of `root` has no two names that differ only
-/// by ASCII case. A directory no longer there has none.
+/// The key two names must not share in one directory: what a case-insensitive,
+/// normalising filesystem (macOS, Windows) would treat as the same name.
+///
+/// A valid UTF-8 name goes through `to_uppercase` then `to_lowercase` (so `ß`
+/// meets `SS`) and then NFKC. No full Unicode case folding is available
+/// without a new dependency (`icu_casemap`), so the limit is that of Rust's
+/// own case mapping: locale-specific folds (Turkish dotless `ı`) and
+/// foldings outside the simple and special-casing tables are not seen. NFKC
+/// is wider than canonical equivalence (it also joins compatibility forms
+/// such as full-width letters), which only errs towards refusing. A name
+/// that is not UTF-8 is compared by its ASCII lowercase bytes.
+///
+/// Normalisation per [`icu_normalizer::ComposingNormalizerBorrowed::new_nfkc`](https://docs.rs/icu_normalizer/2.3.0/icu_normalizer/struct.ComposingNormalizerBorrowed.html).
+fn collision_key(name: &[u8]) -> Vec<u8> {
+    match std::str::from_utf8(name) {
+        Ok(name) => ComposingNormalizerBorrowed::new_nfkc()
+            .normalize(&name.to_uppercase().to_lowercase())
+            .into_owned()
+            .into_bytes(),
+        Err(_) => name.to_ascii_lowercase(),
+    }
+}
+
+/// Whether the directory `dir` of `root` has no two names that collide
+/// under [`collision_key`]. A directory no longer there has none.
 fn distinct_without_case(private: &mut ObjectReader, root: Oid, dir: &str) -> anyhow::Result<bool> {
     let mut tree = root;
     for segment in dir.split('/').filter(|s| !s.is_empty()) {
@@ -421,7 +445,7 @@ fn distinct_without_case(private: &mut ObjectReader, root: Oid, dir: &str) -> an
     let mut seen = HashSet::new();
     Ok(read_entries(private, Some(tree))?
         .iter()
-        .all(|e| seen.insert(e.name.to_ascii_lowercase())))
+        .all(|e| seen.insert(collision_key(&e.name))))
 }
 
 pub(super) struct RoundTrip {

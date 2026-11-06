@@ -63,6 +63,7 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["allo
 form_urlencoded = "1.2.2"
 futures = "0.3.34"
 hmac = "0.13.0"
+icu_normalizer = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
 openidconnect = { version = "4.0.1", features = ["reqwest"] }
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 rand = "0.10.3"

@@ -14,6 +14,8 @@ s3db = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
+# Unicode normalisation of tree entry names, `inbound::translate::distinct_without_case`.
+icu_normalizer = { workspace = true }
 # The secret scan's detectors. Already in the lock through the AWS SDK.
 regex-lite = "0.1.9"
 serde = { workspace = true }

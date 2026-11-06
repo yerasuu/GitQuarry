@@ -1860,6 +1860,7 @@ dependencies = [
  "gitquarry-forge-clients",
  "gitquarry-i18n",
  "gitquarry-test-support",
+ "icu_normalizer",
  "rand 0.10.3",
  "regex-lite",
  "s3db",

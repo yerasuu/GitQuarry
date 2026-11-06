@@ -440,6 +440,49 @@ async fn a_symlink_is_refused() {
     assert_eq!(refusal.path.as_deref(), Some("src/link"));
 }
 
+/// Pairs a case-insensitive, normalising filesystem (macOS, Windows) would
+/// open as one file: canonically equivalent spellings, and `ß` against `SS`
+/// (which the case mapping handles through upper then lower case).
+#[tokio::test]
+async fn names_equal_after_unicode_normalisation_and_case_are_refused() {
+    let fx = Fixture::new().await;
+    start(&fx).await;
+    fx.publish().await;
+    let base = fx.public_main().await;
+    for (n, (one, two)) in [("src/caf\u{e9}", "src/cafe\u{301}"), ("src/STRASSE", "src/stra\u{df}e")]
+        .into_iter()
+        .enumerate()
+    {
+        let pr = fx.contributor(&base).await;
+        pr.commit(&[(one, "a\n"), (two, "b\n")], "Two spellings\n").await;
+        pr.open(u32::try_from(n + 1).unwrap()).await;
+        let out = fx.dry_run(&(n + 1).to_string()).await;
+        let refusal = refused(&out);
+        assert_eq!(refusal.reason, Reason::CaseCollision, "{one} / {two}");
+        assert_eq!(refusal.path.as_deref(), Some("src"));
+    }
+}
+
+#[tokio::test]
+async fn distinct_names_in_one_directory_still_translate() {
+    let fx = Fixture::new().await;
+    start(&fx).await;
+    fx.publish().await;
+    let pr = fx.contributor(&fx.public_main().await).await;
+    pr.commit(
+        &[
+            ("src/caf\u{e9}", "a\n"),
+            ("src/cafes", "b\n"),
+            ("src/Stra\u{df}e", "c\n"),
+        ],
+        "Distinct\n",
+    )
+    .await;
+    pr.open(1).await;
+
+    translated(&fx.dry_run("1").await);
+}
+
 /// Somebody pushed straight to the public branch (the forge's merge button,
 /// a force push): the pull request sits on a commit the mirror never made,
 /// and the commits in between are not translated as if they were its own.
