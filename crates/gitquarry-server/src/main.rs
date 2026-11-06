@@ -34,6 +34,9 @@
 //! - `publish-inverse-backfill`: human-run, rebuilds the inverse index of
 //!   publish epochs from their mapping — see
 //!   [`gitquarry_mirror_external::publish::inverse::backfill`].
+//! - `publish-inbound-dry-run`: human-run, says whether one public pull
+//!   request of a publish mirror translates into private commits, writing
+//!   nothing — see [`gitquarry_mirror_external::publish::inbound`].
 
 use anyhow::Result;
 use gitquarry::serve;
@@ -81,6 +84,7 @@ async fn dispatch() -> Result<()> {
         Some("restore") => commands::restore::run(&args[2..]).await,
         Some("publish-gc") => gitquarry_mirror_external::publish::gc::command::run(&args[2..]).await,
         Some("publish-inverse-backfill") => gitquarry_mirror_external::publish::inverse::command::run(&args[2..]).await,
+        Some("publish-inbound-dry-run") => gitquarry_mirror_external::publish::inbound::command::run(&args[2..]).await,
         _ => serve::run(&args[1..]).await,
     }
 }

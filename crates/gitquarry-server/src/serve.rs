@@ -66,9 +66,11 @@ live data, and 'gitquarry restore --repo <uid> [--apply]' brings back one
 repo from the backup -- see that command with --help.
 
 'gitquarry publish-gc [--grace-days N] [--apply]' deletes publish-mirror
-epochs abandoned longer than the grace period, and 'gitquarry
+epochs abandoned longer than the grace period, 'gitquarry
 publish-inverse-backfill [--apply]' rebuilds the inverse index of epochs
-published before it existed -- see each command with --help.";
+published before it existed, and 'gitquarry publish-inbound-dry-run --repo
+OWNER/NAME --mirror ID --pr N --base BRANCH' says whether a public pull
+request translates into private commits -- see each command with --help.";
 
 #[derive(Debug, Default)]
 struct Args {
