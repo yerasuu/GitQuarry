@@ -80,9 +80,12 @@ fn credential_args() -> [&'static OsStr; 8] {
 /// `url` stays the plain `https://host/owner/repo` the mirror stored, so
 /// neither argv nor an error string can leak the credential.
 async fn run_authed(git_dir: Option<&Path>, token: &str, args: &[&OsStr]) -> Result<Vec<u8>> {
+    run_authed_with(Command::new("git"), git_dir, token, args).await
+}
+
+async fn run_authed_with(mut cmd: Command, git_dir: Option<&Path>, token: &str, args: &[&OsStr]) -> Result<Vec<u8>> {
     let mut full: Vec<&OsStr> = credential_args().to_vec();
     full.extend_from_slice(args);
-    let mut cmd = Command::new("git");
     if let Some(dir) = git_dir {
         cmd.env("GIT_DIR", dir);
     }
@@ -284,6 +287,9 @@ pub enum Fetched {
 /// so a remote could otherwise fill the disk for as long as the timeout
 /// lets it.
 ///
+/// git runs with none of this process's environment but `PATH`, and with no
+/// user or system config: only the flags set here configure it.
+///
 /// Same out-of-band credential as [`fetch_ref_from_remote_url`].
 pub async fn fetch_untrusted(
     quarantine: &Path,
@@ -376,7 +382,23 @@ async fn fetch_untrusted_unbounded(quarantine: &Path, url: &str, token: &str, re
     .collect();
     args.push(OsStr::new(url));
     args.extend(refspecs.iter().map(OsStr::new));
-    run_authed(Some(quarantine), token, &args)
+    // §4: nothing of the server's environment (its other credentials, a
+    // GIT_* variable, proxy or askpass settings) nor its user or system git
+    // config reaches a git talking to a remote on behalf of a pull request.
+    // `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL`:
+    // [git-config](https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGNOSYSTEM).
+    // HOME is still set, to a directory with nothing in it, because git
+    // expands `~` and looks for XDG config under it.
+    let home = gitquarry_core::git::scratch_dir(&std::env::temp_dir())?;
+    let mut cmd = Command::new("git");
+    cmd.env_clear()
+        .env("HOME", home.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    run_authed_with(cmd, Some(quarantine), token, &args)
         .await
         .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;
     Ok(())

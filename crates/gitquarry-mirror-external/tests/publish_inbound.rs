@@ -547,6 +547,68 @@ async fn a_fetch_over_its_disk_budget_is_stopped_before_it_lands() {
     git(&quarantine, &["rev-parse", "--verify", "refs/inbound/head"]).await;
 }
 
+const POISONED_SOURCE: &str = "GITQUARRY_TEST_POISONED_SOURCE";
+const POISONED_QUARANTINE: &str = "GITQUARRY_TEST_POISONED_QUARANTINE";
+
+/// The server's own environment and user config don't reach the fetch of a
+/// pull request: this test binary is run again with every way git reads
+/// config from outside the command set to forbid local fetches, and the
+/// fetch has to go through regardless.
+#[tokio::test]
+async fn the_untrusted_fetch_ignores_the_servers_environment_and_git_config() {
+    let (dir, source, quarantine) = incompressible_remote(1024).await;
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".config/git")).unwrap();
+    let deny = "[protocol \"file\"]\n\tallow = never\n";
+    std::fs::write(home.join(".gitconfig"), deny).unwrap();
+    std::fs::write(home.join(".config/git/config"), deny).unwrap();
+
+    let out = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "untrusted_fetch_in_a_poisoned_environment",
+        ])
+        .env(POISONED_SOURCE, &source)
+        .env(POISONED_QUARANTINE, &quarantine)
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
+        .env("GIT_CONFIG_VALUE_0", "never")
+        .env("GIT_ALLOW_PROTOCOL", "https")
+        .output()
+        .await
+        .unwrap();
+
+    let report = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{report}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(report.contains("1 passed"), "the child test didn't run: {report}");
+    git(&quarantine, &["rev-parse", "--verify", "refs/inbound/head"]).await;
+}
+
+#[tokio::test]
+#[ignore = "run by the_untrusted_fetch_ignores_the_servers_environment_and_git_config, in the environment it sets"]
+async fn untrusted_fetch_in_a_poisoned_environment() {
+    let (Some(source), Some(quarantine)) = (std::env::var_os(POISONED_SOURCE), std::env::var_os(POISONED_QUARANTINE))
+    else {
+        return;
+    };
+    let refspecs = ["+refs/heads/main:refs/inbound/head".to_string()];
+    let fetched = fetch_untrusted(
+        Path::new(&quarantine),
+        &source.to_string_lossy(),
+        "t",
+        &refspecs,
+        1 << 30,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fetched, Fetched::Done);
+}
+
 #[test]
 fn the_dry_run_command_takes_validated_arguments_only() {
     let args = |list: &[&str]| parse_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
