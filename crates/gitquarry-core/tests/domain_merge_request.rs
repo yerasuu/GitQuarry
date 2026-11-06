@@ -1161,6 +1161,91 @@ async fn merge_succeeds_cleanly_and_updates_the_manifest_and_mr_status() {
     );
 }
 
+/// `merge`'s own half of the tracker binary split
+/// (`docs/tracker-binary-split-concept.md`): with `ctx.tracker` configured,
+/// a successful merge pushes `POST /_internal/tracker/merge-request-merged`
+/// carrying the MR's own title/description — `gitquarry-tracker`'s own
+/// `close_referenced_by_merge_request` (tested against that payload shape
+/// directly in its own crate) is what actually parses the "closes #N"
+/// keyword on the receiving end.
+#[tokio::test]
+async fn merge_pushes_a_notification_to_a_configured_tracker() {
+    use axum::Json;
+    use axum::extract::State;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Option<gitquarry_wire::tracker::MergeRequestMergedNotification>>>);
+
+    async fn handler(
+        State(captured): State<Captured>,
+        Json(notification): Json<gitquarry_wire::tracker::MergeRequestMergedNotification>,
+    ) -> axum::http::StatusCode {
+        *captured.0.lock().unwrap() = Some(notification);
+        axum::http::StatusCode::OK
+    }
+
+    let captured = Captured::default();
+    let app = axum::Router::new()
+        .route("/_internal/tracker/merge-request-merged", axum::routing::post(handler))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = AppContext {
+        tracker: Some(gitquarry_core::app::TrackerLink {
+            base_url: format!("http://{addr}"),
+            internal_token: "unused".to_string(),
+            http: reqwest::Client::new(),
+        }),
+        ..ctx(dir.path())
+    };
+    let target = test_target(&ctx);
+    init_target_mirror(&ctx, &target, false).await;
+    let new = NewMergeRequest {
+        source_repo: &target.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "Add widget",
+        description: "Closes: #7",
+        author: "alice",
+    };
+    create(&ctx, &target, new, gitquarry_i18n::Locale::En).await.unwrap();
+
+    merge(
+        &ctx,
+        &target,
+        1,
+        "bob",
+        MergeStrategy::Merge,
+        gitquarry_i18n::Locale::En,
+    )
+    .await
+    .unwrap();
+
+    // The push is fire-and-forget (`tokio::spawn`), not awaited by `merge`
+    // itself — poll with a timeout instead of asserting immediately.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if let Some(notification) = captured.0.lock().unwrap().clone() {
+            assert_eq!(notification.repo_uid, target.uid);
+            assert_eq!(notification.mr_number, 1);
+            assert_eq!(notification.title, "Add widget");
+            assert_eq!(notification.description, "Closes: #7");
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "merge never pushed a notification to the configured tracker"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 /// A merge lands code on the target branch exactly like a real push does —
 /// but never goes through `mirror::hook::run_pre_receive_hook`, the only
 /// other place `RepoConfig::last_push` used to get stamped. Without its own
@@ -1733,6 +1818,7 @@ async fn edit_metadata_rejects_an_unknown_label() {
             labels_csv: "nonexistent",
             assignees_csv: "",
             reviewers_csv: "",
+            milestone: None,
         },
         gitquarry_i18n::Locale::En,
     )
@@ -1759,6 +1845,7 @@ async fn edit_metadata_rejects_an_unknown_assignee() {
             labels_csv: "",
             assignees_csv: "nobody",
             reviewers_csv: "",
+            milestone: None,
         },
         gitquarry_i18n::Locale::En,
     )
@@ -1785,6 +1872,7 @@ async fn edit_metadata_rejects_an_unknown_reviewer() {
             labels_csv: "",
             assignees_csv: "",
             reviewers_csv: "nobody",
+            milestone: None,
         },
         gitquarry_i18n::Locale::En,
     )
@@ -1814,6 +1902,7 @@ async fn edit_metadata_updates_labels_assignees_and_reviewers() {
             labels_csv: "bug",
             assignees_csv: "bob",
             reviewers_csv: "carol",
+            milestone: None,
         },
         gitquarry_i18n::Locale::En,
     )
