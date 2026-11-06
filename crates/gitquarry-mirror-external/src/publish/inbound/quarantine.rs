@@ -3,6 +3,7 @@
 //! checkout, so nothing in the pull request's trees is ever a file here).
 
 use super::MAX_PR_COMMITS;
+use crate::git_remote::isolate;
 use crate::publish::objects::{Oid, from_hex, to_hex};
 use anyhow::{Context, Result, bail};
 use std::io::Write;
@@ -86,8 +87,7 @@ pub(super) fn blob_sizes(quarantine: &Path, blobs: &[Oid]) -> Result<Vec<u64>> {
     if blobs.is_empty() {
         return Ok(Vec::new());
     }
-    let mut child = Command::new("git")
-        .env("GIT_DIR", quarantine)
+    let mut child = git_command(quarantine)?
         .args(["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -137,8 +137,7 @@ fn rev_parse_commit(quarantine: &Path, name: &str) -> Result<Oid> {
 }
 
 fn merge_bases(quarantine: &Path, head: &Oid, tip: &Oid) -> Result<Vec<Oid>> {
-    let out = Command::new("git")
-        .env("GIT_DIR", quarantine)
+    let out = git_command(quarantine)?
         .args(["merge-base", "--all", "--end-of-options"])
         .args([to_hex(head), to_hex(tip)])
         .output()
@@ -152,8 +151,7 @@ fn merge_bases(quarantine: &Path, head: &Oid, tip: &Oid) -> Result<Vec<Oid>> {
 }
 
 fn git(quarantine: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .env("GIT_DIR", quarantine)
+    let out = git_command(quarantine)?
         .args(args)
         .output()
         .with_context(|| format!("couldn't run git {}", args.first().unwrap_or(&"")))?;
@@ -165,4 +163,11 @@ fn git(quarantine: &Path, args: &[&str]) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn git_command(quarantine: &Path) -> Result<Command> {
+    let mut cmd = Command::new("git");
+    isolate(&mut cmd)?;
+    cmd.env("GIT_DIR", quarantine);
+    Ok(cmd)
 }

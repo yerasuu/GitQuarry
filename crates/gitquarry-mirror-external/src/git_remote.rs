@@ -10,6 +10,7 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -19,6 +20,39 @@ use tokio::process::Command;
 /// and then stalls forever would otherwise pin that lock — and with it
 /// every clone/push of the repo — for as long as the process lives.
 const GIT_OP_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Strips `cmd` to what a git touching untrusted objects may see (§4): none
+/// of this process's environment but `PATH` (its other credentials, a `GIT_*`
+/// variable, proxy or askpass settings), and no user or system git config, so
+/// only the flags and `GIT_DIR` the caller sets next configure it. Call it
+/// before setting anything else on `cmd`, since it clears the environment.
+///
+/// `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL`:
+/// [git-config](https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGNOSYSTEM).
+/// HOME is still set, to a directory with nothing in it, because git expands
+/// `~` and looks for XDG config under it.
+///
+/// # Errors
+/// When the empty HOME can't be created.
+pub(crate) fn isolate(cmd: &mut std::process::Command) -> Result<()> {
+    static EMPTY_HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+    let home = match EMPTY_HOME.get() {
+        Some(home) => home,
+        None => {
+            let made = gitquarry_core::git::scratch_dir(&std::env::temp_dir())?;
+            EMPTY_HOME.get_or_init(|| made)
+        }
+    };
+    cmd.env_clear()
+        .env("HOME", home.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    Ok(())
+}
 
 async fn run(git_dir: Option<&Path>, args: &[&OsStr]) -> Result<Vec<u8>> {
     let mut cmd = Command::new("git");
@@ -382,22 +416,9 @@ async fn fetch_untrusted_unbounded(quarantine: &Path, url: &str, token: &str, re
     .collect();
     args.push(OsStr::new(url));
     args.extend(refspecs.iter().map(OsStr::new));
-    // §4: nothing of the server's environment (its other credentials, a
-    // GIT_* variable, proxy or askpass settings) nor its user or system git
-    // config reaches a git talking to a remote on behalf of a pull request.
-    // `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL`:
-    // [git-config](https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGNOSYSTEM).
-    // HOME is still set, to a directory with nothing in it, because git
-    // expands `~` and looks for XDG config under it.
-    let home = gitquarry_core::git::scratch_dir(&std::env::temp_dir())?;
+    // §4, see [`isolate`].
     let mut cmd = Command::new("git");
-    cmd.env_clear()
-        .env("HOME", home.path())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null");
-    if let Some(path) = std::env::var_os("PATH") {
-        cmd.env("PATH", path);
-    }
+    isolate(cmd.as_std_mut())?;
     run_authed_with(cmd, Some(quarantine), token, &args)
         .await
         .map_err(|e| anyhow::anyhow!(redact_url(&e.to_string())))?;

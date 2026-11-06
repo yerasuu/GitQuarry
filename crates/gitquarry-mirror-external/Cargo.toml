@@ -17,6 +17,8 @@ rand = { workspace = true }
 # The secret scan's detectors. Already in the lock through the AWS SDK.
 regex-lite = "0.1.9"
 serde = { workspace = true }
+# The empty HOME of an isolated git, `git_remote::isolate`.
+tempfile = { workspace = true }
 # Publish-mirror object ids are computed in memory, never written.
 sha1 = { workspace = true }
 # `.gitquarry/publish.toml`.
@@ -28,7 +30,6 @@ tracing = { workspace = true }
 gitquarry-test-support = { workspace = true }
 axum = { workspace = true }
 serde_json = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
 
 [lints.rust]

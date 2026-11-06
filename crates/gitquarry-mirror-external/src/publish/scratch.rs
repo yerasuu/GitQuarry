@@ -5,6 +5,7 @@
 //! (see [`super::history`]).
 
 use super::objects::{ObjectKind, Oid, from_hex, to_hex};
+use crate::git_remote::isolate;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
@@ -14,7 +15,9 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 pub(super) fn init_scratch(repo: &Path) -> Result<()> {
     // SHA-1 named explicitly: the ids here are computed as SHA-1, and a
     // global `init.defaultObjectFormat` must not change what gets written.
-    let out = Command::new("git")
+    let mut cmd = Command::new("git");
+    isolate(&mut cmd)?;
+    let out = cmd
         .args(["init", "--bare", "--quiet", "--object-format=sha1", "--end-of-options"])
         .arg(repo)
         .output()

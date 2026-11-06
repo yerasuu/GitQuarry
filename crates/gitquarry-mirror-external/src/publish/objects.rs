@@ -5,6 +5,7 @@
 //! single `git cat-file --batch` pipe, and [`super::preview`] runs the whole
 //! computation on a blocking thread rather than awaiting each round trip.
 
+use crate::git_remote::isolate;
 use anyhow::{Context, Result, bail};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -42,8 +43,7 @@ pub(crate) struct ObjectReader {
 impl ObjectReader {
     pub(crate) fn open(git_dir: &Path) -> Result<Self> {
         check_sha1_repo(git_dir)?;
-        let mut child = Command::new("git")
-            .env("GIT_DIR", git_dir)
+        let mut child = isolated_git(git_dir)?
             .args(["cat-file", "--batch"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -118,11 +118,19 @@ impl Drop for ObjectReader {
     }
 }
 
+/// A git on `git_dir` with [`isolate`]d environment: the repositories read
+/// here include the inbound quarantine, which holds what a stranger sent.
+fn isolated_git(git_dir: &Path) -> Result<Command> {
+    let mut cmd = Command::new("git");
+    isolate(&mut cmd)?;
+    cmd.env("GIT_DIR", git_dir);
+    Ok(cmd)
+}
+
 /// The rewrite computes SHA-1 ids itself, so a SHA-256 repository would get
 /// ids that name nothing. Refused up front instead.
 fn check_sha1_repo(git_dir: &Path) -> Result<()> {
-    let out = Command::new("git")
-        .env("GIT_DIR", git_dir)
+    let out = isolated_git(git_dir)?
         .args(["config", "--get", "extensions.objectformat"])
         .output()
         .context("couldn't run git config")?;

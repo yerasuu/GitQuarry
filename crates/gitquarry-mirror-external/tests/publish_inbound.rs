@@ -652,6 +652,48 @@ async fn untrusted_fetch_in_a_poisoned_environment() {
     assert_eq!(fetched, Fetched::Done);
 }
 
+/// Every git of a dry run, not only its fetch, ignores the server's
+/// environment: the test binary is run again with config injected through
+/// `GIT_CONFIG_COUNT` that makes any git reading it believe the repositories
+/// are SHA-256, and a whole publish, pull request and dry run has to go
+/// through regardless.
+#[tokio::test]
+async fn the_dry_run_ignores_the_servers_environment_and_git_config() {
+    let out = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "dry_run_in_a_poisoned_environment",
+        ])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "extensions.objectformat")
+        .env("GIT_CONFIG_VALUE_0", "sha256")
+        .output()
+        .await
+        .unwrap();
+
+    let report = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{report}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(report.contains("1 passed"), "the child test didn't run: {report}");
+}
+
+#[tokio::test]
+#[ignore = "run by the_dry_run_ignores_the_servers_environment_and_git_config, in the environment it sets"]
+async fn dry_run_in_a_poisoned_environment() {
+    let fx = Fixture::new().await;
+    let start = start(&fx).await;
+    fx.publish().await;
+    let base = fx.public_main().await;
+    let pr = fx.contributor(&base).await;
+    pr.commit(&[("src/run.rs", "pub fn run() {}\n")], "Add run\n").await;
+    pr.open(1).await;
+
+    let out = fx.dry_run("1").await;
+
+    assert_eq!(translated(&out).private_base, start);
+}
+
 #[test]
 fn the_dry_run_command_takes_validated_arguments_only() {
     let args = |list: &[&str]| parse_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
