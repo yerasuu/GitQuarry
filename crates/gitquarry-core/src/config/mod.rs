@@ -70,12 +70,33 @@ pub struct FederationSection {
     pub federation_url: String,
 }
 
+/// `[tracker]` in `gitquarry.toml` — optional, same "`None` = feature fully
+/// off, never a half-wired no-op" pattern `oidc: Option<OidcClient>`
+/// already establishes. Absent means core has no way to reach `gitquarry-tracker`'s
+/// loopback API and the issues/board/milestones tabs disappear entirely
+/// from the web UI. See `docs/tracker-binary-split-concept.md`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackerSection {
+    /// Loopback address the `/_internal/*` server binds to — see
+    /// `docs/tracker-binary-split-concept.md`.
+    pub internal_bind: String,
+    /// Shared secret gating that server, manually kept identical to
+    /// `gitquarry-tracker.toml`'s own `internal_token`.
+    pub internal_token: String,
+    /// `gitquarry-tracker`'s own loopback address (its `listen`) — where
+    /// `webui` forwards issue/board/milestone CRUD, and where core pushes a
+    /// PR-merge notification for issue auto-close.
+    pub tracker_url: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(default)]
     buckets: BTreeMap<String, BucketConfig>,
     #[serde(default)]
     federation: Option<FederationSection>,
+    #[serde(default)]
+    tracker: Option<TrackerSection>,
     /// Which bucket this instance serves when no `--bucket` is passed. Only
     /// meaningful with several sections configured, which is the normal
     /// shape once a bucket exists purely as a backup destination
@@ -117,6 +138,7 @@ struct RawConfigOut<'a> {
 pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
     federation: Option<FederationSection>,
+    tracker: Option<TrackerSection>,
     default_bucket: Option<String>,
     allow_push_create: bool,
     trust_forwarded_for: bool,
@@ -163,6 +185,7 @@ impl Config {
         Ok(Config {
             buckets: raw.buckets,
             federation: raw.federation,
+            tracker: raw.tracker,
             default_bucket: raw.default_bucket,
             allow_push_create: raw.allow_push_create,
             trust_forwarded_for: raw.trust_forwarded_for,
@@ -174,6 +197,12 @@ impl Config {
     /// [`FederationSection`]'s own doc comment.
     pub fn federation(&self) -> Option<&FederationSection> {
         self.federation.as_ref()
+    }
+
+    /// `None` unless `[tracker]` is present in `gitquarry.toml` — see
+    /// [`TrackerSection`]'s own doc comment.
+    pub fn tracker(&self) -> Option<&TrackerSection> {
+        self.tracker.as_ref()
     }
 
     /// See `RawConfig::allow_push_create`'s doc comment.

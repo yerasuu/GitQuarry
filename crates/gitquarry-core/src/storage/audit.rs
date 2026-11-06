@@ -209,7 +209,7 @@ pub async fn list_recent_for(backend: &Arc<dyn Backend>, cipher: &Cipher, target
 /// `pub(crate)`: other bucket-side timestamp fields in this crate
 /// (`storage::remote::ReleaseMeta`/`AssetMeta`) reuse it, and so does the
 /// `gitquarry-tracker` crate's own issue/milestone timestamps
-/// (`docs/tracker-extension-concept.md`) — a separate crate needs full
+/// (`docs/tracker-binary-split-concept.md`) — a separate crate needs full
 /// `pub`, `pub(crate)` isn't visible across the crate boundary.
 pub fn format_unix_secs(secs: u64) -> String {
     let days = (secs / 86400) as i64;

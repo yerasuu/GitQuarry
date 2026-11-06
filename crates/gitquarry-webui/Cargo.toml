@@ -7,7 +7,11 @@ description = "Read-only web UI (plus settings/search/auth pages) for gitquarry-
 license.workspace = true
 
 [dependencies]
-gitquarry-core = { workspace = true }
+# Path, not `workspace = true`: edition 2024 rejects `default-features =
+# false` on an inherited dependency whose workspace entry keeps defaults, and
+# this crate's own `tracker` feature is what turns `gitquarry-core/tracker`
+# back on (see [features] below).
+gitquarry-core = { path = "../gitquarry-core", default-features = false }
 gitquarry-i18n = { workspace = true }
 gitquarry-auth-crypto = { workspace = true }
 gitquarry-domain = { workspace = true }
@@ -50,11 +54,24 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 
+[features]
+default = ["tracker"]
+# Issue tracker/board/milestones views — see
+# docs/tracker-binary-split-concept.md. `gitquarry-tracker` is its own
+# binary, never a dependency of this one — every read/write here goes
+# through `ctx.tracker` (`webui::tracker_client`). Off in a minimal build
+# that never wants these tabs even if `[tracker]` were configured.
+tracker = ["gitquarry-core/tracker"]
+
 [dev-dependencies]
 gitquarry-test-support = { workspace = true }
 # Captures `webui::bootstrap::print_hint`'s log line, the only public way to
 # learn the bootstrap token -- same version `gitquarry-server` installs.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt"] }
+# Seeds tracker data straight through `gitquarry_tracker::domain::*` in the
+# issues/board/milestones tests; never a production dependency (see
+# [dependencies] above).
+gitquarry-tracker = { path = "../gitquarry-tracker" }
 
 [lints.rust]
 unsafe_code = "forbid"

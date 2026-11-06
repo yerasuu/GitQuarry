@@ -812,7 +812,7 @@ pub(crate) async fn handler_merge_post(
 }
 
 #[derive(serde::Deserialize)]
-pub(crate) struct EditPrMetadataForm {
+pub(crate) struct EditMrMetadataForm {
     repo_uid: String,
     number: u64,
     #[serde(default)]
@@ -825,6 +825,12 @@ pub(crate) struct EditPrMetadataForm {
     assignees: String,
     #[serde(default)]
     reviewers: String,
+    /// Blank means "no milestone" — same "empty clears it" convention
+    /// `issues::handlers::EditIssueForm::milestone`'s own doc comment
+    /// describes, including tolerating an unparseable value as blank
+    /// rather than 400ing.
+    #[serde(default)]
+    milestone: String,
     #[serde(default)]
     csrf: String,
 }
@@ -839,7 +845,7 @@ pub(crate) async fn handler_edit_metadata_post(
     State(ctx): State_,
     Path(repo): Path<String>,
     headers: HeaderMap,
-    Form(form): Form<EditPrMetadataForm>,
+    Form(form): Form<EditMrMetadataForm>,
 ) -> Result<Response, AppError> {
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
@@ -850,6 +856,38 @@ pub(crate) async fn handler_edit_metadata_post(
     let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_manage_permission(&ctx, &me, &resolved, &name, form.number, locale).await?;
 
+    // Existence validation lives here, not in `domain::merge_request::edit_metadata`
+    // itself — milestones are owned by the optional `gitquarry-tracker` crate
+    // (`docs/tracker-binary-split-concept.md`), and only this edge can reach it
+    // conditionally. A blank/unparseable field means "no milestone", same
+    // "empty clears it" tolerance `EditMrMetadataForm::milestone`'s own doc
+    // comment describes. Tracker off: `domain::merge_request::edit_metadata`
+    // discards this value regardless (its own cfg'd write-through), so no
+    // validation is needed here either.
+    #[cfg(feature = "tracker")]
+    let milestone = match form.milestone.trim().parse::<u64>() {
+        Ok(n) => {
+            let found = match &ctx.tracker {
+                Some(tracker) => crate::webui::tracker_client::get_milestone(tracker, &resolved.uid, n)
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            if found.is_none() {
+                return Err(AppError::bad_request(anyhow::anyhow!(
+                    "{}",
+                    gitquarry_i18n::shared::tracker::milestone_not_found(locale, n)
+                )));
+            }
+            Some(n)
+        }
+        // Not a number at all (blank included) means "no milestone"; only a
+        // number naming no milestone is the caller's mistake.
+        Err(_) => None,
+    };
+    #[cfg(not(feature = "tracker"))]
+    let milestone = form.milestone.trim().parse::<u64>().ok();
     let cas = domain::merge_request::edit_metadata(
         &ctx,
         &resolved,
@@ -860,6 +898,7 @@ pub(crate) async fn handler_edit_metadata_post(
             labels_csv: &form.labels,
             assignees_csv: &form.assignees,
             reviewers_csv: &form.reviewers,
+            milestone,
         },
         locale,
     )

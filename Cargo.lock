@@ -1885,7 +1885,9 @@ dependencies = [
  "gitquarry-core",
  "gitquarry-federation",
  "gitquarry-i18n",
+ "gitquarry-tracker",
  "p256 0.14.0",
+ "reqwest 0.13.5",
  "s3db",
  "s3db-crypto",
  "serde_json",
@@ -1893,6 +1895,28 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "gitquarry-tracker"
+version = "0.6.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dirs",
+ "gitquarry-i18n",
+ "gitquarry-wire",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "s3db",
+ "s3db-crypto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1911,6 +1935,7 @@ dependencies = [
  "gitquarry-i18n",
  "gitquarry-mirror-external",
  "gitquarry-test-support",
+ "gitquarry-tracker",
  "gitquarry-wire",
  "lru",
  "maud",

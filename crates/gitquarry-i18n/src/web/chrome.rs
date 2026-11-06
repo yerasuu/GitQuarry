@@ -42,7 +42,11 @@ msg!(log_tab() { Locale::Es => "historial", Locale::En => "log" });
 msg!(tree_tab() { Locale::Es => "arbol", Locale::En => "tree" });
 msg!(stats_tab() { Locale::Es => "estadisticas", Locale::En => "stats" });
 msg!(releases_tab() { Locale::Es => "lanzamientos", Locale::En => "releases" });
+msg!(tracker_tab() { Locale::Es => "tracker", Locale::En => "tracker" });
+msg!(issues_tab() { Locale::Es => "issues", Locale::En => "issues" });
 msg!(merges_tab() { Locale::Es => "merge requests", Locale::En => "merge requests" });
+msg!(board_tab() { Locale::Es => "tablero", Locale::En => "board" });
+msg!(milestones_tab() { Locale::Es => "milestones", Locale::En => "milestones" });
 
 msg!(repos_nav() { Locale::Es => "repos", Locale::En => "repos" });
 msg!(new_repo_nav() { Locale::Es => "nuevo repo", Locale::En => "new repo" });
@@ -50,6 +54,7 @@ msg!(skip_to_content() { Locale::Es => "saltar al contenido", Locale::En => "ski
 msg!(menu_toggle_label() { Locale::Es => "menu", Locale::En => "menu" });
 msg!(page_tabs_nav_label() { Locale::Es => "secciones de la pagina", Locale::En => "page sections" });
 msg!(page_tabs_toggle_label() { Locale::Es => "menu de secciones de la pagina", Locale::En => "page sections menu" });
+msg!(project_subnav_label() { Locale::Es => "secciones de gestion", Locale::En => "project sections" });
 msg!(breadcrumb_nav_label() { Locale::Es => "ruta", Locale::En => "breadcrumb" });
 
 msg!(archived_notice() {

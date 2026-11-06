@@ -610,10 +610,16 @@ pub(super) fn side_by_side_diff(diff: &str) -> Markup {
     }
 }
 
-/// Every `#123` in `text` that names a real merge request on `target`,
-/// mapped to its link. What isn't in the map isn't linked, which is how a
-/// mention of a number that doesn't exist stays plain text instead of
-/// becoming a dead link.
+/// Every `#123` in `text` that names a real issue or merge request on
+/// `target`, mapped to its link — issue takes priority over MR on a number
+/// that happens to exist as both, since issue/MR numbers are independent
+/// sequences (unlike GitHub's shared one) and this codebase has no way to
+/// tell which the author meant beyond that tie-break. Without the `tracker`
+/// feature (`docs/tracker-binary-split-concept.md`) there are no issues to
+/// check against, so `#N` is still tried as an MR — a working link beats a
+/// deliberately broken one, and MRs exist in every build. What isn't in the
+/// map isn't linked, which is how a mention of a number that doesn't exist
+/// stays plain text instead of becoming a dead link.
 ///
 /// Separate from the rendering so the substitution can happen inside
 /// [`crate::webui::markdown::render_with_mentions`], on the parsed event
@@ -633,6 +639,17 @@ pub(crate) async fn resolve_number_mentions(
 
     let mut resolved = std::collections::HashMap::new();
     for number in numbers {
+        #[cfg(feature = "tracker")]
+        if let Some(tracker) = &ctx.tracker
+            && crate::webui::tracker_client::get_issue(tracker, &target.uid, number)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            resolved.insert(number, repo_link(repo_name, "issue", "").number(number).to_string());
+            continue;
+        }
         if domain::merge_request::get(ctx, target, number)
             .await
             .ok()

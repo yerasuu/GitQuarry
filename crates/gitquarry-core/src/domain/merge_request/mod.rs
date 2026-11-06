@@ -220,6 +220,7 @@ pub async fn create(
         labels: Vec::new(),
         assignees: Vec::new(),
         requested_reviewers: Vec::new(),
+        milestone: None,
     };
     let cas = merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, None).await?;
     if cas != Cas::Ok {
@@ -372,11 +373,21 @@ pub struct MrMetadataEdit<'a> {
     pub labels_csv: &'a str,
     pub assignees_csv: &'a str,
     pub reviewers_csv: &'a str,
+    /// `None` clears the milestone. Unlike `domain::issue::IssueEdit::milestone`,
+    /// this crate no longer checks the number resolves to a real milestone —
+    /// milestones are owned by the optional `gitquarry-tracker` crate
+    /// (`docs/tracker-binary-split-concept.md`), so the caller
+    /// (`webui::repo::pulls::handlers`) validates this at the edge, where it
+    /// can reach that crate behind `#[cfg(feature = "tracker")]`.
+    pub milestone: Option<u64>,
 }
 
 /// Title, description, labels, assignees, and requested reviewers all
-/// change together in a single get-etag/mutate/CAS-put. Every label in
-/// `edit.labels_csv` must already exist in `target`'s
+/// change together in a single get-etag/mutate/CAS-put — same shape as
+/// `gitquarry_tracker::domain::issue::edit` (when that crate is compiled
+/// in), including reusing its title validation (length cap + control-char
+/// rejection isn't an issue-specific concern, both titles render the same
+/// way). Every label in `edit.labels_csv` must already exist in `target`'s
 /// `RepoConfig.labels`, every name in `assignees_csv`/`reviewers_csv` must
 /// resolve to a real user — the first one that doesn't bails with a clear
 /// error naming it, before anything is written.
@@ -437,6 +448,20 @@ pub async fn edit_metadata(
     mr.labels = labels;
     mr.assignees = assignees;
     mr.requested_reviewers = reviewers;
+    // Tracker off: this deploy has no milestone vocabulary to validate
+    // against and no UI to re-set the field, so an edit passes the existing
+    // value through untouched rather than silently clearing a milestone
+    // that was assigned while tracker was compiled in. The wire DTO field
+    // (`MergeRequestMeta.milestone`) itself stays unconditional — only this
+    // write is gated (docs/tracker-binary-split-concept.md).
+    #[cfg(feature = "tracker")]
+    {
+        mr.milestone = edit.milestone;
+    }
+    #[cfg(not(feature = "tracker"))]
+    {
+        let _ = edit.milestone;
+    }
     mr.updated_at = now_stamp();
     let cas =
         merge_requests::put_merge_request(backend.as_ref(), &ctx.cipher, &target.uid, &mr, etag.as_deref()).await?;
@@ -1259,6 +1284,41 @@ pub async fn merge(
             action: crate::events::MergeRequestAction::Merged,
         },
     );
+    // `gitquarry-tracker`'s own issue-auto-close logic — an in-process
+    // `ctx.events` consumer before the tracker binary split
+    // (`docs/tracker-binary-split-concept.md`), now a pushed notification
+    // instead, since tracker is no longer in this process to register one.
+    // Best-effort, same tolerance every other cross-process notification in
+    // this codebase has (e.g. `mirror::gc::touch_last_access`): a merge that
+    // already landed on the target branch must never fail because tracker
+    // happened to be unreachable.
+    if let Some(tracker) = &ctx.tracker {
+        let notification = gitquarry_wire::tracker::MergeRequestMergedNotification {
+            repo_uid: target.uid.clone(),
+            mr_number: number,
+            title: mr.title.clone(),
+            description: mr.description.clone(),
+        };
+        let url = format!(
+            "{}/_internal/tracker/merge-request-merged",
+            tracker.base_url.trim_end_matches('/')
+        );
+        let req = tracker
+            .http
+            .post(&url)
+            .header("x-internal-token", &tracker.internal_token)
+            .header(
+                gitquarry_wire::WIRE_VERSION_HEADER,
+                gitquarry_wire::WIRE_PROTOCOL_VERSION,
+            )
+            .json(&notification);
+        tokio::spawn(async move {
+            if let Err(e) = req.send().await {
+                warn!(error = %e, "couldn't notify gitquarry-tracker of a merged MR");
+            }
+        });
+    }
+
     let stamp = now_stamp();
     mr.status = MrStatus::Merged;
     mr.merge_commit_sha = Some(merge_sha.clone());

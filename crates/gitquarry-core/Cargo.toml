@@ -63,6 +63,17 @@ tar = { version = "0.4.46", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tracing = { workspace = true }
 
+[features]
+default = ["tracker"]
+# Dependency-free behavior flag (docs/tracker-binary-split-concept.md) — this
+# crate never links `gitquarry-tracker` (tracker depends on core, not the
+# reverse, so core can't call into it even behind a cfg without a cycle).
+# Gates only core's own code that would otherwise assume issues/milestones
+# are always present, e.g. whether a PR's `milestone` field gets validated
+# and written through on edit. Off in a minimal build that compiles out
+# gitquarry-tracker entirely.
+tracker = []
+
 [dev-dependencies]
 gitquarry-test-support = { workspace = true }
 # tests/auth_domain_user_totp.rs derives TOTP codes on its own, independent

@@ -89,6 +89,12 @@ pub struct AppContext {
     /// exist (see `config::FederationSection`'s own doc comment on the
     /// "`None` = feature fully off" pattern).
     pub federation: Option<FederationLink>,
+    /// `None` unless `[tracker]` is configured — see [`TrackerLink`]. Every
+    /// issue/board/milestone route in `webui` checks this before forwarding
+    /// anything, same "`None` = feature fully off" pattern
+    /// `oidc: Option<OidcClient>` already establishes:
+    /// `docs/tracker-binary-split-concept.md`.
+    pub tracker: Option<TrackerLink>,
     /// anything, same "`None` = feature fully off" pattern
     /// `federation` already establishes:
     /// `config::Config::allow_push_create` — gates the ssh:// receive-pack
@@ -125,6 +131,22 @@ pub struct FederationLink {
     pub base_url: String,
     /// Shared secret sent as `X-Internal-Token` on every proxied request —
     /// must equal federation's own `internal_token`.
+    pub internal_token: String,
+    pub http: reqwest::Client,
+}
+
+/// What core needs to reach `gitquarry-tracker`'s own loopback API — the
+/// *outbound* half of a bidirectional IPC leg: `webui` calls into tracker for issue/board/milestone CRUD via
+/// `core_client.rs`-style calls (through `ctx.tracker`), and core pushes a
+/// PR-merge notification back through this same link — see
+/// `docs/tracker-binary-split-concept.md`.
+#[derive(Debug, Clone)]
+pub struct TrackerLink {
+    /// `gitquarry-tracker.toml`'s `listen` address, as a full
+    /// `http://host:port` base URL — `config::TrackerSection::tracker_url`.
+    pub base_url: String,
+    /// Shared secret sent as `X-Internal-Token` — must equal
+    /// `gitquarry-tracker`'s own `internal_token`.
     pub internal_token: String,
     pub http: reqwest::Client,
 }

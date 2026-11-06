@@ -73,6 +73,17 @@ impl AppError {
         }
     }
 
+    /// `[tracker]` compiled in (`feature = "tracker"`) but not configured for
+    /// this deploy — every issue/board/milestone route hits this before
+    /// forwarding anything to `ctx.tracker`.
+    pub(crate) fn service_unavailable(error: anyhow::Error) -> Self {
+        AppError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error,
+            redirect: None,
+        }
+    }
+
     /// For the `webui::raw` routes (plain/patch/rawdiff/snapshot/atom/
     /// release_asset): those promise a non-HTML body on success, so an
     /// error must stay plain text too instead of falling back to the

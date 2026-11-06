@@ -171,6 +171,12 @@ fn classify_repo(rest: &str) -> Class {
         || tail.starts_with("mirrors/")
         || tail.starts_with("publish-mirrors/")
         || tail.starts_with("publish-log/")
+        || tail == "board"
+        || tail.starts_with("board/")
+        || tail == "milestones"
+        || tail.starts_with("milestones/")
+        || tail == "issues"
+        || tail.starts_with("issues/")
     {
         return Class::Entities;
     }

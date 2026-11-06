@@ -29,9 +29,14 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    fixture_on(dir, ctx).await
+}
+
+async fn fixture_on(dir: tempfile::TempDir, ctx: AppContext) -> Fixture {
     let ctx = Arc::new(AppContext {
         mirror_max_age: Duration::from_secs(1),
-        ..gitquarry_test_support::ctx(dir.path())
+        ..ctx
     });
     let repo = repo::create(&ctx, "team/proj", None, None, None, Visibility::Public)
         .await
@@ -113,6 +118,46 @@ async fn merge_detail_404s_for_a_nonexistent_number() {
         .await
         .status;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// Needs `gitquarry_tracker::domain::issue` to create the issue `#1` in the
+// MR description resolves to — only exercised when `tracker` is on, same as
+// `resolve_number_mentions`'s issue-lookup half itself.
+#[cfg(feature = "tracker")]
+#[tokio::test]
+async fn merge_detail_links_a_hash_mention_that_resolves_to_an_issue() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = gitquarry_test_support::ctx(dir.path());
+    let (tracker_state, link) = gitquarry_test_support::spawn_tracker(&base).await;
+    let f = fixture_on(
+        dir,
+        AppContext {
+            tracker: Some(link),
+            ..base
+        },
+    )
+    .await;
+    let ttarget = gitquarry_tracker::state::TrackerTarget {
+        uid: f.repo.uid.clone(),
+    };
+    gitquarry_tracker::domain::issue::create(&tracker_state, &ttarget, "The bug", "b", "alice")
+        .await
+        .unwrap();
+    let new = NewMergeRequest {
+        source_repo: &f.repo.uid,
+        source_branch: "feature",
+        target_branch: "main",
+        title: "Add widget",
+        description: "fixes #1",
+        author: "alice",
+    };
+    merge_request::create(&f.ctx, &f.repo, new, Locale::En).await.unwrap();
+
+    let html = detail(&f, None).await;
+    assert!(
+        html.contains(r#"<a href="/team/proj?view=issue&amp;number=1">#1</a>"#),
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -431,6 +476,7 @@ async fn merge_detail_shows_labels_assignees_and_requested_reviewers() {
             labels_csv: "bug",
             assignees_csv: "bob",
             reviewers_csv: "carol",
+            milestone: None,
         },
         Locale::En,
     )

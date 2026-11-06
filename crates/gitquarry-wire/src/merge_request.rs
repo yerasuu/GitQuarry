@@ -89,6 +89,13 @@ pub struct MergeRequestMeta {
     /// signal: nothing here gates who's *allowed* to submit a review.
     #[serde(default)]
     pub requested_reviewers: Vec<String>,
+    /// Milestone number, same repo-wide vocabulary an issue's own
+    /// `milestone` field already points into
+    /// (`crate::storage::milestones` in `gitquarry-core` — this crate has
+    /// no milestone type of its own, just the number). `None` back-compats
+    /// PRs created before this field existed.
+    #[serde(default)]
+    pub milestone: Option<u64>,
 }
 
 /// Which side of a diff a [`CommentAnchor`]'s line number counts on: a

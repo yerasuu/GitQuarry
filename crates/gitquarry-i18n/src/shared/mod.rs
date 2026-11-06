@@ -2,8 +2,8 @@
 //! Spanish literal onto one function here, instead of translating it
 //! separately at each site, is the whole point of this module. Split by domain
 //! into submodules ([`auth`], [`oidc`], [`repo`], [`release`], [`merge_request`],
-//! [`settings`]); what's left here is genuinely cross-cutting — request/session
-//! plumbing and generic UI widgets no single domain owns.
+//! [`settings`], [`tracker`]); what's left here is genuinely cross-cutting —
+//! request/session plumbing and generic UI widgets no single domain owns.
 
 use super::{Locale, msg};
 
@@ -13,6 +13,7 @@ pub mod oidc;
 pub mod release;
 pub mod repo;
 pub mod settings;
+pub mod tracker;
 
 msg!(
     /// A `Cas::Conflict` on a bucket-side write: someone else's edit landed

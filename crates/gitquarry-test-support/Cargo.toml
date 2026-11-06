@@ -16,11 +16,13 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 gitquarry-core = { workspace = true }
 gitquarry-federation = { path = "../gitquarry-federation" }
+gitquarry-tracker = { path = "../gitquarry-tracker" }
 gitquarry-i18n = { workspace = true }
 s3db = { workspace = true }
 s3db-crypto = { workspace = true }
 axum = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
+reqwest = { workspace = true }
 form_urlencoded = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
 tempfile = { workspace = true }
