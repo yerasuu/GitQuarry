@@ -4,7 +4,9 @@
 
 use gitquarry_core::app::AppContext;
 use gitquarry_core::storage::Cas;
-use gitquarry_mirror_external::publish::{self, FilterConfig, IdentityMapping, PublishMirror, SecretAllow};
+use gitquarry_mirror_external::publish::{
+    self, FilterConfig, IdentityMapping, MirrorToken, PublishMirror, SecretAllow,
+};
 use gitquarry_test_support::ctx;
 
 fn sample() -> PublishMirror {
@@ -153,6 +155,10 @@ async fn untrusted_fields_are_validated_before_storing() {
         },
         PublishMirror {
             remote_url: "https://user:pw@github.com/acme/public.git".to_string(),
+            ..sample()
+        },
+        PublishMirror {
+            inbound_token: MirrorToken::new("read:only@evil".to_string()),
             ..sample()
         },
     ];

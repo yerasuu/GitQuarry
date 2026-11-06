@@ -148,6 +148,12 @@ pub struct PublishMirror {
     pub remote_url: String,
     #[serde(default)]
     pub token: MirrorToken,
+    /// What reads pull requests from the public remote (inbound,
+    /// `docs/publish-mirror-inbound-concept.md` §4): meant to be a read-only
+    /// token, apart from [`Self::token`], which can push. Empty means none;
+    /// the push token stands in for it only when the operator says so.
+    #[serde(default)]
+    pub inbound_token: MirrorToken,
     /// Whether the periodic sweep publishes this mirror. "Publish now"
     /// works either way.
     #[serde(default)]
@@ -191,6 +197,9 @@ pub fn validate_publish_mirror(mirror: &PublishMirror) -> Result<()> {
         validate_mirror_token(mirror.token.expose())?;
     } else if mirror.enabled {
         bail!("an enabled publish mirror needs a token for its public remote");
+    }
+    if !mirror.inbound_token.is_empty() {
+        validate_mirror_token(mirror.inbound_token.expose())?;
     }
     if let Some(publisher) = &mirror.publisher {
         validate_identity_name(&publisher.name)?;
