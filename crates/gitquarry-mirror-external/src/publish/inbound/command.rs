@@ -6,7 +6,7 @@
 //! bucket, as `repack` does, so the command needs no running server and
 //! leaves no mirror behind.
 
-use super::{DryRun, PrNumber, PublicBranch, Request, Verdict};
+use super::{DryRun, PrNumber, PublicBranch, Request, SecretFinding, Verdict};
 use crate::access::ExternalMirrorProvider;
 use crate::publish::{MirrorToken, publish_mirrors_collection};
 use crate::validate::{mirror_host, validate_mirror_id};
@@ -191,6 +191,24 @@ pub fn render(dry_run: &DryRun) -> String {
             let _ = writeln!(out, "collapsed onto base: {}", translation.collapsed_onto_base);
             for commit in &translation.commits {
                 let _ = writeln!(out, "  {} -> {}", commit.public, commit.private);
+            }
+            for finding in &translation.secrets {
+                let _ = match finding {
+                    SecretFinding::Blob { path, rule, line } => {
+                        writeln!(out, "possible secret (informational): {rule} at {path:?} line {line}")
+                    }
+                    SecretFinding::Message {
+                        public_commit,
+                        rule,
+                        line,
+                    } => writeln!(
+                        out,
+                        "possible secret (informational): {rule} in the message of {public_commit} line {line}"
+                    ),
+                    SecretFinding::Unscanned { path } => {
+                        writeln!(out, "not scanned for secrets (too large): {path:?}")
+                    }
+                };
             }
         }
         Verdict::Refused(refusal) => {

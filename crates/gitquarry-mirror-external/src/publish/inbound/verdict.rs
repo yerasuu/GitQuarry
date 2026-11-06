@@ -115,6 +115,28 @@ pub struct TranslatedCommit {
     pub private: String,
 }
 
+/// What the secret scan of the outbound audit finds in what the pull
+/// request adds (§3.12, "Secrets in the PR"). Informational: the content is
+/// already public, so a finding never refuses the pull request; it tells
+/// the maintainer what the private repo would start to store. Names the
+/// rule and the line, never the matched text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretFinding {
+    /// In a blob, named by the first path the pull request adds it at.
+    Blob {
+        path: String,
+        rule: &'static str,
+        line: usize,
+    },
+    Message {
+        public_commit: String,
+        rule: &'static str,
+        line: usize,
+    },
+    /// A text blob past the scanner's size limit: unscanned, not clean.
+    Unscanned { path: String },
+}
+
 #[derive(Debug)]
 pub struct Translation {
     /// The private commit that produced the public base (§3.2, `C_o`).
@@ -124,6 +146,7 @@ pub struct Translation {
     pub collapsed_onto_base: usize,
     /// Oldest first, one per public commit of the pull request.
     pub commits: Vec<TranslatedCommit>,
+    pub secrets: Vec<SecretFinding>,
 }
 
 #[derive(Debug)]

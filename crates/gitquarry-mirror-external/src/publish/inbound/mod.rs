@@ -24,7 +24,7 @@ mod quarantine;
 mod translate;
 mod verdict;
 
-pub use verdict::{Cap, DryRun, Reason, Refusal, TranslatedCommit, Translation, Verdict};
+pub use verdict::{Cap, DryRun, Reason, Refusal, SecretFinding, TranslatedCommit, Translation, Verdict};
 
 use super::epoch::published_epoch;
 use super::log::PublishLog;
@@ -367,6 +367,7 @@ impl Job<'_> {
             )));
         }
         let commits = translated.commits.clone();
+        let secrets = translated.secrets;
         {
             let round_trip = translate::RoundTrip {
                 reader: translated.reader,
@@ -388,6 +389,7 @@ impl Job<'_> {
                     private: to_hex(private),
                 })
                 .collect(),
+            secrets,
         })
     }
 

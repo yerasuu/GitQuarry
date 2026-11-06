@@ -5,13 +5,15 @@
 //! public tree is never turned back into a private one.
 
 use super::quarantine::blob_sizes;
-use super::{Cap, MAX_BLOB_BYTES, MAX_CHANGED_FILES, MAX_PR_BYTES, Reason, Stop, refuse};
+use super::{Cap, MAX_BLOB_BYTES, MAX_CHANGED_FILES, MAX_PR_BYTES, Reason, SecretFinding, Stop, refuse};
 use crate::publish::IdentityMapping;
 use crate::publish::filter::{EntryKind, Filter};
 use crate::publish::objects::{
     Commit, EMPTY_BLOB, ObjectKind, ObjectReader, Oid, TreeEntry, encode_commit, encode_tree, parse_commit, parse_tree,
+    to_hex,
 };
 use crate::publish::rewrite::{Rewriter, join};
+use crate::publish::secrets::{Scan, scan_blob, scan_text};
 use crate::validate::{MAX_INBOUND_PATH_DEPTH, validate_inbound_path};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -66,6 +68,7 @@ pub(super) struct Translated {
     pub commits: Vec<(Oid, Oid)>,
     /// Every blob the pull request adds, with the first path it is added at.
     pub added: Vec<(Oid, String)>,
+    pub secrets: Vec<SecretFinding>,
 }
 
 /// One file the public side changed: its entry before and after, `None`
@@ -121,9 +124,19 @@ pub(super) fn translate(input: Input) -> Result<Translated, Stop> {
     let mut commits = Vec::with_capacity(input.commits.len());
     let mut added = Vec::new();
     let mut seen_blobs = HashSet::new();
+    let mut secrets = Vec::new();
     for oid in &input.commits {
         let commit = parse_commit(&public.read_kind(oid, ObjectKind::Commit)?)?;
         check_controls(&commit).map_err(|reason| refuse(reason, Some(oid), None))?;
+        secrets.extend(
+            scan_text(&String::from_utf8_lossy(&commit.message))
+                .into_iter()
+                .map(|hit| SecretFinding::Message {
+                    public_commit: to_hex(oid),
+                    rule: hit.rule,
+                    line: hit.line,
+                }),
+        );
         let mut changes = Vec::new();
         diff(&mut public, "", Some(public_tree), Some(commit.tree), &mut changes)
             .map_err(|stop| super::with_commit(stop, oid))?;
@@ -170,10 +183,24 @@ pub(super) fn translate(input: Input) -> Result<Translated, Stop> {
             return Err(refuse(Reason::TooLarge(Cap::PrBytes), None, None));
         }
     }
+    // Only once every size is known to be under its cap, so that no blob is
+    // read whole before that.
+    for (blob, path) in &added {
+        match scan_blob(&public.read_kind(blob, ObjectKind::Blob)?) {
+            Scan::Binary => {}
+            Scan::TooLarge => secrets.push(SecretFinding::Unscanned { path: path.clone() }),
+            Scan::Hits(hits) => secrets.extend(hits.into_iter().map(|hit| SecretFinding::Blob {
+                path: path.clone(),
+                rule: hit.rule,
+                line: hit.line,
+            })),
+        }
+    }
     Ok(Translated {
         reader: private,
         commits,
         added,
+        secrets,
     })
 }
 

@@ -12,7 +12,7 @@ use gitquarry_mirror_external::git_remote::{Fetched, fetch_untrusted};
 use gitquarry_mirror_external::publish::filter::{FilterConfig, FilterMode};
 use gitquarry_mirror_external::publish::inbound::command::{parse_args, provider_for, render};
 use gitquarry_mirror_external::publish::inbound::{
-    Cap, DryRun, MAX_CHANGED_FILES, Reason, Refusal, Request, Translation, Verdict, dry_run,
+    Cap, DryRun, MAX_CHANGED_FILES, Reason, Refusal, Request, SecretFinding, Translation, Verdict, dry_run,
 };
 use gitquarry_mirror_external::publish::log::RunOutcome;
 use gitquarry_mirror_external::publish::run::publish_mirror_now;
@@ -315,6 +315,49 @@ async fn a_base_other_private_commits_collapsed_onto_resolves_to_the_one_that_pr
     assert_eq!(translation.private_base, start);
     assert_eq!(translation.collapsed_onto_base, 1);
     assert_eq!(translation.commits.len(), 1);
+}
+
+/// A contributor pastes a key: the pull request still translates, and the
+/// finding names the rule and the line, never the key.
+#[tokio::test]
+async fn a_secret_in_the_pull_request_is_reported_without_refusing_it() {
+    let fx = Fixture::new().await;
+    start(&fx).await;
+    fx.publish().await;
+    let pr = fx.contributor(&fx.public_main().await).await;
+    let key = "AKIAABCDEFGHIJKLMNOP";
+    let token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+    let commit = pr
+        .commit(
+            &[("src/config.rs", &format!("// config\nconst KEY: &str = \"{key}\";\n"))],
+            &format!("Add config with {token}\n"),
+        )
+        .await;
+    pr.open(1).await;
+
+    let out = fx.dry_run("1").await;
+
+    let translation = translated(&out);
+    assert_eq!(translation.commits.len(), 1);
+    assert_eq!(
+        translation.secrets,
+        [
+            SecretFinding::Message {
+                public_commit: commit,
+                rule: "github-token",
+                line: 1,
+            },
+            SecretFinding::Blob {
+                path: "src/config.rs".to_string(),
+                rule: "aws-access-key-id",
+                line: 2,
+            },
+        ]
+    );
+    let report = render(&out);
+    assert!(report.contains("verdict: translatable"));
+    assert!(report.contains("possible secret (informational): aws-access-key-id"));
+    assert!(!report.contains(key) && !report.contains(token));
 }
 
 #[tokio::test]
