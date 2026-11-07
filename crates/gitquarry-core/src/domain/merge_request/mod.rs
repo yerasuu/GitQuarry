@@ -187,13 +187,13 @@ pub async fn create(
     if !branch_exists(source_remote, new.source_branch).await? {
         bail!(
             "{}",
-            gitquarry_i18n::shared::repo::not_a_branch(locale, new.source_branch)
+            gitquarry_i18n::shared::merge_request::merge_request_branch_not_found(locale, new.source_branch)
         );
     }
     if !branch_exists(&target.remote, new.target_branch).await? {
         bail!(
             "{}",
-            gitquarry_i18n::shared::repo::not_a_branch(locale, new.target_branch)
+            gitquarry_i18n::shared::merge_request::merge_request_branch_not_found(locale, new.target_branch)
         );
     }
 

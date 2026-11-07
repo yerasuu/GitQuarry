@@ -45,10 +45,11 @@ async fn put_branch(target: &ResolvedRepo, branch: &str, sha: &str) {
 }
 
 #[tokio::test]
-async fn create_rejects_a_nonexistent_branch() {
+async fn create_rejects_a_nonexistent_branch_and_says_a_fresh_push_may_need_a_retry() {
     let dir = tempfile::tempdir().unwrap();
     let ctx = ctx(dir.path());
     let target = test_target(&ctx);
+    put_branch(&target, "main", &"a".repeat(40)).await;
     let new = NewMergeRequest {
         source_repo: &target.uid,
         source_branch: "feature",
@@ -57,7 +58,12 @@ async fn create_rejects_a_nonexistent_branch() {
         description: "d",
         author: "alice",
     };
-    assert!(create(&ctx, &target, new, gitquarry_i18n::Locale::Es).await.is_err());
+    let err = create(&ctx, &target, new, gitquarry_i18n::Locale::En)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.starts_with("'feature' isn't a branch of this repo"), "{err}");
+    assert!(err.contains("just pushed") && err.contains("retry"), "{err}");
 }
 
 #[tokio::test]

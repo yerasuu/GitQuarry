@@ -43,6 +43,18 @@ msg!(
 );
 
 msg!(
+    /// `domain::merge_request::create`: `branch` isn't in the manifest this
+    /// server read. A push writes `refs.json` from the hook's own process,
+    /// so a server's backend cache can serve the pre-push copy until its
+    /// `resilience.cache.ttl` runs out: a branch pushed moments ago may not
+    /// be visible yet, and a retry finds it.
+    merge_request_branch_not_found(branch: &str) {
+        Locale::Es => "'{branch}' no es una rama de este repo; si se acaba de subir, puede que este servidor aun no la vea: reintentalo en unos segundos",
+        Locale::En => "'{branch}' isn't a branch of this repo; if it was just pushed, this server may not see it yet: retry in a few seconds",
+    }
+);
+
+msg!(
     /// `domain::merge_request::merge`: the MR is still a draft — flip it
     /// with `domain::merge_request::mark_ready` before merging.
     merge_request_is_draft() {

@@ -7,6 +7,11 @@ fn merge_request_not_found_carries_the_number() {
 }
 
 #[test]
+fn merge_request_branch_not_found_carries_the_branch_name() {
+    assert!(merge_request_branch_not_found(Locale::Es, "feature2").starts_with("'feature2' no es una rama"));
+}
+
+#[test]
 fn merge_request_wrong_status_differs_by_locale() {
     assert_ne!(
         merge_request_wrong_status(Locale::Es),
