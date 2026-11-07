@@ -16,6 +16,7 @@ use anyhow::{Result, bail};
 use s3db::{Backend, Cipher, Collection};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 
 const MAX_PAT_LABEL_LEN: usize = 128;
 
@@ -117,7 +118,9 @@ pub async fn resolve_by_secret(
     let Some(token) = PersonalAccessToken::find_by_token_hash(backend, cipher, &hash).await? else {
         return Ok(None);
     };
-    if token.token_hash != hash {
+    // Constant time, like every other secret comparison here, so how long
+    // this takes says nothing about how close a presented digest came.
+    if !bool::from(token.token_hash.as_bytes().ct_eq(hash.as_bytes())) {
         return Ok(None);
     }
     if let Some(expires_at) = &token.expires_at
