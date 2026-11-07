@@ -233,6 +233,52 @@ pub async fn sync_bare_repo_from_s3(remote: &crate::storage::remote::Remote, bar
     Ok(())
 }
 
+/// Name of the file the `pre-receive` hook leaves inside a mirror when its
+/// push gave the repo a new HEAD — see [`resync_after_push`].
+const PUSHED_HEAD: &str = ".gitquarry-pushed-head";
+
+/// Called by the hook once its `refs.json` CAS landed with a HEAD the
+/// manifest didn't have before. A plain file, not `git symbolic-ref`: the
+/// hook runs inside receive-pack's quarantine, where git refuses ref updates.
+pub(crate) async fn record_pushed_head(bare_repo: &Path, head: &str) -> Result<()> {
+    let path = bare_repo.join(PUSHED_HEAD);
+    tokio::fs::write(&path, head)
+        .await
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// [`sync_bare_repo_from_s3`] for the server process right after a
+/// `receive-pack` it ran, plus the HEAD the hook recorded. The hook wrote
+/// `refs.json` from its own process, so this process's backend cache can
+/// still hand the sync the pre-push manifest (until `resilience.cache.ttl`
+/// runs out), and the sync then leaves HEAD where `git init --bare` put it:
+/// a repo whose only branch isn't that default rendered as empty (#151).
+pub(crate) async fn resync_after_push(remote: &crate::storage::remote::Remote, bare_repo: &Path) -> Result<()> {
+    // The recorded HEAD is applied even when the sync fails: it comes from
+    // the mirror, not the bucket, and the push it belongs to already landed.
+    let synced = sync_bare_repo_from_s3(remote, bare_repo).await;
+    apply_pushed_head(bare_repo).await?;
+    synced
+}
+
+async fn apply_pushed_head(bare_repo: &Path) -> Result<()> {
+    let path = bare_repo.join(PUSHED_HEAD);
+    let head = match tokio::fs::read_to_string(&path).await {
+        Ok(head) => head,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    tokio::fs::remove_file(&path)
+        .await
+        .with_context(|| format!("removing {}", path.display()))?;
+    // receive-pack can still fail to move the ref locally after the hook
+    // accepted it; HEAD must not end up naming a ref the mirror lacks.
+    if git::browse::resolve_commit(bare_repo, head.trim()).await?.is_some() {
+        git::set_head(bare_repo, head.trim()).await?;
+    }
+    Ok(())
+}
+
 /// Syncs a peer-repo mirror via a real `git fetch` against the peer's own
 /// URL, instead of S3 — federation layer 2 (`docs/federation-concept.md`),
 /// [`sync_bare_repo_from_s3`]'s counterpart for

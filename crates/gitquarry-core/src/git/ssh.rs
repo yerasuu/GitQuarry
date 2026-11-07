@@ -12,7 +12,7 @@ use crate::auth::access;
 use crate::auth::entities::{Permission, User};
 use crate::crypto::Cipher;
 use crate::domain;
-use crate::mirror::{spawn_git_subcommand, sync_bare_repo_from_s3};
+use crate::mirror::{resync_after_push, spawn_git_subcommand};
 use crate::storage::entities::Visibility;
 use crate::storage::{Backend, Cas};
 use crate::validate;
@@ -372,7 +372,7 @@ impl ConnHandler {
                 // the pre-receive hook already synced S3; refresh the
                 // mirror just in case (another concurrent push, deleted
                 // refs, etc), same as git smart-HTTP does after a push.
-                if let Err(e) = sync_bare_repo_from_s3(&mirror.remote, &mirror.path).await {
+                if let Err(e) = resync_after_push(&mirror.remote, &mirror.path).await {
                     warn!(error = %e, "ssh: couldn't re-sync after push");
                 }
                 // Detached: see `domain::repo::update_primary_language`'s

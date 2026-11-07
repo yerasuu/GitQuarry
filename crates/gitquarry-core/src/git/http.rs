@@ -351,7 +351,7 @@ async fn handle(
                     // The pre-receive hook already pushed to the bucket; this just
                     // refreshes the local mirror for the next reader, same as
                     // `ssh.rs` does after a push.
-                    if let Err(e) = mirror::sync_bare_repo_from_s3(&mirror.remote, &mirror.path).await {
+                    if let Err(e) = mirror::resync_after_push(&mirror.remote, &mirror.path).await {
                         warn!(error = %e, "http: couldn't re-sync after push");
                     }
                     // Detached, same reasoning as `ssh.rs`'s own call to

@@ -392,6 +392,14 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
 
     match remote.put_manifest(&new_manifest, etag.as_deref()).await? {
         Cas::Ok => {
+            if new_manifest.head != manifest.head
+                && let Some(head) = &new_manifest.head
+                && let Err(e) = super::record_pushed_head(Path::new(&git_dir), head).await
+            {
+                // The push itself landed; the mirror's HEAD catches up on
+                // the first sync that sees the new manifest.
+                warn!(error = %e, "couldn't record the pushed HEAD for the server");
+            }
             let uid = crate::storage::uid::Uid::from(repo_uid.clone());
             if uploaded_bytes > 0 {
                 crate::storage::settings::bump_pack_bytes(
