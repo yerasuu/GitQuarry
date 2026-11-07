@@ -6,6 +6,7 @@
 //! `main.rs` is just the CLI dispatch shim; see its own doc comment for the
 //! full command list.
 
+pub mod api;
 pub mod app;
 pub mod auth;
 pub mod backup;
