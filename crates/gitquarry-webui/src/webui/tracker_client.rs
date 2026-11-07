@@ -5,18 +5,34 @@
 //! since tracker's own surface (issues/board/milestones, ~20 operations) is
 //! much bigger than ci's single page.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use gitquarry_core::app::TrackerLink;
 use gitquarry_wire::Uid;
 use gitquarry_wire::ipc::SignedRequestBuilderExt;
 use gitquarry_wire::tracker::*;
+use reqwest::Url;
 use serde::{Serialize, de::DeserializeOwned};
 
-async fn get<T: DeserializeOwned>(tracker: &TrackerLink, path: &str) -> Result<Option<T>> {
-    let url = format!("{}{path}", tracker.base_url.trim_end_matches('/'));
+/// `/_internal/<segments>?uid=<uid>` under `tracker.base_url`. Every segment
+/// and query value is percent-encoded on its own, so caller data (a comment
+/// id, a status filter) can never add a path segment, a query pair or a
+/// fragment and point the call at another repo's `uid`.
+fn endpoint(tracker: &TrackerLink, uid: &Uid, segments: &[&str]) -> Result<Url> {
+    let mut url = Url::parse(&tracker.base_url)
+        .with_context(|| format!("gitquarry-tracker base URL {} isn't a valid URL", tracker.base_url))?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow!("gitquarry-tracker base URL {} can't carry a path", tracker.base_url))?
+        .pop_if_empty()
+        .push("_internal")
+        .extend(segments);
+    url.query_pairs_mut().clear().append_pair("uid", uid.as_str());
+    Ok(url)
+}
+
+async fn get<T: DeserializeOwned>(tracker: &TrackerLink, url: Url) -> Result<Option<T>> {
     let resp = tracker
         .http
-        .get(&url)
+        .get(url.clone())
         .signed(&tracker.internal_token)
         .send()
         .await
@@ -33,11 +49,10 @@ async fn get<T: DeserializeOwned>(tracker: &TrackerLink, path: &str) -> Result<O
         .with_context(|| format!("gitquarry-tracker's response from {url} wasn't valid JSON"))
 }
 
-async fn post<B: Serialize, T: DeserializeOwned>(tracker: &TrackerLink, path: &str, body: &B) -> Result<T> {
-    let url = format!("{}{path}", tracker.base_url.trim_end_matches('/'));
+async fn post<B: Serialize, T: DeserializeOwned>(tracker: &TrackerLink, url: Url, body: &B) -> Result<T> {
     let resp = tracker
         .http
-        .post(&url)
+        .post(url.clone())
         .signed(&tracker.internal_token)
         .json(body)
         .send()
@@ -53,11 +68,10 @@ async fn post<B: Serialize, T: DeserializeOwned>(tracker: &TrackerLink, path: &s
 
 /// Same as [`post`], but for a route whose success body is empty
 /// (`StatusCode::OK` with no JSON) — `add_comment`/`delete_comment`.
-async fn post_empty<B: Serialize>(tracker: &TrackerLink, path: &str, body: &B) -> Result<()> {
-    let url = format!("{}{path}", tracker.base_url.trim_end_matches('/'));
+async fn post_empty<B: Serialize>(tracker: &TrackerLink, url: Url, body: &B) -> Result<()> {
     let resp = tracker
         .http
-        .post(&url)
+        .post(url.clone())
         .signed(&tracker.internal_token)
         .json(body)
         .send()
@@ -83,22 +97,18 @@ async fn error_body(resp: reqwest::Response) -> String {
     }
 }
 
-fn uid_query(uid: &Uid) -> String {
-    format!("uid={uid}")
-}
-
 // ---- issues ----
 
 pub(crate) async fn list_issues(tracker: &TrackerLink, uid: &Uid, status: Option<&str>) -> Result<Vec<IssueSummary>> {
-    let mut path = format!("/_internal/issues?{}", uid_query(uid));
+    let mut url = endpoint(tracker, uid, &["issues"])?;
     if let Some(status) = status {
-        path.push_str(&format!("&status={status}"));
+        url.query_pairs_mut().append_pair("status", status);
     }
-    Ok(get(tracker, &path).await?.unwrap_or_default())
+    Ok(get(tracker, url).await?.unwrap_or_default())
 }
 
 pub(crate) async fn get_issue(tracker: &TrackerLink, uid: &Uid, number: u64) -> Result<Option<IssueSummary>> {
-    get(tracker, &format!("/_internal/issues/{number}?{}", uid_query(uid))).await
+    get(tracker, endpoint(tracker, uid, &["issues", &number.to_string()])?).await
 }
 
 pub(crate) async fn create_issue(
@@ -110,7 +120,7 @@ pub(crate) async fn create_issue(
 ) -> Result<IssueSummary> {
     post(
         tracker,
-        &format!("/_internal/issues?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["issues"])?,
         &CreateIssueRequest {
             title: title.to_string(),
             body: body.to_string(),
@@ -133,7 +143,7 @@ pub(crate) async fn edit_issue(
 ) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/issues/{number}/edit?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["issues", &number.to_string(), "edit"])?,
         &EditIssueRequest {
             title: title.to_string(),
             body: body.to_string(),
@@ -148,7 +158,7 @@ pub(crate) async fn edit_issue(
 pub(crate) async fn close_issue(tracker: &TrackerLink, uid: &Uid, number: u64) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/issues/{number}/close?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["issues", &number.to_string(), "close"])?,
         &(),
     )
     .await
@@ -157,7 +167,7 @@ pub(crate) async fn close_issue(tracker: &TrackerLink, uid: &Uid, number: u64) -
 pub(crate) async fn reopen_issue(tracker: &TrackerLink, uid: &Uid, number: u64) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/issues/{number}/reopen?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["issues", &number.to_string(), "reopen"])?,
         &(),
     )
     .await
@@ -166,7 +176,7 @@ pub(crate) async fn reopen_issue(tracker: &TrackerLink, uid: &Uid, number: u64) 
 pub(crate) async fn list_issue_comments(tracker: &TrackerLink, uid: &Uid, number: u64) -> Result<Vec<IssueCommentDto>> {
     Ok(get(
         tracker,
-        &format!("/_internal/issues/{number}/comments?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["issues", &number.to_string(), "comments"])?,
     )
     .await?
     .unwrap_or_default())
@@ -181,7 +191,7 @@ pub(crate) async fn add_issue_comment(
 ) -> Result<()> {
     post_empty(
         tracker,
-        &format!("/_internal/issues/{number}/comments?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["issues", &number.to_string(), "comments"])?,
         &AddIssueCommentRequest {
             actor: actor.to_string(),
             body: body.to_string(),
@@ -200,10 +210,11 @@ pub(crate) async fn edit_issue_comment(
 ) -> Result<bool> {
     post(
         tracker,
-        &format!(
-            "/_internal/issues/{number}/comments/{comment_id}/edit?{}",
-            uid_query(uid)
-        ),
+        endpoint(
+            tracker,
+            uid,
+            &["issues", &number.to_string(), "comments", comment_id, "edit"],
+        )?,
         &EditIssueCommentRequest {
             actor: actor.to_string(),
             body: body.to_string(),
@@ -222,10 +233,11 @@ pub(crate) async fn delete_issue_comment(
 ) -> Result<()> {
     post_empty(
         tracker,
-        &format!(
-            "/_internal/issues/{number}/comments/{comment_id}/delete?{}",
-            uid_query(uid)
-        ),
+        endpoint(
+            tracker,
+            uid,
+            &["issues", &number.to_string(), "comments", comment_id, "delete"],
+        )?,
         &DeleteIssueCommentRequest {
             actor: actor.to_string(),
             is_moderator,
@@ -237,7 +249,7 @@ pub(crate) async fn delete_issue_comment(
 // ---- board ----
 
 pub(crate) async fn get_board(tracker: &TrackerLink, uid: &Uid) -> Result<BoardStateDto> {
-    Ok(get(tracker, &format!("/_internal/board?{}", uid_query(uid)))
+    Ok(get(tracker, endpoint(tracker, uid, &["board"])?)
         .await?
         .unwrap_or_default())
 }
@@ -245,7 +257,7 @@ pub(crate) async fn get_board(tracker: &TrackerLink, uid: &Uid) -> Result<BoardS
 pub(crate) async fn add_board_column(tracker: &TrackerLink, uid: &Uid, name: &str) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/board/columns?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["board", "columns"])?,
         &AddBoardColumnRequest { name: name.to_string() },
     )
     .await
@@ -254,7 +266,7 @@ pub(crate) async fn add_board_column(tracker: &TrackerLink, uid: &Uid, name: &st
 pub(crate) async fn remove_board_column(tracker: &TrackerLink, uid: &Uid, column_index: usize) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/board/columns/{column_index}/remove?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["board", "columns", &column_index.to_string(), "remove"])?,
         &(),
     )
     .await
@@ -268,7 +280,7 @@ pub(crate) async fn add_board_card(
 ) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/board/columns/{column_index}/cards?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["board", "columns", &column_index.to_string(), "cards"])?,
         &AddBoardCardRequest { card },
     )
     .await
@@ -282,7 +294,7 @@ pub(crate) async fn move_board_card(
 ) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/board/cards/{card_id}/move?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["board", "cards", &card_id.to_string(), "move"])?,
         &MoveBoardCardRequest { to_column_index },
     )
     .await
@@ -296,7 +308,7 @@ pub(crate) async fn reorder_board_card(
 ) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/board/cards/{card_id}/reorder?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["board", "cards", &card_id.to_string(), "reorder"])?,
         &direction,
     )
     .await
@@ -305,7 +317,7 @@ pub(crate) async fn reorder_board_card(
 pub(crate) async fn remove_board_card(tracker: &TrackerLink, uid: &Uid, card_id: u64) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/board/cards/{card_id}/remove?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["board", "cards", &card_id.to_string(), "remove"])?,
         &(),
     )
     .await
@@ -314,7 +326,7 @@ pub(crate) async fn remove_board_card(tracker: &TrackerLink, uid: &Uid, card_id:
 // ---- milestones ----
 
 pub(crate) async fn list_milestones(tracker: &TrackerLink, uid: &Uid) -> Result<Vec<MilestoneSummaryDto>> {
-    Ok(get(tracker, &format!("/_internal/milestones?{}", uid_query(uid)))
+    Ok(get(tracker, endpoint(tracker, uid, &["milestones"])?)
         .await?
         .unwrap_or_default())
 }
@@ -324,7 +336,7 @@ pub(crate) async fn get_milestone(
     uid: &Uid,
     number: u64,
 ) -> Result<Option<MilestoneSummaryDto>> {
-    get(tracker, &format!("/_internal/milestones/{number}?{}", uid_query(uid))).await
+    get(tracker, endpoint(tracker, uid, &["milestones", &number.to_string()])?).await
 }
 
 pub(crate) async fn create_milestone(
@@ -336,7 +348,7 @@ pub(crate) async fn create_milestone(
 ) -> Result<MilestoneSummaryDto> {
     post(
         tracker,
-        &format!("/_internal/milestones?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["milestones"])?,
         &CreateMilestoneRequest {
             title: title.to_string(),
             description: description.to_string(),
@@ -356,7 +368,7 @@ pub(crate) async fn edit_milestone(
 ) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/milestones/{number}/edit?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["milestones", &number.to_string(), "edit"])?,
         &EditMilestoneRequest {
             title: title.to_string(),
             description: description.to_string(),
@@ -369,7 +381,7 @@ pub(crate) async fn edit_milestone(
 pub(crate) async fn close_milestone(tracker: &TrackerLink, uid: &Uid, number: u64) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/milestones/{number}/close?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["milestones", &number.to_string(), "close"])?,
         &(),
     )
     .await
@@ -378,7 +390,7 @@ pub(crate) async fn close_milestone(tracker: &TrackerLink, uid: &Uid, number: u6
 pub(crate) async fn reopen_milestone(tracker: &TrackerLink, uid: &Uid, number: u64) -> Result<bool> {
     post(
         tracker,
-        &format!("/_internal/milestones/{number}/reopen?{}", uid_query(uid)),
+        endpoint(tracker, uid, &["milestones", &number.to_string(), "reopen"])?,
         &(),
     )
     .await
