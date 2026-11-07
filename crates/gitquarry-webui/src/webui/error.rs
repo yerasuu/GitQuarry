@@ -106,14 +106,15 @@ impl AppError {
     /// "federation isn't configured" — and goes out verbatim; that's the
     /// whole point of marking those statuses explicitly.
     ///
-    /// A 5xx is the opposite: the blanket `From<E> for AppError` below
-    /// means *any* stray error becomes one, so the chain is whatever
+    /// Any other 5xx is the opposite: the blanket `From<E> for AppError`
+    /// below means *any* stray error becomes a 500, so the chain is whatever
     /// happened to bubble up — git's stderr (which quotes `GIT_DIR` paths),
     /// an S3 key, a bucket name, a backend endpoint URL. The full chain
     /// still reaches the operator through the `error!` log next to every
-    /// call of this; the client gets a fixed sentence.
+    /// call of this; the client gets a fixed sentence. A 503 is only ever
+    /// built by [`Self::service_unavailable`], never by that conversion.
     fn client_message(&self, locale: gitquarry_i18n::Locale) -> String {
-        if self.status.is_server_error() {
+        if self.status.is_server_error() && self.status != StatusCode::SERVICE_UNAVAILABLE {
             gitquarry_i18n::shared::internal_error(locale)
         } else {
             format!("error: {:#}", self.error)

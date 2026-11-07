@@ -19,6 +19,37 @@ async fn view(f: &TrackerFixture, query: &str) -> String {
 }
 
 #[tokio::test]
+async fn issue_routes_say_why_they_503_without_a_configured_tracker() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    gitquarry_core::domain::repo::create(
+        &ctx,
+        "team/proj",
+        None,
+        None,
+        None,
+        gitquarry_core::storage::entities::Visibility::Public,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    gitquarry_test_support::user(&ctx, "alice", true).await;
+    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+    let session = Session::login(&app, "alice").await;
+
+    let page = session
+        .post(&app, "/_issues", &[("repo", "team/proj"), ("title", "x")])
+        .await;
+    assert_eq!(page.status, StatusCode::SERVICE_UNAVAILABLE, "{}", page.body);
+    assert!(
+        page.body
+            .contains(&gitquarry_i18n::shared::tracker::tracker_not_configured(Locale::En)),
+        "{}",
+        page.body
+    );
+}
+
+#[tokio::test]
 async fn issues_list_shows_hint_when_empty() {
     let f = tracker_fixture(&[]).await;
     let html = view(&f, "view=issues").await;
