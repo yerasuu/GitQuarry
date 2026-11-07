@@ -265,3 +265,65 @@ async fn issue_detail_wraps_actions_in_an_async_fragment_target() {
     let html = view(&f, "view=issue&number=1").await;
     assert!(html.contains(r#"id="issue-actions""#), "{html}");
 }
+
+/// An issue by alice carrying one comment of hers, the comment's id, and
+/// alice logged in.
+async fn commented_issue(f: &TrackerFixture) -> (axum::Router, Session, u64, String) {
+    let issue = gitquarry_tracker::domain::issue::create(&f.tracker, &f.target, "Bug", "b", "alice")
+        .await
+        .unwrap();
+    gitquarry_tracker::domain::issue::add_comment(&f.tracker, &f.target, issue.number, "alice", "mine", Locale::En)
+        .await
+        .unwrap();
+    let (comment_id, _) = gitquarry_tracker::domain::issue::list_comments(&f.tracker, &f.target, issue.number)
+        .await
+        .unwrap()
+        .remove(0);
+    gitquarry_test_support::user(&f.ctx, "alice", false).await;
+    let app = gitquarry_webui::webui::router(Arc::clone(&f.ctx));
+    let session = Session::login(&app, "alice").await;
+    (app, session, issue.number, comment_id)
+}
+
+#[tokio::test]
+async fn comment_delete_rejects_a_comment_id_that_rewrites_the_tracker_url() {
+    let f = tracker_fixture(&[]).await;
+    let (app, session, number, comment_id) = commented_issue(&f).await;
+    let number_field = number.to_string();
+    let payload = format!("{comment_id}/delete?uid={}#", f.repo.uid);
+
+    for route in ["/_issues/comment/delete", "/_issues/comment/edit"] {
+        let fields = [
+            ("repo", "team/proj"),
+            ("number", number_field.as_str()),
+            ("comment_id", payload.as_str()),
+            ("body", "edited"),
+        ];
+        let page = session.post(&app, route, &fields).await;
+        assert_eq!(page.status, StatusCode::BAD_REQUEST, "{route}: {}", page.body);
+    }
+    let comments = gitquarry_tracker::domain::issue::list_comments(&f.tracker, &f.target, number)
+        .await
+        .unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].1.body, "mine");
+}
+
+#[tokio::test]
+async fn comment_delete_with_a_valid_id_removes_the_comment() {
+    let f = tracker_fixture(&[]).await;
+    let (app, session, number, comment_id) = commented_issue(&f).await;
+    let number_field = number.to_string();
+
+    let fields = [
+        ("repo", "team/proj"),
+        ("number", number_field.as_str()),
+        ("comment_id", comment_id.as_str()),
+    ];
+    let page = session.post(&app, "/_issues/comment/delete", &fields).await;
+    assert_eq!(page.status, StatusCode::SEE_OTHER, "{}", page.body);
+    let comments = gitquarry_tracker::domain::issue::list_comments(&f.tracker, &f.target, number)
+        .await
+        .unwrap();
+    assert!(comments.is_empty());
+}

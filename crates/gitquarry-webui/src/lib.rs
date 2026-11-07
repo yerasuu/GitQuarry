@@ -13,4 +13,6 @@
 pub(crate) mod auth;
 pub(crate) mod search;
 pub(crate) mod settings;
+#[cfg(feature = "tracker")]
+pub(crate) mod validate;
 pub mod webui;

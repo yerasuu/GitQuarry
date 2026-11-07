@@ -511,6 +511,7 @@ pub(crate) async fn handler_comment_edit_post(
         Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
+    crate::validate::validate_comment_id(&form.comment_id).map_err(AppError::bad_request)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     let Some(tracker) = &ctx.tracker else {
@@ -568,6 +569,7 @@ pub(crate) async fn handler_comment_delete_post(
         Err(resp) => return Ok(*resp),
     };
     require_csrf(&headers, &form.csrf)?;
+    crate::validate::validate_comment_id(&form.comment_id).map_err(AppError::bad_request)?;
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     let Some(tracker) = &ctx.tracker else {
