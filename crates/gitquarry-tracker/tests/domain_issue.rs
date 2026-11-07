@@ -185,6 +185,31 @@ async fn edit_rejects_an_unknown_assignee() {
 }
 
 #[tokio::test]
+async fn edit_rejects_an_assignee_that_smuggles_a_second_query_parameter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, fake) = test_state(dir.path()).await;
+    let target = test_target();
+    fake.users.lock().unwrap().insert("admin".to_string());
+    let issue = create(&state, &target, "Bug", "b", "alice").await.unwrap();
+
+    let result = edit(
+        &state,
+        &target,
+        issue.number,
+        IssueEdit {
+            title: "Bug",
+            body: "b",
+            labels_csv: "",
+            assignees_csv: "x&username=admin",
+            milestone: None,
+        },
+        gitquarry_i18n::Locale::En,
+    )
+    .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn edit_updates_title_body_labels_and_assignees() {
     let dir = tempfile::tempdir().unwrap();
     let (state, fake) = test_state(dir.path()).await;
