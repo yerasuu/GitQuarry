@@ -143,14 +143,18 @@ pub async fn put_issue(
 }
 
 /// Every issue currently stored for this repo, newest-number-first. Skips
-/// [`COUNTER_KEY`], same reasoning as `pull_requests::list_pull_requests`.
+/// [`COUNTER_KEY`] and every name with a `/`: `list_names` scans the whole
+/// prefix, so each issue's comment thread (`<number>/comments/...`) comes
+/// back too, and an `IssueComment` deserializes as an all-default
+/// `IssueMeta` (a phantom issue #0). Same filter as
+/// `gitquarry_core::storage::merge_requests::list_merge_requests`.
 pub async fn list_issues(backend: &Arc<dyn Backend>, cipher: &Arc<Cipher>, uid: &Uid) -> Result<Vec<IssueMeta>> {
     let collection = issues_collection(uid);
     let names: Vec<String> = collection
         .list_names(backend.as_ref())
         .await?
         .into_iter()
-        .filter(|name| name != COUNTER_KEY)
+        .filter(|name| name != COUNTER_KEY && !name.contains('/'))
         .collect();
 
     let mut set = tokio::task::JoinSet::new();

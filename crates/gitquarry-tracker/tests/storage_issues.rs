@@ -103,6 +103,30 @@ async fn list_issues_excludes_the_counter_and_sorts_newest_first() {
 }
 
 #[tokio::test]
+async fn list_issues_skips_the_comment_threads_nested_under_each_issue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (backend, cipher) = test_backend_and_cipher(dir.path());
+    let backend: Arc<dyn Backend> = Arc::new(backend);
+    let cipher = Arc::new(cipher);
+    let uid = Uid::from("team/proj".to_string());
+
+    put_issue(backend.as_ref(), &cipher, &uid, &sample(1), None)
+        .await
+        .unwrap();
+    let comment = IssueComment {
+        author: "bob".to_string(),
+        body: "a comment, not an issue".to_string(),
+        created_at: "2024-01-01T00:00:00Z".to_string(),
+    };
+    add_issue_comment(backend.as_ref(), &cipher, &uid, 1, &comment)
+        .await
+        .unwrap();
+
+    let issues = list_issues(&backend, &cipher, &uid).await.unwrap();
+    assert_eq!(issues.iter().map(|issue| issue.number).collect::<Vec<_>>(), vec![1]);
+}
+
+#[tokio::test]
 async fn comments_list_empty_before_any_are_added() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
