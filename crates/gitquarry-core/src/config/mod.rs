@@ -173,6 +173,16 @@ impl Config {
                 );
             }
         }
+        // An empty secret would compare equal to an empty `X-Internal-Token`
+        // header, letting any loopback caller through.
+        if let Some(tracker) = &raw.tracker
+            && tracker.internal_token.trim().is_empty()
+        {
+            bail!(
+                "[tracker] in {} has an empty `internal_token` (mandatory: must match gitquarry-tracker.toml's)",
+                path.display()
+            );
+        }
         if let Some(name) = &raw.default_bucket
             && !raw.buckets.contains_key(name)
         {
