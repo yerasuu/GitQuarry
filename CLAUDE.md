@@ -119,6 +119,13 @@ One binary, `gitquarry` (`crates/gitquarry-server`), over `gitquarry-core` (ssh,
 - Never `Co-Authored-By: Claude` or any AI mention.
   Caught by: `ai-attribution` (scans commit messages).
 
+## Worktrees
+
+- A branch worktree lives in `../gitquarry-wt/<type>/<topic>` (sibling folder, never inside the repo or `.claude/worktrees/`);
+  create it with `git worktree add -b <type>/<topic> ../gitquarry-wt/<type>/<topic> develop`.
+- Once its branch is integrated into `develop`, remove the worktree (`git worktree remove`) and delete
+  the branch (`git branch -d`), after checking its content is in `develop`.
+
 ## Versioning
 
 SemVer as it reads below 1.0 (§4 plus Cargo's rule: in `0.y.z`
