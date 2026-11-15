@@ -16,4 +16,5 @@ pub mod domain;
 pub mod i18n;
 pub mod state;
 pub mod storage;
+mod validate;
 pub mod web;

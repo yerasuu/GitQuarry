@@ -34,7 +34,7 @@ fn sample(number: u64) -> IssueMeta {
 async fn next_issue_number_starts_at_one_and_increments() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
 
     assert_eq!(next_issue_number(&backend, &cipher, &uid).await.unwrap(), 1);
     assert_eq!(next_issue_number(&backend, &cipher, &uid).await.unwrap(), 2);
@@ -45,8 +45,8 @@ async fn next_issue_number_starts_at_one_and_increments() {
 async fn next_issue_number_is_scoped_per_repo_uid() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let a = Uid::from("team/a".to_string());
-    let b = Uid::from("team/b".to_string());
+    let a = Uid::new();
+    let b = Uid::new();
 
     assert_eq!(next_issue_number(&backend, &cipher, &a).await.unwrap(), 1);
     assert_eq!(next_issue_number(&backend, &cipher, &a).await.unwrap(), 2);
@@ -57,7 +57,7 @@ async fn next_issue_number_is_scoped_per_repo_uid() {
 async fn put_then_get_roundtrips_and_conflicts_on_a_stale_etag() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
     let issue = sample(1);
 
     assert_eq!(put_issue(&backend, &cipher, &uid, &issue, None).await.unwrap(), Cas::Ok);
@@ -75,7 +75,7 @@ async fn put_then_get_roundtrips_and_conflicts_on_a_stale_etag() {
 async fn get_is_none_for_a_never_created_number() {
     let dir = tempfile::tempdir().unwrap();
     let (backend, cipher) = test_backend_and_cipher(dir.path());
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
     assert!(get_issue(&backend, &cipher, &uid, 99).await.unwrap().0.is_none());
 }
 
@@ -85,7 +85,7 @@ async fn list_issues_excludes_the_counter_and_sorts_newest_first() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let backend: Arc<dyn Backend> = Arc::new(backend);
     let cipher = Arc::new(cipher);
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
 
     for number in [1, 2, 3] {
         let n = next_issue_number(backend.as_ref(), &cipher, &uid).await.unwrap();
@@ -108,7 +108,7 @@ async fn list_issues_skips_the_comment_threads_nested_under_each_issue() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let backend: Arc<dyn Backend> = Arc::new(backend);
     let cipher = Arc::new(cipher);
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
 
     put_issue(backend.as_ref(), &cipher, &uid, &sample(1), None)
         .await
@@ -132,7 +132,7 @@ async fn comments_list_empty_before_any_are_added() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let backend: Arc<dyn Backend> = Arc::new(backend);
     let cipher = Arc::new(cipher);
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
     assert_eq!(
         list_issue_comments(&backend, &cipher, &uid, 1).await.unwrap(),
         Vec::new()
@@ -145,7 +145,7 @@ async fn comments_roundtrip_in_chronological_order() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let backend: Arc<dyn Backend> = Arc::new(backend);
     let cipher = Arc::new(cipher);
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
 
     for (author, body) in [("alice", "first"), ("bob", "second"), ("alice", "third")] {
         let comment = IssueComment {
@@ -171,7 +171,7 @@ async fn comments_are_scoped_per_issue_number() {
     let (backend, cipher) = test_backend_and_cipher(dir.path());
     let backend: Arc<dyn Backend> = Arc::new(backend);
     let cipher = Arc::new(cipher);
-    let uid = Uid::from("team/proj".to_string());
+    let uid = Uid::new();
 
     let comment = IssueComment {
         author: "alice".to_string(),

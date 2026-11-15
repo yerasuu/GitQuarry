@@ -12,6 +12,7 @@ use crate::state::{TrackerState, TrackerTarget};
 use crate::storage::board::{Board, BoardCard, BoardColumn, CardRef};
 use crate::storage::issues::{IssueComment, IssueMeta, IssueStatus};
 use crate::storage::milestones::{MilestoneMeta, MilestoneStatus};
+use crate::validate;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -39,11 +40,12 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
 }
 
 fn target_from(params: &HashMap<String, String>) -> Result<TrackerTarget, Box<Response>> {
-    match params.get("uid") {
-        Some(uid) => Ok(TrackerTarget {
-            uid: gitquarry_wire::Uid::from(uid.clone()),
-        }),
-        None => Err(Box::new(json_error(StatusCode::BAD_REQUEST, "missing ?uid="))),
+    let Some(raw) = params.get("uid") else {
+        return Err(Box::new(json_error(StatusCode::BAD_REQUEST, "missing ?uid=")));
+    };
+    match validate::validate_uid(raw) {
+        Ok(uid) => Ok(TrackerTarget { uid }),
+        Err(e) => Err(Box::new(json_error(StatusCode::BAD_REQUEST, e.to_string()))),
     }
 }
 
@@ -554,8 +556,9 @@ async fn handler_merge_request_merged(
     State(state): State<Arc<TrackerState>>,
     Json(notification): Json<MergeRequestMergedNotification>,
 ) -> Response {
-    let target = TrackerTarget {
-        uid: notification.repo_uid,
+    let target = match validate::validate_uid(notification.repo_uid.as_str()) {
+        Ok(uid) => TrackerTarget { uid },
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, e.to_string()),
     };
     match issue::close_referenced_by_merge_request(
         &state,

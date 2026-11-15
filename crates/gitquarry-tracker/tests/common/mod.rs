@@ -91,6 +91,6 @@ pub async fn test_state(root: &std::path::Path) -> (Arc<TrackerState>, FakeCore)
 
 pub fn test_target() -> TrackerTarget {
     TrackerTarget {
-        uid: gitquarry_wire::Uid::from("team/proj".to_string()),
+        uid: gitquarry_wire::Uid::new(),
     }
 }
