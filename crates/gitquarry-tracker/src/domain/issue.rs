@@ -65,6 +65,20 @@ fn validate_issue_title(title: &str) -> Result<String> {
     Ok(title.to_string())
 }
 
+/// Every issue page fetches, decrypts and renders the body and each comment
+/// in full, and resolves every `#N` in them, so an unbounded one makes a
+/// single page view arbitrarily expensive for whoever opens it.
+const MAX_BODY_BYTES: usize = 64 * 1024;
+
+fn validate_body(body: &str) -> Result<()> {
+    if body.len() > MAX_BODY_BYTES {
+        bail!(DomainError::Invalid(format!(
+            "text too long (max {MAX_BODY_BYTES} bytes)"
+        )));
+    }
+    Ok(())
+}
+
 /// Duplicated from `gitquarry_core::domain::pull_request::closing_issue_numbers`
 /// — a small, pure text-parsing function, no I/O, not worth a shared crate
 /// (same reasoning `gitquarry-graph-validate`'s design explicitly *rejected*
@@ -118,6 +132,7 @@ pub async fn create(
     author: &str,
 ) -> Result<IssueMeta> {
     let title = validate_issue_title(title)?;
+    validate_body(body)?;
     let number = issues::next_issue_number(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let stamp = now_stamp();
     let issue = IssueMeta {
@@ -192,6 +207,7 @@ pub async fn edit(
     locale: Locale,
 ) -> Result<Cas> {
     let title = validate_issue_title(edit.title)?;
+    validate_body(edit.body)?;
 
     let requested_labels: Vec<&str> = edit
         .labels_csv
@@ -360,6 +376,7 @@ pub async fn add_comment(
     body: &str,
     locale: Locale,
 ) -> Result<()> {
+    validate_body(body)?;
     if get(state, target, number).await?.is_none() {
         bail!(DomainError::NotFound(i18n::issue_not_found(locale, number)));
     }
@@ -392,6 +409,7 @@ pub async fn edit_comment(
     body: &str,
     locale: Locale,
 ) -> Result<Cas> {
+    validate_body(body)?;
     let (comment, etag) =
         issues::get_issue_comment(state.backend.as_ref(), &state.cipher, &target.uid, number, comment_id).await?;
     let Some(mut comment) = comment else {

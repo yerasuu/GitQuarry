@@ -362,3 +362,24 @@ async fn issue_edit_hides_a_tracker_failure_behind_the_generic_message() {
     assert!(!page.body.contains("127.0.0.1"), "{}", page.body);
     assert!(!page.body.contains("gitquarry-core"), "{}", page.body);
 }
+
+#[tokio::test]
+async fn issue_detail_links_only_the_first_50_distinct_hash_mentions() {
+    let f = tracker_fixture(&[]).await;
+    for n in 1..=51 {
+        gitquarry_tracker::domain::issue::create(&f.tracker, &f.target, &format!("Issue {n}"), "b", "alice")
+            .await
+            .unwrap();
+    }
+    let body = (1..=51).map(|n| format!("#{n}")).collect::<Vec<_>>().join(" ");
+    let mentioning = gitquarry_tracker::domain::issue::create(&f.tracker, &f.target, "Index", &body, "alice")
+        .await
+        .unwrap();
+
+    let html = view(&f, &format!("view=issue&number={}", mentioning.number)).await;
+    assert!(
+        html.contains(r#"<a href="/team/proj?view=issue&amp;number=50">#50</a>"#),
+        "{html}"
+    );
+    assert!(!html.contains(r#"number=51">"#), "{html}");
+}

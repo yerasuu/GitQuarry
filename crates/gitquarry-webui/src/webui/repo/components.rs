@@ -610,6 +610,12 @@ pub(super) fn side_by_side_diff(diff: &str) -> Markup {
     }
 }
 
+/// Each distinct number costs up to two lookups (tracker, then core) on
+/// every render of every body on the page, so past this many the rest of a
+/// body's mentions stay plain text. Counted in order of appearance, so the
+/// ones a reader sees first are the ones linked.
+const MAX_RESOLVED_MENTIONS: usize = 50;
+
 /// Every `#123` in `text` that names a real issue or merge request on
 /// `target`, mapped to its link — issue takes priority over MR on a number
 /// that happens to exist as both, since issue/MR numbers are independent
@@ -633,9 +639,12 @@ pub(crate) async fn resolve_number_mentions(
     text: &str,
 ) -> std::collections::HashMap<u64, String> {
     let spans = crate::webui::markdown::scan_number_mentions(text);
-    let mut numbers: Vec<u64> = spans.iter().map(|(_, n)| *n).collect();
-    numbers.sort_unstable();
-    numbers.dedup();
+    let mut seen = std::collections::HashSet::new();
+    let numbers = spans
+        .iter()
+        .map(|(_, n)| *n)
+        .filter(|n| seen.insert(*n))
+        .take(MAX_RESOLVED_MENTIONS);
 
     let mut resolved = std::collections::HashMap::new();
     for number in numbers {

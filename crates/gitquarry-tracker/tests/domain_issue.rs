@@ -589,3 +589,50 @@ async fn delete_comment_allows_a_moderator_to_remove_someone_elses() {
     .unwrap();
     assert!(list_comments(&state, &target, issue.number).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_body_or_comment_past_64_kib_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _fake) = test_state(dir.path()).await;
+    let target = test_target();
+    let fits = "a".repeat(64 * 1024);
+    let too_long = "a".repeat(64 * 1024 + 1);
+
+    assert!(create(&state, &target, "Bug", &too_long, "alice").await.is_err());
+    let issue = create(&state, &target, "Bug", &fits, "alice").await.unwrap();
+
+    let locale = gitquarry_i18n::Locale::En;
+    assert!(
+        add_comment(&state, &target, issue.number, "alice", &too_long, locale)
+            .await
+            .is_err()
+    );
+    add_comment(&state, &target, issue.number, "alice", &fits, locale)
+        .await
+        .unwrap();
+    let (comment_id, _) = list_comments(&state, &target, issue.number).await.unwrap().remove(0);
+    assert!(
+        edit_comment(&state, &target, issue.number, &comment_id, "alice", &too_long, locale)
+            .await
+            .is_err()
+    );
+
+    let edit_body = |body| IssueEdit {
+        title: "Bug",
+        body,
+        labels_csv: "",
+        assignees_csv: "",
+        milestone: None,
+    };
+    assert!(
+        edit(&state, &target, issue.number, edit_body(&too_long), locale)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        edit(&state, &target, issue.number, edit_body(&fits), locale)
+            .await
+            .unwrap(),
+        Cas::Ok
+    );
+}
