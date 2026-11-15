@@ -3,6 +3,7 @@
 //! same shape as `/_issues`/`/_pulls` (`pulls::handlers`'s own doc comment
 //! explains why).
 
+use crate::webui::repo::bulk::BulkForm;
 use crate::webui::repo::can_view_repo;
 use crate::webui::{
     AppError, State_, effective_locale, repo_link, require_csrf, require_login, tracker_client, url_encode,
@@ -259,29 +260,15 @@ pub(crate) async fn handler_reopen_post(
     Ok(Redirect::to(&repo_link(&name, "milestones", "").to_string()).into_response())
 }
 
-#[derive(serde::Deserialize)]
-pub(crate) struct BulkMilestoneActionForm {
-    repo: String,
-    /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
-    /// repeated once per selected row — same shape
-    /// `issues::handlers::BulkIssueActionForm` already uses.
-    #[serde(default)]
-    numbers: Vec<u64>,
-    /// `"close"` or `"reopen"` — anything else is rejected up front, before
-    /// touching any milestone.
-    action: String,
-    #[serde(default)]
-    csrf: String,
-}
-
 /// Best-effort per milestone, same tolerance every other bulk handler in
 /// this codebase already accepts: one already-in-that-state milestone in
 /// the selection doesn't abort the rest of the batch.
 pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<BulkMilestoneActionForm>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
+    let form = BulkForm::parse(&body);
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(*resp),
@@ -290,6 +277,7 @@ pub(crate) async fn handler_bulk_post(
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
+    form.require_within_cap()?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
     };

@@ -3,6 +3,8 @@
 //! `webui::router` against a real tracker.
 
 use axum::http::StatusCode;
+use gitquarry_core::auth::domain::user;
+use gitquarry_core::auth::entities::Permission;
 use gitquarry_i18n::Locale;
 use gitquarry_test_support::{Page, Session, TrackerFixture, tracker_fixture};
 use std::sync::Arc;
@@ -382,4 +384,56 @@ async fn issue_detail_links_only_the_first_50_distinct_hash_mentions() {
         "{html}"
     );
     assert!(!html.contains(r#"number=51">"#), "{html}");
+}
+
+async fn developer_session(f: &TrackerFixture) -> (axum::Router, Session) {
+    gitquarry_test_support::user(&f.ctx, "carol", false).await;
+    user::set_repo_perm(&f.ctx, "carol", "team/proj", Some(Permission::Developer), Locale::En)
+        .await
+        .unwrap();
+    let app = gitquarry_webui::webui::router(Arc::clone(&f.ctx));
+    let session = Session::login(&app, "carol").await;
+    (app, session)
+}
+
+#[tokio::test]
+async fn bulk_close_and_reopen_apply_to_every_repeated_number() {
+    use gitquarry_tracker::storage::issues::IssueStatus;
+    let f = tracker_fixture(&[]).await;
+    for title in ["One", "Two", "Three"] {
+        gitquarry_tracker::domain::issue::create(&f.tracker, &f.target, title, "b", "alice")
+            .await
+            .unwrap();
+    }
+    let (app, carol) = developer_session(&f).await;
+
+    for (action, expected) in [("close", IssueStatus::Closed), ("reopen", IssueStatus::Open)] {
+        let fields = [
+            ("repo", "team/proj"),
+            ("numbers", "1"),
+            ("numbers", "2"),
+            ("numbers", "3"),
+            ("action", action),
+        ];
+        let page = carol.post(&app, "/_issues/bulk", &fields).await;
+        assert_eq!(page.status, StatusCode::SEE_OTHER, "{}", page.body);
+        for number in [1, 2, 3] {
+            let issue = gitquarry_tracker::domain::issue::get(&f.tracker, &f.target, number)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(issue.status, expected, "{action} #{number}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn bulk_refuses_a_selection_over_the_cap() {
+    let f = tracker_fixture(&[]).await;
+    let (app, carol) = developer_session(&f).await;
+    let numbers: Vec<String> = (1..=101).map(|n| n.to_string()).collect();
+    let mut fields = vec![("repo", "team/proj"), ("action", "close")];
+    fields.extend(numbers.iter().map(|n| ("numbers", n.as_str())));
+    let page = carol.post(&app, "/_issues/bulk", &fields).await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST, "{}", page.body);
 }

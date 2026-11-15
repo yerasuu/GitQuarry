@@ -20,6 +20,7 @@ pub(crate) mod blob;
 #[cfg(feature = "tracker")]
 pub(crate) mod board;
 pub(crate) mod branches;
+mod bulk;
 pub(crate) mod commit;
 mod compare;
 pub(crate) mod components;

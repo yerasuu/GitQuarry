@@ -3,6 +3,7 @@
 //! [`super`]'s own doc comment on why.
 
 use crate::auth::web::login;
+use crate::webui::repo::bulk::BulkForm;
 use crate::webui::repo::can_view_repo;
 use crate::webui::{
     ASYNC_HEADER, AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout,
@@ -1003,38 +1004,6 @@ pub(crate) async fn handler_mark_ready_post(
     Ok(Redirect::to(&repo_link(&name, "merge", "").number(form.number).to_string()).into_response())
 }
 
-/// Read by hand from the raw body rather than through axum's `Form`:
-/// `serde_urlencoded` can't collect a key repeated once per checked row into
-/// a `Vec`, so every submission with a selection was a 422.
-#[derive(Default)]
-struct BulkPrActionForm {
-    repo_uid: String,
-    /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
-    /// one per selected row. A value that isn't a number names no MR, so it
-    /// is dropped rather than failing the whole batch.
-    numbers: Vec<u64>,
-    /// `"close"` or `"reopen"` — anything else is rejected up front, before
-    /// touching any MR.
-    action: String,
-    csrf: String,
-}
-
-impl BulkPrActionForm {
-    fn parse(body: &[u8]) -> Self {
-        let mut form = Self::default();
-        for (key, value) in form_urlencoded::parse(body) {
-            match key.as_ref() {
-                "repo_uid" => form.repo_uid = value.into_owned(),
-                "numbers" => form.numbers.extend(value.parse::<u64>().ok()),
-                "action" => form.action = value.into_owned(),
-                "csrf" => form.csrf = value.into_owned(),
-                _ => {}
-            }
-        }
-        form
-    }
-}
-
 /// Best-effort per MR, same tolerance `issues::handlers::handler_bulk_post`
 /// already accepts: one already-merged or already-in-that-state MR in the
 /// selection doesn't abort the rest of the batch (`domain::merge_request::close`/
@@ -1045,7 +1014,7 @@ pub(crate) async fn handler_bulk_post(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
-    let form = BulkPrActionForm::parse(&body);
+    let form = BulkForm::parse(&body);
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(*resp),
@@ -1054,6 +1023,7 @@ pub(crate) async fn handler_bulk_post(
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = resolve_target(&ctx, &headers, &repo, &form.repo_uid, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
+    form.require_within_cap()?;
 
     if !matches!(form.action.as_str(), "close" | "reopen") {
         // Back to the list this batch was selected on -- there's no single

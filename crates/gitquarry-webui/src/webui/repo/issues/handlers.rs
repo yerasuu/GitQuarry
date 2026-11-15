@@ -3,6 +3,7 @@
 //! [`super`]'s own doc comment on why.
 
 use crate::auth::web::login;
+use crate::webui::repo::bulk::BulkForm;
 use crate::webui::repo::can_view_repo;
 use crate::webui::{
     ASYNC_HEADER, AppError, State_, csrf_field, effective_density, effective_locale, effective_theme, layout,
@@ -302,22 +303,6 @@ async fn require_developer_permission(
     Ok(())
 }
 
-#[derive(serde::Deserialize)]
-pub(crate) struct BulkIssueActionForm {
-    repo: String,
-    /// Checkbox values (`<input type="checkbox" name="numbers" value=...>`),
-    /// repeated once per selected row — `axum`'s `Form` extractor collects
-    /// every same-named field into the `Vec` the same way a multi-select
-    /// `<select multiple>` would.
-    #[serde(default)]
-    numbers: Vec<u64>,
-    /// `"close"` or `"reopen"` — anything else is rejected up front, before
-    /// touching any issue.
-    action: String,
-    #[serde(default)]
-    csrf: String,
-}
-
 /// Best-effort per issue: one bad number (already in the requested state,
 /// deleted mid-flight, whatever) doesn't abort the rest of the batch — the
 /// whole point of a bulk action is that most of a large selection
@@ -327,8 +312,9 @@ pub(crate) struct BulkIssueActionForm {
 pub(crate) async fn handler_bulk_post(
     State(ctx): State_,
     headers: HeaderMap,
-    Form(form): Form<BulkIssueActionForm>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
+    let form = BulkForm::parse(&body);
     let me = match require_login(&ctx, &headers, &format!("/{}", url_encode(&form.repo))).await {
         Ok(u) => u,
         Err(resp) => return Ok(*resp),
@@ -337,6 +323,7 @@ pub(crate) async fn handler_bulk_post(
     let locale = effective_locale(&ctx, &headers).await;
     let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
+    form.require_within_cap()?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
     };
