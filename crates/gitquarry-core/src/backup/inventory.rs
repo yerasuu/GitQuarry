@@ -52,7 +52,8 @@ pub enum Class {
     /// (one object per commit ever verified).
     Derived,
     /// Transient or self-referential: s3db's own transaction/WAL keys,
-    /// snapshot leases, and the backup system's own output. Copying these
+    /// snapshot leases, `/_api/v1` idempotency keys, and the backup
+    /// system's own output. Copying these
     /// would at best be pointless and at worst make a backup back up its
     /// own previous backups.
     Never,
@@ -227,6 +228,11 @@ fn classify_conf(rest: &str) -> Class {
         || rest.starts_with("snapshots/")
         || rest.starts_with("txn/")
         || rest.starts_with("wal/")
+        // `/_api/v1` idempotency keys (`crate::api::idempotency`) expire in
+        // a day; a restore that brought them back would only revive copies
+        // of old answers, and losing them costs at most a day of retries
+        // being told apart.
+        || rest.starts_with("api-idempotency/")
     {
         return Class::Never;
     }
