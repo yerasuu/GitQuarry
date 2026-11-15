@@ -160,3 +160,81 @@ async fn a_pat_post_without_the_session_csrf_token_is_refused() {
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_eq!(response.location(), "/_login?return_to=/_account/pat");
 }
+
+/// An API token made on this page carries its checked scopes and path list,
+/// and its secret opens `/_api/v1` under the same router.
+#[tokio::test]
+async fn an_api_token_is_created_with_its_scopes_and_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, session) = app_with_alice(dir.path()).await;
+
+    let fields = [
+        ("pat_action", "create"),
+        ("label", "agent"),
+        ("kind", "api"),
+        ("scopes", "alice/proj:developer"),
+        ("repo:read", "1"),
+        ("tracker:write", "1"),
+        ("paths", "alice/proj:services/api\r\nalice/proj:docs\r\n"),
+    ];
+    let html = session.post(&app, "/_account/pat", &fields).await.body;
+    let secret = revealed_secret(&html).to_string();
+    assert!(
+        html.contains("API <code>repo:read</code> <code>tracker:write</code>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<code>alice/proj:developer</code> (<code>docs</code>, <code>services/api</code>)"),
+        "{html}"
+    );
+
+    let request = Request::get("/_api/v1/whoami")
+        .header(header::AUTHORIZATION, format!("Bearer {secret}"))
+        .body(Body::empty())
+        .unwrap();
+    let page = send(&app, request).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(
+        page.body.contains(r#""paths":["docs","services/api"]"#),
+        "{}",
+        page.body
+    );
+}
+
+#[tokio::test]
+async fn bad_paths_and_paths_on_a_git_token_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, session) = app_with_alice(dir.path()).await;
+
+    let api = |paths| {
+        [
+            ("pat_action", "create"),
+            ("label", "agent"),
+            ("kind", "api"),
+            ("scopes", "alice/proj:developer"),
+            ("repo:read", "1"),
+            ("paths", paths),
+        ]
+    };
+    for paths in ["alice/proj:../etc", "alice/proj:/abs", "alice/other:src", "no-colon"] {
+        let html = session.post(&app, "/_account/pat", &api(paths)).await.body;
+        assert!(!html.contains("<pre>"), "{paths}: {html}");
+    }
+    let no_scope = [
+        ("pat_action", "create"),
+        ("label", "agent"),
+        ("kind", "api"),
+        ("scopes", "alice/proj:developer"),
+    ];
+    let html = session.post(&app, "/_account/pat", &no_scope).await.body;
+    assert!(html.contains("at least one scope"), "{html}");
+    let git = [
+        ("pat_action", "create"),
+        ("label", "laptop"),
+        ("scopes", "alice/proj:developer"),
+        ("paths", "alice/proj:src"),
+    ];
+    let html = session.post(&app, "/_account/pat", &git).await.body;
+    assert!(html.contains("paths apply only to API tokens"), "{html}");
+    assert!(pat_page(&app, &session).await.contains("no tokens yet"));
+}

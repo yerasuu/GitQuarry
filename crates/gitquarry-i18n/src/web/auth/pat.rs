@@ -1,8 +1,8 @@
 use super::super::super::{Locale, msg};
 
 msg!(page_intro() {
-    Locale::Es => "Tokens de larga duración para clonar/hacer push por HTTPS con scopes explícitos por repositorio — distintos de los tokens de federación.",
-    Locale::En => "Long-lived tokens for HTTPS clone/push with explicit per-repo scopes — separate from federation's own tokens.",
+    Locale::Es => "Tokens de larga duración con scopes explícitos por repositorio: los de git clonan y hacen push por HTTPS, los de API valen solo en /_api/v1. Ninguno vale en el otro, y son distintos de los tokens de federación.",
+    Locale::En => "Long-lived tokens with explicit per-repo scopes: git tokens clone and push over HTTPS, API tokens work only on /_api/v1. Neither works on the other, and both are separate from federation's own tokens.",
 });
 msg!(secret_reveal_warning() {
     Locale::Es => "Copia este token ahora: no se puede volver a ver.",
@@ -29,3 +29,21 @@ msg!(scopes_placeholder() {
 msg!(expires_days_placeholder() { Locale::Es => "expira en (días, opcional)", Locale::En => "expires in (days, optional)" });
 msg!(create_button() { Locale::Es => "crear token", Locale::En => "create token" });
 msg!(tokens_heading() { Locale::Es => "tus tokens", Locale::En => "your tokens" });
+
+msg!(kind_column_header() { Locale::Es => "tipo", Locale::En => "kind" });
+msg!(kind_git() { Locale::Es => "git (HTTPS)", Locale::En => "git (HTTPS)" });
+msg!(kind_api() { Locale::Es => "API", Locale::En => "API" });
+msg!(api_scopes_label() { Locale::Es => "scopes de la API", Locale::En => "API scopes" });
+msg!(api_scopes_hint() {
+    Locale::Es => "Solo para tokens de API. Nunca dan más de lo que tú puedes hacer ni más que el permiso puesto a cada repositorio.",
+    Locale::En => "API tokens only. They never give more than you can do, nor more than the permission set on each repo.",
+});
+msg!(paths_label() { Locale::Es => "rutas (opcional)", Locale::En => "paths (optional)" });
+msg!(paths_placeholder() {
+    Locale::Es => "repo:servicios/api (una por línea)",
+    Locale::En => "repo:services/api (one per line)",
+});
+msg!(paths_hint() {
+    Locale::Es => "Solo para tokens de API: limita un repositorio a esos subdirectorios. Un repositorio sin rutas queda entero.",
+    Locale::En => "API tokens only: confines a repo to those subdirectories. A repo with no paths stays open in full.",
+});

@@ -1,5 +1,5 @@
-//! `/_account/pat`: self-service local personal access tokens for
-//! git-smart-HTTP clone/push — separate from [`super::security`] (SSH keys/
+//! `/_account/pat`: self-service local personal access tokens, either for
+//! git-smart-HTTP clone/push or for `/_api/v1` — separate from [`super::security`] (SSH keys/
 //! password/2FA) and from federation's own fine-grained tokens at
 //! `/_account/tokens` (proxied, needs `[federation]` configured). This page
 //! works with core alone: [`gitquarry_core::auth::domain::pat`] never
@@ -19,7 +19,7 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain;
-use gitquarry_core::auth::entities::{Permission, PersonalAccessToken, User};
+use gitquarry_core::auth::entities::{ApiGrant, ApiScope, Permission, PersonalAccessToken, User};
 use gitquarry_core::storage::settings;
 use gitquarry_core::storage::uid::Uid;
 use maud::{Markup, PreEscaped, html};
@@ -122,6 +122,29 @@ async fn resolve_scopes(
     Ok(scopes)
 }
 
+/// Parses the create form's path list, one `repo:path` per line, into each
+/// named repo's uid and its paths. Split at the first `:`, which a repo name
+/// never holds and a path may. The paths themselves are validated by
+/// `domain::pat::create_api`, which also refuses a repo the token doesn't
+/// name.
+async fn resolve_paths(
+    ctx: &gitquarry_core::app::AppContext,
+    lines: &str,
+) -> Result<BTreeMap<Uid, BTreeSet<String>>, String> {
+    let mut paths = BTreeMap::<Uid, BTreeSet<String>>::new();
+    for line in lines.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let (repo, path) = line
+            .split_once(':')
+            .ok_or_else(|| format!("invalid path entry: {line}"))?;
+        let uid = settings::resolve_repo_name(ctx.backend().as_ref(), &ctx.cipher, repo.trim())
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("repo not found: {}", repo.trim()))?;
+        paths.entry(uid).or_default().insert(path.trim().to_string());
+    }
+    Ok(paths)
+}
+
 #[derive(serde::Deserialize)]
 pub(crate) struct PatForm {
     /// Not `action` on the wire: a control named `action` shadows the
@@ -139,6 +162,39 @@ pub(crate) struct PatForm {
     scopes: String,
     #[serde(default)]
     expires_days: String,
+    /// `git` or `api`; anything else is a git token, the kind every token
+    /// was before API tokens existed.
+    #[serde(default)]
+    kind: String,
+    #[serde(default, rename = "repo:read")]
+    repo_read: Option<String>,
+    #[serde(default, rename = "repo:write")]
+    repo_write: Option<String>,
+    #[serde(default, rename = "repo:admin")]
+    repo_admin: Option<String>,
+    #[serde(default, rename = "tracker:read")]
+    tracker_read: Option<String>,
+    #[serde(default, rename = "tracker:write")]
+    tracker_write: Option<String>,
+    #[serde(default)]
+    paths: String,
+}
+
+impl PatForm {
+    /// The checked scope boxes; each box is named after its scope.
+    fn api_scopes(&self) -> BTreeSet<ApiScope> {
+        [
+            (ApiScope::RepoRead, &self.repo_read),
+            (ApiScope::RepoWrite, &self.repo_write),
+            (ApiScope::RepoAdmin, &self.repo_admin),
+            (ApiScope::TrackerRead, &self.tracker_read),
+            (ApiScope::TrackerWrite, &self.tracker_write),
+        ]
+        .into_iter()
+        .filter(|(_, checked)| checked.is_some())
+        .map(|(scope, _)| scope)
+        .collect()
+    }
 }
 
 pub(crate) async fn handler_pat_post(
@@ -203,10 +259,19 @@ pub(crate) async fn handler_pat_post(
 async fn create_token(ctx: &gitquarry_core::app::AppContext, me: &User, form: &PatForm) -> Result<String, String> {
     let scopes = resolve_scopes(ctx, &form.scopes).await?;
     let expires_in_days = form.expires_days.trim().parse::<u32>().ok();
-    match domain::pat::create(ctx, &me.uid, form.label.trim(), scopes, expires_in_days)
-        .await
-        .map_err(|e| e.to_string())?
-    {
+    let created = if form.kind == "api" {
+        let grant = ApiGrant {
+            scopes: form.api_scopes(),
+            paths: resolve_paths(ctx, &form.paths).await?,
+        };
+        domain::pat::create_api(ctx, &me.uid, form.label.trim(), scopes, grant, expires_in_days).await
+    } else {
+        if !form.paths.trim().is_empty() {
+            return Err("paths apply only to API tokens: a git clone always carries the whole repo".to_string());
+        }
+        domain::pat::create(ctx, &me.uid, form.label.trim(), scopes, expires_in_days).await
+    };
+    match created.map_err(|e| e.to_string())? {
         Some((_token, secret)) => Ok(secret),
         None => Err("try again.".to_string()),
     }
@@ -240,21 +305,39 @@ fn render_pat_page(
             table class="list" {
                 tr {
                     th { (t::label_column_header(locale)) }
+                    th { (t::kind_column_header(locale)) }
                     th { (t::scopes_column_header(locale)) }
                     th { (t::expires_column_header(locale)) }
                     th { (t::last_used_column_header(locale)) }
                     th {}
                 }
                 @if tokens.is_empty() {
-                    tr { td colspan="5" { em { (t::no_tokens_yet_hint(locale)) } } }
+                    tr { td colspan="6" { em { (t::no_tokens_yet_hint(locale)) } } }
                 }
                 @for token in tokens {
                     tr {
                         td { (token.label) }
                         td {
+                            @match &token.api {
+                                None => { (t::kind_git(locale)) }
+                                Some(grant) => {
+                                    (t::kind_api(locale))
+                                    @for scope in &grant.scopes { " " code { (scope.as_str()) } }
+                                }
+                            }
+                        }
+                        td {
                             @for (i, (repo_uid, perm)) in token.scopes.iter().enumerate() {
                                 @if i > 0 { ", " }
                                 code { (repo_names.get(repo_uid).map(String::as_str).unwrap_or("?")) ":" (format!("{perm:?}").to_lowercase()) }
+                                @if let Some(paths) = token.api.as_ref().and_then(|grant| grant.paths.get(repo_uid)) {
+                                    " ("
+                                    @for (j, path) in paths.iter().enumerate() {
+                                        @if j > 0 { ", " }
+                                        code { (path) }
+                                    }
+                                    ")"
+                                }
                             }
                         }
                         td { (token.expires_at.as_deref().unwrap_or("—")) }
@@ -279,8 +362,22 @@ fn render_pat_page(
                 (field(&t::label_column_header(locale), None, html! {
                     input name="label" size="30" placeholder=(t::label_placeholder(locale));
                 }))
+                (field(&t::kind_column_header(locale), None, html! {
+                    select name="kind" {
+                        option value="git" { (t::kind_git(locale)) }
+                        option value="api" { (t::kind_api(locale)) }
+                    }
+                }))
                 (field(&t::scopes_column_header(locale), None, html! {
                     input name="scopes" size="60" placeholder=(t::scopes_placeholder(locale));
+                }))
+                (field(&t::api_scopes_label(locale), Some(&t::api_scopes_hint(locale)), html! {
+                    @for scope in ApiScope::ALL {
+                        label { input type="checkbox" name=(scope.as_str()) value="1"; " " code { (scope.as_str()) } } " "
+                    }
+                }))
+                (field(&t::paths_label(locale), Some(&t::paths_hint(locale)), html! {
+                    textarea name="paths" rows="3" cols="60" placeholder=(t::paths_placeholder(locale)) {}
                 }))
                 (field(&t::expires_column_header(locale), None, html! {
                     input name="expires_days" type="number" min="1" size="6" placeholder=(t::expires_days_placeholder(locale));
