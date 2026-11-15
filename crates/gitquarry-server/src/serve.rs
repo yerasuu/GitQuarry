@@ -490,6 +490,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // detached, log-and-retry treatment as every sweep around it.
     tokio::spawn(run_periodic_stale_transaction_sweep(Arc::clone(&ctx)));
     tokio::spawn(deleted_repo_sweep::run_periodic_sweep(Arc::clone(&ctx)));
+    tokio::spawn(gitquarry_core::api::idempotency::run_periodic_sweep(Arc::clone(&ctx)));
     if let Some(spool) = spool {
         tokio::spawn(run_periodic_spool_recovery(spool));
     }

@@ -1,14 +1,19 @@
 //! What every `/_api/v1` endpoint that changes data takes (decision #144),
-//! so `dry_run` means the same thing on all of them.
+//! so `dry_run` and `Idempotency-Key` ([`super::idempotency`]) mean the
+//! same thing on all of them.
 //!
 //! A write handler takes a [`WriteRequest`] as its last extractor (it reads
 //! the body) and does its work inside [`WriteRequest::run`], branching on
 //! the [`Mode`] it is handed. In [`Mode::DryRun`] the handler validates
 //! everything it would validate for real, checks permissions the same way,
 //! and answers with what it would do, but writes nothing: no bucket object,
-//! no git ref, no event.
+//! no git ref, no event. A dry run never reads or writes an idempotency
+//! key either, so it neither replays a stored answer nor takes the key.
 
+use super::auth::ApiPrincipal;
 use super::error::{ApiError, ErrorCode};
+use super::idempotency;
+use crate::app::AppContext;
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
@@ -44,11 +49,18 @@ fn mode(query: Option<&str>) -> Result<Mode, ApiError> {
     Ok(mode)
 }
 
-/// One write request: its [`Mode`] and its raw body, which the handler
-/// parses itself inside [`Self::run`].
+#[derive(Debug)]
+struct Idempotent {
+    key: String,
+    fingerprint: String,
+}
+
+/// One write request: its [`Mode`], its `Idempotency-Key` if it sent one,
+/// and its raw body, which the handler parses itself inside [`Self::run`].
 #[derive(Debug)]
 pub struct WriteRequest {
     mode: Mode,
+    idempotent: Option<Idempotent>,
     body: Bytes,
 }
 
@@ -58,15 +70,29 @@ impl WriteRequest {
     }
 
     /// Runs the write `op` in this request's [`Mode`] and answers with what
-    /// it returns.
-    pub async fn run<F, Fut>(self, op: F) -> Response
+    /// it returns. With an `Idempotency-Key`, `principal`'s token and the key
+    /// decide whether `op` runs at all or a stored answer is replayed, as
+    /// [`super::idempotency`] describes; `principal` must be the one the
+    /// handler authorized the write for.
+    pub async fn run<F, Fut>(self, ctx: &AppContext, principal: &ApiPrincipal, op: F) -> Response
     where
         F: FnOnce(Mode, Bytes) -> Fut,
         Fut: Future<Output = Result<Response, ApiError>>,
     {
-        op(self.mode, self.body)
-            .await
-            .unwrap_or_else(IntoResponse::into_response)
+        match (self.mode, self.idempotent) {
+            (Mode::Apply, Some(idempotent)) => {
+                let write = op(Mode::Apply, self.body);
+                idempotency::run(
+                    ctx,
+                    &principal.token().uid,
+                    &idempotent.key,
+                    &idempotent.fingerprint,
+                    write,
+                )
+                .await
+            }
+            (mode, _) => op(mode, self.body).await.unwrap_or_else(IntoResponse::into_response),
+        }
     }
 }
 
@@ -77,6 +103,13 @@ impl<S: Send + Sync> FromRequest<S> for WriteRequest {
 
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
         let mode = mode(request.uri().query())?;
+        let key = request
+            .headers()
+            .get(idempotency::HEADER)
+            .map(idempotency::parse_key)
+            .transpose()?;
+        let method = request.method().clone();
+        let uri = request.uri().clone();
         let body = Bytes::from_request(request, state).await.map_err(|rejection| {
             if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
                 ApiError::new(ErrorCode::RequestTooLarge, "the request body is too large")
@@ -84,6 +117,10 @@ impl<S: Send + Sync> FromRequest<S> for WriteRequest {
                 ApiError::new(ErrorCode::InvalidParameter, "the request body could not be read")
             }
         })?;
-        Ok(WriteRequest { mode, body })
+        let idempotent = key.map(|key| Idempotent {
+            fingerprint: idempotency::fingerprint(&method, &uri, &body),
+            key,
+        });
+        Ok(WriteRequest { mode, idempotent, body })
     }
 }

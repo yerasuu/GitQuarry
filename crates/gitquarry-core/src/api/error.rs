@@ -24,6 +24,10 @@ pub enum ErrorCode {
     InvalidParameter,
     /// A request body over the size a write accepts.
     RequestTooLarge,
+    /// An `Idempotency-Key` this token already used for a different request.
+    IdempotencyKeyReused,
+    /// An `Idempotency-Key` whose first request is still running.
+    IdempotencyKeyInUse,
     /// Over a rate limit: the token's own, or its client address's for
     /// failed credentials. `Retry-After` says when to try again.
     RateLimited,
@@ -44,6 +48,8 @@ impl ErrorCode {
             ErrorCode::InvalidCursor => "invalid_cursor",
             ErrorCode::InvalidParameter => "invalid_parameter",
             ErrorCode::RequestTooLarge => "request_too_large",
+            ErrorCode::IdempotencyKeyReused => "idempotency_key_reused",
+            ErrorCode::IdempotencyKeyInUse => "idempotency_key_in_use",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::ResponseTooLarge => "response_too_large",
             ErrorCode::Internal => "internal",
@@ -60,6 +66,8 @@ impl ErrorCode {
                 StatusCode::BAD_REQUEST
             }
             ErrorCode::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorCode::IdempotencyKeyReused => StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::IdempotencyKeyInUse => StatusCode::CONFLICT,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }

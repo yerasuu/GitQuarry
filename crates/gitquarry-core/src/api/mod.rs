@@ -11,6 +11,7 @@
 pub mod auth;
 pub mod cursor;
 pub mod error;
+pub mod idempotency;
 pub mod limits;
 mod whoami;
 pub mod write;
