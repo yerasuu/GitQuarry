@@ -65,7 +65,7 @@ fn federated(root: &std::path::Path, base_url: String) -> AppContext {
         federation: Some(FederationLink {
             base_url,
             internal_token: INTERNAL_TOKEN.to_string(),
-            http: reqwest::Client::new(),
+            http: gitquarry_wire::ipc::loopback_client().unwrap(),
         }),
         ..ctx(root)
     }

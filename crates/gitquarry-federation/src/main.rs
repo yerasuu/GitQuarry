@@ -57,7 +57,7 @@ async fn run() -> Result<()> {
     let state = Arc::new(FederationState {
         backend,
         cipher: Arc::new(cipher),
-        core: CoreClient::new(config.core_internal_url.clone(), config.internal_token.clone()),
+        core: CoreClient::new(config.core_internal_url.clone(), config.internal_token.clone())?,
         backend_config: config.backend.clone(),
         gossip: Arc::new(GossipTable::default()),
         self_announce,

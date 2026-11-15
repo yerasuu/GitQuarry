@@ -377,11 +377,16 @@ pub async fn run(rest: &[String]) -> Result<()> {
     // `federation_cfg` the internal API server
     // spawns below also consume — `.as_ref()` here so those moves stay
     // available.
-    let federation_link = federation_cfg.as_ref().map(|f| gitquarry_core::app::FederationLink {
-        base_url: f.federation_url.clone(),
-        internal_token: f.internal_token.clone(),
-        http: reqwest::Client::new(),
-    });
+    let federation_link = federation_cfg
+        .as_ref()
+        .map(|f| -> Result<_> {
+            Ok(gitquarry_core::app::FederationLink {
+                base_url: f.federation_url.clone(),
+                internal_token: f.internal_token.clone(),
+                http: gitquarry_wire::ipc::loopback_client().context("building the HTTP client for federation")?,
+            })
+        })
+        .transpose()?;
     let tracker_link = tracker_cfg
         .as_ref()
         .map(|t| -> Result<_> {

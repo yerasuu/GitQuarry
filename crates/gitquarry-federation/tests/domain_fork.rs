@@ -12,7 +12,7 @@ async fn request_fork_rejects_a_peer_that_isnt_linked() {
     let backend = backend(dir.path());
     let backend = backend.as_ref();
     let cipher = cipher();
-    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
+    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string()).unwrap();
     let dest_uid = Uid::new();
     let err = request_fork(
         backend,
@@ -53,7 +53,7 @@ async fn request_fork_rejects_a_browse_only_peer() {
     };
     access::put_peer(backend, &cipher, &peer, None).await.unwrap();
 
-    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
+    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string()).unwrap();
     let dest_uid = Uid::new();
     let err = request_fork(
         backend,
@@ -94,7 +94,7 @@ async fn request_fork_rejects_a_banned_peer_even_at_full_access_level() {
     };
     access::put_peer(backend, &cipher, &peer, None).await.unwrap();
 
-    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
+    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string()).unwrap();
     let dest_uid = Uid::new();
     let err = request_fork(
         backend,

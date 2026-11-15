@@ -317,7 +317,7 @@ async fn serve_with_federation_token(dir: &std::path::Path, secret: &'static str
     ctx.federation = Some(FederationLink {
         base_url: spawn_fake_token_resolver(secret, write, repo_uid).await,
         internal_token: "unused".to_string(),
-        http: reqwest::Client::new(),
+        http: gitquarry_wire::ipc::loopback_client().unwrap(),
     });
     serve(Arc::new(ctx)).await
 }

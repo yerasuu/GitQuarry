@@ -16,7 +16,7 @@ async fn request_line_of(call: impl AsyncFnOnce(CoreClient)) -> String {
             .unwrap();
         String::from_utf8_lossy(&buf[..n]).lines().next().unwrap().to_string()
     });
-    call(CoreClient::new(base, "secret".to_string())).await;
+    call(CoreClient::new(base, "secret".to_string()).unwrap()).await;
     server.await.unwrap()
 }
 
@@ -55,6 +55,24 @@ async fn merge_request_lookup_encodes_the_repo_and_keeps_the_number() {
 
 #[tokio::test]
 async fn repo_name_with_a_dot_segment_is_refused_before_any_request() {
-    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string());
+    let core = CoreClient::new("http://127.0.0.1:1/_internal".to_string(), "secret".to_string()).unwrap();
     assert!(core.public_repo("../../authorize").await.is_err());
+}
+
+#[tokio::test]
+async fn a_core_that_never_answers_fails_within_the_request_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/_internal", listener.local_addr().unwrap());
+    // Accepts and holds the socket open without ever replying.
+    let _hung = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+        drop(socket);
+    });
+    let core = CoreClient::new(base, "secret".to_string()).unwrap();
+    let started = std::time::Instant::now();
+    let result = core.uid_for_name("alice").await;
+    assert!(result.is_err());
+    let limit = gitquarry_wire::ipc::LOOPBACK_REQUEST_TIMEOUT + std::time::Duration::from_secs(5);
+    assert!(started.elapsed() < limit, "took {:?}", started.elapsed());
 }

@@ -120,7 +120,8 @@ pub fn federation_state(root: &Path, core_url: &str) -> Arc<gitquarry_federation
     Arc::new(gitquarry_federation::state::FederationState {
         backend: backend(&bucket),
         cipher: cipher(),
-        core: gitquarry_federation::core_client::CoreClient::new(core_url.to_string(), "unused".to_string()),
+        core: gitquarry_federation::core_client::CoreClient::new(core_url.to_string(), "unused".to_string())
+            .expect("building the federation core client"),
         backend_config: s3db::BackendConfig::Local(LocalParams {
             bucket: bucket.to_string_lossy().to_string(),
             engine: LocalEngine::Redb,
