@@ -59,6 +59,7 @@ pub fn ctx(root: &Path) -> AppContext {
         oidc: None,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        api_limits: Default::default(),
         federation: None,
         tracker: None,
         allow_push_create: false,

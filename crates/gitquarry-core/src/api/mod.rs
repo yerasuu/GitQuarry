@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod cursor;
 pub mod error;
+pub mod limits;
 mod whoami;
 
 use crate::app::AppContext;
@@ -21,14 +22,19 @@ use std::sync::Arc;
 pub const PREFIX: &str = "/_api/v1";
 
 /// Every `/_api/v1` route, for the caller to merge into its router and
-/// give the [`AppContext`] state.
-pub fn router() -> Router<Arc<AppContext>> {
+/// give the [`AppContext`] state. `ctx` is the state the caller gives it,
+/// which the rate-limit layer ([`limits`]) needs before that happens.
+pub fn router(ctx: &Arc<AppContext>) -> Router<Arc<AppContext>> {
     // A per-route fallback, not the merged router's: the web UI sets its own
     // `method_not_allowed_fallback` (a redirect to `/`), which only replaces
     // the routes still on axum's default one.
     Router::new()
         .route("/_api/v1/whoami", get(whoami::handler).fallback(method_not_allowed))
         .route("/_api/v1/{*rest}", any(not_found))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(ctx),
+            limits::middleware,
+        ))
 }
 
 async fn not_found() -> ApiError {

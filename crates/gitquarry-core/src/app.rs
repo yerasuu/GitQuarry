@@ -109,6 +109,9 @@ pub struct AppContext {
     /// Clone/fetch flood tracker for `git::http`'s `info/refs`/`upload-pack`
     /// handlers — see [`GitRateLimiter`].
     pub git_rate_limiter: GitRateLimiter,
+    /// `/_api/v1`'s per-token and failed-authentication rate limits, from
+    /// `[api]` in `gitquarry.toml` — see [`crate::api::limits`].
+    pub api_limits: crate::api::limits::ApiLimits,
     /// Fan-out point for domain state changes (push, MR, issue, release) —
     /// see [`crate::events`]. No consumers registered yet.
     pub events: crate::events::EventBus,

@@ -139,12 +139,14 @@ pub async fn run(rest: &[String]) -> Result<()> {
         tracker_cfg,
         allow_push_create,
         trust_forwarded_for,
+        api_cfg,
     ) = if config_path.is_file() {
         let conf = config::Config::load_from(&config_path)?;
         let federation_cfg = conf.federation().cloned();
         let tracker_cfg = conf.tracker().cloned();
         let allow_push_create = conf.allow_push_create();
         let trust_forwarded_for = conf.trust_forwarded_for();
+        let api_cfg = conf.api().clone();
         config::warn_if_world_readable(&config_path);
         // Without --bucket: whatever `default_bucket` names, or the single
         // configured bucket. Buckets that exist only as a backup destination
@@ -202,6 +204,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
                 tracker_cfg,
                 allow_push_create,
                 trust_forwarded_for,
+                api_cfg,
             )
         } else {
             (
@@ -214,13 +217,14 @@ pub async fn run(rest: &[String]) -> Result<()> {
                 tracker_cfg,
                 allow_push_create,
                 trust_forwarded_for,
+                api_cfg,
             )
         }
     } else {
         // First run, no `gitquarry.toml` at all yet — `[federation]`/`[tracker]` can't
         // exist either, and the setup wizard writes a bucket-only config, so
         // `allow_push_create`/`trust_forwarded_for` are both off too until an
-        // operator opts in by hand.
+        // operator opts in by hand, and `[api]` keeps its defaults.
         let web_bind = args.web_bind.clone().unwrap_or_else(|| DEFAULT_WEB_BIND.to_string());
         let outcome = setup::run(&config_path, &web_bind, None, gitquarry_auth_crypto::random_token()).await?;
         (
@@ -233,6 +237,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
             None,
             false,
             false,
+            config::ApiSection::default(),
         )
     };
     let cipher = Arc::new(cipher);
@@ -398,6 +403,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         oidc,
         login_attempts: Default::default(),
         git_rate_limiter: Default::default(),
+        api_limits: gitquarry_core::api::limits::ApiLimits::new(&api_cfg),
         federation: federation_link,
         tracker: tracker_link,
         allow_push_create,

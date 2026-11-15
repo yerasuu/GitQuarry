@@ -13,6 +13,7 @@
 //! has.
 
 use super::error::{ApiError, ErrorCode};
+use super::limits;
 use crate::app::AppContext;
 use crate::auth::access;
 use crate::auth::entities::{ApiScope, Permission, PersonalAccessToken, User};
@@ -206,30 +207,65 @@ impl ApiPrincipal {
     }
 }
 
+/// The principal `parts` carry, or why it has none.
+async fn authenticate(parts: &Parts, ctx: &AppContext) -> Result<ApiPrincipal, ApiError> {
+    let secret = bearer_secret(parts)?;
+    // Checked before any lookup, so a malformed header costs no S3 read.
+    if !well_formed_secret(secret) {
+        return Err(invalid_token());
+    }
+    let backend = ctx.backend();
+    let token = access::resolve_by_secret(backend.as_ref(), &ctx.cipher, secret)
+        .await
+        .map_err(|e| ApiError::internal(&e))?
+        .ok_or_else(invalid_token)?;
+    // Answered as any other bad secret, so the API never confirms that a
+    // secret it refuses opens git.
+    if token.api.is_none() {
+        return Err(invalid_token());
+    }
+    let user = access::resolve_user_uid(backend.as_ref(), &ctx.cipher, &token.owner_uid)
+        .await
+        .map_err(|e| ApiError::internal(&e))?
+        .ok_or_else(invalid_token)?;
+    access::touch_pat_last_used(backend.as_ref(), &ctx.cipher, &token).await;
+    Ok(ApiPrincipal { user, token })
+}
+
+const TOO_MANY_FAILURES: &str = "too many requests without a valid token from this address";
+
+/// Rate-limited as [`limits`] describes: a client address past its failed
+/// credentials is refused before its token is looked up, a missing or
+/// refused token counts as one more failure, and an accepted one counts
+/// against its own quota.
 impl FromRequestParts<Arc<AppContext>> for ApiPrincipal {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, ctx: &Arc<AppContext>) -> Result<Self, Self::Rejection> {
-        let secret = bearer_secret(parts)?;
-        // Checked before any lookup, so a malformed header costs no S3 read.
-        if !well_formed_secret(secret) {
-            return Err(invalid_token());
+        let client = limits::client(ctx, &parts.headers, &parts.extensions);
+        if ctx.api_limits.failures(&client).exceeded() {
+            return Err(limits::rate_limited(TOO_MANY_FAILURES));
         }
-        let backend = ctx.backend();
-        let token = access::resolve_by_secret(backend.as_ref(), &ctx.cipher, secret)
-            .await
-            .map_err(|e| ApiError::internal(&e))?
-            .ok_or_else(invalid_token)?;
-        // Answered as any other bad secret, so the API never confirms that a
-        // secret it refuses opens git.
-        if token.api.is_none() {
-            return Err(invalid_token());
+        match authenticate(parts, ctx).await {
+            Ok(principal) => {
+                let quota = ctx.api_limits.hit_token(principal.token.uid.as_str());
+                if let Some(slot) = parts.extensions.get::<limits::TokenQuota>() {
+                    slot.set(quota);
+                }
+                if quota.exceeded() {
+                    Err(limits::rate_limited("this token is over its request rate"))
+                } else {
+                    Ok(principal)
+                }
+            }
+            Err(e) if matches!(e.code(), ErrorCode::Unauthenticated | ErrorCode::InvalidToken) => {
+                if ctx.api_limits.record_failure(&client).exceeded() {
+                    Err(limits::rate_limited(TOO_MANY_FAILURES))
+                } else {
+                    Err(e)
+                }
+            }
+            Err(e) => Err(e),
         }
-        let user = access::resolve_user_uid(backend.as_ref(), &ctx.cipher, &token.owner_uid)
-            .await
-            .map_err(|e| ApiError::internal(&e))?
-            .ok_or_else(invalid_token)?;
-        access::touch_pat_last_used(backend.as_ref(), &ctx.cipher, &token).await;
-        Ok(ApiPrincipal { user, token })
     }
 }

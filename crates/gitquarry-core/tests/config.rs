@@ -234,3 +234,36 @@ fn rejects_a_federation_section_with_a_blank_internal_token() {
         assert!(err.to_string().contains("internal_token"), "{err}");
     }
 }
+
+const ONE_BUCKET: &str = r#"
+    [buckets.main]
+    driver = "local"
+    bucket = "/tmp/gq"
+    passphrase = "hunter2"
+"#;
+
+#[test]
+fn a_config_without_an_api_section_keeps_the_api_defaults() {
+    let config = load(ONE_BUCKET).unwrap();
+    assert_eq!(config.api().requests_per_minute, 120);
+    assert_eq!(config.api().failed_auth_per_minute, 30);
+}
+
+#[test]
+fn the_api_section_lowers_the_limits() {
+    let config = load(&format!("{ONE_BUCKET}\n[api]\nrequests_per_minute = 10\n")).unwrap();
+    assert_eq!(config.api().requests_per_minute, 10);
+    assert_eq!(config.api().failed_auth_per_minute, 30);
+}
+
+#[test]
+fn rejects_api_limits_outside_their_range_or_unknown_keys() {
+    for section in [
+        "requests_per_minute = 0",
+        "requests_per_minute = 1201",
+        "failed_auth_per_minute = 301",
+        "request_per_minute = 10",
+    ] {
+        assert!(load(&format!("{ONE_BUCKET}\n[api]\n{section}\n")).is_err(), "{section}");
+    }
+}

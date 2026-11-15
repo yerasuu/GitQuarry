@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 fn app(ctx: &Arc<AppContext>) -> axum::Router {
-    axum::Router::new().merge(api::router()).with_state(Arc::clone(ctx))
+    axum::Router::new().merge(api::router(ctx)).with_state(Arc::clone(ctx))
 }
 
 async fn repo(ctx: &AppContext, full_name: &str) -> Uid {

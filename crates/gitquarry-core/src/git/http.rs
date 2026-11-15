@@ -143,7 +143,7 @@ fn extract_variable_segment<'a>(path: &'a str, infix: &str, trailing: &str) -> O
 /// overwrites it is the opposite failure: each request picks its own
 /// bucket, and the limit stops existing. Neither is safe to guess, hence
 /// the setting.
-fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
+pub(crate) fn client_key(ctx: &AppContext, headers: &HeaderMap, socket_ip: std::net::IpAddr) -> String {
     if !ctx.trust_forwarded_for {
         return socket_ip.to_string();
     }

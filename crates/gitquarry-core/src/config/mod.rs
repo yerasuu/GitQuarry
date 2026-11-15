@@ -89,6 +89,67 @@ pub struct TrackerSection {
     pub tracker_url: String,
 }
 
+/// `[api]` in `gitquarry.toml`: how much one client may ask of `/_api/v1`
+/// (see [`crate::api::limits`]). Optional, as is every key in it; a missing
+/// one keeps its default. Each value can be lowered, never raised past the
+/// ceiling the API module names for it: a value outside `1..=ceiling` stops
+/// startup, so an operator learns of it instead of getting a silent clamp.
+///
+/// ```toml
+/// [api]
+/// requests_per_minute = 120
+/// failed_auth_per_minute = 30
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ApiSection {
+    /// Requests per minute one API token may make, counted per token.
+    /// Default 120, ceiling [`crate::api::limits::REQUESTS_PER_MINUTE_CEILING`].
+    pub requests_per_minute: u32,
+    /// Requests per minute without a token, or with one the API refuses,
+    /// counted per client address as [`Config::trust_forwarded_for`]
+    /// resolves it. Past it the address gets `429` before any token is
+    /// looked up, which is what bounds guessing secrets. Default 30, ceiling
+    /// [`crate::api::limits::FAILED_AUTH_PER_MINUTE_CEILING`].
+    pub failed_auth_per_minute: u32,
+}
+
+impl Default for ApiSection {
+    fn default() -> Self {
+        ApiSection {
+            requests_per_minute: 120,
+            failed_auth_per_minute: 30,
+        }
+    }
+}
+
+impl ApiSection {
+    fn check(&self, path: &Path) -> Result<()> {
+        use crate::api::limits;
+        let keys = [
+            (
+                "requests_per_minute",
+                u64::from(self.requests_per_minute),
+                u64::from(limits::REQUESTS_PER_MINUTE_CEILING),
+            ),
+            (
+                "failed_auth_per_minute",
+                u64::from(self.failed_auth_per_minute),
+                u64::from(limits::FAILED_AUTH_PER_MINUTE_CEILING),
+            ),
+        ];
+        for (key, value, ceiling) in keys {
+            if !(1..=ceiling).contains(&value) {
+                bail!(
+                    "[api] {key} = {value} in {} is out of range (use 1 to {ceiling})",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(default)]
@@ -97,6 +158,8 @@ struct RawConfig {
     federation: Option<FederationSection>,
     #[serde(default)]
     tracker: Option<TrackerSection>,
+    #[serde(default)]
+    api: ApiSection,
     /// Which bucket this instance serves when no `--bucket` is passed. Only
     /// meaningful with several sections configured, which is the normal
     /// shape once a bucket exists purely as a backup destination
@@ -139,6 +202,7 @@ pub struct Config {
     buckets: BTreeMap<String, BucketConfig>,
     federation: Option<FederationSection>,
     tracker: Option<TrackerSection>,
+    api: ApiSection,
     default_bucket: Option<String>,
     allow_push_create: bool,
     trust_forwarded_for: bool,
@@ -200,10 +264,12 @@ impl Config {
                 path.display()
             );
         }
+        raw.api.check(path)?;
         Ok(Config {
             buckets: raw.buckets,
             federation: raw.federation,
             tracker: raw.tracker,
+            api: raw.api,
             default_bucket: raw.default_bucket,
             allow_push_create: raw.allow_push_create,
             trust_forwarded_for: raw.trust_forwarded_for,
@@ -221,6 +287,11 @@ impl Config {
     /// [`TrackerSection`]'s own doc comment.
     pub fn tracker(&self) -> Option<&TrackerSection> {
         self.tracker.as_ref()
+    }
+
+    /// `[api]`, or its defaults when the section is absent.
+    pub fn api(&self) -> &ApiSection {
+        &self.api
     }
 
     /// See `RawConfig::allow_push_create`'s doc comment.

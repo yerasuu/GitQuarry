@@ -235,7 +235,7 @@ async fn revoke_is_a_no_op_for_a_non_owner_without_admin() {
 /// `/_api/v1/whoami` as `secret` sees it: the API's verdict on the token.
 async fn whoami(ctx: &Arc<AppContext>, secret: &str) -> axum::http::StatusCode {
     let app = axum::Router::new()
-        .merge(gitquarry_core::api::router())
+        .merge(gitquarry_core::api::router(ctx))
         .with_state(Arc::clone(ctx));
     let request = axum::http::Request::get("/_api/v1/whoami")
         .header("authorization", format!("Bearer {secret}"))

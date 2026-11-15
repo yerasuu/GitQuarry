@@ -524,7 +524,7 @@ pub fn asset_routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
 pub fn router(ctx: Arc<AppContext>) -> Router {
     let app = Router::new()
         .merge(asset_routes())
-        .merge(gitquarry_core::api::router())
+        .merge(gitquarry_core::api::router(&ctx))
         .route("/_bootstrap", get(bootstrap::handler_bootstrap_get))
         .route("/_healthz", get(health::handler_healthz))
         .route("/_metrics", get(health::handler_metrics))

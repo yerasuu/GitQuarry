@@ -22,6 +22,9 @@ pub enum ErrorCode {
     /// A `cursor` this server did not issue for this listing.
     InvalidCursor,
     InvalidParameter,
+    /// Over a rate limit: the token's own, or its client address's for
+    /// failed credentials. `Retry-After` says when to try again.
+    RateLimited,
     Internal,
 }
 
@@ -35,6 +38,7 @@ impl ErrorCode {
             ErrorCode::MethodNotAllowed => "method_not_allowed",
             ErrorCode::InvalidCursor => "invalid_cursor",
             ErrorCode::InvalidParameter => "invalid_parameter",
+            ErrorCode::RateLimited => "rate_limited",
             ErrorCode::Internal => "internal",
         }
     }
@@ -46,6 +50,7 @@ impl ErrorCode {
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::InvalidCursor | ErrorCode::InvalidParameter => StatusCode::BAD_REQUEST,
+            ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
