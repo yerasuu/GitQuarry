@@ -43,12 +43,15 @@ struct UserExistsResponse {
 }
 
 impl CoreClient {
-    pub fn new(base_url: String, internal_token: String) -> Self {
-        Self {
+    /// # Errors
+    ///
+    /// When the HTTP client can't be built ([`gitquarry_wire::ipc::loopback_client`]).
+    pub fn new(base_url: String, internal_token: String) -> Result<Self> {
+        Ok(Self {
             base_url,
             internal_token,
-            http: reqwest::Client::new(),
-        }
+            http: gitquarry_wire::ipc::loopback_client().context("building the HTTP client for core")?,
+        })
     }
 
     /// Values go through `query_pairs_mut` so an `&` or `=` inside one is

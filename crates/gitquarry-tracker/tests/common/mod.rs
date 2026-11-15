@@ -71,7 +71,10 @@ pub async fn fake_core() -> (CoreClient, FakeCore) {
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (CoreClient::new(format!("http://{addr}"), "unused".to_string()), fake)
+    (
+        CoreClient::new(format!("http://{addr}"), "unused".to_string()).unwrap(),
+        fake,
+    )
 }
 
 pub fn test_backend_and_cipher(root: &std::path::Path) -> (Arc<dyn s3db::Backend>, Arc<s3db_crypto::Cipher>) {

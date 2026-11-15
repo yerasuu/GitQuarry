@@ -12,6 +12,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use std::time::Duration;
 use subtle::ConstantTimeEq;
 
 /// Header carrying the shared secret every loopback call authenticates
@@ -37,6 +38,29 @@ pub fn wire_version_matches(headers: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u32>().ok())
         .is_some_and(|got| got == crate::WIRE_PROTOCOL_VERSION)
+}
+
+/// Loopback peers are on the same host, so a connect that takes longer than
+/// this means the peer is wedged or the address is wrong, not a slow network.
+pub const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Bounds a whole loopback call. A tracker request does a handful of S3
+/// round trips and may call back into core; past this the peer is hung, and
+/// without a bound one hung peer holds every webui request that reaches it.
+pub const LOOPBACK_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The HTTP client for a core<->module loopback leg, with
+/// [`LOOPBACK_CONNECT_TIMEOUT`] and [`LOOPBACK_REQUEST_TIMEOUT`] applied:
+/// a request that exceeds either fails with `reqwest::Error::is_timeout`.
+///
+/// # Errors
+///
+/// When reqwest can't build its client (its TLS backend failing to load).
+pub fn loopback_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(LOOPBACK_CONNECT_TIMEOUT)
+        .timeout(LOOPBACK_REQUEST_TIMEOUT)
+        .build()
 }
 
 #[derive(Serialize)]

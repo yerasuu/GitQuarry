@@ -382,11 +382,16 @@ pub async fn run(rest: &[String]) -> Result<()> {
         internal_token: f.internal_token.clone(),
         http: reqwest::Client::new(),
     });
-    let tracker_link = tracker_cfg.as_ref().map(|t| gitquarry_core::app::TrackerLink {
-        base_url: t.tracker_url.clone(),
-        internal_token: t.internal_token.clone(),
-        http: reqwest::Client::new(),
-    });
+    let tracker_link = tracker_cfg
+        .as_ref()
+        .map(|t| -> Result<_> {
+            Ok(gitquarry_core::app::TrackerLink {
+                base_url: t.tracker_url.clone(),
+                internal_token: t.internal_token.clone(),
+                http: gitquarry_wire::ipc::loopback_client().context("building the HTTP client for the tracker")?,
+            })
+        })
+        .transpose()?;
 
     let ctx = Arc::new(AppContext {
         bucket,

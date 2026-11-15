@@ -1710,6 +1710,7 @@ dependencies = [
  "gitquarry-mirror-external",
  "gitquarry-test-support",
  "gitquarry-webui",
+ "gitquarry-wire",
  "reqwest 0.13.5",
  "s3db",
  "serde",

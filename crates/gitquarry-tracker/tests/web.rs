@@ -135,7 +135,7 @@ async fn a_failed_call_to_core_is_a_502_that_names_nothing_internal() {
         .await
         .unwrap();
     let unreachable = gitquarry_tracker::state::TrackerState {
-        core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string()),
+        core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string()).unwrap(),
         ..(*state).clone()
     };
     let base = serve(Arc::new(unreachable)).await;

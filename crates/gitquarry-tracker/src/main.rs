@@ -36,7 +36,7 @@ async fn run() -> Result<()> {
     let state = Arc::new(TrackerState {
         backend,
         cipher: Arc::new(cipher),
-        core: CoreClient::new(config.core_internal_url.clone(), config.internal_token.clone()),
+        core: CoreClient::new(config.core_internal_url.clone(), config.internal_token.clone())?,
     });
 
     web::run_server(&config.listen, state, config.internal_token).await

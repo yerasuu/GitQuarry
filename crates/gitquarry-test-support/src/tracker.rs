@@ -23,7 +23,8 @@ pub async fn spawn_tracker(base: &AppContext) -> (TrackerState, TrackerLink) {
     let state = TrackerState {
         backend: Arc::clone(&base.backend),
         cipher: Arc::clone(&base.cipher),
-        core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string()),
+        core: CoreClient::new("http://127.0.0.1:1".to_string(), "unused".to_string())
+            .expect("building the tracker's core client"),
     };
     // `router()` rather than `run_server`, which only adds the
     // internal-token check: webui's client sends the header either way.

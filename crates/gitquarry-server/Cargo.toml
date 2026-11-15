@@ -33,6 +33,8 @@ axum = { workspace = true, features = ["multipart"] }
 
 # Outbound HTTP for FederationLink's peer round-trip.
 reqwest = { workspace = true }
+# `ipc::loopback_client`, the bounded client for TrackerLink.
+gitquarry-wire = { workspace = true }
 
 serde = { workspace = true }
 # Compares the setup wizard's one-time token (setup.rs) in constant time.
