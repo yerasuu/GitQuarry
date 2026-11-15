@@ -229,3 +229,34 @@ async fn column_names_and_notes_are_capped() {
     let fits = CardRef::Note(format!("first line\nsecond{}", "n".repeat(1024)));
     add_card(&state, &target, 0, fits, locale).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_board_caps_its_columns_and_cards() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _fake) = test_state(dir.path()).await;
+    let target = test_target();
+    let locale = gitquarry_i18n::Locale::En;
+    const MAX_COLUMNS: usize = 16;
+    const MAX_CARDS: usize = 200;
+
+    for i in 0..MAX_COLUMNS {
+        add_column(&state, &target, &format!("c{i}")).await.unwrap();
+    }
+    assert!(is_invalid(&add_column(&state, &target, "one more").await.unwrap_err()));
+
+    for i in 0..MAX_CARDS {
+        let card = CardRef::Note(format!("n{i}"));
+        add_card(&state, &target, i % MAX_COLUMNS, card, locale).await.unwrap();
+    }
+    let card = CardRef::Note("one more".to_string());
+    assert!(is_invalid(
+        &add_card(&state, &target, 0, card, locale).await.unwrap_err()
+    ));
+
+    let (board, _etag) = get(&state, &target).await.unwrap();
+    let first = board.columns[0].cards[0].id;
+    remove_card(&state, &target, first, locale).await.unwrap();
+    add_card(&state, &target, 0, CardRef::Note("fits again".to_string()), locale)
+        .await
+        .unwrap();
+}

@@ -32,6 +32,16 @@ const MAX_COLUMN_NAME_BYTES: usize = 64;
 /// every change (`storage::board`).
 const MAX_NOTE_BYTES: usize = 2 * 1024;
 
+/// The board is one sealed object, read, decrypted and rewritten whole on
+/// every change and rendered whole on every view (`storage::board`), so its
+/// size is capped by count. Columns are the stages of a workflow; a few
+/// more than anyone uses.
+const MAX_COLUMNS: usize = 16;
+
+/// With every card a maximal note this keeps the board object around
+/// 400 KiB; boards past this belong in issues and milestones.
+const MAX_CARDS: usize = 200;
+
 pub async fn get(state: &TrackerState, target: &TrackerTarget) -> Result<(Board, Option<String>)> {
     board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await
 }
@@ -39,6 +49,9 @@ pub async fn get(state: &TrackerState, target: &TrackerTarget) -> Result<(Board,
 pub async fn add_column(state: &TrackerState, target: &TrackerTarget, name: &str) -> Result<Cas> {
     let name = validate_line("column name", name, MAX_COLUMN_NAME_BYTES)?;
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
+    if board.columns.len() >= MAX_COLUMNS {
+        bail!(DomainError::Invalid(format!("too many columns (max {MAX_COLUMNS})")));
+    }
     board.columns.push(crate::storage::board::BoardColumn {
         name,
         cards: Vec::new(),
@@ -129,6 +142,11 @@ pub async fn add_card(
         CardRef::Note(text) => validate_text("note", text, MAX_NOTE_BYTES)?,
     }
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
+    if board.columns.iter().map(|c| c.cards.len()).sum::<usize>() >= MAX_CARDS {
+        bail!(DomainError::Invalid(format!(
+            "too many cards on the board (max {MAX_CARDS})"
+        )));
+    }
     let Some(column) = board.columns.get_mut(column_index) else {
         bail!(DomainError::NotFound(i18n::board_column_not_found(locale)));
     };

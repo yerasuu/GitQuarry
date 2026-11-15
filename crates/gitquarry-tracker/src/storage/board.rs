@@ -1,5 +1,5 @@
-//! A single kanban board per repo — one JSON blob (a handful of columns,
-//! at most a few dozen cards) rather than a per-card collection like
+//! A single kanban board per repo — one JSON blob (`domain::board` caps it
+//! at 16 columns and 200 cards) rather than a per-card collection like
 //! [`super::issues`]/[`super::milestones`]: the whole board is always read
 //! and rendered together, so one CAS-guarded read/write of the lot is
 //! simpler than coordinating many independent card keys for no real
