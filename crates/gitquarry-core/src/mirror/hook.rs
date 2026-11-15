@@ -264,6 +264,16 @@ pub async fn run_pre_receive_hook() -> Result<bool> {
 
     let (manifest, etag) = remote.get_manifest().await?;
 
+    // Git's own refusal to delete the checked-out branch comes after this hook
+    // has run, so without this check the manifest would lose the branch (and
+    // HEAD) while the client sees the push fail.
+    if let Some(head) = manifest.head.as_deref()
+        && updates.iter().any(|u| u.refname == head && is_zero_sha(&u.new))
+    {
+        warn!(refname = %head, "push rejected: it deletes the branch HEAD points to, make another branch the default first");
+        return Ok(false);
+    }
+
     let branches_touched = touched_refs(&updates, "refs/heads/", &repo_config.protected_branches);
     let tags_touched = touched_refs(&updates, "refs/tags/", &repo_config.protected_tags);
     if !branches_touched.is_empty() || !tags_touched.is_empty() {

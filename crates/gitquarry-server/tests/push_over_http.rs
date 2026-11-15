@@ -100,3 +100,54 @@ async fn the_only_branch_pushed_into_a_new_repo_is_its_head_whatever_its_name() 
         Some("refs/heads/trunk")
     );
 }
+
+/// A repo with `trunk` (HEAD) and `side` pushed, and a work tree holding both.
+async fn repo_with_trunk_and_side(dir: &Path) -> (Arc<AppContext>, String, Work) {
+    let (ctx, url) = new_repo(dir).await;
+    let work = Work::new().await;
+    work.commit(&[("a.txt", "one\n")], "first").await;
+    git(work.path(), &["branch", "-q", "-m", "trunk"]).await;
+    git(work.path(), &["push", "-q", &url, "trunk"]).await;
+    git(work.path(), &["branch", "-q", "side", "trunk"]).await;
+    git(work.path(), &["push", "-q", &url, "side"]).await;
+    (ctx, url, work)
+}
+
+/// Read off the mirror a fresh sync builds from the bucket's manifest.
+async fn branches_in_bucket(ctx: &AppContext) -> (Option<String>, Vec<String>) {
+    let resolved = ctx.resolve_repo("alice/proj").await.unwrap().unwrap();
+    let mirror = ctx.open_mirror_read(&resolved).await.unwrap();
+    let head = gitquarry_core::git::browse::resolve_head(&mirror.path).await.unwrap();
+    let refs = git(&mirror.path, &["for-each-ref", "--format=%(refname)", "refs/heads"]).await;
+    (head, refs.lines().map(str::to_owned).collect())
+}
+
+#[tokio::test]
+async fn a_push_deleting_the_head_branch_is_rejected_and_the_bucket_is_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, url, work) = repo_with_trunk_and_side(dir.path()).await;
+
+    let out = tokio::process::Command::new("git")
+        .current_dir(work.path())
+        .args(["push", "-q", &url, ":trunk"])
+        .output()
+        .await
+        .unwrap();
+
+    assert!(!out.status.success());
+    let (head, refs) = branches_in_bucket(&ctx).await;
+    assert_eq!(head.as_deref(), Some("refs/heads/trunk"));
+    assert_eq!(refs, ["refs/heads/side", "refs/heads/trunk"]);
+}
+
+#[tokio::test]
+async fn a_push_deleting_a_branch_other_than_head_still_works() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, url, work) = repo_with_trunk_and_side(dir.path()).await;
+
+    git(work.path(), &["push", "-q", &url, ":side"]).await;
+
+    let (head, refs) = branches_in_bucket(&ctx).await;
+    assert_eq!(head.as_deref(), Some("refs/heads/trunk"));
+    assert_eq!(refs, ["refs/heads/trunk"]);
+}
