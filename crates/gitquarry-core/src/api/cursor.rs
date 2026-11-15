@@ -22,8 +22,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub const DEFAULT_LIMIT: usize = 50;
-pub const MAX_LIMIT: usize = 100;
+pub const DEFAULT_LIMIT: u32 = 50;
+/// The ceiling on `[api] max_page_size`, which lowers it per instance.
+pub const MAX_LIMIT: u32 = 100;
 
 /// Far above any cursor this module issues for a uid-sized position; it only
 /// bounds the work a hostile `cursor=` can make the server do before it is
@@ -93,13 +94,15 @@ pub fn open(cipher: &Cipher, scope: &str, cursor: &str) -> Result<String, ApiErr
 #[derive(Debug)]
 pub struct PageRequest {
     cursor: Option<String>,
-    limit: usize,
+    limit: u32,
 }
 
 impl PageRequest {
-    /// Between 1 and [`MAX_LIMIT`], [`DEFAULT_LIMIT`] when not given.
+    /// Between 1 and the instance's `[api] max_page_size`, never above
+    /// [`MAX_LIMIT`]; [`DEFAULT_LIMIT`] or that maximum, whichever is
+    /// smaller, when not given.
     pub fn limit(&self) -> usize {
-        self.limit
+        usize::try_from(self.limit).unwrap_or(usize::MAX)
     }
 
     /// Where to resume, `None` for the first page.
@@ -115,23 +118,21 @@ impl PageRequest {
 impl FromRequestParts<Arc<AppContext>> for PageRequest {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, _ctx: &Arc<AppContext>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, ctx: &Arc<AppContext>) -> Result<Self, Self::Rejection> {
+        let max = ctx.api_limits.max_page_size();
+        let default = DEFAULT_LIMIT.min(max);
         let mut cursor = None;
-        let mut limit = DEFAULT_LIMIT;
+        let mut limit = default;
         for (key, value) in form_urlencoded::parse(parts.uri.query().unwrap_or_default().as_bytes()) {
             match key.as_ref() {
                 // An empty `cursor=` is what a client building the URL from a
                 // null `next_cursor` sends; it means the first page.
                 "cursor" if !value.is_empty() => cursor = Some(value.into_owned()),
                 "limit" => {
-                    limit = value
-                        .parse()
-                        .ok()
-                        .filter(|n| (1..=MAX_LIMIT).contains(n))
-                        .ok_or_else(|| {
-                            ApiError::new(ErrorCode::InvalidParameter, "`limit` must be a whole number")
-                                .with_hint(format!("use 1 to {MAX_LIMIT}; omit it for {DEFAULT_LIMIT}"))
-                        })?;
+                    limit = value.parse().ok().filter(|n| (1..=max).contains(n)).ok_or_else(|| {
+                        ApiError::new(ErrorCode::InvalidParameter, "`limit` must be a whole number")
+                            .with_hint(format!("use 1 to {max}; omit it for {default}"))
+                    })?;
                 }
                 _ => {}
             }

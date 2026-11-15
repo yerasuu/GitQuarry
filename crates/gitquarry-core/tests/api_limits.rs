@@ -1,5 +1,6 @@
 //! `/_api/v1`'s limits as a client meets them: the per-token rate and its
-//! `RateLimit-*` fields, and the per-address limit on failed credentials.
+//! `RateLimit-*` fields, the per-address limit on failed credentials, and
+//! the caps on page size and response bytes.
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -243,4 +244,79 @@ async fn every_api_response_carries_the_ratelimit_fields() {
     assert_eq!(header_u64(&page, "ratelimit-limit"), 30);
     assert_eq!(header_u64(&page, "ratelimit-remaining"), 30);
     assert!(page.headers.get("ratelimit-reset").is_some());
+}
+
+#[tokio::test]
+async fn the_page_size_is_capped_by_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = limited(
+        dir.path(),
+        ApiSection {
+            max_page_size: 1,
+            ..ApiSection::default()
+        },
+    );
+    let owner = owner(&ctx).await;
+    let other = gitquarry_core::domain::repo::create(&ctx, "alice/other", None, None, None, Visibility::Private)
+        .await
+        .unwrap()
+        .unwrap()
+        .uid;
+    let grant = ApiGrant {
+        scopes: ApiScope::ALL.into_iter().collect(),
+        paths: BTreeMap::new(),
+    };
+    let scopes = BTreeMap::from([(owner.proj, Permission::Reporter), (other, Permission::Reporter)]);
+    let (_, secret) = domain::pat::create_api(&ctx, &owner.alice, "agent", scopes, grant, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let bearer = format!("Bearer {secret}");
+
+    let page = Call::get("/_api/v1/whoami", Some(&bearer)).send(&ctx).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let body: Value = serde_json::from_str(&page.body).unwrap();
+    assert_eq!(body["scopes"]["items"].as_array().unwrap().len(), 1);
+    assert!(body["scopes"]["next_cursor"].is_string());
+
+    let page = Call::get("/_api/v1/whoami?limit=2", Some(&bearer)).send(&ctx).await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST);
+    assert_eq!(code(&page), "invalid_parameter");
+    assert!(page.body.contains("use 1 to 1"), "{}", page.body);
+}
+
+#[tokio::test]
+async fn a_response_over_the_byte_cap_is_a_400_response_too_large() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = limited(
+        dir.path(),
+        ApiSection {
+            max_response_bytes: 4096,
+            ..ApiSection::default()
+        },
+    );
+    let owner = owner(&ctx).await;
+    let small = format!("Bearer {}", token(&ctx, &owner).await);
+    // 64 paths of about 100 bytes each put whoami well over 4 KiB.
+    let paths = (0..64).map(|i| format!("src/{i:02}/{}", "p".repeat(90))).collect();
+    let grant = ApiGrant {
+        scopes: ApiScope::ALL.into_iter().collect(),
+        paths: BTreeMap::from([(owner.proj.clone(), paths)]),
+    };
+    let scopes = BTreeMap::from([(owner.proj.clone(), Permission::Reporter)]);
+    let (_, secret) = domain::pat::create_api(&ctx, &owner.alice, "agent", scopes, grant, None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let page = Call::get("/_api/v1/whoami", Some(&small)).send(&ctx).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+
+    let page = Call::get("/_api/v1/whoami", Some(&format!("Bearer {secret}")))
+        .send(&ctx)
+        .await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST);
+    assert_eq!(page.headers[header::CONTENT_TYPE], "application/json");
+    assert_eq!(code(&page), "response_too_large");
+    assert!(page.headers.get("ratelimit-remaining").is_some());
 }

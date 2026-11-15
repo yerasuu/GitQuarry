@@ -247,12 +247,19 @@ fn a_config_without_an_api_section_keeps_the_api_defaults() {
     let config = load(ONE_BUCKET).unwrap();
     assert_eq!(config.api().requests_per_minute, 120);
     assert_eq!(config.api().failed_auth_per_minute, 30);
+    assert_eq!(config.api().max_page_size, 100);
+    assert_eq!(config.api().max_response_bytes, 1024 * 1024);
 }
 
 #[test]
 fn the_api_section_lowers_the_limits() {
-    let config = load(&format!("{ONE_BUCKET}\n[api]\nrequests_per_minute = 10\n")).unwrap();
+    let config = load(&format!(
+        "{ONE_BUCKET}\n[api]\nrequests_per_minute = 10\nmax_page_size = 20\nmax_response_bytes = 65536\n"
+    ))
+    .unwrap();
     assert_eq!(config.api().requests_per_minute, 10);
+    assert_eq!(config.api().max_page_size, 20);
+    assert_eq!(config.api().max_response_bytes, 65536);
     assert_eq!(config.api().failed_auth_per_minute, 30);
 }
 
@@ -262,6 +269,10 @@ fn rejects_api_limits_outside_their_range_or_unknown_keys() {
         "requests_per_minute = 0",
         "requests_per_minute = 1201",
         "failed_auth_per_minute = 301",
+        "max_page_size = 0",
+        "max_page_size = 101",
+        "max_response_bytes = 4095",
+        "max_response_bytes = 8388609",
         "request_per_minute = 10",
     ] {
         assert!(load(&format!("{ONE_BUCKET}\n[api]\n{section}\n")).is_err(), "{section}");

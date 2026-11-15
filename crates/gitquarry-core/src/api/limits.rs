@@ -26,10 +26,11 @@
 use super::error::{ApiError, ErrorCode};
 use crate::app::AppContext;
 use crate::config::ApiSection;
+use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Extensions, HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -37,6 +38,10 @@ use std::time::{Duration, Instant};
 
 pub const REQUESTS_PER_MINUTE_CEILING: u32 = 1200;
 pub const FAILED_AUTH_PER_MINUTE_CEILING: u32 = 300;
+pub const MAX_RESPONSE_BYTES_CEILING: u32 = 8 * 1024 * 1024;
+/// Floor on `[api] max_response_bytes`, far above any error body, so a cap
+/// set too low still lets the API say what went wrong.
+pub const MIN_RESPONSE_BYTES: u32 = 4096;
 
 const WINDOW: Duration = Duration::from_secs(60);
 
@@ -192,6 +197,8 @@ fn full_table(max: u32) -> Quota {
 pub struct ApiLimits {
     requests_per_minute: u32,
     failed_auth_per_minute: u32,
+    max_page_size: u32,
+    max_response_bytes: usize,
     by_token: Windows,
     failures_by_client: Windows,
 }
@@ -204,6 +211,13 @@ impl ApiLimits {
         ApiLimits {
             requests_per_minute: section.requests_per_minute.clamp(1, REQUESTS_PER_MINUTE_CEILING),
             failed_auth_per_minute: section.failed_auth_per_minute.clamp(1, FAILED_AUTH_PER_MINUTE_CEILING),
+            max_page_size: section.max_page_size.clamp(1, super::cursor::MAX_LIMIT),
+            max_response_bytes: usize::try_from(
+                section
+                    .max_response_bytes
+                    .clamp(MIN_RESPONSE_BYTES, MAX_RESPONSE_BYTES_CEILING),
+            )
+            .unwrap_or(usize::MAX),
             by_token: Windows::default(),
             failures_by_client: Windows::default(),
         }
@@ -219,6 +233,10 @@ impl ApiLimits {
     /// Counts one missing or refused credential from `client`.
     pub(crate) fn record_failure(&self, client: &str) -> Quota {
         self.failures_by_client.hit(client, self.failed_auth_per_minute)
+    }
+
+    pub(crate) fn max_page_size(&self) -> u32 {
+        self.max_page_size
     }
 
     /// Where `client` stands on failed credentials; checked before a token
@@ -263,15 +281,19 @@ impl TokenQuota {
     }
 }
 
-/// Puts the `RateLimit-*` fields on every `/_api/v1` response: the token's
-/// quota once a token was accepted, else the client address's quota of
-/// failed credentials, which is the one a request without a usable token
-/// spends.
+/// Caps every `/_api/v1` response body at `[api] max_response_bytes`, and
+/// puts the `RateLimit-*` fields on every response: the token's quota once
+/// a token was accepted, else the client address's quota of failed
+/// credentials, which is the one a request without a usable token spends.
+///
+/// The cap buffers the body, which costs nothing for the JSON endpoints
+/// that build theirs in memory anyway; an endpoint that streams a large
+/// body (a blob, an archive) would need its own route outside this layer.
 pub(crate) async fn middleware(State(ctx): State<Arc<AppContext>>, mut request: Request, next: Next) -> Response {
     let client = client(&ctx, request.headers(), request.extensions());
     let slot = TokenQuota::default();
     request.extensions_mut().insert(slot.clone());
-    let mut response = next.run(request).await;
+    let mut response = capped(next.run(request).await, ctx.api_limits.max_response_bytes).await;
     let quota = slot
         .0
         .get()
@@ -280,4 +302,25 @@ pub(crate) async fn middleware(State(ctx): State<Arc<AppContext>>, mut request: 
     let refused = response.status() == StatusCode::TOO_MANY_REQUESTS;
     quota.write_headers(response.headers_mut(), refused);
     response
+}
+
+async fn capped(response: Response, max: usize) -> Response {
+    let (parts, body) = response.into_parts();
+    match axum::body::to_bytes(body, max).await {
+        Ok(bytes) => Response::from_parts(parts, Body::from(bytes)),
+        Err(e) => {
+            let over = std::iter::successors(Some(&e as &(dyn std::error::Error + 'static)), |err| err.source())
+                .any(|err| err.is::<http_body_util::LengthLimitError>());
+            if over {
+                ApiError::new(
+                    ErrorCode::ResponseTooLarge,
+                    "the answer is larger than this server sends at once",
+                )
+                .with_hint("ask for fewer items with `limit`, or for a narrower path")
+                .into_response()
+            } else {
+                ApiError::internal(&anyhow::Error::new(e)).into_response()
+            }
+        }
+    }
 }

@@ -99,6 +99,8 @@ pub struct TrackerSection {
 /// [api]
 /// requests_per_minute = 120
 /// failed_auth_per_minute = 30
+/// max_page_size = 100
+/// max_response_bytes = 1048576
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -112,6 +114,16 @@ pub struct ApiSection {
     /// looked up, which is what bounds guessing secrets. Default 30, ceiling
     /// [`crate::api::limits::FAILED_AUTH_PER_MINUTE_CEILING`].
     pub failed_auth_per_minute: u32,
+    /// Most items one page of a listing holds; a `limit=` above it is
+    /// refused, and the default page is the smaller of 50 and this. Default
+    /// and ceiling [`crate::api::cursor::MAX_LIMIT`].
+    pub max_page_size: u32,
+    /// Most bytes one response body holds; a larger one is answered with
+    /// `response_too_large` instead. At least
+    /// [`crate::api::limits::MIN_RESPONSE_BYTES`], so an error body always
+    /// fits. Default 1 MiB, ceiling
+    /// [`crate::api::limits::MAX_RESPONSE_BYTES_CEILING`].
+    pub max_response_bytes: u32,
 }
 
 impl Default for ApiSection {
@@ -119,6 +131,8 @@ impl Default for ApiSection {
         ApiSection {
             requests_per_minute: 120,
             failed_auth_per_minute: 30,
+            max_page_size: crate::api::cursor::MAX_LIMIT,
+            max_response_bytes: 1024 * 1024,
         }
     }
 }
@@ -129,19 +143,28 @@ impl ApiSection {
         let keys = [
             (
                 "requests_per_minute",
-                u64::from(self.requests_per_minute),
-                u64::from(limits::REQUESTS_PER_MINUTE_CEILING),
+                self.requests_per_minute,
+                1,
+                limits::REQUESTS_PER_MINUTE_CEILING,
             ),
             (
                 "failed_auth_per_minute",
-                u64::from(self.failed_auth_per_minute),
-                u64::from(limits::FAILED_AUTH_PER_MINUTE_CEILING),
+                self.failed_auth_per_minute,
+                1,
+                limits::FAILED_AUTH_PER_MINUTE_CEILING,
+            ),
+            ("max_page_size", self.max_page_size, 1, crate::api::cursor::MAX_LIMIT),
+            (
+                "max_response_bytes",
+                self.max_response_bytes,
+                limits::MIN_RESPONSE_BYTES,
+                limits::MAX_RESPONSE_BYTES_CEILING,
             ),
         ];
-        for (key, value, ceiling) in keys {
-            if !(1..=ceiling).contains(&value) {
+        for (key, value, floor, ceiling) in keys {
+            if !(floor..=ceiling).contains(&value) {
                 bail!(
-                    "[api] {key} = {value} in {} is out of range (use 1 to {ceiling})",
+                    "[api] {key} = {value} in {} is out of range (use {floor} to {ceiling})",
                     path.display()
                 );
             }

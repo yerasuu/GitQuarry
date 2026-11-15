@@ -25,6 +25,9 @@ pub enum ErrorCode {
     /// Over a rate limit: the token's own, or its client address's for
     /// failed credentials. `Retry-After` says when to try again.
     RateLimited,
+    /// The answer is over the instance's `[api] max_response_bytes`; a
+    /// smaller `limit` or a narrower path asks for less.
+    ResponseTooLarge,
     Internal,
 }
 
@@ -39,6 +42,7 @@ impl ErrorCode {
             ErrorCode::InvalidCursor => "invalid_cursor",
             ErrorCode::InvalidParameter => "invalid_parameter",
             ErrorCode::RateLimited => "rate_limited",
+            ErrorCode::ResponseTooLarge => "response_too_large",
             ErrorCode::Internal => "internal",
         }
     }
@@ -49,7 +53,9 @@ impl ErrorCode {
             ErrorCode::Forbidden => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-            ErrorCode::InvalidCursor | ErrorCode::InvalidParameter => StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidCursor | ErrorCode::InvalidParameter | ErrorCode::ResponseTooLarge => {
+                StatusCode::BAD_REQUEST
+            }
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
