@@ -1,7 +1,7 @@
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::access;
 use gitquarry_core::auth::domain;
-use gitquarry_core::auth::entities::Permission;
+use gitquarry_core::auth::entities::{ApiGrant, ApiScope, Permission, PersonalAccessToken};
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_test_support::account;
@@ -230,4 +230,82 @@ async fn revoke_is_a_no_op_for_a_non_owner_without_admin() {
             .unwrap()
             .is_some()
     );
+}
+
+/// `/_api/v1/whoami` as `secret` sees it: the API's verdict on the token.
+async fn whoami(ctx: &Arc<AppContext>, secret: &str) -> axum::http::StatusCode {
+    let app = axum::Router::new()
+        .merge(gitquarry_core::api::router())
+        .with_state(Arc::clone(ctx));
+    let request = axum::http::Request::get("/_api/v1/whoami")
+        .header("authorization", format!("Bearer {secret}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    gitquarry_test_support::send(&app, request).await.status
+}
+
+#[tokio::test]
+async fn a_token_stored_before_api_scopes_still_works_for_git_and_not_the_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    let (owner_uid, proj) = make_alice(&ctx).await;
+    let scopes = BTreeMap::from([(proj.clone(), Permission::Developer)]);
+    let (token, secret) = domain::pat::create(&ctx, &owner_uid, "laptop", scopes, None)
+        .await
+        .unwrap()
+        .unwrap();
+    // A git token is still written in the shape every earlier release wrote.
+    let stored = serde_json::to_value(&token).unwrap();
+    assert!(stored.get("api").is_none(), "{stored}");
+
+    // The record exactly as a release before API scopes stored it.
+    let legacy = serde_json::json!({
+        "uid": token.uid,
+        "owner_uid": owner_uid,
+        "label": "laptop",
+        "token_hash": token.token_hash,
+        "scopes": { proj.as_str(): "developer" },
+        "created_at": token.created_at,
+        "expires_at": null,
+        "last_used_at": null,
+    });
+    let legacy: PersonalAccessToken = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.api.is_none());
+    let (_, etag) = PersonalAccessToken::get(ctx.backend().as_ref(), &ctx.cipher, token.uid.as_str())
+        .await
+        .unwrap();
+    legacy
+        .put(ctx.backend().as_ref(), &ctx.cipher, etag.as_deref())
+        .await
+        .unwrap();
+    let base = serve(Arc::clone(&ctx)).await;
+
+    assert_eq!(fetch_refs(&base, "alice/proj", &secret).await, StatusCode::OK);
+    let pushed = push(&base, "alice/proj", &secret).await;
+    assert!(
+        pushed != StatusCode::UNAUTHORIZED && pushed != StatusCode::FORBIDDEN,
+        "{pushed}"
+    );
+    assert_eq!(whoami(&ctx, &secret).await, axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_api_token_is_refused_over_git_http() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
+    let (owner_uid, proj) = make_alice(&ctx).await;
+    let scopes = BTreeMap::from([(proj, Permission::Owner)]);
+    let grant = ApiGrant {
+        scopes: ApiScope::ALL.into_iter().collect(),
+        paths: BTreeMap::new(),
+    };
+    let (_token, secret) = domain::pat::create_api(&ctx, &owner_uid, "agent", scopes, grant, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let base = serve(Arc::clone(&ctx)).await;
+
+    assert_eq!(whoami(&ctx, &secret).await, axum::http::StatusCode::OK);
+    assert_eq!(fetch_refs(&base, "alice/proj", &secret).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(push(&base, "alice/proj", &secret).await, StatusCode::UNAUTHORIZED);
 }

@@ -263,17 +263,19 @@ impl User {
     }
 }
 
-/// A long-lived, locally-scoped credential for git-smart-HTTP clone/push —
-/// separate from federation's own fine-grained `AccessToken` (`.conf/tokens`,
-/// owned by `gitquarry-federation`, resolved via loopback): this one lives
+/// A long-lived, locally-scoped credential for git-smart-HTTP clone/push or,
+/// with [`Self::api`] set, for `/_api/v1` — separate from federation's own
+/// fine-grained `AccessToken` (`.conf/tokens`, owned by
+/// `gitquarry-federation`, resolved via loopback): this one lives
 /// entirely in core, so it works with no `[federation]` config at all.
 /// `scopes` is never empty — same "explicit repos only, never all" rule
 /// federation's tokens follow — but carries a full [`Permission`] ceiling
 /// per repo instead of a single read/write bool, since core already has
 /// [`Permission`]'s 5 tiers and [`User::repos`] already uses this exact map
 /// shape. The ceiling never grants more than `owner_uid`'s real, current
-/// permission — see `git::http::authorize_impl`, which re-derives that on
-/// every request and takes the lower of the two.
+/// permission — see `git::http::authorize_impl` and
+/// `api::auth::ApiPrincipal::permission_on`, which re-derive that on every
+/// request and take the lower of the two.
 #[derive(Debug, Default, Serialize, Deserialize, Entity)]
 #[entity(collection = ".conf/pat")]
 pub struct PersonalAccessToken {
@@ -311,6 +313,64 @@ pub struct PersonalAccessToken {
     pub expires_at: Option<String>,
     #[serde(default)]
     pub last_used_at: Option<String>,
+    /// `Some` makes this a `/_api/v1` token, `None` a git-smart-HTTP one:
+    /// each is refused by the other surface, so a token handed to an agent
+    /// for the API can't also clone, and the reverse. Records written before
+    /// API tokens existed have no such key and stay git tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<ApiGrant>,
+}
+
+/// What an API [`PersonalAccessToken`] may do beyond naming its repos
+/// (decision #144). Both caps apply on top of the per-repo ceiling in
+/// [`PersonalAccessToken::scopes`] and the owner's live permission, so
+/// neither can raise anything.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ApiGrant {
+    /// Never empty for a stored token: `domain::pat::create_api` refuses one.
+    pub scopes: BTreeSet<ApiScope>,
+    /// Repo uid → the subtrees the token is confined to on that repo; a repo
+    /// absent here is open in full. Every entry passed
+    /// `validate::validate_tree_path` and is never empty (the root), and
+    /// every key is also a key of [`PersonalAccessToken::scopes`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paths: BTreeMap<Uid, BTreeSet<String>>,
+}
+
+/// The scope names are the wire form in stored tokens and in `/_api/v1`
+/// answers, so a released one is never renamed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ApiScope {
+    #[serde(rename = "repo:read")]
+    RepoRead,
+    #[serde(rename = "repo:write")]
+    RepoWrite,
+    #[serde(rename = "repo:admin")]
+    RepoAdmin,
+    #[serde(rename = "tracker:read")]
+    TrackerRead,
+    #[serde(rename = "tracker:write")]
+    TrackerWrite,
+}
+
+impl ApiScope {
+    pub const ALL: [ApiScope; 5] = [
+        ApiScope::RepoRead,
+        ApiScope::RepoWrite,
+        ApiScope::RepoAdmin,
+        ApiScope::TrackerRead,
+        ApiScope::TrackerWrite,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApiScope::RepoRead => "repo:read",
+            ApiScope::RepoWrite => "repo:write",
+            ApiScope::RepoAdmin => "repo:admin",
+            ApiScope::TrackerRead => "tracker:read",
+            ApiScope::TrackerWrite => "tracker:write",
+        }
+    }
 }
 
 /// One WebAuthn credential (passkey) a user registered — a second factor

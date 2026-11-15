@@ -8,27 +8,82 @@
 
 use crate::app::AppContext;
 use crate::auth::access;
-use crate::auth::entities::{Permission, PersonalAccessToken};
+use crate::auth::entities::{ApiGrant, Permission, PersonalAccessToken};
 use crate::storage::Cas;
 use crate::storage::audit::format_unix_secs;
 use crate::storage::uid::Uid;
+use crate::validate;
 use anyhow::{Result, bail};
 use s3db::txn;
 use std::collections::BTreeMap;
 
-/// Creates a token owned by `owner_uid`, scoped to `scopes` (repo uid →
-/// `Permission` ceiling, already resolved by the caller) with an optional
-/// expiry. Returns the stored record and the one-time plaintext secret —
-/// the only moment it's ever available; only `PersonalAccessToken::token_hash`
-/// survives past this call. `Ok(None)` only on a fresh-uid collision
-/// (`Cas::Conflict`, vanishingly rare with 160 bits of randomness). The
-/// entity write and its `token_hash` index claim land in one create-only
-/// [`txn::run`] batch.
+/// Keeps one token record small; a monorepo agent needing more subtrees
+/// than this on one repo is better served by the whole repo.
+const MAX_PATHS_PER_REPO: usize = 64;
+
+/// Creates a git-smart-HTTP token owned by `owner_uid`, scoped to `scopes`
+/// (repo uid → `Permission` ceiling, already resolved by the caller) with an
+/// optional expiry. Returns the stored record and the one-time plaintext
+/// secret — the only moment it's ever available; only
+/// `PersonalAccessToken::token_hash` survives past this call. `Ok(None)`
+/// only on a fresh-uid collision (`Cas::Conflict`, vanishingly rare with 160
+/// bits of randomness). The entity write and its `token_hash` index claim
+/// land in one create-only [`txn::run`] batch. The token is refused by
+/// `/_api/v1`; see [`create_api`].
 pub async fn create(
     ctx: &AppContext,
     owner_uid: &Uid,
     label: &str,
     scopes: BTreeMap<Uid, Permission>,
+    expires_in_days: Option<u32>,
+) -> Result<Option<(PersonalAccessToken, String)>> {
+    insert(ctx, owner_uid, label, scopes, None, expires_in_days).await
+}
+
+/// [`create`] for a `/_api/v1` token, which git-smart-HTTP refuses. `grant`
+/// needs at least one scope, and each of its path lists has to name a repo
+/// in `scopes` and hold only non-root paths `validate::validate_tree_path`
+/// accepts: a path is matched against request paths by whole segments, so
+/// anything else would either never match or match more than it says.
+///
+/// # Errors
+///
+/// An invalid label, no repo, no scope, or a path list breaking the rules
+/// above; storage failures.
+pub async fn create_api(
+    ctx: &AppContext,
+    owner_uid: &Uid,
+    label: &str,
+    scopes: BTreeMap<Uid, Permission>,
+    grant: ApiGrant,
+    expires_in_days: Option<u32>,
+) -> Result<Option<(PersonalAccessToken, String)>> {
+    if grant.scopes.is_empty() {
+        bail!("an API token needs at least one scope");
+    }
+    for (repo_uid, paths) in &grant.paths {
+        if !scopes.contains_key(repo_uid) {
+            bail!("a path list names a repo the token does not");
+        }
+        if paths.is_empty() || paths.len() > MAX_PATHS_PER_REPO {
+            bail!("a repo's path list needs 1 to {MAX_PATHS_PER_REPO} paths");
+        }
+        for path in paths {
+            if path.is_empty() {
+                bail!("a path list can't hold the repo root; leave the repo out of it instead");
+            }
+            validate::validate_tree_path(path)?;
+        }
+    }
+    insert(ctx, owner_uid, label, scopes, Some(grant), expires_in_days).await
+}
+
+async fn insert(
+    ctx: &AppContext,
+    owner_uid: &Uid,
+    label: &str,
+    scopes: BTreeMap<Uid, Permission>,
+    api: Option<ApiGrant>,
     expires_in_days: Option<u32>,
 ) -> Result<Option<(PersonalAccessToken, String)>> {
     access::validate_pat_label(label)?;
@@ -48,6 +103,7 @@ pub async fn create(
         created_at: format_unix_secs(now),
         expires_at,
         last_used_at: None,
+        api,
     };
 
     let ops = vec![

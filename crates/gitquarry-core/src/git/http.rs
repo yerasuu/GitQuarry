@@ -710,8 +710,8 @@ async fn authenticate(
 /// Tries the Basic-Auth username as a local personal access token secret —
 /// recognizable by its `gqpat_` prefix, so a real password or a real
 /// federation token never even reaches the hash lookup below. `None` on any
-/// mismatch (wrong prefix, unknown/expired secret, or `repo_uid` outside
-/// the token's `scopes`) — deliberately not distinguished from "not a PAT
+/// mismatch (wrong prefix, unknown/expired secret, an API token, or
+/// `repo_uid` outside the token's `scopes`) — deliberately not distinguished from "not a PAT
 /// at all", so a malformed token attempt just falls through to the next
 /// credential type instead of being treated as a login failure.
 async fn resolve_local_pat(
@@ -725,6 +725,11 @@ async fn resolve_local_pat(
     let Some(token) = access::resolve_by_secret(ctx.backend().as_ref(), &ctx.cipher, secret).await? else {
         return Ok(None);
     };
+    // An API token is never a git credential (decision #144), so it falls
+    // through like any other secret that isn't one.
+    if token.api.is_some() {
+        return Ok(None);
+    }
     let Some(&ceiling) = token.scopes.get(repo_uid) else {
         return Ok(None);
     };

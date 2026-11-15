@@ -7,7 +7,7 @@ use gitquarry_core::api;
 use gitquarry_core::api::error::ErrorCode;
 use gitquarry_core::app::AppContext;
 use gitquarry_core::auth::domain;
-use gitquarry_core::auth::entities::Permission;
+use gitquarry_core::auth::entities::{ApiGrant, ApiScope, Permission};
 use gitquarry_core::storage::entities::Visibility;
 use gitquarry_core::storage::uid::Uid;
 use gitquarry_test_support::{Page, account, send};
@@ -27,9 +27,17 @@ async fn repo(ctx: &AppContext, full_name: &str) -> Uid {
         .uid
 }
 
-/// alice's token over `scopes`, returning its secret.
+/// Every API scope, so these tests see only the per-repo ceiling.
+fn every_scope() -> ApiGrant {
+    ApiGrant {
+        scopes: ApiScope::ALL.into_iter().collect(),
+        paths: BTreeMap::new(),
+    }
+}
+
+/// alice's API token over `scopes`, returning its secret.
 async fn token(ctx: &AppContext, owner: &Uid, scopes: BTreeMap<Uid, Permission>) -> String {
-    domain::pat::create(ctx, owner, "agent", scopes, None)
+    domain::pat::create_api(ctx, owner, "agent", scopes, every_scope(), None)
         .await
         .unwrap()
         .unwrap()
@@ -76,6 +84,9 @@ async fn whoami_names_the_user_the_token_and_its_capped_permission() {
     assert_eq!(body["scopes"]["items"][0]["repo"], "alice/proj");
     assert_eq!(body["scopes"]["items"][0]["ceiling"], "reporter");
     assert_eq!(body["scopes"]["items"][0]["permission"], "reporter");
+    assert_eq!(body["scopes"]["items"][0]["tracker_permission"], "reporter");
+    assert_eq!(body["scopes"]["items"][0]["paths"], Value::Null);
+    assert_eq!(body["token"]["scopes"].as_array().unwrap().len(), ApiScope::ALL.len());
     assert_eq!(body["scopes"]["next_cursor"], Value::Null);
     assert!(!page.body.contains(&secret), "the secret must never be echoed");
 }
@@ -130,11 +141,12 @@ async fn a_revoked_token_stops_working() {
     let ctx = Arc::new(gitquarry_test_support::ctx(dir.path()));
     let alice = account(&ctx, "alice", None).await;
     let proj = repo(&ctx, "alice/proj").await;
-    let (record, secret) = domain::pat::create(
+    let (record, secret) = domain::pat::create_api(
         &ctx,
         &alice.uid,
         "agent",
         BTreeMap::from([(proj, Permission::Reporter)]),
+        every_scope(),
         None,
     )
     .await

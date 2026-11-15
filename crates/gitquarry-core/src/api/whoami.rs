@@ -1,14 +1,15 @@
-use super::auth::ApiPrincipal;
+use super::auth::{ApiPrincipal, Area};
 use super::cursor::{self, Page, PageRequest};
 use super::error::ApiError;
 use crate::app::AppContext;
-use crate::auth::entities::Permission;
+use crate::auth::entities::{ApiScope, Permission};
 use crate::storage::settings;
 use crate::storage::uid::Uid;
 use axum::Json;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::sync::Arc;
 
@@ -16,7 +17,7 @@ use std::sync::Arc;
 struct Whoami<'a> {
     user: UserInfo<'a>,
     token: TokenInfo<'a>,
-    scopes: Page<ScopeInfo>,
+    scopes: Page<ScopeInfo<'a>>,
 }
 
 #[derive(Serialize)]
@@ -33,16 +34,21 @@ struct TokenInfo<'a> {
     created_at: &'a str,
     expires_at: Option<&'a str>,
     last_used_at: Option<&'a str>,
+    scopes: Option<&'a BTreeSet<ApiScope>>,
 }
 
-/// `repo` and `permission` are `null` once the repo is gone; the token keeps
-/// naming its uid until revoked.
+/// `repo` and the permissions are `null` once the repo is gone; the token
+/// keeps naming its uid until revoked. `ceiling` is the token's per-repo
+/// ceiling before its scopes apply; `paths` is `null` when the whole repo is
+/// open to the token.
 #[derive(Serialize)]
-struct ScopeInfo {
+struct ScopeInfo<'a> {
     repo_uid: Uid,
     repo: Option<String>,
     ceiling: Permission,
     permission: Option<Permission>,
+    tracker_permission: Option<Permission>,
+    paths: Option<&'a BTreeSet<String>>,
 }
 
 /// `GET /_api/v1/whoami`: the token's owner, the token, and one page of the
@@ -66,20 +72,26 @@ pub(super) async fn handler(
         let (config, _) = settings::get_repo_config(backend.as_ref(), repo_uid.as_str(), &ctx.cipher)
             .await
             .map_err(|e| ApiError::internal(&e))?;
-        let (repo, permission) = if config.full_name.is_empty() {
-            (None, None)
+        let (repo, permission, tracker_permission) = if config.full_name.is_empty() {
+            (None, None, None)
         } else {
             let permission = principal
-                .permission_on(&ctx, repo_uid, &config.full_name)
+                .permission_on(&ctx, Area::Repo, repo_uid, &config.full_name)
                 .await
                 .map_err(|e| ApiError::internal(&e))?;
-            (Some(config.full_name), permission)
+            let tracker_permission = principal
+                .permission_on(&ctx, Area::Tracker, repo_uid, &config.full_name)
+                .await
+                .map_err(|e| ApiError::internal(&e))?;
+            (Some(config.full_name), permission, tracker_permission)
         };
         items.push(ScopeInfo {
             repo_uid: repo_uid.clone(),
             repo,
             ceiling,
             permission,
+            tracker_permission,
+            paths: token.api.as_ref().and_then(|grant| grant.paths.get(repo_uid)),
         });
     }
     let next_cursor = match (remaining.next(), items.last()) {
@@ -99,6 +111,7 @@ pub(super) async fn handler(
             created_at: &token.created_at,
             expires_at: token.expires_at.as_deref(),
             last_used_at: token.last_used_at.as_deref(),
+            scopes: token.api.as_ref().map(|grant| &grant.scopes),
         },
         scopes: Page { items, next_cursor },
     };
