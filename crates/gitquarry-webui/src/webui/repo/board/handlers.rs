@@ -3,6 +3,7 @@
 //! `/_issues`/`/_milestones` (`milestones::handlers`'s own doc comment
 //! explains why).
 
+use crate::webui::repo::can_view_repo;
 use crate::webui::{
     AppError, State_, effective_locale, repo_link, require_csrf, require_login, tracker_client, url_encode,
 };
@@ -22,18 +23,30 @@ fn tracker_unavailable(locale: Locale) -> AppError {
     ))
 }
 
+/// Resolves `repo` and checks the caller can see it, the same gate
+/// `issues::handlers::resolve_target` applies: these top-level routes never
+/// pass through `handler_repo`'s own [`can_view_repo`]. A rejection is 404,
+/// not 403, so a refused write doesn't confirm that a private repo exists.
 async fn resolve_target(
     ctx: &AppContext,
+    headers: &HeaderMap,
     repo: &str,
     locale: Locale,
 ) -> Result<(gitquarry_core::app::ResolvedRepo, String), AppError> {
     let name = validate::sanitize_path(repo).map_err(AppError::bad_request)?;
-    let Some(resolved) = ctx.resolve_repo(&name).await? else {
-        return Err(AppError::not_found(anyhow::anyhow!(
+    let not_found = || {
+        AppError::not_found(anyhow::anyhow!(
             "{}",
             gitquarry_i18n::shared::repo::repo_not_found(locale, &name)
-        )));
+        ))
     };
+    let Some(resolved) = ctx.resolve_repo(&name).await? else {
+        return Err(not_found());
+    };
+    let (config, _etag) = resolved.remote.get_repo_config().await?;
+    if !can_view_repo(ctx, headers, &name, config.visibility).await? {
+        return Err(not_found());
+    }
     Ok((resolved, name))
 }
 
@@ -88,7 +101,7 @@ pub(crate) async fn handler_add_column_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
@@ -130,7 +143,7 @@ pub(crate) async fn handler_remove_column_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
@@ -176,7 +189,7 @@ pub(crate) async fn handler_add_card_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
@@ -240,7 +253,7 @@ pub(crate) async fn handler_remove_card_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
@@ -274,7 +287,7 @@ pub(crate) async fn handler_move_card_up_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
@@ -298,7 +311,7 @@ pub(crate) async fn handler_move_card_down_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));
@@ -331,7 +344,7 @@ pub(crate) async fn handler_move_card_to_column_post(
     };
     require_csrf(&headers, &form.csrf)?;
     let locale = effective_locale(&ctx, &headers).await;
-    let (resolved, name) = resolve_target(&ctx, &form.repo, locale).await?;
+    let (resolved, name) = resolve_target(&ctx, &headers, &form.repo, locale).await?;
     require_developer_permission(&ctx, &me, &name, locale).await?;
     let Some(tracker) = &ctx.tracker else {
         return Err(tracker_unavailable(locale));

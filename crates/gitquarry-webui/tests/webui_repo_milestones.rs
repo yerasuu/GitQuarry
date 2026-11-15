@@ -5,6 +5,7 @@
 use axum::http::StatusCode;
 use gitquarry_core::auth::domain::user;
 use gitquarry_core::auth::entities::Permission;
+use gitquarry_core::storage::entities::Visibility;
 use gitquarry_i18n::Locale;
 use gitquarry_test_support::{Session, TrackerFixture, tracker_fixture};
 use std::sync::Arc;
@@ -91,4 +92,57 @@ async fn issue_edit_form_marks_the_current_milestone_selected() {
         "{html}"
     );
     assert!(!html.contains(r#"value="1" selected"#), "{html}");
+}
+
+/// `fields` POSTed to `route` by a logged-in user with no grant on
+/// `team/proj` after it was made private: refused as 404, the same answer a
+/// repo that doesn't exist gets, not as a 403 that confirms it does.
+async fn assert_hidden_from_an_outsider(route: &str, fields: &[(&str, &str)]) {
+    let f = tracker_fixture(&[]).await;
+    let (mut config, etag) = f.repo.remote.get_repo_config().await.unwrap();
+    config.visibility = Visibility::Private;
+    gitquarry_core::storage::settings::put_repo_config(
+        f.ctx.backend().as_ref(),
+        f.repo.uid.as_str(),
+        &config,
+        etag.as_deref(),
+        &f.ctx.cipher,
+    )
+    .await
+    .unwrap();
+    gitquarry_test_support::user(&f.ctx, "mallory", false).await;
+    let app = gitquarry_webui::webui::router(Arc::clone(&f.ctx));
+    let session = Session::login(&app, "mallory").await;
+
+    let mut all = vec![("repo", "team/proj")];
+    all.extend_from_slice(fields);
+    let page = session.post(&app, route, &all).await;
+    assert_eq!(page.status, StatusCode::NOT_FOUND, "{route}: {}", page.body);
+    let refusal = gitquarry_i18n::shared::repo::write_permission_required(Locale::En);
+    assert!(!page.body.contains(&refusal), "{route}: {}", page.body);
+}
+
+#[tokio::test]
+async fn milestones_create_404s_for_an_outsider_on_a_private_repo() {
+    assert_hidden_from_an_outsider("/_milestones", &[("title", "v1")]).await;
+}
+
+#[tokio::test]
+async fn milestones_edit_404s_for_an_outsider_on_a_private_repo() {
+    assert_hidden_from_an_outsider("/_milestones/edit", &[("number", "1"), ("title", "v1")]).await;
+}
+
+#[tokio::test]
+async fn milestones_close_404s_for_an_outsider_on_a_private_repo() {
+    assert_hidden_from_an_outsider("/_milestones/close", &[("number", "1")]).await;
+}
+
+#[tokio::test]
+async fn milestones_reopen_404s_for_an_outsider_on_a_private_repo() {
+    assert_hidden_from_an_outsider("/_milestones/reopen", &[("number", "1")]).await;
+}
+
+#[tokio::test]
+async fn milestones_bulk_404s_for_an_outsider_on_a_private_repo() {
+    assert_hidden_from_an_outsider("/_milestones/bulk", &[("action", "close")]).await;
 }
