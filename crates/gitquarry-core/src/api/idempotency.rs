@@ -188,7 +188,7 @@ async fn purge(backend: &dyn Backend, name: &str) -> Result<()> {
 }
 
 enum Begin {
-    Run { attempt: String },
+    Run(IdempotencyRecord),
     Answer(Response),
 }
 
@@ -226,7 +226,7 @@ async fn begin(ctx: &AppContext, name: &str, fingerprint: &str) -> Result<Begin,
             name: name.to_string(),
             fingerprint: fingerprint.to_string(),
             created_at: now,
-            attempt: attempt.clone(),
+            attempt,
             response: None,
         };
         match IdempotencyRecord::COLLECTION
@@ -234,7 +234,7 @@ async fn begin(ctx: &AppContext, name: &str, fingerprint: &str) -> Result<Begin,
             .await
             .map_err(|e| ApiError::internal(&e))?
         {
-            Cas::Ok => return Ok(Begin::Run { attempt }),
+            Cas::Ok => return Ok(Begin::Run(pending)),
             Cas::Conflict => {}
         }
     }
@@ -269,17 +269,23 @@ fn header_string(response: &Response, name: header::HeaderName) -> Option<String
         .map(str::to_string)
 }
 
-/// Writes `stored` over this attempt's pending record, or releases the key
-/// when `stored` is `None`. Whatever happens here, the write itself has
+/// Writes `stored` over this attempt's `pending` record, or releases the
+/// key when `stored` is `None`. Whatever happens here, the write itself has
 /// already happened, so a failure is logged and the client still gets its
 /// answer.
-async fn finish(ctx: &AppContext, name: &str, attempt: &str, stored: Option<StoredResponse>) {
+async fn finish(ctx: &AppContext, mut pending: IdempotencyRecord, stored: Option<StoredResponse>) {
     let backend = ctx.backend.as_ref();
+    let name = pending.name.as_str();
     let current = IdempotencyRecord::COLLECTION
         .get::<IdempotencyRecord>(backend, &ctx.cipher, name)
         .await;
-    let (mut record, etag) = match current {
-        Ok((Some(record), etag)) if record.attempt == attempt && record.response.is_none() => (record, etag),
+    let etag = match current {
+        Ok((Some(record), etag)) if record.attempt == pending.attempt && record.response.is_none() => etag,
+        // Deletes are unconditional, so a sweep or a release that read the
+        // key before this attempt took it can remove this attempt's record.
+        // Written back, so a retry still gets this answer instead of
+        // running the write again.
+        Ok((None, _)) => None,
         Ok(_) => {
             warn!(
                 record = name,
@@ -293,14 +299,16 @@ async fn finish(ctx: &AppContext, name: &str, attempt: &str, stored: Option<Stor
         }
     };
     let Some(stored) = stored else {
-        if let Err(e) = purge(backend, name).await {
+        if etag.is_some()
+            && let Err(e) = purge(backend, name).await
+        {
             error!(record = name, error = %e, "couldn't release an idempotency key");
         }
         return;
     };
-    record.response = Some(stored);
+    pending.response = Some(stored);
     match IdempotencyRecord::COLLECTION
-        .put(backend, &ctx.cipher, name, &record, etag.as_deref())
+        .put(backend, &ctx.cipher, name, &pending, etag.as_deref())
         .await
     {
         Ok(Cas::Ok) => {}
@@ -318,14 +326,14 @@ where
     Fut: Future<Output = Result<Response, ApiError>>,
 {
     let name = record_name(token_uid, key);
-    let attempt = match begin(ctx, &name, fingerprint).await {
-        Ok(Begin::Run { attempt }) => attempt,
+    let pending = match begin(ctx, &name, fingerprint).await {
+        Ok(Begin::Run(pending)) => pending,
         Ok(Begin::Answer(response)) => return response,
         Err(e) => return e.into_response(),
     };
     let response = write.await.unwrap_or_else(IntoResponse::into_response);
     if response.status().is_server_error() {
-        finish(ctx, &name, &attempt, None).await;
+        finish(ctx, pending, None).await;
         return response;
     }
     let content_type = header_string(&response, header::CONTENT_TYPE);
@@ -334,7 +342,7 @@ where
     let bytes = match axum::body::to_bytes(body, MAX_STORED_BODY).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            finish(ctx, &name, &attempt, None).await;
+            finish(ctx, pending, None).await;
             return ApiError::internal(&anyhow::Error::new(e)).into_response();
         }
     };
@@ -344,7 +352,7 @@ where
         location,
         body: body.to_string(),
     });
-    finish(ctx, &name, &attempt, stored).await;
+    finish(ctx, pending, stored).await;
     Response::from_parts(parts, Body::from(bytes))
 }
 
