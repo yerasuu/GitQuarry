@@ -22,6 +22,8 @@ pub enum ErrorCode {
     /// A `cursor` this server did not issue for this listing.
     InvalidCursor,
     InvalidParameter,
+    /// A request body over the size a write accepts.
+    RequestTooLarge,
     /// Over a rate limit: the token's own, or its client address's for
     /// failed credentials. `Retry-After` says when to try again.
     RateLimited,
@@ -41,6 +43,7 @@ impl ErrorCode {
             ErrorCode::MethodNotAllowed => "method_not_allowed",
             ErrorCode::InvalidCursor => "invalid_cursor",
             ErrorCode::InvalidParameter => "invalid_parameter",
+            ErrorCode::RequestTooLarge => "request_too_large",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::ResponseTooLarge => "response_too_large",
             ErrorCode::Internal => "internal",
@@ -56,6 +59,7 @@ impl ErrorCode {
             ErrorCode::InvalidCursor | ErrorCode::InvalidParameter | ErrorCode::ResponseTooLarge => {
                 StatusCode::BAD_REQUEST
             }
+            ErrorCode::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
