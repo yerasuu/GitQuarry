@@ -16,6 +16,7 @@
 //! — this is the one place tracker code depends on core's merge-request
 //! domain, now over the loopback instead of a direct in-process call.
 
+use crate::domain::DomainError;
 use crate::domain::issue;
 use crate::i18n;
 use crate::state::{TrackerState, TrackerTarget};
@@ -30,7 +31,7 @@ pub async fn get(state: &TrackerState, target: &TrackerTarget) -> Result<(Board,
 pub async fn add_column(state: &TrackerState, target: &TrackerTarget, name: &str) -> Result<Cas> {
     let name = name.trim();
     if name.is_empty() {
-        bail!("column name can't be empty");
+        bail!(DomainError::Invalid("column name can't be empty".to_string()));
     }
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     board.columns.push(crate::storage::board::BoardColumn {
@@ -56,11 +57,11 @@ pub async fn rename_column(
 ) -> Result<Cas> {
     let name = name.trim();
     if name.is_empty() {
-        bail!("column name can't be empty");
+        bail!(DomainError::Invalid("column name can't be empty".to_string()));
     }
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some(column) = board.columns.get_mut(column_index) else {
-        bail!("{}", i18n::board_column_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_column_not_found(locale)));
     };
     column.name = name.to_string();
     board::put_board(
@@ -83,10 +84,10 @@ pub async fn remove_column(
 ) -> Result<Cas> {
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some(column) = board.columns.get(column_index) else {
-        bail!("{}", i18n::board_column_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_column_not_found(locale)));
     };
     if !column.cards.is_empty() {
-        bail!("{}", i18n::board_column_not_empty(locale));
+        bail!(DomainError::Invalid(i18n::board_column_not_empty(locale)));
     }
     board.columns.remove(column_index);
     board::put_board(
@@ -112,22 +113,22 @@ pub async fn add_card(
     match &card {
         CardRef::Issue(number) => {
             if issue::get(state, target, *number).await?.is_none() {
-                bail!("{}", i18n::board_card_target_not_found(locale));
+                bail!(DomainError::Invalid(i18n::board_card_target_not_found(locale)));
             }
         }
         CardRef::MergeRequest(number) => {
             if state.core.mr_summary(target.uid.as_str(), *number).await?.is_none() {
-                bail!("{}", i18n::board_card_target_not_found(locale));
+                bail!(DomainError::Invalid(i18n::board_card_target_not_found(locale)));
             }
         }
         CardRef::Note(text) if text.trim().is_empty() => {
-            bail!("note text can't be empty");
+            bail!(DomainError::Invalid("note text can't be empty".to_string()));
         }
         CardRef::Note(_) => {}
     }
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some(column) = board.columns.get_mut(column_index) else {
-        bail!("{}", i18n::board_column_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_column_not_found(locale)));
     };
     let id = board.next_card_id;
     column.cards.push(BoardCard { id, card });
@@ -162,10 +163,10 @@ pub async fn move_card_to_column(
 ) -> Result<Cas> {
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some((from_column, from_pos)) = locate_card(&board, card_id) else {
-        bail!("{}", i18n::board_card_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_card_not_found(locale)));
     };
     if board.columns.get(to_column_index).is_none() {
-        bail!("{}", i18n::board_column_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_column_not_found(locale)));
     }
     let card = board.columns[from_column].cards.remove(from_pos);
     board.columns[to_column_index].cards.push(card);
@@ -190,7 +191,7 @@ async fn swap_within_column(
 ) -> Result<Cas> {
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some((column_index, pos)) = locate_card(&board, card_id) else {
-        bail!("{}", i18n::board_card_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_card_not_found(locale)));
     };
     let cards = &mut board.columns[column_index].cards;
     let Some(new_pos) = pos.checked_add_signed(delta).filter(|&p| p < cards.len()) else {
@@ -233,7 +234,7 @@ pub async fn remove_card(
 ) -> Result<Cas> {
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some((column_index, pos)) = locate_card(&board, card_id) else {
-        bail!("{}", i18n::board_card_not_found(locale));
+        bail!(DomainError::NotFound(i18n::board_card_not_found(locale)));
     };
     board.columns[column_index].cards.remove(pos);
     board::put_board(

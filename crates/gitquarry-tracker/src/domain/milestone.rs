@@ -11,6 +11,7 @@
 //! by [`bump_counts`] from `domain::issue::edit` (milestone reassignment)
 //! and `domain::issue::transition` (status change).
 
+use crate::domain::DomainError;
 use crate::i18n;
 use crate::state::{TrackerState, TrackerTarget};
 use crate::storage::milestones::{self, MilestoneMeta, MilestoneStatus};
@@ -57,7 +58,7 @@ pub async fn create(
 ) -> Result<MilestoneMeta> {
     let title = title.trim();
     if title.is_empty() {
-        bail!("milestone title can't be empty");
+        bail!(DomainError::Invalid("milestone title can't be empty".to_string()));
     }
     let number = milestones::next_milestone_number(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let stamp = now_stamp();
@@ -99,12 +100,12 @@ pub async fn edit(
 ) -> Result<Cas> {
     let title = title.trim();
     if title.is_empty() {
-        bail!("milestone title can't be empty");
+        bail!(DomainError::Invalid("milestone title can't be empty".to_string()));
     }
     let (milestone, etag) =
         milestones::get_milestone(state.backend.as_ref(), &state.cipher, &target.uid, number).await?;
     let Some(mut milestone) = milestone else {
-        bail!("{}", i18n::milestone_not_found(locale, number));
+        bail!(DomainError::NotFound(i18n::milestone_not_found(locale, number)));
     };
     milestone.title = title.to_string();
     milestone.description = description.to_string();
@@ -138,10 +139,10 @@ async fn transition(
     let (milestone, etag) =
         milestones::get_milestone(state.backend.as_ref(), &state.cipher, &target.uid, number).await?;
     let Some(mut milestone) = milestone else {
-        bail!("{}", i18n::milestone_not_found(locale, number));
+        bail!(DomainError::NotFound(i18n::milestone_not_found(locale, number)));
     };
     if milestone.status != expected {
-        bail!("{}", i18n::milestone_wrong_status(locale));
+        bail!(DomainError::Invalid(i18n::milestone_wrong_status(locale)));
     }
     milestone.status = next;
     milestone.updated_at = now_stamp();

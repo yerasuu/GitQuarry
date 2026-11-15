@@ -101,7 +101,7 @@ pub(crate) async fn handler_create_post(
     let milestone =
         tracker_client::create_milestone(tracker, &resolved.uid, &form.title, &form.description, &form.due_date)
             .await
-            .map_err(AppError::bad_request)?;
+            .map_err(tracker_client::app_error)?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -155,7 +155,7 @@ pub(crate) async fn handler_edit_post(
         &form.due_date,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(
@@ -197,7 +197,7 @@ pub(crate) async fn handler_close_post(
 
     let ok = tracker_client::close_milestone(tracker, &resolved.uid, form.number)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(
@@ -231,7 +231,7 @@ pub(crate) async fn handler_reopen_post(
 
     let ok = tracker_client::reopen_milestone(tracker, &resolved.uid, form.number)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(

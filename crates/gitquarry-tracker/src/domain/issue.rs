@@ -5,6 +5,7 @@
 //! Unlike a pull request, an issue has no merge/diff/shadow-ref machinery —
 //! it's just a title, a markdown body, a status, labels, and assignees.
 
+use crate::domain::DomainError;
 use crate::i18n;
 use crate::state::{TrackerState, TrackerTarget};
 use crate::storage::issues::{self, IssueComment, IssueMeta, IssueStatus};
@@ -52,10 +53,14 @@ const MAX_ISSUE_TITLE_LEN: usize = 256;
 fn validate_issue_title(title: &str) -> Result<String> {
     let title = title.trim();
     if title.is_empty() || title.len() > MAX_ISSUE_TITLE_LEN {
-        bail!("empty or too-long issue title (max {MAX_ISSUE_TITLE_LEN} bytes)");
+        bail!(DomainError::Invalid(format!(
+            "empty or too-long issue title (max {MAX_ISSUE_TITLE_LEN} bytes)"
+        )));
     }
     if title.contains(|c: char| c.is_control()) {
-        bail!("invalid issue title (control characters)");
+        bail!(DomainError::Invalid(
+            "invalid issue title (control characters)".to_string()
+        ));
     }
     Ok(title.to_string())
 }
@@ -203,7 +208,7 @@ pub async fn edit(
         let known_labels: std::collections::BTreeSet<&str> = known_labels.iter().map(String::as_str).collect();
         for name in requested_labels {
             if !known_labels.contains(name) {
-                bail!("{}", i18n::unknown_label(locale, name));
+                bail!(DomainError::Invalid(i18n::unknown_label(locale, name)));
             }
             labels.push(name.to_string());
         }
@@ -212,7 +217,7 @@ pub async fn edit(
     let mut assignees = Vec::new();
     for username in edit.assignees_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         if !state.core.user_exists(username).await? {
-            bail!("{}", i18n::unknown_assignee(locale, username));
+            bail!(DomainError::Invalid(i18n::unknown_assignee(locale, username)));
         }
         assignees.push(username.to_string());
     }
@@ -221,13 +226,16 @@ pub async fn edit(
         let (milestone, _etag) =
             milestones::get_milestone(state.backend.as_ref(), &state.cipher, &target.uid, milestone_number).await?;
         if milestone.is_none() {
-            bail!("{}", i18n::milestone_not_found(locale, milestone_number));
+            bail!(DomainError::Invalid(i18n::milestone_not_found(
+                locale,
+                milestone_number
+            )));
         }
     }
 
     let (issue, etag) = issues::get_issue(state.backend.as_ref(), &state.cipher, &target.uid, number).await?;
     let Some(mut issue) = issue else {
-        bail!("{}", i18n::issue_not_found(locale, number));
+        bail!(DomainError::NotFound(i18n::issue_not_found(locale, number)));
     };
     let old_milestone = issue.milestone;
     let status = issue.status;
@@ -275,10 +283,10 @@ async fn transition(
 ) -> Result<Cas> {
     let (issue, etag) = issues::get_issue(state.backend.as_ref(), &state.cipher, &target.uid, number).await?;
     let Some(mut issue) = issue else {
-        bail!("{}", i18n::issue_not_found(locale, number));
+        bail!(DomainError::NotFound(i18n::issue_not_found(locale, number)));
     };
     if issue.status != expected {
-        bail!("{}", i18n::issue_wrong_status(locale));
+        bail!(DomainError::Invalid(i18n::issue_wrong_status(locale)));
     }
     let milestone = issue.milestone;
     issue.status = next;
@@ -353,7 +361,7 @@ pub async fn add_comment(
     locale: Locale,
 ) -> Result<()> {
     if get(state, target, number).await?.is_none() {
-        bail!("{}", i18n::issue_not_found(locale, number));
+        bail!(DomainError::NotFound(i18n::issue_not_found(locale, number)));
     }
     let comment = IssueComment {
         author: author.to_string(),
@@ -387,10 +395,12 @@ pub async fn edit_comment(
     let (comment, etag) =
         issues::get_issue_comment(state.backend.as_ref(), &state.cipher, &target.uid, number, comment_id).await?;
     let Some(mut comment) = comment else {
-        bail!("comment {comment_id} not found on issue #{number}");
+        bail!(DomainError::NotFound(format!(
+            "comment {comment_id} not found on issue #{number}"
+        )));
     };
     if comment.author != actor {
-        bail!("{}", i18n::not_comment_author(locale));
+        bail!(DomainError::Forbidden(i18n::not_comment_author(locale)));
     }
     comment.body = body.to_string();
     issues::put_issue_comment(
@@ -421,10 +431,12 @@ pub async fn delete_comment(
     let (comment, _etag) =
         issues::get_issue_comment(state.backend.as_ref(), &state.cipher, &target.uid, number, comment_id).await?;
     let Some(comment) = comment else {
-        bail!("comment {comment_id} not found on issue #{number}");
+        bail!(DomainError::NotFound(format!(
+            "comment {comment_id} not found on issue #{number}"
+        )));
     };
     if comment.author != actor && !is_moderator {
-        bail!("{}", i18n::not_comment_author(locale));
+        bail!(DomainError::Forbidden(i18n::not_comment_author(locale)));
     }
     issues::delete_issue_comment(state.backend.as_ref(), &state.cipher, &target.uid, number, comment_id).await;
     Ok(())

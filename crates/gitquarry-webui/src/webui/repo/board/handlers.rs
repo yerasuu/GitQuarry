@@ -96,7 +96,7 @@ pub(crate) async fn handler_add_column_post(
 
     let ok = tracker_client::add_board_column(tracker, &resolved.uid, &form.name)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(
@@ -138,7 +138,7 @@ pub(crate) async fn handler_remove_column_post(
 
     let ok = tracker_client::remove_board_column(tracker, &resolved.uid, form.column)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(
@@ -206,7 +206,7 @@ pub(crate) async fn handler_add_card_post(
 
     let ok = tracker_client::add_board_card(tracker, &resolved.uid, form.column, card)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(
@@ -248,7 +248,7 @@ pub(crate) async fn handler_remove_card_post(
 
     let ok = tracker_client::remove_board_card(tracker, &resolved.uid, form.card_id)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(
@@ -282,7 +282,7 @@ pub(crate) async fn handler_move_card_up_post(
 
     let ok = tracker_client::reorder_board_card(tracker, &resolved.uid, form.card_id, ReorderDirection::Up)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
     Ok(Redirect::to(&repo_link(&name, "board", "").to_string()).into_response())
 }
@@ -306,7 +306,7 @@ pub(crate) async fn handler_move_card_down_post(
 
     let ok = tracker_client::reorder_board_card(tracker, &resolved.uid, form.card_id, ReorderDirection::Down)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
     Ok(Redirect::to(&repo_link(&name, "board", "").to_string()).into_response())
 }
@@ -339,7 +339,7 @@ pub(crate) async fn handler_move_card_to_column_post(
 
     let ok = tracker_client::move_board_card(tracker, &resolved.uid, form.card_id, form.to_column)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     check_ok(ok, locale)?;
 
     gitquarry_core::storage::audit::record(

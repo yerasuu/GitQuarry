@@ -18,6 +18,20 @@ pub struct CoreClient {
     http: reqwest::Client,
 }
 
+/// Marks an error as a failed call to core, so `web` can answer it with 502
+/// instead of 500. It is the outermost error of whatever a [`CoreClient`]
+/// call returns, which is what `anyhow::Error::downcast_ref` looks at.
+#[derive(Debug)]
+pub(crate) struct CoreUnavailable(String);
+
+impl std::fmt::Display for CoreUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CoreUnavailable {}
+
 #[derive(Deserialize)]
 struct RepoLabelsResponse {
     labels: Vec<String>,
@@ -64,14 +78,14 @@ impl CoreClient {
             .get_request(&url)
             .send()
             .await
-            .with_context(|| format!("couldn't reach core at {url}"))?;
+            .with_context(|| CoreUnavailable(format!("couldn't reach core at {url}")))?;
         if !resp.status().is_success() {
-            bail!("core at {url} returned {}", resp.status());
+            bail!(CoreUnavailable(format!("core at {url} returned {}", resp.status())));
         }
         let body: RepoLabelsResponse = resp
             .json()
             .await
-            .with_context(|| format!("core's response from {url} wasn't valid JSON"))?;
+            .with_context(|| CoreUnavailable(format!("core's response from {url} wasn't valid JSON")))?;
         Ok(body.labels)
     }
 
@@ -83,14 +97,14 @@ impl CoreClient {
             .get_request(&url)
             .send()
             .await
-            .with_context(|| format!("couldn't reach core at {url}"))?;
+            .with_context(|| CoreUnavailable(format!("couldn't reach core at {url}")))?;
         if !resp.status().is_success() {
-            bail!("core at {url} returned {}", resp.status());
+            bail!(CoreUnavailable(format!("core at {url} returned {}", resp.status())));
         }
         let body: UserExistsResponse = resp
             .json()
             .await
-            .with_context(|| format!("core's response from {url} wasn't valid JSON"))?;
+            .with_context(|| CoreUnavailable(format!("core's response from {url} wasn't valid JSON")))?;
         Ok(body.exists)
     }
 
@@ -107,17 +121,17 @@ impl CoreClient {
             .get_request(&url)
             .send()
             .await
-            .with_context(|| format!("couldn't reach core at {url}"))?;
+            .with_context(|| CoreUnavailable(format!("couldn't reach core at {url}")))?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if !resp.status().is_success() {
-            bail!("core at {url} returned {}", resp.status());
+            bail!(CoreUnavailable(format!("core at {url} returned {}", resp.status())));
         }
         resp.json()
             .await
             .map(Some)
-            .with_context(|| format!("core's response from {url} wasn't valid JSON"))
+            .with_context(|| CoreUnavailable(format!("core's response from {url} wasn't valid JSON")))
     }
 
     /// `POST /_internal/tracker/event` — forwards one of tracker's own

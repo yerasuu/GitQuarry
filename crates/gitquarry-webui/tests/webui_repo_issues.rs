@@ -327,3 +327,38 @@ async fn comment_delete_with_a_valid_id_removes_the_comment() {
         .unwrap();
     assert!(comments.is_empty());
 }
+
+#[tokio::test]
+async fn issue_edit_shows_a_tracker_refusal_verbatim() {
+    let f = tracker_fixture(&[]).await;
+    let (app, session, number, _) = commented_issue(&f).await;
+    let number_field = number.to_string();
+    let fields = [("repo", "team/proj"), ("number", number_field.as_str()), ("title", " ")];
+    let page = session.post(&app, "/_issues/edit", &fields).await;
+    assert_eq!(page.status, StatusCode::BAD_REQUEST, "{}", page.body);
+    assert!(page.body.contains("issue title"), "{}", page.body);
+}
+
+#[tokio::test]
+async fn issue_edit_hides_a_tracker_failure_behind_the_generic_message() {
+    // The fixture's tracker reaches core at a port nothing listens on, so
+    // validating a label fails inside tracker.
+    let f = tracker_fixture(&[]).await;
+    let (app, session, number, _) = commented_issue(&f).await;
+    let number_field = number.to_string();
+    let fields = [
+        ("repo", "team/proj"),
+        ("number", number_field.as_str()),
+        ("title", "Bug"),
+        ("labels", "bug"),
+    ];
+    let page = session.post(&app, "/_issues/edit", &fields).await;
+    assert_eq!(page.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", page.body);
+    assert!(
+        page.body.contains(&gitquarry_i18n::shared::internal_error(Locale::En)),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains("127.0.0.1"), "{}", page.body);
+    assert!(!page.body.contains("gitquarry-core"), "{}", page.body);
+}

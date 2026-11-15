@@ -5,7 +5,8 @@
 //! since tracker's own surface (issues/board/milestones, ~20 operations) is
 //! much bigger than ci's single page.
 
-use anyhow::{Context, Result, anyhow, bail};
+use crate::webui::AppError;
+use anyhow::{Context, Result, anyhow};
 use gitquarry_core::app::TrackerLink;
 use gitquarry_wire::Uid;
 use gitquarry_wire::ipc::SignedRequestBuilderExt;
@@ -41,7 +42,7 @@ async fn get<T: DeserializeOwned>(tracker: &TrackerLink, url: Url) -> Result<Opt
         return Ok(None);
     }
     if !resp.status().is_success() {
-        bail!("{}", error_body(resp).await);
+        return Err(failure(resp).await);
     }
     resp.json()
         .await
@@ -59,7 +60,7 @@ async fn post<B: Serialize, T: DeserializeOwned>(tracker: &TrackerLink, url: Url
         .await
         .with_context(|| format!("couldn't reach gitquarry-tracker at {url}"))?;
     if !resp.status().is_success() {
-        bail!("{}", error_body(resp).await);
+        return Err(failure(resp).await);
     }
     resp.json()
         .await
@@ -78,22 +79,56 @@ async fn post_empty<B: Serialize>(tracker: &TrackerLink, url: Url, body: &B) -> 
         .await
         .with_context(|| format!("couldn't reach gitquarry-tracker at {url}"))?;
     if !resp.status().is_success() {
-        bail!("{}", error_body(resp).await);
+        return Err(failure(resp).await);
     }
     Ok(())
 }
 
-async fn error_body(resp: reqwest::Response) -> String {
+/// A 4xx from tracker. Only these carry a message written for the person
+/// who made the request; a 5xx or a transport failure is turned into a
+/// plain error whose text stays in webui's log.
+#[derive(Debug)]
+pub(crate) struct Rejected {
+    status: reqwest::StatusCode,
+    message: String,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Rejected {}
+
+/// What a failed tracker call becomes in a handler: a [`Rejected`] keeps
+/// its message under the matching 4xx, anything else is a 500 that
+/// [`AppError`] logs and answers with its generic sentence.
+pub(crate) fn app_error(e: anyhow::Error) -> AppError {
+    match e.downcast_ref::<Rejected>().map(|r| r.status) {
+        Some(reqwest::StatusCode::NOT_FOUND) => AppError::not_found(e),
+        Some(reqwest::StatusCode::FORBIDDEN) => AppError::forbidden(e),
+        Some(_) => AppError::bad_request(e),
+        None => AppError::from(e),
+    }
+}
+
+async fn failure(resp: reqwest::Response) -> anyhow::Error {
     #[derive(serde::Deserialize)]
     struct ErrorBody {
         error: String,
     }
     let status = resp.status();
-    match resp.json::<ErrorBody>().await {
+    let message = match resp.json::<ErrorBody>().await {
         Ok(body) => body.error,
         // A body that isn't tracker's JSON error shape (a proxy's page, a
         // dropped connection) still has a status worth reporting.
         Err(_) => format!("gitquarry-tracker returned {status}"),
+    };
+    if status.is_client_error() {
+        Rejected { status, message }.into()
+    } else {
+        anyhow!("gitquarry-tracker returned {status}: {message}")
     }
 }
 

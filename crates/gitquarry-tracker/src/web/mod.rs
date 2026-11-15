@@ -7,7 +7,8 @@
 //! Every response here is English-only, machine-to-machine, same posture
 //! `gitquarry_core::internal_api`'s own `API_LOCALE` doc comment gives.
 
-use crate::domain::{board, issue, milestone};
+use crate::core_client::CoreUnavailable;
+use crate::domain::{DomainError, board, issue, milestone};
 use crate::state::{TrackerState, TrackerTarget};
 use crate::storage::board::{Board, BoardCard, BoardColumn, CardRef};
 use crate::storage::issues::{IssueComment, IssueMeta, IssueStatus};
@@ -37,6 +38,25 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
         error: String,
     }
     (status, Json(ErrorBody { error: message.into() })).into_response()
+}
+
+/// Only a [`DomainError`] carries text written for the requester. Anything
+/// else can quote an S3 key, a bucket endpoint or core's own URL, so it is
+/// logged in full here and answered with a fixed sentence.
+fn error_response(e: anyhow::Error) -> Response {
+    match e.downcast_ref::<DomainError>() {
+        Some(DomainError::Invalid(m)) => json_error(StatusCode::BAD_REQUEST, m.as_str()),
+        Some(DomainError::NotFound(m)) => json_error(StatusCode::NOT_FOUND, m.as_str()),
+        Some(DomainError::Forbidden(m)) => json_error(StatusCode::FORBIDDEN, m.as_str()),
+        None if e.is::<CoreUnavailable>() => {
+            tracing::error!(target: "gitquarry_tracker::web", error = %format!("{e:#}"), "call to gitquarry-core failed");
+            json_error(StatusCode::BAD_GATEWAY, "gitquarry-core request failed")
+        }
+        None => {
+            tracing::error!(target: "gitquarry_tracker::web", error = %format!("{e:#}"), "tracker request failed");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
 }
 
 fn target_from(params: &HashMap<String, String>) -> Result<TrackerTarget, Box<Response>> {
@@ -147,7 +167,7 @@ async fn handler_issue_list(
     });
     match issue::list(&state, &target, status_filter).await {
         Ok(issues) => Json(issues.into_iter().map(issue_summary).collect::<Vec<_>>()).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -163,7 +183,7 @@ async fn handler_issue_get(
     match issue::get(&state, &target, number).await {
         Ok(Some(issue)) => Json(issue_summary(issue)).into_response(),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "no such issue"),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -178,7 +198,7 @@ async fn handler_issue_create(
     };
     match issue::create(&state, &target, &req.title, &req.body, &req.actor).await {
         Ok(issue) => Json(issue_summary(issue)).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -201,7 +221,7 @@ async fn handler_issue_edit(
     };
     match issue::edit(&state, &target, number, edit, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -216,7 +236,7 @@ async fn handler_issue_close(
     };
     match issue::close(&state, &target, number, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -231,7 +251,7 @@ async fn handler_issue_reopen(
     };
     match issue::reopen(&state, &target, number, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -252,7 +272,7 @@ async fn handler_issue_comments_list(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -268,7 +288,7 @@ async fn handler_issue_comment_add(
     };
     match issue::add_comment(&state, &target, number, &req.actor, &req.body, API_LOCALE).await {
         Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -284,7 +304,7 @@ async fn handler_issue_comment_edit(
     };
     match issue::edit_comment(&state, &target, number, &comment_id, &req.actor, &req.body, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -310,7 +330,7 @@ async fn handler_issue_comment_delete(
     .await
     {
         Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -326,7 +346,7 @@ async fn handler_board_get(
     };
     match board::get(&state, &target).await {
         Ok((board, _etag)) => Json(board_dto(board)).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -341,7 +361,7 @@ async fn handler_board_add_column(
     };
     match board::add_column(&state, &target, &req.name).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -357,7 +377,7 @@ async fn handler_board_rename_column(
     };
     match board::rename_column(&state, &target, column_index, &req.name, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -372,7 +392,7 @@ async fn handler_board_remove_column(
     };
     match board::remove_column(&state, &target, column_index, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -388,7 +408,7 @@ async fn handler_board_add_card(
     };
     match board::add_card(&state, &target, column_index, card_ref_from(req.card), API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -404,7 +424,7 @@ async fn handler_board_move_card(
     };
     match board::move_card_to_column(&state, &target, card_id, req.to_column_index, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -424,7 +444,7 @@ async fn handler_board_reorder_card(
     };
     match result {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -439,7 +459,7 @@ async fn handler_board_remove_card(
     };
     match board::remove_card(&state, &target, card_id, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -455,7 +475,7 @@ async fn handler_milestone_list(
     };
     match milestone::list(&state, &target).await {
         Ok(milestones) => Json(milestones.into_iter().map(milestone_summary).collect::<Vec<_>>()).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -471,7 +491,7 @@ async fn handler_milestone_get(
     match milestone::get(&state, &target, number).await {
         Ok(Some(m)) => Json(milestone_summary(m)).into_response(),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "no such milestone"),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -486,7 +506,7 @@ async fn handler_milestone_create(
     };
     match milestone::create(&state, &target, &req.title, &req.description, &req.due_date).await {
         Ok(m) => Json(milestone_summary(m)).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -512,7 +532,7 @@ async fn handler_milestone_edit(
     .await
     {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -527,7 +547,7 @@ async fn handler_milestone_close(
     };
     match milestone::close(&state, &target, number, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -542,7 +562,7 @@ async fn handler_milestone_reopen(
     };
     match milestone::reopen(&state, &target, number, API_LOCALE).await {
         Ok(cas) => Json(cas == s3db::Cas::Ok).into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 
@@ -570,7 +590,7 @@ async fn handler_merge_request_merged(
     .await
     {
         Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => error_response(e),
     }
 }
 

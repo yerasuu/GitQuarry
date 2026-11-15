@@ -119,6 +119,7 @@ pub(crate) async fn handler_create_post(
     let issue = match tracker_client::create_issue(tracker, &resolved.uid, &form.title, &form.body, &me.username).await
     {
         Ok(issue) => issue,
+        Err(e) if !e.is::<tracker_client::Rejected>() => return Err(AppError::from(e)),
         Err(e) => {
             let topnav = login::topnav(&ctx, &headers).await;
             let body = super::render_new_issue_form(
@@ -213,7 +214,7 @@ pub(crate) async fn handler_close_post(
 
     let ok = tracker_client::close_issue(tracker, &resolved.uid, form.number)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     if !ok {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
@@ -255,7 +256,7 @@ pub(crate) async fn handler_reopen_post(
 
     let ok = tracker_client::reopen_issue(tracker, &resolved.uid, form.number)
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
     if !ok {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
@@ -422,7 +423,7 @@ pub(crate) async fn handler_edit_post(
         milestone,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(tracker_client::app_error)?;
     if !ok {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
@@ -472,7 +473,7 @@ pub(crate) async fn handler_comment_post(
 
     tracker_client::add_issue_comment(tracker, &resolved.uid, form.number, &me.username, form.body.trim())
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(tracker_client::app_error)?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
@@ -527,7 +528,7 @@ pub(crate) async fn handler_comment_edit_post(
         form.body.trim(),
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(tracker_client::app_error)?;
     if !ok {
         return Err(AppError::bad_request(anyhow::anyhow!(
             "{}",
@@ -589,7 +590,7 @@ pub(crate) async fn handler_comment_delete_post(
         is_moderator,
     )
     .await
-    .map_err(AppError::bad_request)?;
+    .map_err(tracker_client::app_error)?;
 
     gitquarry_core::storage::audit::record(
         ctx.backend().as_ref(),
