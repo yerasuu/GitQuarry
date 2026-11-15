@@ -1,7 +1,8 @@
 //! The public JSON API under `/_api/v1` (decision #144): one prefix, bearer
 //! tokens ([`auth`]), one error shape ([`error`]) and opaque cursors
 //! ([`cursor`]) shared by every endpoint, so a client learns them once.
-//! Every endpoint that changes data takes a [`write::WriteRequest`].
+//! Every endpoint that changes data takes a [`write::WriteRequest`], and
+//! every repo read answers at a [`revision::Revision`].
 //!
 //! Mounted by `gitquarry_webui::webui::router` on the same port as the web
 //! UI and git-smart-HTTP. Everything under the prefix answers JSON, an
@@ -13,6 +14,7 @@ pub mod cursor;
 pub mod error;
 pub mod idempotency;
 pub mod limits;
+pub mod revision;
 mod whoami;
 pub mod write;
 
