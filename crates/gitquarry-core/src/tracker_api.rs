@@ -62,6 +62,15 @@ fn json_error(status: StatusCode, message: &str) -> Response {
     gitquarry_wire::ipc::json_error(status, message)
 }
 
+/// A read that failed (decrypt, corruption, the backend) is a 500, never the
+/// 404/`false` of an object that isn't there: tracker would otherwise reject
+/// a real label or assignee as unknown and hide the fault. The cause stays
+/// in core's log, not in the response.
+fn storage_failure(what: &str, error: &anyhow::Error) -> Response {
+    tracing::error!(target: "gitquarry_core::tracker_api", error = %format!("{error:#}"), "{what} failed");
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("{what} failed"))
+}
+
 #[derive(Serialize)]
 struct RepoLabelsResponse {
     labels: Vec<String>,
@@ -78,18 +87,16 @@ async fn handler_repo_labels(
     let Some(uid) = params.get("uid") else {
         return json_error(StatusCode::BAD_REQUEST, "missing ?uid=");
     };
-    let Ok((config, etag)) = storage::settings::get_repo_config(ctx.backend().as_ref(), uid, &ctx.cipher).await else {
-        return json_error(StatusCode::NOT_FOUND, "no such repo");
-    };
-    if etag.is_none() {
-        return json_error(StatusCode::NOT_FOUND, "no such repo");
+    match storage::settings::get_repo_config(ctx.backend().as_ref(), uid, &ctx.cipher).await {
+        Ok((config, Some(_))) => json_response(
+            StatusCode::OK,
+            &RepoLabelsResponse {
+                labels: config.labels.into_iter().map(|l| l.name).collect(),
+            },
+        ),
+        Ok((_, None)) => json_error(StatusCode::NOT_FOUND, "no such repo"),
+        Err(e) => storage_failure("reading the repo config", &e),
     }
-    json_response(
-        StatusCode::OK,
-        &RepoLabelsResponse {
-            labels: config.labels.into_iter().map(|l| l.name).collect(),
-        },
-    )
 }
 
 #[derive(Serialize)]
@@ -109,11 +116,10 @@ async fn handler_user_exists(
     let Some(username) = params.get("username") else {
         return json_error(StatusCode::BAD_REQUEST, "missing ?username=");
     };
-    let exists = matches!(
-        access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await,
-        Ok((Some(_), _))
-    );
-    json_response(StatusCode::OK, &UserExistsResponse { exists })
+    match access::get_user(ctx.backend().as_ref(), &ctx.cipher, username).await {
+        Ok((user, _)) => json_response(StatusCode::OK, &UserExistsResponse { exists: user.is_some() }),
+        Err(e) => storage_failure("reading the user", &e),
+    }
 }
 
 /// `GET /_internal/tracker/merge-request?uid=&number=` — `gitquarry-tracker`'s
