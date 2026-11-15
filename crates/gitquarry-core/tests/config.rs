@@ -278,3 +278,17 @@ fn rejects_api_limits_outside_their_range_or_unknown_keys() {
         assert!(load(&format!("{ONE_BUCKET}\n[api]\n{section}\n")).is_err(), "{section}");
     }
 }
+
+#[test]
+fn the_readme_example_loads_with_allow_push_create_at_top_level() {
+    let readme = include_str!("../../../README.md");
+    let example = readme
+        .split("```toml\n")
+        .skip(1)
+        .filter_map(|block| block.split("```").next())
+        .find(|block| block.contains("[buckets.myrepo]"))
+        .unwrap();
+    let config = load(example).unwrap();
+    assert!(config.allow_push_create());
+    assert!(config.bucket("myrepo").is_ok());
+}

@@ -98,6 +98,8 @@ git clone https://host/team/project
 user-global path.
 
 ```toml
+allow_push_create = true   # off by default: pushing an unknown repo fails
+
 [buckets.myrepo]
 driver = "s3"              # s3 | r2 | local
 bucket = "myrepo"
@@ -107,8 +109,6 @@ access_key_id = "..."
 secret_access_key = "..."
 path_style = true
 passphrase = "..."         # mandatory: encrypts everything uploaded
-
-# allow_push_create = true # off by default: pushing an unknown repo fails
 
 # [api]                          # /_api/v1 limits: lower them, never past the ceiling
 # requests_per_minute = 120      # per token (up to 1200)
