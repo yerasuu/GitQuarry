@@ -1908,6 +1908,7 @@ dependencies = [
  "dirs",
  "gitquarry-i18n",
  "gitquarry-wire",
+ "http-body-util",
  "rand 0.10.3",
  "reqwest 0.13.5",
  "s3db",
@@ -1917,6 +1918,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
