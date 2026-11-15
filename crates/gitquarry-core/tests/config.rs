@@ -211,3 +211,26 @@ fn rejects_a_tracker_section_with_a_blank_internal_token() {
         assert!(err.to_string().contains("internal_token"), "{err}");
     }
 }
+
+#[test]
+fn rejects_a_federation_section_with_a_blank_internal_token() {
+    for token in ["", "   "] {
+        let toml = format!(
+            r#"
+            [buckets.main]
+            driver = "s3"
+            bucket = "my-bucket"
+            access_key_id = "AKIA"
+            secret_access_key = "secret"
+            passphrase = "hunter2"
+
+            [federation]
+            internal_bind = "127.0.0.1:8090"
+            internal_token = "{token}"
+            federation_url = "http://127.0.0.1:8181"
+            "#
+        );
+        let err = load(&toml).unwrap_err();
+        assert!(err.to_string().contains("internal_token"), "{err}");
+    }
+}

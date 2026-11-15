@@ -175,6 +175,14 @@ impl Config {
         }
         // An empty secret would compare equal to an empty `X-Internal-Token`
         // header, letting any loopback caller through.
+        if let Some(federation) = &raw.federation
+            && federation.internal_token.trim().is_empty()
+        {
+            bail!(
+                "[federation] in {} has an empty `internal_token` (mandatory: must match gitquarry-federation.toml's)",
+                path.display()
+            );
+        }
         if let Some(tracker) = &raw.tracker
             && tracker.internal_token.trim().is_empty()
         {

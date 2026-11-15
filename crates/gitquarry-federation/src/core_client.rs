@@ -28,15 +28,31 @@ impl CoreClient {
         }
     }
 
-    fn url(&self, path: &str) -> String {
-        format!("{}{path}", self.base_url.trim_end_matches('/'))
+    /// Segments and query values are appended through `url`'s own encoders, so
+    /// a `/`, `&` or `..` inside a caller-supplied name can't reroute the
+    /// call or add a second parameter to what core sees.
+    fn url(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .with_context(|| format!("invalid core_internal_url {}", self.base_url))?;
+        url.path_segments_mut()
+            .map_err(|()| anyhow::anyhow!("core_internal_url {} can't carry a path", self.base_url))?
+            .pop_if_empty()
+            .extend(segments);
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+        Ok(url)
     }
 
-    async fn post_json<Req: Serialize, Resp: for<'de> Deserialize<'de>>(&self, path: &str, body: &Req) -> Result<Resp> {
-        let url = self.url(path);
+    async fn post_json<Req: Serialize, Resp: for<'de> Deserialize<'de>>(
+        &self,
+        segments: &[&str],
+        body: &Req,
+    ) -> Result<Resp> {
+        let url = self.url(segments, &[])?;
         let resp = self
             .http
-            .post(&url)
+            .post(url.as_str())
             .signed(&self.internal_token)
             .json(body)
             .send()
@@ -47,12 +63,15 @@ impl CoreClient {
             .with_context(|| format!("core's response from {url} wasn't valid JSON"))
     }
 
-    /// `path` already includes its own query string, if any.
-    async fn get_json<Resp: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<Option<Resp>> {
-        let url = self.url(path);
+    async fn get_json<Resp: for<'de> Deserialize<'de>>(
+        &self,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<Option<Resp>> {
+        let url = self.url(segments, query)?;
         let resp = self
             .http
-            .get(&url)
+            .get(url.as_str())
             .signed(&self.internal_token)
             .send()
             .await
@@ -88,7 +107,7 @@ impl CoreClient {
         }
         let resp: Resp = self
             .post_json(
-                "/authorize",
+                &["authorize"],
                 &Req {
                     username,
                     repo,
@@ -124,7 +143,7 @@ impl CoreClient {
             repo: Option<RepoSummary>,
         }
         let resp: Resp = self
-            .post_json("/repos/authorize-and-summarize", &Req { username, uid, require })
+            .post_json(&["repos", "authorize-and-summarize"], &Req { username, uid, require })
             .await?;
         Ok(if resp.ok { resp.repo } else { None })
     }
@@ -132,13 +151,19 @@ impl CoreClient {
     /// `GET /_internal/repos/public` — every repo core currently exposes
     /// publicly.
     pub async fn public_repos(&self) -> Result<Vec<RepoSummary>> {
-        Ok(self.get_json("/repos/public").await?.unwrap_or_default())
+        Ok(self.get_json(&["repos", "public"], &[]).await?.unwrap_or_default())
     }
 
     /// `GET /_internal/repos/public/{name}` — `None` if `name` doesn't
     /// exist or isn't `Public`.
     pub async fn public_repo(&self, name: &str) -> Result<Option<RepoSummary>> {
-        self.get_json(&format!("/repos/public/{name}")).await
+        // `Url` resolves dot segments even when pushed one by one, which
+        // would let a name walk out of `/repos/public`.
+        if name.split('/').any(|part| part == "." || part == "..") {
+            bail!("repo name {name:?} has a dot segment");
+        }
+        let segments: Vec<&str> = ["repos", "public"].into_iter().chain(name.split('/')).collect();
+        self.get_json(&segments, &[]).await
     }
 
     /// `GET /_internal/repos/uid-for-name?name=` — see
@@ -150,16 +175,14 @@ impl CoreClient {
         struct Resp {
             uid: String,
         }
-        let resp: Option<Resp> = self
-            .get_json(&format!("/repos/uid-for-name?name={}", urlencoding(name)))
-            .await?;
+        let resp: Option<Resp> = self.get_json(&["repos", "uid-for-name"], &[("name", name)]).await?;
         Ok(resp.map(|r| Uid::from(r.uid)))
     }
 
     /// `GET /_internal/merge-requests/list?repo=` — every MR on `repo`.
     pub async fn list_merge_requests(&self, repo: &str) -> Result<Vec<MergeRequestMeta>> {
         Ok(self
-            .get_json(&format!("/merge-requests/list?repo={}", urlencoding(repo)))
+            .get_json(&["merge-requests", "list"], &[("repo", repo)])
             .await?
             .unwrap_or_default())
     }
@@ -167,7 +190,7 @@ impl CoreClient {
     /// `GET /_internal/merge-requests?repo=&number=` — one MR plus its
     /// comments.
     pub async fn merge_request_detail(&self, repo: &str, number: u64) -> Result<Option<MrDetail>> {
-        self.get_json(&format!("/merge-requests?repo={}&number={number}", urlencoding(repo)))
+        self.get_json(&["merge-requests"], &[("repo", repo), ("number", &number.to_string())])
             .await
     }
 
@@ -175,7 +198,7 @@ impl CoreClient {
     /// `author` on `repo` via [`Self::authorize`], same division of labor
     /// `gitquarry-core`'s own `internal_api` module doc comment describes.
     pub async fn create_merge_request(&self, req: &CreateMergeRequest<'_>) -> Result<MergeRequestMeta> {
-        self.post_json("/merge-requests", req).await
+        self.post_json(&["merge-requests"], req).await
     }
 
     pub async fn comment_merge_request(&self, repo: &str, number: u64, author: &str, body: &str) -> Result<()> {
@@ -193,7 +216,7 @@ impl CoreClient {
         }
         let _: Resp = self
             .post_json(
-                "/merge-requests/comment",
+                &["merge-requests", "comment"],
                 &Req {
                     repo,
                     number,
@@ -220,7 +243,7 @@ impl CoreClient {
             strategy: gitquarry_wire::MergeStrategy,
         }
         self.post_json(
-            "/merge-requests/merge",
+            &["merge-requests", "merge"],
             &Req {
                 repo,
                 number,
@@ -230,14 +253,6 @@ impl CoreClient {
         )
         .await
     }
-}
-
-/// Minimal, dependency-free percent-encoding for a repo full name
-/// (`owner/name`) landing in a query string — the only reserved character
-/// that can appear in one is `/`, so this doesn't need a general-purpose
-/// URL-encoding crate.
-fn urlencoding(repo: &str) -> String {
-    repo.replace('%', "%25").replace('/', "%2F").replace('&', "%26")
 }
 
 #[derive(Serialize)]
@@ -288,6 +303,6 @@ impl CoreClient {
     /// `POST /_internal/repos/fork-from-remote` — see
     /// `crate::domain::fork::request_fork`, the one caller.
     pub async fn fork_from_remote(&self, req: &ForkFromRemote<'_>) -> Result<ForkOutcome> {
-        self.post_json("/repos/fork-from-remote", req).await
+        self.post_json(&["repos", "fork-from-remote"], req).await
     }
 }
