@@ -109,6 +109,12 @@ path_style = true
 passphrase = "..."         # mandatory: encrypts everything uploaded
 
 # allow_push_create = true # off by default: pushing an unknown repo fails
+
+# [api]                          # /_api/v1 limits: lower them, never past the ceiling
+# requests_per_minute = 120      # per token (up to 1200)
+# failed_auth_per_minute = 30    # per client address, missing or refused token (up to 300)
+# max_page_size = 100            # items per listing page (up to 100)
+# max_response_bytes = 1048576   # per response body (4096 to 8388608)
 ```
 
 Writes that can't reach the bucket right away are spooled locally and replayed
