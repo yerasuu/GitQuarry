@@ -11,7 +11,7 @@
 //! by [`bump_counts`] from `domain::issue::edit` (milestone reassignment)
 //! and `domain::issue::transition` (status change).
 
-use crate::domain::DomainError;
+use crate::domain::{DomainError, validate_line, validate_text};
 use crate::i18n;
 use crate::state::{TrackerState, TrackerTarget};
 use crate::storage::milestones::{self, MilestoneMeta, MilestoneStatus};
@@ -49,6 +49,29 @@ fn now_stamp() -> String {
     format_unix_secs(secs)
 }
 
+/// Same cap as an issue title: both are one heading-sized line.
+const MAX_TITLE_BYTES: usize = 256;
+
+/// The milestones page renders every milestone's description at once, so
+/// the cap is per milestone times however many a repo has; a quarter of an
+/// issue body still fits a long release plan.
+const MAX_DESCRIPTION_BYTES: usize = 16 * 1024;
+
+/// A date as typed into a 20-column field (`2026-12-31`, `Q3 2026`); only
+/// ever displayed, never parsed.
+const MAX_DUE_DATE_BYTES: usize = 32;
+
+/// Returns the trimmed title and due date, the empty due date meaning none.
+fn validate_fields(title: &str, description: &str, due_date: &str) -> Result<(String, String)> {
+    let title = validate_line("milestone title", title, MAX_TITLE_BYTES)?;
+    validate_text("milestone description", description, MAX_DESCRIPTION_BYTES)?;
+    let due_date = match due_date.trim() {
+        "" => String::new(),
+        due_date => validate_line("due date", due_date, MAX_DUE_DATE_BYTES)?,
+    };
+    Ok((title, due_date))
+}
+
 pub async fn create(
     state: &TrackerState,
     target: &TrackerTarget,
@@ -56,17 +79,14 @@ pub async fn create(
     description: &str,
     due_date: &str,
 ) -> Result<MilestoneMeta> {
-    let title = title.trim();
-    if title.is_empty() {
-        bail!(DomainError::Invalid("milestone title can't be empty".to_string()));
-    }
+    let (title, due_date) = validate_fields(title, description, due_date)?;
     let number = milestones::next_milestone_number(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let stamp = now_stamp();
     let milestone = MilestoneMeta {
         number,
-        title: title.to_string(),
+        title,
         description: description.to_string(),
-        due_date: due_date.trim().to_string(),
+        due_date,
         status: MilestoneStatus::Open,
         open_issues: 0,
         closed_issues: 0,
@@ -98,18 +118,15 @@ pub async fn edit(
     due_date: &str,
     locale: Locale,
 ) -> Result<Cas> {
-    let title = title.trim();
-    if title.is_empty() {
-        bail!(DomainError::Invalid("milestone title can't be empty".to_string()));
-    }
+    let (title, due_date) = validate_fields(title, description, due_date)?;
     let (milestone, etag) =
         milestones::get_milestone(state.backend.as_ref(), &state.cipher, &target.uid, number).await?;
     let Some(mut milestone) = milestone else {
         bail!(DomainError::NotFound(i18n::milestone_not_found(locale, number)));
     };
-    milestone.title = title.to_string();
+    milestone.title = title;
     milestone.description = description.to_string();
-    milestone.due_date = due_date.trim().to_string();
+    milestone.due_date = due_date;
     milestone.updated_at = now_stamp();
     milestones::put_milestone(
         state.backend.as_ref(),

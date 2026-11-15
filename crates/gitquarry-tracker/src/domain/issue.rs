@@ -79,6 +79,14 @@ fn validate_body(body: &str) -> Result<()> {
     Ok(())
 }
 
+/// Every label renders on the issue page, and past a few dozen on one issue
+/// they stop sorting anything.
+const MAX_LABELS: usize = 32;
+
+/// Each assignee costs a round trip to core (`user_exists`) before anything
+/// is written, so the cap also bounds how many calls one edit can make.
+const MAX_ASSIGNEES: usize = 16;
+
 /// Duplicated from `gitquarry_core::domain::pull_request::closing_issue_numbers`
 /// — a small, pure text-parsing function, no I/O, not worth a shared crate
 /// (same reasoning `gitquarry-graph-validate`'s design explicitly *rejected*
@@ -215,6 +223,20 @@ pub async fn edit(
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .collect();
+    if requested_labels.len() > MAX_LABELS {
+        bail!(DomainError::Invalid(format!("too many labels (max {MAX_LABELS})")));
+    }
+    let requested_assignees: Vec<&str> = edit
+        .assignees_csv
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect();
+    if requested_assignees.len() > MAX_ASSIGNEES {
+        bail!(DomainError::Invalid(format!(
+            "too many assignees (max {MAX_ASSIGNEES})"
+        )));
+    }
     let mut labels = Vec::new();
     if !requested_labels.is_empty() {
         // Only fetched when there's actually something to validate against
@@ -230,8 +252,8 @@ pub async fn edit(
         }
     }
 
-    let mut assignees = Vec::new();
-    for username in edit.assignees_csv.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+    let mut assignees = Vec::with_capacity(requested_assignees.len());
+    for username in requested_assignees {
         if !state.core.user_exists(username).await? {
             bail!(DomainError::Invalid(i18n::unknown_assignee(locale, username)));
         }

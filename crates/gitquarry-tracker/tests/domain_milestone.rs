@@ -152,3 +152,53 @@ async fn edit_on_a_nonexistent_number_errs() {
             .is_err()
     );
 }
+
+fn is_invalid(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<gitquarry_tracker::domain::DomainError>(),
+        Some(gitquarry_tracker::domain::DomainError::Invalid(_))
+    )
+}
+
+#[tokio::test]
+async fn create_and_edit_cap_title_description_and_due_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _fake) = test_state(dir.path()).await;
+    let target = test_target();
+    let long_title = "t".repeat(257);
+    let long_description = "d".repeat(16 * 1024 + 1);
+    let long_due = "2".repeat(33);
+
+    for (title, description, due) in [
+        (long_title.as_str(), "", ""),
+        ("v1", long_description.as_str(), ""),
+        ("v1", "", long_due.as_str()),
+        ("v1\u{1b}[31m", "", ""),
+        ("v1", "bell\u{7}", ""),
+        ("v1", "", "2026\n12"),
+    ] {
+        let err = create(&state, &target, title, description, due).await.unwrap_err();
+        assert!(is_invalid(&err), "{title:?} {description:?} {due:?}: {err:#}");
+    }
+
+    let milestone = create(
+        &state,
+        &target,
+        &"t".repeat(256),
+        &format!("line one\r\n\tline two{}", "d".repeat(1024)),
+        "2026-12-31",
+    )
+    .await
+    .unwrap();
+    let locale = gitquarry_i18n::Locale::En;
+    let err = edit(&state, &target, milestone.number, "v1", &long_description, "", locale)
+        .await
+        .unwrap_err();
+    assert!(is_invalid(&err));
+    assert_eq!(
+        edit(&state, &target, milestone.number, "v1", "", "Q3 2026", locale)
+            .await
+            .unwrap(),
+        s3db::Cas::Ok
+    );
+}

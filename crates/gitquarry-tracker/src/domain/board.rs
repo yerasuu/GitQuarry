@@ -16,26 +16,31 @@
 //! — this is the one place tracker code depends on core's merge-request
 //! domain, now over the loopback instead of a direct in-process call.
 
-use crate::domain::DomainError;
 use crate::domain::issue;
+use crate::domain::{DomainError, validate_line, validate_text};
 use crate::i18n;
 use crate::state::{TrackerState, TrackerTarget};
 use crate::storage::board::{self, Board, BoardCard, CardRef};
 use anyhow::{Result, bail};
 use s3db::Cas;
 
+/// A column header is one short line across a narrow board column.
+const MAX_COLUMN_NAME_BYTES: usize = 64;
+
+/// A note is a sticky, not a document: every card renders in full on the
+/// board page, and the whole board is one object read and rewritten on
+/// every change (`storage::board`).
+const MAX_NOTE_BYTES: usize = 2 * 1024;
+
 pub async fn get(state: &TrackerState, target: &TrackerTarget) -> Result<(Board, Option<String>)> {
     board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await
 }
 
 pub async fn add_column(state: &TrackerState, target: &TrackerTarget, name: &str) -> Result<Cas> {
-    let name = name.trim();
-    if name.is_empty() {
-        bail!(DomainError::Invalid("column name can't be empty".to_string()));
-    }
+    let name = validate_line("column name", name, MAX_COLUMN_NAME_BYTES)?;
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     board.columns.push(crate::storage::board::BoardColumn {
-        name: name.to_string(),
+        name,
         cards: Vec::new(),
     });
     board::put_board(
@@ -55,15 +60,12 @@ pub async fn rename_column(
     name: &str,
     locale: gitquarry_i18n::Locale,
 ) -> Result<Cas> {
-    let name = name.trim();
-    if name.is_empty() {
-        bail!(DomainError::Invalid("column name can't be empty".to_string()));
-    }
+    let name = validate_line("column name", name, MAX_COLUMN_NAME_BYTES)?;
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some(column) = board.columns.get_mut(column_index) else {
         bail!(DomainError::NotFound(i18n::board_column_not_found(locale)));
     };
-    column.name = name.to_string();
+    column.name = name;
     board::put_board(
         state.backend.as_ref(),
         &state.cipher,
@@ -124,7 +126,7 @@ pub async fn add_card(
         CardRef::Note(text) if text.trim().is_empty() => {
             bail!(DomainError::Invalid("note text can't be empty".to_string()));
         }
-        CardRef::Note(_) => {}
+        CardRef::Note(text) => validate_text("note", text, MAX_NOTE_BYTES)?,
     }
     let (mut board, etag) = board::get_board(state.backend.as_ref(), &state.cipher, &target.uid).await?;
     let Some(column) = board.columns.get_mut(column_index) else {

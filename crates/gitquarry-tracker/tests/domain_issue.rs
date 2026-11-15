@@ -636,3 +636,50 @@ async fn a_body_or_comment_past_64_kib_is_rejected() {
         Cas::Ok
     );
 }
+
+#[tokio::test]
+async fn edit_caps_the_number_of_labels_and_assignees() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, fake) = test_state(dir.path()).await;
+    let target = test_target();
+    let issue = create(&state, &target, "Bug", "b", "alice").await.unwrap();
+    let labels: Vec<String> = (0..33).map(|i| format!("l{i}")).collect();
+    let users: Vec<String> = (0..17).map(|i| format!("u{i}")).collect();
+    fake.labels.lock().unwrap().extend(labels.iter().cloned());
+    fake.users.lock().unwrap().extend(users.iter().cloned());
+    let locale = gitquarry_i18n::Locale::En;
+
+    let attempt = |labels_csv: String, assignees_csv: String| {
+        let state = &state;
+        let target = &target;
+        async move {
+            edit(
+                state,
+                target,
+                issue.number,
+                IssueEdit {
+                    title: "Bug",
+                    body: "b",
+                    labels_csv: &labels_csv,
+                    assignees_csv: &assignees_csv,
+                    milestone: None,
+                },
+                locale,
+            )
+            .await
+        }
+    };
+    let is_invalid = |err: anyhow::Error| {
+        matches!(
+            err.downcast_ref::<gitquarry_tracker::domain::DomainError>(),
+            Some(gitquarry_tracker::domain::DomainError::Invalid(_))
+        )
+    };
+
+    assert!(is_invalid(attempt(labels.join(","), String::new()).await.unwrap_err()));
+    assert!(is_invalid(attempt(String::new(), users.join(",")).await.unwrap_err()));
+    assert_eq!(
+        attempt(labels[..32].join(","), users[..16].join(",")).await.unwrap(),
+        Cas::Ok
+    );
+}

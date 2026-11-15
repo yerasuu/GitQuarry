@@ -192,3 +192,40 @@ async fn remove_column_deletes_an_empty_column() {
     assert_eq!(board.columns.len(), 1);
     assert_eq!(board.columns[0].name, "done");
 }
+
+fn is_invalid(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<gitquarry_tracker::domain::DomainError>(),
+        Some(gitquarry_tracker::domain::DomainError::Invalid(_))
+    )
+}
+
+#[tokio::test]
+async fn column_names_and_notes_are_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _fake) = test_state(dir.path()).await;
+    let target = test_target();
+    let locale = gitquarry_i18n::Locale::En;
+
+    assert!(is_invalid(
+        &add_column(&state, &target, &"c".repeat(65)).await.unwrap_err()
+    ));
+    assert!(is_invalid(&add_column(&state, &target, "to\ndo").await.unwrap_err()));
+    add_column(&state, &target, &"c".repeat(64)).await.unwrap();
+    assert!(is_invalid(
+        &rename_column(&state, &target, 0, &"c".repeat(65), locale)
+            .await
+            .unwrap_err()
+    ));
+
+    let long_note = CardRef::Note("n".repeat(2 * 1024 + 1));
+    assert!(is_invalid(
+        &add_card(&state, &target, 0, long_note, locale).await.unwrap_err()
+    ));
+    let escape = CardRef::Note("note\u{1b}[2J".to_string());
+    assert!(is_invalid(
+        &add_card(&state, &target, 0, escape, locale).await.unwrap_err()
+    ));
+    let fits = CardRef::Note(format!("first line\nsecond{}", "n".repeat(1024)));
+    add_card(&state, &target, 0, fits, locale).await.unwrap();
+}
