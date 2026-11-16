@@ -125,9 +125,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
     let backend = storage::build_backend(&bucket_cfg)?.backend;
-    let cipher = Arc::new(
-        gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?,
-    );
+    let cipher = Arc::new(snapshot::open_live_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?);
 
     // Where the snapshots are: `--from`, else whatever the instance's own
     // settings point at. Read from the bucket rather than re-specified, so

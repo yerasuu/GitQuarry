@@ -580,3 +580,16 @@ async fn a_dry_run_reports_corrupted_snapshot_copies_and_writes_nothing() {
     assert_eq!(report.failures.len(), 3, "{:?}", report.failures);
     assert!(list_all_keys(restored.as_ref(), "").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn restoring_into_a_bucket_without_a_data_key_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = backend(dir.path());
+
+    let err = snapshot::open_live_cipher(empty.as_ref(), "passphrase")
+        .await
+        .expect_err("an empty bucket has no data key to restore under");
+
+    assert!(format!("{err:#}").contains("no data key"), "{err:#}");
+    assert!(list_all_keys(empty.as_ref(), "").await.unwrap().is_empty());
+}

@@ -607,3 +607,20 @@ pub async fn delete(backend: &Arc<dyn Backend>, id: &str) -> Result<usize> {
         .context("deleting the snapshot manifest")?;
     Ok(deleted + 1)
 }
+
+/// Opens the live bucket's cipher for a restore, never creating one.
+///
+/// A bucket with no `.conf/encryption.json` can't take a snapshot back: a
+/// fresh data key would not open the snapshot's objects, and even a dry run
+/// would have written the key. Bringing back a whole dead instance is
+/// starting gitquarry on the replica bucket, not a restore.
+///
+/// # Errors
+///
+/// The bucket has no encryption config, or `passphrase` doesn't open it.
+pub async fn open_live_cipher(live: &dyn Backend, passphrase: &str) -> Result<Cipher> {
+    crate::crypto::bootstrap::open_cipher(live, passphrase).await.context(
+        "restoring into a bucket that has no data key is not supported (nothing was written): start gitquarry \
+         on the replica bucket to recover a whole instance, or restore into a bucket that was already in use",
+    )
+}
