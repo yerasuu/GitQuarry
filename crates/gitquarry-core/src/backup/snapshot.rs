@@ -452,6 +452,7 @@ pub async fn restore(
             dest_cipher,
             &snapshot_key,
             live_key,
+            size,
         )
         .await
         {
@@ -465,6 +466,9 @@ pub async fn restore(
     Ok(report)
 }
 
+/// Re-seals one snapshot copy of `size` bytes back under `live_key`, in the
+/// envelope the copy is in (see [`reseal_body`]). A copy that doesn't open is
+/// a failure for this key; nothing is written for it.
 pub(crate) async fn restore_one(
     snapshot: &dyn Backend,
     snapshot_cipher: &Cipher,
@@ -472,20 +476,28 @@ pub(crate) async fn restore_one(
     dest_cipher: &Cipher,
     snapshot_key: &str,
     live_key: &str,
+    size: u64,
 ) -> Result<u64> {
-    let (sealed, etag) = snapshot
-        .get(snapshot_key)
+    let Some(sealed) = fetch(snapshot, snapshot_key, size)
         .await
-        .context("reading the snapshot object")?;
-    if etag.is_none() {
+        .context("reading the snapshot object")?
+    else {
         bail!("vanished from the snapshot mid-restore");
-    }
-    let plain = snapshot_cipher
-        .open(snapshot_key, &sealed)
-        .context("decrypting the snapshot object")?;
-    let resealed = dest_cipher
-        .seal(live_key, &plain, CompressionStrategy::None)
-        .context("re-encrypting for the live key")?;
+    };
+    let resealed = reseal_body(sealed, snapshot_cipher, snapshot_key, dest_cipher, live_key)
+        .await
+        .context("re-sealing the snapshot object for the live key")?;
+    let resealed = match resealed {
+        Body::Memory(resealed) => resealed,
+        Body::File(path) => {
+            // `put_stream` has no CAS: the same unconditional overwrite
+            // `restore_repo::copy_raw` does for a large object.
+            dest.put_stream(live_key, &path)
+                .await
+                .context("writing the live object")?;
+            return Ok(tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(size));
+        }
+    };
     let written = resealed.len() as u64;
 
     // Read the live etag immediately before writing, and re-read on

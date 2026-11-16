@@ -205,7 +205,7 @@ pub async fn restore_repo(
                 let outcome = if dry_run {
                     Ok(size)
                 } else if from_snapshot {
-                    snapshot::restore_one(backup.as_ref(), cipher, live.as_ref(), cipher, &key, &live_key).await
+                    snapshot::restore_one(backup.as_ref(), cipher, live.as_ref(), cipher, &key, &live_key, size).await
                 } else {
                     copy_raw(backup.as_ref(), live.as_ref(), &live_key, size).await
                 };
