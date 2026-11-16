@@ -42,6 +42,7 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::TempPath;
 
 /// Root of every snapshot. Classified [`Class::Never`] by
 /// [`inventory::classify`], so a snapshot never captures a previous one.
@@ -53,9 +54,10 @@ pub const SNAPSHOT_ROOT: &str = ".conf/backups";
 /// a snapshot id (`validate::validate_backup_id` rejects a leading `.`).
 pub const MANIFEST_PREFIX: &str = ".conf/backups/.manifests/";
 
-/// Objects at or under this size are re-sealed in memory; bigger ones go
-/// through the streaming envelope. Same threshold, and same reasoning, as
-/// the replica's own inline cut-off.
+/// Objects at or under this size are read into memory; bigger ones go
+/// through scratch files. It picks where the bytes live, not which envelope
+/// they're sealed in (see `reseal_body`). Same threshold, and same
+/// reasoning, as the replica's own inline cut-off.
 const INLINE_MAX_BYTES: u64 = 1 << 20;
 
 /// Which classes a snapshot captures unless a caller says otherwise: the
@@ -230,95 +232,147 @@ async fn reseal(
     dest_key: &str,
     size: u64,
 ) -> Result<Option<u64>> {
-    if size > INLINE_MAX_BYTES {
-        return reseal_streaming(src, src_cipher, dest, dest_cipher, src_key, dest_key).await;
-    }
-    let (sealed, etag) = src.get(src_key).await.context("reading the source object")?;
-    if etag.is_none() {
+    let Some(sealed) = fetch(src, src_key, size).await.context("reading the source object")? else {
         // Deleted between the listing and now. The live bucket no longer has
         // it, so neither should the snapshot.
         return Ok(None);
-    }
-    let plain = src_cipher
-        .open(src_key, &sealed)
-        .context("decrypting the source object")?;
-    let resealed = dest_cipher
-        .seal(dest_key, &plain, CompressionStrategy::None)
-        .context("re-encrypting for the snapshot")?;
-    let written = resealed.len() as u64;
-    // Create-only: a snapshot id is written once. A conflict means this id
-    // already holds this key (a re-run after a partial failure), which is
-    // not an error -- the object is already captured.
-    match dest
-        .put_cas(dest_key, resealed, None)
+    };
+    let resealed = reseal_body(sealed, src_cipher, src_key, dest_cipher, dest_key)
         .await
-        .context("writing the snapshot object")?
-    {
-        Cas::Ok => Ok(Some(written)),
-        Cas::Conflict => Ok(None),
+        .context("re-sealing the source object for the snapshot")?;
+    match resealed {
+        Body::Memory(resealed) => {
+            let written = resealed.len() as u64;
+            // Create-only: a snapshot id is written once. A conflict means
+            // this id already holds this key (a re-run after a partial
+            // failure), which is not an error -- the object is already
+            // captured.
+            match dest
+                .put_cas(dest_key, resealed, None)
+                .await
+                .context("writing the snapshot object")?
+            {
+                Cas::Ok => Ok(Some(written)),
+                Cas::Conflict => Ok(None),
+            }
+        }
+        Body::File(path) => {
+            dest.put_stream(dest_key, &path)
+                .await
+                .context("writing the snapshot object")?;
+            Ok(Some(tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0)))
+        }
     }
 }
 
-/// The same re-seal for an object too big to hold in memory. Which envelope
-/// it's in isn't knowable from the key — small JSON uses `Cipher::seal`,
-/// packs and LFS objects use `Cipher::seal_stream`, and opening one with the
-/// other's routine fails outright rather than producing garbage — so it's
-/// detected from the object's own first bytes, the same way
-/// `storage::remote::Remote::reencrypt_object` does it.
-async fn reseal_streaming(
-    src: &dyn Backend,
-    src_cipher: &Cipher,
-    dest: &dyn Backend,
-    dest_cipher: &Cipher,
-    src_key: &str,
-    dest_key: &str,
-) -> Result<Option<u64>> {
-    let sealed_tmp = tempfile::Builder::new()
+/// One object's ciphertext: in memory at or under [`INLINE_MAX_BYTES`], in a
+/// scratch file above it, so a multi-gigabyte pack is never buffered whole.
+enum Body {
+    Memory(Vec<u8>),
+    File(TempPath),
+}
+
+fn scratch_file() -> Result<TempPath> {
+    Ok(tempfile::Builder::new()
         .prefix(".gitquarry-snapshot-")
         .tempfile()
         .context("creating a scratch file")?
-        .into_temp_path();
-    src.get_stream(src_key, &sealed_tmp)
-        .await
-        .context("reading the source object")?;
+        .into_temp_path())
+}
 
-    let mut header = [0u8; 8];
-    let header_len = {
-        use tokio::io::AsyncReadExt;
-        let mut f = tokio::fs::File::open(&sealed_tmp)
-            .await
-            .context("reopening the downloaded object")?;
-        f.read(&mut header).await.context("peeking the downloaded object")?
+/// `Ok(None)` when `key` isn't there (only knowable on the in-memory path;
+/// `get_stream` of a missing key is the backend's own error).
+async fn fetch(backend: &dyn Backend, key: &str, size: u64) -> Result<Option<Body>> {
+    if size > INLINE_MAX_BYTES {
+        let path = scratch_file()?;
+        backend.get_stream(key, &path).await?;
+        return Ok(Some(Body::File(path)));
+    }
+    let (bytes, etag) = backend.get(key).await?;
+    Ok(etag.map(|_| Body::Memory(bytes)))
+}
+
+/// Opens `sealed` under `src_key` and seals its plaintext under `dest_key`,
+/// in the same envelope it came in.
+///
+/// Which envelope an object is in isn't knowable from its key or its size:
+/// small JSON uses `Cipher::seal`, while `storage::remote::seal_and_upload`
+/// writes every pack, LFS object and release file with `Cipher::seal_stream`,
+/// however small. The live readers of those keys only open the envelope
+/// they wrote, so a copy that changed envelope would restore to an object
+/// nothing can read. The envelope is read from the object's own first bytes
+/// (`Cipher::is_stream_sealed`), the same way
+/// `storage::remote::Remote::reencrypt_object` does it; an object that fails
+/// the open of its own envelope is an error, never retried as the other one.
+///
+/// A [`Body::File`] stays on disk end to end when stream-sealed. A
+/// single-shot envelope can only be opened whole, so it comes back as
+/// [`Body::Memory`] whatever its size.
+async fn reseal_body(
+    sealed: Body,
+    src_cipher: &Cipher,
+    src_key: &str,
+    dest_cipher: &Cipher,
+    dest_key: &str,
+) -> Result<Body> {
+    let stream_sealed = match &sealed {
+        Body::Memory(bytes) => Cipher::is_stream_sealed(bytes),
+        Body::File(path) => {
+            use tokio::io::AsyncReadExt;
+            let mut header = Vec::with_capacity(8);
+            tokio::fs::File::open(path)
+                .await
+                .context("reopening the downloaded object")?
+                .take(8)
+                .read_to_end(&mut header)
+                .await
+                .context("peeking the downloaded object")?;
+            Cipher::is_stream_sealed(&header)
+        }
     };
 
-    let plain_tmp = tempfile::Builder::new()
-        .prefix(".gitquarry-snapshot-")
-        .tempfile()
-        .context("creating a scratch file")?
-        .into_temp_path();
-    if Cipher::is_stream_sealed(&header[..header_len]) {
-        src_cipher.open_stream(src_key, &sealed_tmp, &plain_tmp).await?;
-    } else {
-        let sealed = tokio::fs::read(&sealed_tmp)
-            .await
-            .context("reading the downloaded object")?;
-        let plain = src_cipher.open(src_key, &sealed)?;
-        tokio::fs::write(&plain_tmp, plain)
-            .await
-            .context("writing the decrypted object")?;
+    if !stream_sealed {
+        let sealed = match sealed {
+            Body::Memory(bytes) => bytes,
+            Body::File(path) => tokio::fs::read(&path).await.context("reading the downloaded object")?,
+        };
+        let plain = src_cipher
+            .open(src_key, &sealed)
+            .context("decrypting the object (single-shot envelope)")?;
+        let resealed = dest_cipher
+            .seal(dest_key, &plain, CompressionStrategy::None)
+            .context("re-encrypting the object")?;
+        return Ok(Body::Memory(resealed));
     }
 
-    let resealed_tmp = tempfile::Builder::new()
-        .prefix(".gitquarry-snapshot-")
-        .tempfile()
-        .context("creating a scratch file")?
-        .into_temp_path();
-    dest_cipher.seal_stream(dest_key, &plain_tmp, &resealed_tmp).await?;
-    dest.put_stream(dest_key, &resealed_tmp)
+    let in_memory = matches!(sealed, Body::Memory(_));
+    let sealed_path = match sealed {
+        Body::File(path) => path,
+        Body::Memory(bytes) => {
+            let path = scratch_file()?;
+            tokio::fs::write(&path, bytes)
+                .await
+                .context("writing the downloaded object")?;
+            path
+        }
+    };
+    let plain_path = scratch_file()?;
+    src_cipher
+        .open_stream(src_key, &sealed_path, &plain_path)
         .await
-        .context("writing the snapshot object")?;
-    let written = tokio::fs::metadata(&resealed_tmp).await.map(|m| m.len()).unwrap_or(0);
-    Ok(Some(written))
+        .context("decrypting the object (streaming envelope)")?;
+    let resealed_path = scratch_file()?;
+    dest_cipher
+        .seal_stream(dest_key, &plain_path, &resealed_path)
+        .await
+        .context("re-encrypting the object")?;
+    if in_memory {
+        let resealed = tokio::fs::read(&resealed_path)
+            .await
+            .context("reading the re-encrypted object")?;
+        return Ok(Body::Memory(resealed));
+    }
+    Ok(Body::File(resealed_path))
 }
 
 /// Every snapshot manifest at `backend`, newest first.
