@@ -292,6 +292,56 @@ async fn fetch(backend: &dyn Backend, key: &str, size: u64) -> Result<Option<Bod
     Ok(etag.map(|_| Body::Memory(bytes)))
 }
 
+/// Reads the envelope from the object's first bytes (see [`reseal_body`]).
+async fn is_stream_sealed(sealed: &Body) -> Result<bool> {
+    Ok(match sealed {
+        Body::Memory(bytes) => Cipher::is_stream_sealed(bytes),
+        Body::File(path) => {
+            use tokio::io::AsyncReadExt;
+            let mut header = Vec::with_capacity(8);
+            tokio::fs::File::open(path)
+                .await
+                .context("reopening the downloaded object")?
+                .take(8)
+                .read_to_end(&mut header)
+                .await
+                .context("peeking the downloaded object")?;
+            Cipher::is_stream_sealed(&header)
+        }
+    })
+}
+
+/// Opens the downloaded `sealed` under `key` in its own envelope and throws
+/// the plaintext away. A streaming envelope is checked through scratch files,
+/// so memory stays at one chunk whatever the size.
+async fn authenticate_body(sealed: Body, cipher: &Cipher, key: &str) -> Result<()> {
+    if !is_stream_sealed(&sealed).await? {
+        let sealed = match sealed {
+            Body::Memory(bytes) => bytes,
+            Body::File(path) => tokio::fs::read(&path).await.context("reading the downloaded object")?,
+        };
+        cipher
+            .open(key, &sealed)
+            .context("decrypting the object (single-shot envelope)")?;
+        return Ok(());
+    }
+    let sealed_path = match sealed {
+        Body::File(path) => path,
+        Body::Memory(bytes) => {
+            let path = scratch_file()?;
+            tokio::fs::write(&path, bytes)
+                .await
+                .context("writing the downloaded object")?;
+            path
+        }
+    };
+    let plain_path = scratch_file()?;
+    cipher
+        .open_stream(key, &sealed_path, &plain_path)
+        .await
+        .context("decrypting the object (streaming envelope)")
+}
+
 /// Opens `sealed` under `src_key` and seals its plaintext under `dest_key`,
 /// in the same envelope it came in.
 ///
@@ -315,21 +365,7 @@ async fn reseal_body(
     dest_cipher: &Cipher,
     dest_key: &str,
 ) -> Result<Body> {
-    let stream_sealed = match &sealed {
-        Body::Memory(bytes) => Cipher::is_stream_sealed(bytes),
-        Body::File(path) => {
-            use tokio::io::AsyncReadExt;
-            let mut header = Vec::with_capacity(8);
-            tokio::fs::File::open(path)
-                .await
-                .context("reopening the downloaded object")?
-                .take(8)
-                .read_to_end(&mut header)
-                .await
-                .context("peeking the downloaded object")?;
-            Cipher::is_stream_sealed(&header)
-        }
-    };
+    let stream_sealed = is_stream_sealed(&sealed).await?;
 
     if !stream_sealed {
         let sealed = match sealed {
@@ -411,7 +447,8 @@ pub struct RestoreReport {
 /// `dest_cipher` at each object's original key.
 ///
 /// Destructive by nature — it overwrites whatever is live now. `dry_run`
-/// counts what it would touch and writes nothing; the caller
+/// opens every snapshot object the way the real run would, reports the ones
+/// that don't open in [`RestoreReport::failures`] and writes nothing; the caller
 /// (`gitquarry restore`) is what makes the operator confirm.
 #[allow(clippy::too_many_arguments)] // Same as `capture`: two (backend, cipher) pairs are the real shape of this operation.
 pub async fn restore(
@@ -440,22 +477,21 @@ pub async fn restore(
         let Some(live_key) = snapshot_key.strip_prefix(&prefix) else {
             continue;
         };
-        if dry_run {
-            report.restored += 1;
-            report.bytes += size;
-            continue;
-        }
-        match restore_one(
-            snapshot.as_ref(),
-            snapshot_cipher,
-            dest,
-            dest_cipher,
-            &snapshot_key,
-            live_key,
-            size,
-        )
-        .await
-        {
+        let outcome = if dry_run {
+            verify_one(snapshot.as_ref(), snapshot_cipher, &snapshot_key, size).await
+        } else {
+            restore_one(
+                snapshot.as_ref(),
+                snapshot_cipher,
+                dest,
+                dest_cipher,
+                &snapshot_key,
+                live_key,
+                size,
+            )
+            .await
+        };
+        match outcome {
             Ok(bytes) => {
                 report.restored += 1;
                 report.bytes += bytes;
@@ -464,6 +500,26 @@ pub async fn restore(
         }
     }
     Ok(report)
+}
+
+/// What [`restore_one`] would find, without writing: opens the snapshot copy
+/// of `size` bytes under its own key, in the envelope it is in. Returns `size`.
+pub(crate) async fn verify_one(
+    snapshot: &dyn Backend,
+    snapshot_cipher: &Cipher,
+    snapshot_key: &str,
+    size: u64,
+) -> Result<u64> {
+    let Some(sealed) = fetch(snapshot, snapshot_key, size)
+        .await
+        .context("reading the snapshot object")?
+    else {
+        bail!("vanished from the snapshot mid-restore");
+    };
+    authenticate_body(sealed, snapshot_cipher, snapshot_key)
+        .await
+        .context("opening the snapshot object")?;
+    Ok(size)
 }
 
 /// Re-seals one snapshot copy of `size` bytes back under `live_key`, in the

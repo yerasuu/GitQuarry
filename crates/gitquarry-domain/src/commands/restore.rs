@@ -125,7 +125,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
     };
     let bucket_cfg = conf.bucket(&bucket)?.clone();
     let backend = storage::build_backend(&bucket_cfg)?.backend;
-    let cipher = std::sync::Arc::new(
+    let cipher = Arc::new(
         gitquarry_core::crypto::bootstrap::get_or_create_cipher(backend.as_ref(), &bucket_cfg.passphrase).await?,
     );
 
@@ -192,6 +192,16 @@ pub async fn run(rest: &[String]) -> Result<()> {
             "gitquarry: would restore {} object(s) ({} bytes) from snapshot {id} over the live data in {bucket}.",
             report.restored, report.bytes
         );
+        if !report.failures.is_empty() {
+            warn!("objects that would fail ({}):", report.failures.len());
+            for failure in &report.failures {
+                warn!("  - {failure}");
+            }
+            bail!(
+                "{} object(s) don't open, so --apply would fail on them",
+                report.failures.len()
+            );
+        }
         info!("(dry-run -- run again with --apply to actually overwrite them)");
         return Ok(());
     }
@@ -248,6 +258,16 @@ async fn run_repo(
              from {entities_from}, refs.json last.",
             report.replica_objects, report.replica_bytes, report.entity_objects
         );
+        if !report.failures.is_empty() {
+            warn!("objects that would fail ({}):", report.failures.len());
+            for failure in &report.failures {
+                warn!("  - {failure}");
+            }
+            bail!(
+                "{} object(s) don't open, so --apply would fail on them",
+                report.failures.len()
+            );
+        }
         info!("(dry-run -- run again with --apply to actually overwrite them)");
         return Ok(());
     }

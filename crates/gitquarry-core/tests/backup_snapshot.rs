@@ -2,7 +2,7 @@ use gitquarry_core::backup::inventory::Class;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
 use gitquarry_core::backup::snapshot::{self, DEFAULT_CLASSES};
 use gitquarry_core::crypto::{Cipher, CompressionStrategy};
-use gitquarry_core::storage::Backend;
+use gitquarry_core::storage::{Backend, list_all_keys};
 use gitquarry_test_support::{backend, cipher};
 use s3db_crypto::SALT_LEN;
 use std::sync::Arc;
@@ -546,4 +546,37 @@ async fn a_corrupted_snapshot_copy_fails_its_restore_and_writes_nothing() {
         );
         assert!(!exists(&restored, key).await);
     }
+}
+
+#[tokio::test]
+async fn a_dry_run_reports_corrupted_snapshot_copies_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let restored_dir = tempfile::tempdir().unwrap();
+    let src = backend(dir.path());
+    let restored = backend(restored_dir.path());
+    let c = cipher();
+    let pack = "repos/r1/objects/pack/pack-aa.pack";
+    let big_pack = "repos/r1/objects/pack/pack-bb.pack";
+    let entity = ".conf/users/alice.json";
+    put_stream_sealed(&src, &c, pack, &patterned(100)).await;
+    put_stream_sealed(&src, &c, big_pack, &patterned(2 << 20)).await;
+    put_sealed(&src, &c, entity, b"alice").await;
+
+    let mut run = fresh_run();
+    let classes = [Class::Git, Class::Entities];
+    let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &classes, 2, &mut run)
+        .await
+        .unwrap();
+    assert!(manifest.complete, "capture failures: {:?}", run.failures);
+    for key in [pack, big_pack, entity] {
+        corrupt(&src, &format!(".conf/backups/snap1/{key}")).await;
+    }
+
+    let report = snapshot::restore(&src, &c, restored.as_ref(), &c, "snap1", true)
+        .await
+        .unwrap();
+
+    assert_eq!(report.restored, 0);
+    assert_eq!(report.failures.len(), 3, "{:?}", report.failures);
+    assert!(list_all_keys(restored.as_ref(), "").await.unwrap().is_empty());
 }

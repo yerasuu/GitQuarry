@@ -186,7 +186,7 @@ async fn purged_repo_with(content: &str) -> Purged {
     }
 }
 
-async fn a_corrupt_replica_pack_is_refused(content: &str, min_pack_bytes: usize) {
+async fn a_corrupt_replica_pack_is_refused(content: &str, min_pack_bytes: usize, dry_run: bool) {
     let Purged {
         ctx, live, backup, uid, ..
     } = &purged_repo_with(content).await;
@@ -203,7 +203,9 @@ async fn a_corrupt_replica_pack_is_refused(content: &str, min_pack_bytes: usize)
     sealed[last] ^= 0x01;
     backup.put_cas(&pack, sealed, etag.as_deref()).await.unwrap();
 
-    let report = restore_repo(backup, live, &ctx.cipher, uid, None, false).await.unwrap();
+    let report = restore_repo(backup, live, &ctx.cipher, uid, None, dry_run)
+        .await
+        .unwrap();
     assert!(!report.refs_restored, "{report:?}");
     assert_eq!(report.failures.len(), 1, "{report:?}");
     assert!(report.failures[0].starts_with(&format!("{pack}: ")), "{report:?}");
@@ -217,12 +219,22 @@ async fn a_corrupt_replica_pack_is_refused(content: &str, min_pack_bytes: usize)
 
 #[tokio::test]
 async fn a_small_corrupt_replica_pack_fails_the_restore_without_refs() {
-    a_corrupt_replica_pack_is_refused("hello\n", 0).await;
+    a_corrupt_replica_pack_is_refused("hello\n", 0, false).await;
 }
 
 #[tokio::test]
 async fn a_large_corrupt_replica_pack_fails_the_restore_without_refs() {
-    a_corrupt_replica_pack_is_refused(&noise(3 << 20), (1 << 20) + 1).await;
+    a_corrupt_replica_pack_is_refused(&noise(3 << 20), (1 << 20) + 1, false).await;
+}
+
+#[tokio::test]
+async fn a_dry_run_reports_a_small_corrupt_replica_pack_and_writes_nothing() {
+    a_corrupt_replica_pack_is_refused("hello\n", 0, true).await;
+}
+
+#[tokio::test]
+async fn a_dry_run_reports_a_large_corrupt_replica_pack_and_writes_nothing() {
+    a_corrupt_replica_pack_is_refused(&noise(3 << 20), (1 << 20) + 1, true).await;
 }
 
 #[tokio::test]

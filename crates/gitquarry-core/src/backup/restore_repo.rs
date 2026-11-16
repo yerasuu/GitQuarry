@@ -177,11 +177,8 @@ pub async fn restore_repo(
     let mut copies = std::pin::pin!(
         blobs
             .map_ok(|(key, size)| async move {
-                let outcome = if dry_run {
-                    Ok(size)
-                } else {
-                    copy_raw(backup.as_ref(), live.as_ref(), cipher, &key, size).await
-                };
+                let dest = (!dry_run).then_some(live.as_ref());
+                let outcome = copy_raw(backup.as_ref(), dest, cipher, &key, size).await;
                 Ok::<_, anyhow::Error>((key, outcome))
             })
             .try_buffer_unordered(DEFAULT_CONCURRENCY)
@@ -209,12 +206,13 @@ pub async fn restore_repo(
                 future::ready(Ok(live_key.map(|live_key| (key, live_key, size))))
             })
             .map_ok(|(key, live_key, size)| async move {
-                let outcome = if dry_run {
-                    Ok(size)
-                } else if from_snapshot {
-                    snapshot::restore_one(backup.as_ref(), cipher, live.as_ref(), cipher, &key, &live_key, size).await
-                } else {
-                    copy_raw(backup.as_ref(), live.as_ref(), cipher, &live_key, size).await
+                let dest = (!dry_run).then_some(live.as_ref());
+                let outcome = match (from_snapshot, dest) {
+                    (true, Some(live)) => {
+                        snapshot::restore_one(backup.as_ref(), cipher, live, cipher, &key, &live_key, size).await
+                    }
+                    (true, None) => snapshot::verify_one(backup.as_ref(), cipher, &key, size).await,
+                    (false, dest) => copy_raw(backup.as_ref(), dest, cipher, &live_key, size).await,
                 };
                 Ok::<_, anyhow::Error>((live_key, outcome))
             })
@@ -322,12 +320,16 @@ async fn undelete(live: &dyn Backend, cipher: &Cipher, uid: &Uid) -> Result<()> 
 
 /// Copies one object at its own key, ciphertext as-is, after opening it
 /// under that key. Returns the bytes written. An object that doesn't open is
-/// never written, so the live copy (if any) stays as it was.
-async fn copy_raw(src: &dyn Backend, dest: &dyn Backend, cipher: &Cipher, key: &str, size: u64) -> Result<u64> {
+/// never written, so the live copy (if any) stays as it was. With no `dest`
+/// (a dry run) it only opens the object and returns what would be written.
+async fn copy_raw(src: &dyn Backend, dest: Option<&dyn Backend>, cipher: &Cipher, key: &str, size: u64) -> Result<u64> {
     if size > INLINE_MAX_BYTES {
         let tmp = scratch_file()?;
         src.get_stream(key, &tmp).await.context("reading the backup object")?;
         authenticate_file(cipher, key, &tmp).await?;
+        let Some(dest) = dest else {
+            return Ok(tokio::fs::metadata(&tmp).await.map(|m| m.len()).unwrap_or(size));
+        };
         dest.put_stream(key, &tmp).await.context("writing the live object")?;
         return Ok(tokio::fs::metadata(&tmp).await.map(|m| m.len()).unwrap_or(size));
     }
@@ -346,7 +348,10 @@ async fn copy_raw(src: &dyn Backend, dest: &dyn Backend, cipher: &Cipher, key: &
             .open(key, &bytes)
             .context("the backup object doesn't decrypt (single-shot envelope)")?;
     }
-    overwrite(dest, key, bytes).await
+    match dest {
+        Some(dest) => overwrite(dest, key, bytes).await,
+        None => Ok(bytes.len() as u64),
+    }
 }
 
 /// Opens the downloaded object at `path` in the envelope its own first bytes
