@@ -261,6 +261,70 @@ async fn a_path_that_climbs_out_of_the_api_surface_never_reaches_federation() {
     }
 }
 
+/// The `url` parser under `reqwest` reads `\` as `/` in an http(s) path and
+/// then resolves the dot segments, so `x\..\..\..\_internal-out\peers` is
+/// one segment to a `/` split and `/_internal-out/peers` at federation.
+/// Encoded separators, control characters and a second layer of encoding
+/// are refused the same way.
+#[tokio::test]
+async fn a_path_that_climbs_out_through_a_backslash_or_an_encoding_never_reaches_federation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    for path in [
+        r"/_api/repos/x\..\..\..\_internal-out\peers",
+        r"/_api/repos/x\%2e%2e\%2E%2E\_internal-out\peers",
+        "/_api/repos/x%5c..%5c..%5c..%5c_internal-out%5cpeers",
+        "/_api/repos/x%5C..%5C..%5C..%5C_internal-out%5Cpeers",
+        "/_api/repos/x%2f..%2f..%2f..%2f_internal-out%2fpeers",
+        "/_api/repos/x%2F..%2F..%2F..%2F_internal-out%2Fpeers",
+        "/_api/repos/%252e%252e/%252e%252e/_internal-out/peers",
+        "/_api/repos/%252E%252E/_peers",
+        "/_api/repos/.%2E/_peers",
+        "/_api/repos/%2e./_peers",
+        "/_api/repos/x%00/peers",
+        "/_api/repos/.%09./_peers",
+        "/_api/repos/x//peers",
+        "/_api/repos/x%zz",
+        "/_api/repos/%ff",
+    ] {
+        let response = get(&app, path, None).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "GET {path}");
+        assert_nothing_forwarded(&mut rx, path);
+    }
+}
+
+/// `..;` is a dot segment only to servlet containers; to `url` and to axum
+/// it is a literal name, so it reaches federation still under `/_api/repos/`.
+#[tokio::test]
+async fn a_semicolon_dot_segment_stays_a_literal_name_under_the_api_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    let path = "/_api/repos/..;/..;/_internal-out/peers";
+    let response = get(&app, path, None).await;
+    assert_eq!(response.status, StatusCode::CREATED);
+    assert_eq!(received(&mut rx).uri, path);
+}
+
+#[tokio::test]
+async fn a_nested_repo_name_keeps_its_segments_and_its_decoded_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    for (sent, forwarded) in [
+        ("/_api/repos/team/sub/project.git", "/_api/repos/team/sub/project.git"),
+        (
+            "/_api/repos/team/my%2Drepo~1?ref=main",
+            "/_api/repos/team/my-repo~1?ref=main",
+        ),
+        ("/_federation/gossip/peers", "/_federation/gossip/peers"),
+    ] {
+        let response = get(&app, sent, None).await;
+        assert_eq!(response.status, StatusCode::CREATED, "GET {sent}");
+        let got = received(&mut rx);
+        assert_signed(&got);
+        assert_eq!(got.uri, forwarded);
+    }
+}
+
 #[tokio::test]
 async fn ordinary_api_paths_are_forwarded_verbatim() {
     let dir = tempfile::tempdir().unwrap();

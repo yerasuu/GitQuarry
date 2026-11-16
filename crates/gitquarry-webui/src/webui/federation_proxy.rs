@@ -19,6 +19,7 @@
 //! is the only legitimate caller of any route on that port).
 
 use super::guards::require_login;
+use super::loopback_url::{self, LoopbackUrlError};
 use super::{AppError, State_, csrf_field, require_csrf};
 use crate::auth::web::login;
 use crate::settings::web::require_admin_or_federation_moderator;
@@ -40,6 +41,8 @@ const CSRF_HEADER: &str = "x-gitquarry-csrf";
 /// its own `ConnectInfo`, same "trust the reverse proxy's header" pattern
 /// `X-Forwarded-For` always is.
 const CLIENT_IP_HEADER: &str = "x-forwarded-for";
+/// The first segment of every route [`proxy_public`] serves.
+const PUBLIC_PREFIXES: [&str; 2] = ["_api", "_federation"];
 
 fn federation_unavailable() -> Response {
     (
@@ -63,14 +66,13 @@ pub fn is_hop_by_hop(name: &HeaderName) -> bool {
 pub async fn send(
     federation: &FederationLink,
     method: reqwest::Method,
-    path_and_query: &str,
+    url: reqwest::Url,
     extra_headers: &[(&str, String)],
     body: Bytes,
 ) -> Response {
-    let url = format!("{}{path_and_query}", federation.base_url.trim_end_matches('/'));
     let mut req = federation
         .http
-        .request(method, &url)
+        .request(method, url)
         .signed(&federation.internal_token)
         .body(body);
     for (name, value) in extra_headers {
@@ -119,27 +121,6 @@ pub fn content_type_header(headers: &HeaderMap) -> Vec<(&'static str, String)> {
         .unwrap_or_default()
 }
 
-/// `false` if `path_and_query`'s path half contains a `.`/`..` segment, in
-/// raw or percent-encoded form. This is the one proxy here that forwards a
-/// *client-controlled* path (the `/_api/repos/{*name}` wildcard capture)
-/// rather than a fixed literal, and it forwards the raw URI — no
-/// normalizing layer sits in front of the router. `reqwest` resolves the
-/// concatenated URL with RFC 3986 `remove_dot_segments` before sending, so
-/// `/_api/repos/../../_internal-out/peers` would otherwise climb out of the
-/// `/_api/*` surface and land on a federation route that trusts the
-/// loopback boundary as its only gate — with core's own `X-Internal-Token`
-/// attached. Percent-encoded forms don't currently normalize, but they're
-/// rejected too rather than left resting on that.
-pub fn traversal_free(path_and_query: &str) -> bool {
-    let path = path_and_query.split(['?', '#']).next().unwrap_or("");
-    !path.split('/').any(|seg| {
-        matches!(
-            seg.to_ascii_lowercase().as_str(),
-            "." | ".." | "%2e" | "%2e%2e" | ".%2e" | "%2e."
-        )
-    })
-}
-
 /// Same ceiling axum's `DefaultBodyLimit` puts on every extractor-read
 /// body. These handlers take the raw `Request` instead, which that limit
 /// never reaches, and `/_api/*` is open to anonymous callers — so without
@@ -163,14 +144,23 @@ pub(crate) async fn proxy_public(
         return federation_unavailable();
     };
     let method = req.method().clone();
-    let path_and_query = req
-        .uri()
-        .path_and_query()
-        .map(|pq| pq.as_str().to_string())
-        .unwrap_or_else(|| req.uri().path().to_string());
-    if !traversal_free(&path_and_query) {
-        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
-    }
+    // The one proxy here whose path is the client's (the `/_api/repos/{*name}`
+    // capture), forwarded from the raw URI with no normalizing layer in
+    // front of the router: see `loopback_url` for what it could otherwise
+    // reach behind core's own `X-Internal-Token`.
+    let path = req.uri().path();
+    let Some((prefix, tail)) = PUBLIC_PREFIXES.iter().find_map(|prefix| {
+        Some((
+            *prefix,
+            path.strip_prefix('/')?.strip_prefix(prefix)?.strip_prefix('/')?,
+        ))
+    }) else {
+        return LoopbackUrlError::Segment.into_response();
+    };
+    let url = match loopback_url::from_raw_tail(&federation.base_url, &[prefix], tail, req.uri().query()) {
+        Ok(url) => url,
+        Err(e) => return e.into_response(),
+    };
     let mut headers = passthrough_headers(req.headers());
     headers.push((CLIENT_IP_HEADER, addr.ip().to_string()));
     let body = match capped_body(req).await {
@@ -178,7 +168,7 @@ pub(crate) async fn proxy_public(
         Err(resp) => return *resp,
     };
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
-    send(federation, method, &path_and_query, &headers, body).await
+    send(federation, method, url, &headers, body).await
 }
 
 /// `/_peers`: admin-or-`is_federation_moderator`-gated
@@ -208,7 +198,11 @@ pub(crate) async fn proxy_peers(State(ctx): State_, req: Request) -> Result<Resp
         Err(resp) => return Ok(*resp),
     };
     require_proxied_csrf(&headers, &method, &body)?;
-    Ok(send(federation, method, "/_peers", &extra, body).await)
+    let url = match loopback_url::from_segments(&federation.base_url, &["_peers"], &[]) {
+        Ok(url) => url,
+        Err(e) => return Ok(e.into_response()),
+    };
+    Ok(send(federation, method, url, &extra, body).await)
 }
 
 /// `/_account/tokens`: self-service, no username in the URL — always the
@@ -238,7 +232,11 @@ pub(crate) async fn proxy_tokens(State(ctx): State_, req: Request) -> Result<Res
         Err(resp) => return Ok(*resp),
     };
     require_proxied_csrf(&headers, &method, &body)?;
-    Ok(send(federation, method, "/_account/tokens", &extra, body).await)
+    let url = match loopback_url::from_segments(&federation.base_url, &["_account", "tokens"], &[]) {
+        Ok(url) => url,
+        Err(e) => return Ok(e.into_response()),
+    };
+    Ok(send(federation, method, url, &extra, body).await)
 }
 
 #[derive(serde::Deserialize)]
@@ -282,14 +280,11 @@ pub(crate) async fn proxy_remote_comment(
         "peer": form.peer, "repo": form.repo, "number": form.number, "body": form.body,
     }))
     .unwrap_or_default();
-    Ok(send(
-        federation,
-        reqwest::Method::POST,
-        "/_remote_pulls/comment",
-        &extra,
-        Bytes::from(body),
-    )
-    .await)
+    let url = match loopback_url::from_segments(&federation.base_url, &["_remote_pulls", "comment"], &[]) {
+        Ok(url) => url,
+        Err(e) => return Ok(e.into_response()),
+    };
+    Ok(send(federation, reqwest::Method::POST, url, &extra, Bytes::from(body)).await)
 }
 
 /// The `csrf` field of a proxied `application/x-www-form-urlencoded` body,

@@ -137,6 +137,7 @@ mod federation_proxy;
 mod flash;
 mod guards;
 mod locale_pref;
+mod loopback_url;
 mod page_chrome;
 pub(crate) mod raw;
 mod raw_link;
