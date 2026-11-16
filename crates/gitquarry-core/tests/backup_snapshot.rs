@@ -287,7 +287,7 @@ async fn a_snapshot_can_be_asked_for_a_blob_class_explicitly() {
     let dir = tempfile::tempdir().unwrap();
     let src = backend(dir.path());
     let c = cipher();
-    put_sealed(&src, &c, "repos/r1/lfs/oid1", b"lfsdata").await;
+    put_stream_sealed(&src, &c, "repos/r1/lfs/oid1", b"lfsdata").await;
 
     let mut run = fresh_run();
     let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &[Class::Lfs], 2, &mut run)
@@ -295,9 +295,7 @@ async fn a_snapshot_can_be_asked_for_a_blob_class_explicitly() {
         .unwrap();
     assert_eq!(manifest.objects, 1);
     assert_eq!(
-        read_sealed(&src, &c, ".conf/backups/snap1/repos/r1/lfs/oid1")
-            .await
-            .unwrap(),
+        read_stream_sealed(&src, &c, ".conf/backups/snap1/repos/r1/lfs/oid1").await,
         b"lfsdata"
     );
 }
@@ -320,8 +318,9 @@ async fn the_encryption_config_is_refused_as_a_snapshot_class() {
     );
 }
 
-/// Writes `body` the way `gitquarry-artifacts` stores a blob
-/// (`storage::blob::upload_blob`): `Cipher::seal_stream`, not `Cipher::seal`.
+/// Writes `body` the way `storage::remote::seal_and_upload` stores packs, LFS
+/// objects and release files (and `gitquarry-artifacts` its blobs):
+/// `Cipher::seal_stream` at any size, not `Cipher::seal`.
 async fn put_stream_sealed(b: &Arc<dyn Backend>, c: &Cipher, key: &str, body: &[u8]) {
     let plain = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(plain.path(), body).unwrap();
@@ -339,8 +338,8 @@ async fn read_stream_sealed(b: &Arc<dyn Backend>, c: &Cipher, key: &str) -> Vec<
 }
 
 #[tokio::test]
-#[ignore = "snapshot::capture opens a stream-sealed object under 1 MiB with Cipher::open, and \
-            snapshot::restore_one opens every object with Cipher::open; both fail on seal_stream envelopes"]
+#[ignore = "needs backup::inventory to classify artifacts/* (218a0d9b, on feat/artifacts only): \
+            on develop those keys are Class::Unknown and no snapshot captures them"]
 async fn artifact_blobs_and_their_package_records_survive_a_snapshot_restore() {
     let src_dir = tempfile::tempdir().unwrap();
     let dest_dir = tempfile::tempdir().unwrap();
@@ -378,4 +377,173 @@ async fn artifact_blobs_and_their_package_records_survive_a_snapshot_restore() {
         read_sealed(&dest, &c, version_key).await.unwrap(),
         b"{\"version\":\"1.0.0\"}"
     );
+}
+
+fn patterned(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+/// Flips the last byte, which sits inside the final AEAD tag of either
+/// envelope.
+async fn corrupt(b: &Arc<dyn Backend>, key: &str) {
+    let (mut sealed, etag) = b.get(key).await.unwrap();
+    *sealed.last_mut().unwrap() ^= 0x01;
+    b.put_cas(key, sealed, etag.as_deref()).await.unwrap();
+}
+
+async fn is_stream_sealed(b: &Arc<dyn Backend>, key: &str) -> bool {
+    let (sealed, etag) = b.get(key).await.unwrap();
+    assert!(etag.is_some(), "{key} is missing");
+    Cipher::is_stream_sealed(&sealed)
+}
+
+async fn exists(b: &Arc<dyn Backend>, key: &str) -> bool {
+    b.get(key).await.unwrap().1.is_some()
+}
+
+#[tokio::test]
+async fn lfs_objects_and_packs_survive_a_snapshot_restore_at_any_size() {
+    let live_dir = tempfile::tempdir().unwrap();
+    let backup_dir = tempfile::tempdir().unwrap();
+    let restored_dir = tempfile::tempdir().unwrap();
+    let live = backend(live_dir.path());
+    let backup = backend(backup_dir.path());
+    let restored = backend(restored_dir.path());
+    let c = cipher();
+    let backup_cipher = Arc::new(Cipher::derive("test passphrase", &[2u8; SALT_LEN]).unwrap());
+
+    // Each class once under the 1 MiB in-memory cut-off and once over it.
+    let objects = [
+        ("repos/r1/lfs/small", patterned(100)),
+        ("repos/r1/lfs/big", patterned(3 << 20)),
+        ("repos/r1/objects/pack/pack-aa.pack", patterned(200)),
+        ("repos/r1/objects/pack/pack-bb.pack", patterned((1 << 20) + 1)),
+    ];
+    for (key, body) in &objects {
+        put_stream_sealed(&live, &c, key, body).await;
+    }
+
+    let mut run = fresh_run();
+    let manifest = snapshot::capture(
+        &live,
+        &c,
+        &backup,
+        &backup_cipher,
+        "snap1",
+        &[Class::Git, Class::Lfs],
+        2,
+        &mut run,
+    )
+    .await
+    .unwrap();
+    assert!(manifest.complete, "capture failures: {:?}", run.failures);
+    assert_eq!(manifest.objects, 4);
+
+    let report = snapshot::restore(&backup, &backup_cipher, restored.as_ref(), &c, "snap1", false)
+        .await
+        .unwrap();
+    assert!(report.failures.is_empty(), "restore failures: {:?}", report.failures);
+    assert_eq!(report.restored, 4);
+
+    for (key, body) in &objects {
+        // The envelope is kept end to end: the live readers of these keys
+        // only ever `open_stream` them.
+        assert!(is_stream_sealed(&backup, &format!(".conf/backups/snap1/{key}")).await);
+        assert!(is_stream_sealed(&restored, key).await);
+        assert_eq!(&read_stream_sealed(&restored, &c, key).await, body, "{key}");
+    }
+}
+
+#[tokio::test]
+async fn a_large_single_shot_entity_keeps_its_envelope_through_a_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let restored_dir = tempfile::tempdir().unwrap();
+    let src = backend(dir.path());
+    let restored = backend(restored_dir.path());
+    let c = cipher();
+    let key = ".conf/users/alice.json";
+    let body = patterned(2 << 20);
+    put_sealed(&src, &c, key, &body).await;
+
+    let mut run = fresh_run();
+    let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &DEFAULT_CLASSES, 2, &mut run)
+        .await
+        .unwrap();
+    assert!(manifest.complete, "capture failures: {:?}", run.failures);
+    let report = snapshot::restore(&src, &c, restored.as_ref(), &c, "snap1", false)
+        .await
+        .unwrap();
+    assert!(report.failures.is_empty(), "restore failures: {:?}", report.failures);
+
+    assert!(!is_stream_sealed(&restored, key).await);
+    assert_eq!(read_sealed(&restored, &c, key).await.unwrap(), body);
+}
+
+#[tokio::test]
+async fn a_corrupted_source_object_fails_its_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = backend(dir.path());
+    let c = cipher();
+    let keys = ["repos/r1/lfs/small", "repos/r1/lfs/big"];
+    put_stream_sealed(&src, &c, keys[0], &patterned(100)).await;
+    put_stream_sealed(&src, &c, keys[1], &patterned(2 << 20)).await;
+    for key in keys {
+        corrupt(&src, key).await;
+    }
+
+    let mut run = fresh_run();
+    let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &[Class::Lfs], 2, &mut run)
+        .await
+        .unwrap();
+
+    assert!(!manifest.complete);
+    assert_eq!(manifest.objects, 0);
+    assert_eq!(run.failures_total, 2);
+    for key in keys {
+        assert!(
+            run.failures.iter().any(|f| f.starts_with(key)),
+            "{key}: {:?}",
+            run.failures
+        );
+        assert!(!exists(&src, &format!(".conf/backups/snap1/{key}")).await);
+    }
+}
+
+#[tokio::test]
+async fn a_corrupted_snapshot_copy_fails_its_restore_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let restored_dir = tempfile::tempdir().unwrap();
+    let src = backend(dir.path());
+    let restored = backend(restored_dir.path());
+    let c = cipher();
+    let keys = [
+        "repos/r1/objects/pack/pack-aa.pack",
+        "repos/r1/objects/pack/pack-bb.pack",
+    ];
+    put_stream_sealed(&src, &c, keys[0], &patterned(100)).await;
+    put_stream_sealed(&src, &c, keys[1], &patterned(2 << 20)).await;
+
+    let mut run = fresh_run();
+    let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &[Class::Git], 2, &mut run)
+        .await
+        .unwrap();
+    assert!(manifest.complete, "capture failures: {:?}", run.failures);
+    for key in keys {
+        corrupt(&src, &format!(".conf/backups/snap1/{key}")).await;
+    }
+
+    let report = snapshot::restore(&src, &c, restored.as_ref(), &c, "snap1", false)
+        .await
+        .unwrap();
+
+    assert_eq!(report.restored, 0);
+    assert_eq!(report.failures.len(), 2);
+    for key in keys {
+        assert!(
+            report.failures.iter().any(|f| f.starts_with(key)),
+            "{key}: {:?}",
+            report.failures
+        );
+        assert!(!exists(&restored, key).await);
+    }
 }
