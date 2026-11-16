@@ -6,6 +6,7 @@
 //! `/_search`'s peer-metadata hits), never anything shown straight back to
 //! a browser unmodified.
 
+use super::loopback_url;
 use gitquarry_core::app::FederationLink;
 use gitquarry_wire::ipc::SignedRequestBuilderExt;
 use gitquarry_wire::{RepoSummary, Uid};
@@ -37,18 +38,16 @@ pub(crate) struct PeerLookup {
 
 /// `GET /_internal-out/peer/{name}` — feeds `/_remote/{peer}/{*repo}`'s
 /// peer resolution, replacing a local `.conf/peers` read now that `Peer`
-/// is federation-owned storage. `None` for an unknown peer *or* an
-/// unreachable federation process — both mean "nothing to browse here",
-/// same as the old local lookup returning `None` for an unknown name.
+/// is federation-owned storage. `None` for an unknown peer, a name that
+/// can't be one literal path segment (it comes from the client's URL, see
+/// `loopback_url`), *or* an unreachable federation process — all mean
+/// "nothing to browse here", same as the old local lookup returning `None`
+/// for an unknown name.
 pub(crate) async fn lookup_peer(federation: &FederationLink, name: &str) -> Option<PeerLookup> {
-    let url = format!(
-        "{}/_internal-out/peer/{}",
-        federation.base_url.trim_end_matches('/'),
-        crate::webui::url_encode(name)
-    );
+    let url = loopback_url::from_segments(&federation.base_url, &["_internal-out", "peer"], &[name]).ok()?;
     let resp = federation
         .http
-        .get(&url)
+        .get(url)
         .signed(&federation.internal_token)
         .send()
         .await
@@ -69,16 +68,13 @@ struct CredentialLookup {
 /// public `/_api/pulls*` directly with it (the PR-proxy tab's read side
 /// stays entirely core-side — see `gitquarry-federation::web::remote_pulls`'s
 /// own doc comment on why only the *write* needs federation). `None` if
-/// nothing's linked, or federation is unreachable.
+/// nothing's linked, `peer_name` can't be one literal path segment, or
+/// federation is unreachable.
 pub(crate) async fn lookup_credential(federation: &FederationLink, peer_name: &str, user_uid: &Uid) -> Option<String> {
-    let url = format!(
-        "{}/_internal-out/credential/{}",
-        federation.base_url.trim_end_matches('/'),
-        crate::webui::url_encode(peer_name)
-    );
+    let url = loopback_url::from_segments(&federation.base_url, &["_internal-out", "credential"], &[peer_name]).ok()?;
     let resp = federation
         .http
-        .get(&url)
+        .get(url)
         .signed(&federation.internal_token)
         .header(USER_UID_HEADER, user_uid.to_string())
         .send()

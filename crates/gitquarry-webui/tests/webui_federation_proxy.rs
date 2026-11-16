@@ -325,6 +325,45 @@ async fn a_nested_repo_name_keeps_its_segments_and_its_decoded_value() {
     }
 }
 
+/// `/_remote/{peer}/{*repo}` looks the peer up at federation's
+/// `/_internal-out/peer/{name}`, a route whose only gate is the internal
+/// token. axum decodes the `{peer}` capture, so `..%2F` arrives as `../`.
+#[tokio::test]
+async fn a_remote_peer_name_cannot_leave_the_peer_lookup_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    for peer in [
+        "..%2F..%2F_internal-out%2Fpeer-repos",
+        "%2E%2E",
+        ".",
+        r"a\..\..\peer-repos",
+        "a%5C..%5C..%5Cpeer-repos",
+        "a%00",
+    ] {
+        let path = format!("/_remote/{peer}/project");
+        let response = get(&app, &path, None).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "GET {path}");
+        assert_nothing_forwarded(&mut rx, &path);
+    }
+}
+
+#[tokio::test]
+async fn a_remote_peer_name_is_looked_up_as_one_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_ctx, app, mut rx) = wired(dir.path()).await;
+    for (peer, forwarded) in [
+        ("peer-one", "/_internal-out/peer/peer-one"),
+        ("peer%3Fx%3D1", "/_internal-out/peer/peer%3Fx=1"),
+    ] {
+        let path = format!("/_remote/{peer}/project");
+        let response = get(&app, &path, None).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "GET {path}");
+        let got = received(&mut rx);
+        assert_signed(&got);
+        assert_eq!(got.uri, forwarded);
+    }
+}
+
 #[tokio::test]
 async fn ordinary_api_paths_are_forwarded_verbatim() {
     let dir = tempfile::tempdir().unwrap();
