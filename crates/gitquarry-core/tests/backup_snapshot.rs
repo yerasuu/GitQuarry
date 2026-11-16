@@ -319,3 +319,63 @@ async fn the_encryption_config_is_refused_as_a_snapshot_class() {
         "unexpected error: {err:#}"
     );
 }
+
+/// Writes `body` the way `gitquarry-artifacts` stores a blob
+/// (`storage::blob::upload_blob`): `Cipher::seal_stream`, not `Cipher::seal`.
+async fn put_stream_sealed(b: &Arc<dyn Backend>, c: &Cipher, key: &str, body: &[u8]) {
+    let plain = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(plain.path(), body).unwrap();
+    let sealed = tempfile::NamedTempFile::new().unwrap();
+    c.seal_stream(key, plain.path(), sealed.path()).await.unwrap();
+    b.put_stream(key, sealed.path()).await.unwrap();
+}
+
+async fn read_stream_sealed(b: &Arc<dyn Backend>, c: &Cipher, key: &str) -> Vec<u8> {
+    let sealed = tempfile::NamedTempFile::new().unwrap();
+    b.get_stream(key, sealed.path()).await.unwrap();
+    let plain = tempfile::NamedTempFile::new().unwrap();
+    c.open_stream(key, sealed.path(), plain.path()).await.unwrap();
+    std::fs::read(plain.path()).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "snapshot::capture opens a stream-sealed object under 1 MiB with Cipher::open, and \
+            snapshot::restore_one opens every object with Cipher::open; both fail on seal_stream envelopes"]
+async fn artifact_blobs_and_their_package_records_survive_a_snapshot_restore() {
+    let src_dir = tempfile::tempdir().unwrap();
+    let dest_dir = tempfile::tempdir().unwrap();
+    let src = backend(src_dir.path());
+    let dest = backend(dest_dir.path());
+    let c = cipher();
+
+    // One blob under the snapshot's 1 MiB inline threshold and one over it,
+    // so both the inline and the streaming re-seal are exercised.
+    let small_key = format!("artifacts/blobs/{}", "aa".repeat(32));
+    let big_key = format!("artifacts/blobs/{}", "bb".repeat(32));
+    let small = b"a tarball".to_vec();
+    let big: Vec<u8> = (0..(3 << 20)).map(|i| (i % 251) as u8).collect();
+    put_stream_sealed(&src, &c, &small_key, &small).await;
+    put_stream_sealed(&src, &c, &big_key, &big).await;
+    let version_key = "artifacts/pkg/npm/left-pad/versions/1.0.0";
+    put_sealed(&src, &c, version_key, b"{\"version\":\"1.0.0\"}").await;
+
+    let mut run = fresh_run();
+    let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &[Class::Lfs, Class::Entities], 2, &mut run)
+        .await
+        .unwrap();
+    assert!(manifest.complete, "capture failures: {:?}", run.failures);
+    assert_eq!(manifest.objects, 3);
+
+    let report = snapshot::restore(&src, &c, dest.as_ref(), &c, "snap1", false)
+        .await
+        .unwrap();
+    assert!(report.failures.is_empty(), "restore failures: {:?}", report.failures);
+    assert_eq!(report.restored, 3);
+
+    assert_eq!(read_stream_sealed(&dest, &c, &small_key).await, small);
+    assert_eq!(read_stream_sealed(&dest, &c, &big_key).await, big);
+    assert_eq!(
+        read_sealed(&dest, &c, version_key).await.unwrap(),
+        b"{\"version\":\"1.0.0\"}"
+    );
+}
