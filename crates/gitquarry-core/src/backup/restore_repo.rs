@@ -5,7 +5,10 @@
 //!
 //! - The replica ([`super::replica`]) holds the repo's git data, LFS objects
 //!   and release files at their own keys, sealed under this bucket's own data
-//!   key, so they go back as raw ciphertext, with no decrypt.
+//!   key, so they go back as the same ciphertext, never re-sealed. Each one is
+//!   still opened under its key before it is written, since a copy that skips
+//!   the AEAD check would publish a corrupt replica object and the repo would
+//!   only fail later, on the first clone.
 //! - A snapshot ([`super::snapshot`]) holds the repo's entities
 //!   (`.conf/config.json`, merge requests, LFS locks, mirror configs) as they
 //!   were at that run, and is re-sealed back under each live key. The replica
@@ -35,7 +38,10 @@ use crate::storage::{Backend, Cas, INDEX_PREFIX, REPOS_PREFIX, get_json, setting
 use anyhow::{Context, Result, bail};
 use futures::future;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
+use std::path::Path;
 use std::sync::Arc;
+use tempfile::TempPath;
+use tokio::io::AsyncReadExt;
 
 /// Same cut-off as the replica's: above it an object streams through a
 /// scratch file instead of memory.
@@ -109,7 +115,8 @@ impl RepoKeys {
 /// the backup holds no config for the repo, or its config or `refs.json`
 /// doesn't decrypt under `cipher`. A decrypt failure is never worked around.
 /// After writing started: a failed listing, or a failure clearing
-/// `deleted_at`. A single object's failure is reported in
+/// `deleted_at`. A single object's failure, including a replica object that
+/// doesn't decrypt under its own key, is reported in
 /// [`RepoRestoreReport::failures`] instead, and withholds `refs.json`.
 pub async fn restore_repo(
     backup: &Arc<dyn Backend>,
@@ -173,7 +180,7 @@ pub async fn restore_repo(
                 let outcome = if dry_run {
                     Ok(size)
                 } else {
-                    copy_raw(backup.as_ref(), live.as_ref(), &key, size).await
+                    copy_raw(backup.as_ref(), live.as_ref(), cipher, &key, size).await
                 };
                 Ok::<_, anyhow::Error>((key, outcome))
             })
@@ -207,7 +214,7 @@ pub async fn restore_repo(
                 } else if from_snapshot {
                     snapshot::restore_one(backup.as_ref(), cipher, live.as_ref(), cipher, &key, &live_key, size).await
                 } else {
-                    copy_raw(backup.as_ref(), live.as_ref(), &live_key, size).await
+                    copy_raw(backup.as_ref(), live.as_ref(), cipher, &live_key, size).await
                 };
                 Ok::<_, anyhow::Error>((live_key, outcome))
             })
@@ -313,16 +320,14 @@ async fn undelete(live: &dyn Backend, cipher: &Cipher, uid: &Uid) -> Result<()> 
     Ok(())
 }
 
-/// Copies one object at its own key, ciphertext as-is. Returns the bytes
-/// written.
-async fn copy_raw(src: &dyn Backend, dest: &dyn Backend, key: &str, size: u64) -> Result<u64> {
+/// Copies one object at its own key, ciphertext as-is, after opening it
+/// under that key. Returns the bytes written. An object that doesn't open is
+/// never written, so the live copy (if any) stays as it was.
+async fn copy_raw(src: &dyn Backend, dest: &dyn Backend, cipher: &Cipher, key: &str, size: u64) -> Result<u64> {
     if size > INLINE_MAX_BYTES {
-        let tmp = tempfile::Builder::new()
-            .prefix(".gitquarry-restore-")
-            .tempfile()
-            .context("creating a scratch file for the copy")?
-            .into_temp_path();
+        let tmp = scratch_file()?;
         src.get_stream(key, &tmp).await.context("reading the backup object")?;
+        authenticate_file(cipher, key, &tmp).await?;
         dest.put_stream(key, &tmp).await.context("writing the live object")?;
         return Ok(tokio::fs::metadata(&tmp).await.map(|m| m.len()).unwrap_or(size));
     }
@@ -330,7 +335,64 @@ async fn copy_raw(src: &dyn Backend, dest: &dyn Backend, key: &str, size: u64) -
     if etag.is_none() {
         bail!("vanished from the backup mid-restore");
     }
+    if Cipher::is_stream_sealed(&bytes) {
+        let tmp = scratch_file()?;
+        tokio::fs::write(&tmp, &bytes)
+            .await
+            .context("writing the backup object to a scratch file")?;
+        open_stream_sealed(cipher, key, &tmp).await?;
+    } else {
+        cipher
+            .open(key, &bytes)
+            .context("the backup object doesn't decrypt (single-shot envelope)")?;
+    }
     overwrite(dest, key, bytes).await
+}
+
+/// Opens the downloaded object at `path` in the envelope its own first bytes
+/// name, as `snapshot::reseal_body` does: `storage::remote::seal_and_upload`
+/// stream-seals packs, LFS objects and release files whatever their size, so
+/// neither key nor size tells. An object failing its own envelope is an
+/// error, never retried as the other one.
+async fn authenticate_file(cipher: &Cipher, key: &str, path: &Path) -> Result<()> {
+    let mut header = Vec::with_capacity(8);
+    tokio::fs::File::open(path)
+        .await
+        .context("reopening the downloaded object")?
+        .take(8)
+        .read_to_end(&mut header)
+        .await
+        .context("peeking the downloaded object")?;
+    if Cipher::is_stream_sealed(&header) {
+        return open_stream_sealed(cipher, key, path).await;
+    }
+    // A single-shot envelope only opens whole. Git data, LFS objects and
+    // release files are always stream-sealed, so only an oversized entity
+    // gets here.
+    let sealed = tokio::fs::read(path).await.context("reading the downloaded object")?;
+    cipher
+        .open(key, &sealed)
+        .context("the backup object doesn't decrypt (single-shot envelope)")?;
+    Ok(())
+}
+
+/// `Cipher::open_stream` only writes to a file and checks the length that
+/// landed there, so the plaintext goes through a scratch file, dropped (and
+/// deleted) as soon as the check is done. Memory stays at one chunk.
+async fn open_stream_sealed(cipher: &Cipher, key: &str, sealed: &Path) -> Result<()> {
+    let plain = scratch_file()?;
+    cipher
+        .open_stream(key, sealed, &plain)
+        .await
+        .context("the backup object doesn't decrypt (streaming envelope)")
+}
+
+fn scratch_file() -> Result<TempPath> {
+    Ok(tempfile::Builder::new()
+        .prefix(".gitquarry-restore-")
+        .tempfile()
+        .context("creating a scratch file for the copy")?
+        .into_temp_path())
 }
 
 /// Unconditional overwrite through CAS, so losing a write race is retried
