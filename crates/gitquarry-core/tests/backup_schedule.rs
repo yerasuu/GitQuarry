@@ -16,6 +16,30 @@ async fn save_settings(ctx: &AppContext, settings: &ServerSettings) {
         .unwrap();
 }
 
+#[tokio::test]
+async fn blobs_in_the_snapshot_are_off_for_a_bucket_that_never_set_them_and_round_trip_once_set() {
+    // A `global.json` written before the field existed must read as "off":
+    // turning it on multiplies a backup's size.
+    let legacy: ServerSettings = serde_json::from_str(r#"{"backup_snapshot":true}"#).unwrap();
+    assert_eq!(legacy.backup_snapshot_blobs, None);
+    assert!(serde_json::from_str::<ServerSettings>(r#"{"backup_snapshot_blobs":"yes"}"#).is_err());
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx(dir.path());
+    save_settings(
+        &ctx,
+        &ServerSettings {
+            backup_snapshot_blobs: Some(true),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (stored, _) = gitquarry_core::storage::settings::get_settings(ctx.backend().as_ref(), &ctx.cipher)
+        .await
+        .unwrap();
+    assert_eq!(stored.backup_snapshot_blobs, Some(true));
+}
+
 #[test]
 fn an_unset_interval_uses_the_default() {
     assert_eq!(schedule::interval(&ServerSettings::default()), DEFAULT_INTERVAL);

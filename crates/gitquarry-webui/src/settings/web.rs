@@ -776,6 +776,8 @@ pub(crate) struct BackupForm {
     #[serde(default)]
     snapshot: Option<String>,
     #[serde(default)]
+    snapshot_blobs: Option<String>,
+    #[serde(default)]
     class_git: Option<String>,
     #[serde(default)]
     class_lfs: Option<String>,
@@ -906,6 +908,13 @@ fn render_backup_page(
                             input type="checkbox" name="snapshot" value="1"
                                 checked[settings.backup_snapshot.unwrap_or(true)];
                             " " (t::settings_backup_snapshot_hint(locale))
+                        }
+                    }
+                    div class="field" {
+                        label {
+                            input type="checkbox" name="snapshot_blobs" value="1"
+                                checked[settings.backup_snapshot_blobs.unwrap_or(false)];
+                            " " (t::settings_backup_snapshot_blobs_hint(locale))
                         }
                     }
 
@@ -1101,6 +1110,7 @@ fn build_backup_settings(
         backup_enabled: checked(&form.enabled),
         backup_interval: interval,
         backup_snapshot: Some(checked(&form.snapshot)),
+        backup_snapshot_blobs: Some(checked(&form.snapshot_blobs)),
         backup_include_git: Some(checked(&form.class_git)),
         backup_include_lfs: Some(checked(&form.class_lfs)),
         backup_include_releases: Some(checked(&form.class_releases)),

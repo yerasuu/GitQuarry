@@ -123,6 +123,14 @@ pub struct ServerSettings {
     /// small.
     #[serde(default)]
     pub backup_snapshot: Option<bool>,
+    /// Whether that snapshot also carries git data, LFS objects and release
+    /// files (each still subject to its `backup_include_*` switch). `None`
+    /// means no: every snapshot re-seals a full copy of them under its own
+    /// id, so with this on a backup grows by the whole blob set per kept
+    /// snapshot, while the replica keeps each of these immutable objects
+    /// once.
+    #[serde(default)]
+    pub backup_snapshot_blobs: Option<bool>,
     /// How many snapshots to keep. `None` keeps every one — deleting a
     /// snapshot destroys the only copy of what the live data used to be, so
     /// it doesn't happen unless an operator asks for it.

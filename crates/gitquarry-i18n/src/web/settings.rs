@@ -151,6 +151,10 @@ msg!(settings_backup_snapshot_hint() {
     Locale::Es => "guardar tambien un snapshot versionado de la config (lo unico que conserva historial)",
     Locale::En => "also keep a versioned snapshot of the config (the only half that keeps history)",
 });
+msg!(settings_backup_snapshot_blobs_hint() {
+    Locale::Es => "incluir tambien git, LFS y releases en el snapshot (cada snapshot guarda una copia completa: ocupa mucho)",
+    Locale::En => "also put git, LFS and releases in the snapshot (each snapshot keeps a full copy: costly in space)",
+});
 msg!(settings_backup_classes_heading() { Locale::Es => "que se copia", Locale::En => "what gets copied" });
 msg!(settings_backup_class_git_hint() { Locale::Es => "git (packs y refs)", Locale::En => "git (packs and refs)" });
 msg!(settings_backup_class_lfs_hint() { Locale::Es => "objetos LFS", Locale::En => "LFS objects" });

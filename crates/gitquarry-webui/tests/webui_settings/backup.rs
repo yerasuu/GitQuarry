@@ -141,6 +141,32 @@ async fn an_unparseable_interval_is_refused_and_nothing_is_stored() {
 }
 
 #[tokio::test]
+async fn blobs_in_the_snapshot_are_off_until_ticked_and_then_stored() {
+    let html = backup_page(&ServerSettings::default(), &[]).await;
+    assert!(html.contains(r#"name="snapshot_blobs" value="1">"#), "{html}");
+
+    let gq = Instance::new().await;
+    let root = gq.login("root").await;
+    let page = gq
+        .post(
+            "/_settings/backup",
+            &root,
+            &[("snapshot", "1"), ("snapshot_blobs", "1")],
+        )
+        .await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(
+        page.body.contains(r#"name="snapshot_blobs" value="1" checked"#),
+        "{}",
+        page.body
+    );
+    let (settings, _) = gitquarry_core::storage::settings::get_settings(gq.ctx.backend().as_ref(), &gq.ctx.cipher)
+        .await
+        .unwrap();
+    assert_eq!(settings.backup_snapshot_blobs, Some(true));
+}
+
+#[tokio::test]
 async fn the_destination_secrets_warning_is_always_shown() {
     // The replica holds the ssh host key, the signing key and every password
     // hash: an admin choosing a destination has to see that said out loud.
