@@ -641,6 +641,9 @@ pub(crate) async fn visible_searchable_repos(
 /// [`can_list_repo`]); otherwise the same rule as [`can_list_repo`]. Shared
 /// with [`super::fork`], which needs the same check on the *source* repo
 /// before letting anyone copy it.
+///
+/// An `Unlisted` repo marks the response `noindex` here ([`super::robots`]),
+/// which is what covers its non-HTML responses (raw files, archives, atom).
 pub(crate) async fn can_view_repo(
     ctx: &AppContext,
     headers: &HeaderMap,
@@ -648,6 +651,7 @@ pub(crate) async fn can_view_repo(
     visibility: Visibility,
 ) -> Result<bool, AppError> {
     if visibility == Visibility::Unlisted {
+        super::robots::mark_unlisted();
         return Ok(true);
     }
     can_list_repo(ctx, headers, name, visibility).await

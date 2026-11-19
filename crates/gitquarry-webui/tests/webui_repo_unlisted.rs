@@ -15,12 +15,13 @@ struct Instance {
 
 impl Instance {
     /// `alice/hidden` (unlisted, with a README) and `alice/open` (public),
-    /// both alice's, plus a `bob` with no grant on either.
+    /// both alice's, plus a `bob` with no grant on either and an admin `root`.
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Arc::new(ctx(dir.path()));
         gitquarry_test_support::user(&ctx, "alice", false).await;
         gitquarry_test_support::user(&ctx, "bob", false).await;
+        gitquarry_test_support::user(&ctx, "root", true).await;
         let alice = access::get_user(ctx.backend().as_ref(), &ctx.cipher, "alice")
             .await
             .unwrap()
@@ -94,4 +95,47 @@ async fn reading_it_by_link_does_not_open_its_settings() {
     let settings = bob.get(&gq.app, "/alice/hidden?view=settings").await;
     assert_ne!(settings.status, StatusCode::OK, "{}", settings.body);
     assert!(!settings.body.contains(r#"name="visibility""#), "{}", settings.body);
+}
+
+fn robots_header(page: &gitquarry_test_support::Page) -> Option<&str> {
+    page.headers.get("x-robots-tag").and_then(|v| v.to_str().ok())
+}
+
+const ROBOTS_META: &str = r#"<meta name="robots" content="noindex, nofollow">"#;
+
+#[tokio::test]
+async fn every_page_of_an_unlisted_repo_asks_not_to_be_indexed() {
+    let gq = Instance::new().await;
+    for path in [
+        "/alice/hidden",
+        "/alice/hidden?view=tree",
+        "/alice/hidden?view=log",
+        "/alice/hidden/blob/main/README.md",
+    ] {
+        let page = Session::get_as(&gq.app, path, None).await;
+        assert_eq!(robots_header(&page), Some("noindex, nofollow"), "GET {path}");
+        let head = &page.body[..page.body.find("</head>").expect("no </head>")];
+        assert!(head.contains(ROBOTS_META), "GET {path}: {head}");
+    }
+    // Exempt from `can_view_repo`, so only its header marks it.
+    let root = Session::login(&gq.app, "root").await;
+    let settings = root.get(&gq.app, "/alice/hidden?view=settings").await;
+    assert_eq!(settings.status, StatusCode::OK, "{}", settings.body);
+    assert_eq!(robots_header(&settings), Some("noindex, nofollow"));
+    for path in ["/_raw/atom/alice/hidden", "/_raw/plain/alice/hidden?path=README.md"] {
+        let page = Session::get_as(&gq.app, path, None).await;
+        assert_eq!(page.status, StatusCode::OK, "GET {path}: {}", page.body);
+        assert_eq!(robots_header(&page), Some("noindex, nofollow"), "GET {path}");
+    }
+}
+
+#[tokio::test]
+async fn a_public_repo_and_the_index_stay_indexable() {
+    let gq = Instance::new().await;
+    for path in ["/alice/open", "/alice/open?view=tree", "/"] {
+        let page = Session::get_as(&gq.app, path, None).await;
+        assert_eq!(page.status, StatusCode::OK, "GET {path}");
+        assert_eq!(robots_header(&page), None, "GET {path}");
+        assert!(!page.body.contains(r#"name="robots""#), "GET {path}");
+    }
 }

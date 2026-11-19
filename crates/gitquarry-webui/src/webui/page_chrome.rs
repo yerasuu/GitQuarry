@@ -453,6 +453,11 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
         .collect();
     let atom_link = raw_link("atom", repo_name, "").to_string();
 
+    // Settings and the other views exempt from `can_view_repo` still render
+    // this header, so it is the second place that marks a page `noindex`.
+    if visibility == Visibility::Unlisted {
+        super::robots::mark_unlisted();
+    }
     let badge = match visibility {
         Visibility::Private => Some(
             maud::html! { span class="badge" { (super::icons::lock()) " " (chrome::private_visibility_badge(locale)) } },
@@ -823,6 +828,9 @@ pub fn layout(
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
+                @if super::robots::is_unlisted() {
+                    meta name="robots" content=(super::robots::NOINDEX);
+                }
                 title { (title) " - GitQuarry" }
                 link rel="icon" type="image/svg+xml" href="/_assets/favicon.svg";
                 link rel="stylesheet" href=(super::style_css_url());

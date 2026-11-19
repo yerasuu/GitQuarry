@@ -142,6 +142,7 @@ mod page_chrome;
 pub(crate) mod raw;
 mod raw_link;
 mod repo_link;
+mod robots;
 mod text_size;
 mod theme_pref;
 #[cfg(feature = "tracker")]
@@ -854,6 +855,7 @@ pub fn router(ctx: Arc<AppContext>) -> Router {
             request_cache_middleware,
         ))
         .layer(axum::middleware::from_fn(flash_middleware))
+        .layer(axum::middleware::from_fn(robots::middleware))
         .layer(axum::middleware::from_fn(security_headers))
         // Every HTML/CSS/JS response this app sends is compressible text
         // (`page_chrome::STYLE` alone inlines ~5000 lines of CSS into every
