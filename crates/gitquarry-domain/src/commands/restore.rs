@@ -36,13 +36,18 @@ usage:
   gitquarry restore --repo UID [<snapshot-id>] [--bucket NAME] [--from DEST] [--apply]
 
 Writes a snapshot's objects back over the live data, at their original
-keys. Dry-run unless --apply is passed.
+keys: the config set, plus git data, LFS objects and release files when the
+snapshot holds them (--list shows its classes). A repo whose pack fails to
+restore keeps its live refs.json. Dry-run unless --apply is passed.
 
   --list        list the snapshots available and stop
   --repo UID    restore only this repo (e.g. one purged by mistake): its
                 packs, refs, LFS objects and releases from the replica, its
                 config and other entities from <snapshot-id> (default: the
                 newest snapshot holding it). refs.json is written last.
+                The replica is the source of git, LFS and releases even
+                when the snapshot holds them too (backup_snapshot_blobs);
+                restore the whole <snapshot-id> to take them from there.
   --from DEST   where the snapshots live, if not the configured backup
                 destination (bucket:<name> | path:/abs/dir | self)
 
@@ -159,10 +164,11 @@ pub async fn run(rest: &[String]) -> Result<()> {
         info!("snapshots at {configured} (newest first):");
         for manifest in &available {
             info!(
-                "  {}  {} object(s), {} bytes{}",
+                "  {}  {} object(s), {} bytes  [{}]{}",
                 manifest.id,
                 manifest.objects,
                 manifest.bytes,
+                manifest.classes.join(","),
                 if manifest.complete { "" } else { "  (INCOMPLETE)" }
             );
         }

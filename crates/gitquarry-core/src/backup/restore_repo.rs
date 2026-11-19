@@ -15,6 +15,12 @@
 //!   carries them too, but only as of the last run, so it is the fallback
 //!   when no snapshot holds the repo at all (snapshots switched off).
 //!
+//! A snapshot taken with `backup_snapshot_blobs` also holds the repo's git
+//! data, LFS objects and release files; they are still taken from the
+//! replica, so the packs and the `refs.json` naming them always come from
+//! the same copy. Restoring the whole snapshot (`snapshot::restore`) is how
+//! to take them from the snapshot instead.
+//!
 //! `refs.json` is read before anything is written and written last, and only
 //! when every other object made it (kb note #30): refs pointing at a pack not
 //! yet copied is a repo every clone fails on, while packs without refs are

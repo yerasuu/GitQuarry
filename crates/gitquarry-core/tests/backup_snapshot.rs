@@ -593,3 +593,45 @@ async fn restoring_into_a_bucket_without_a_data_key_writes_nothing() {
     assert!(format!("{err:#}").contains("no data key"), "{err:#}");
     assert!(list_all_keys(empty.as_ref(), "").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_pack_that_fails_its_restore_withholds_that_repos_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let restored_dir = tempfile::tempdir().unwrap();
+    let src = backend(dir.path());
+    let restored = backend(restored_dir.path());
+    let c = cipher();
+    put_stream_sealed(&src, &c, "repos/r1/objects/pack/pack-aa.pack", &patterned(200)).await;
+    put_sealed(&src, &c, "repos/r1/refs.json", b"{\"new\":true}").await;
+    put_stream_sealed(&src, &c, "repos/r2/objects/pack/pack-bb.pack", &patterned(200)).await;
+    put_sealed(&src, &c, "repos/r2/refs.json", b"{\"r2\":true}").await;
+
+    let mut run = fresh_run();
+    let manifest = snapshot::capture(&src, &c, &src, &c, "snap1", &[Class::Git], 2, &mut run)
+        .await
+        .unwrap();
+    assert!(manifest.complete, "capture failures: {:?}", run.failures);
+    corrupt(&src, ".conf/backups/snap1/repos/r1/objects/pack/pack-aa.pack").await;
+    put_sealed(&restored, &c, "repos/r1/refs.json", b"{\"old\":true}").await;
+
+    for dry_run in [true, false] {
+        let report = snapshot::restore(&src, &c, restored.as_ref(), &c, "snap1", dry_run)
+            .await
+            .unwrap();
+        assert_eq!(report.failures.len(), 2, "{dry_run}: {:?}", report.failures);
+        assert!(
+            report.failures[1].starts_with("repos/r1/refs.json: withheld"),
+            "{:?}",
+            report.failures
+        );
+        assert_eq!(report.restored, 2, "{dry_run}: r2's pack and refs");
+    }
+    assert_eq!(
+        read_sealed(&restored, &c, "repos/r1/refs.json").await.unwrap(),
+        b"{\"old\":true}"
+    );
+    assert_eq!(
+        read_sealed(&restored, &c, "repos/r2/refs.json").await.unwrap(),
+        b"{\"r2\":true}"
+    );
+}

@@ -40,6 +40,7 @@ use crate::storage::{Backend, Cas, get_json, put_json};
 use anyhow::{Context, Result, bail};
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempPath;
@@ -491,6 +492,10 @@ pub struct RestoreReport {
 /// opens every snapshot object the way the real run would, reports the ones
 /// that don't open in [`RestoreReport::failures`] and writes nothing; the caller
 /// (`gitquarry restore`) is what makes the operator confirm.
+///
+/// A snapshot holding git data restores each repo's `refs.json` only if
+/// every pack of that repo opened; otherwise the live `refs.json` is left as
+/// it is and the withheld one is listed in the failures.
 #[allow(clippy::too_many_arguments)] // Same as `capture`: two (backend, cipher) pairs are the real shape of this operation.
 pub async fn restore(
     snapshot: &Arc<dyn Backend>,
@@ -513,11 +518,27 @@ pub async fn restore(
         ..Default::default()
     };
 
+    // Repos (`repos/<uid>/`) one of whose packs failed. Listings are in key
+    // order, so a repo's `objects/pack/*` come before its `refs.json`, and
+    // that refs.json is withheld: refs naming a pack that isn't there break
+    // every clone, while the live refs still point at packs that exist (kb
+    // note #30, same rule as `restore_repo`).
+    let mut broken_repos: HashSet<String> = HashSet::new();
     let mut keys = KeyPages::new(Arc::clone(snapshot), &prefix);
     while let Some((snapshot_key, size)) = keys.next().await? {
         let Some(live_key) = snapshot_key.strip_prefix(&prefix) else {
             continue;
         };
+        let repo = live_key.strip_prefix("repos/").and_then(|rest| rest.split_once('/'));
+        if let Some((uid, tail)) = repo
+            && tail == crate::storage::remote::MANIFEST_SUFFIX
+            && broken_repos.contains(uid)
+        {
+            report
+                .failures
+                .push(format!("{live_key}: withheld, a pack of this repo failed to restore"));
+            continue;
+        }
         let outcome = if dry_run {
             verify_one(snapshot.as_ref(), snapshot_cipher, &snapshot_key, size).await
         } else {
@@ -537,7 +558,14 @@ pub async fn restore(
                 report.restored += 1;
                 report.bytes += bytes;
             }
-            Err(e) => report.failures.push(format!("{live_key}: {e:#}")),
+            Err(e) => {
+                if let Some((uid, tail)) = repo
+                    && tail.starts_with("objects/pack/")
+                {
+                    broken_repos.insert(uid.to_string());
+                }
+                report.failures.push(format!("{live_key}: {e:#}"));
+            }
         }
     }
     Ok(report)
