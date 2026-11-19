@@ -155,9 +155,26 @@ evicted for age, only for the total size cap.
 | `gitquarry fsck [--apply]` | Report (or remove) objects gitquarry never wrote inside a repo prefix |
 | `gitquarry repack <repo> [--max-pack-size BYTES] [--apply]` | Consolidate a repo's accumulated packs into as few as fit under the cap (1 GiB by default) |
 | `gitquarry migrate [--apply]` | Report (or run) pending bucket data migrations; the server runs them itself at startup |
-| `gitquarry backup [--dest DEST] [--minimal \| --with-derived]` | Replicate the bucket and snapshot its config to the backup destination |
-| `gitquarry restore --list` / `restore <snapshot-id> [--apply]` | List snapshots, or write one back over the live config |
+| `gitquarry backup [--dest DEST] [--minimal \| --with-derived] [--snapshot-blobs]` | Replicate the bucket and snapshot its config to the backup destination |
+| `gitquarry restore --list` / `restore <snapshot-id> [--apply]` | List snapshots, or write one back over the live data |
 | `gitquarry backfill-repo-index` | One-time backfill for repos predating the owner/visibility indexes |
+
+Backups are configured at `/_settings/backup` and stored in the bucket's
+`.conf/global.json`, not in `gitquarry.toml`. A run is a replica (every object
+at its own key, immutable packs, LFS objects and release files copied once)
+plus a snapshot under `.conf/backups/<id>/` that keeps the history of the
+config set. Ticking "also put git, LFS and releases in the snapshot"
+(`backup_snapshot_blobs`, off by default; `--snapshot-blobs` for one run) makes
+each snapshot self-contained, at a real cost: every object is re-sealed under
+its snapshot's own key, so no snapshot shares or skips a copy another one
+already holds. Each run downloads, decrypts, re-encrypts and uploads every
+selected blob again, and the destination holds one full copy of them per kept
+snapshot, on top of the replica's; with the `self` destination that is in the
+live bucket. Set "snapshots to keep" before turning it on: unset keeps every
+snapshot. `restore <snapshot-id>` writes back whatever the snapshot holds
+(`restore --list` shows its classes) and keeps a repo's live `refs.json` if
+one of its packs fails; `restore --repo` takes git, LFS and releases from the
+replica even when the snapshot has them.
 
 The web UI ships no TLS of its own. Put it behind a reverse proxy for anything
 that is not localhost.
