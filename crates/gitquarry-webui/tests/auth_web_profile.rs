@@ -96,6 +96,34 @@ async fn profile_row_shows_the_display_name_and_links_the_slug() {
     assert!(content(&page).contains("alice/My Proj!"), "{}", page.body);
 }
 
+/// Listed like a private repo (owner only, with its badge), even though
+/// anyone can open it by URL.
+#[tokio::test]
+async fn profile_lists_unlisted_repos_only_to_their_owner() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice", false).await;
+    gq.user("bob", false).await;
+    gq.user("root", true).await;
+    gq.repo("alice/public-one", &alice, None, Visibility::Public).await;
+    gq.repo("alice/hidden", &alice, None, Visibility::Unlisted).await;
+
+    let own = gq.login("alice").await;
+    let page = gq.get("/_profile/alice", Some(&own)).await;
+    let hidden_row = content(&page)
+        .split("<tr>")
+        .find(|r| r.contains("alice/hidden"))
+        .unwrap();
+    assert!(hidden_row.contains(r#"class="badge">unlisted"#), "{hidden_row}");
+
+    let bob = gq.login("bob").await;
+    let root = gq.login("root").await;
+    for session in [None, Some(bob.as_str()), Some(root.as_str())] {
+        let page = gq.get("/_profile/alice", session).await;
+        assert!(content(&page).contains("alice/public-one"), "{}", page.body);
+        assert!(!content(&page).contains("alice/hidden"), "{}", page.body);
+    }
+}
+
 /// Only the owner's own session lists their private repos — not an admin,
 /// not an anonymous visitor.
 #[tokio::test]

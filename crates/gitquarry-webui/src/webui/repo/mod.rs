@@ -539,8 +539,9 @@ pub(crate) async fn handler_index(
 
 /// Repos visible to the anonymous-index-viewer or a logged-in-but-
 /// otherwise-unprivileged one: `Public` always, `Limited` too if
-/// `viewer_logged_in` — anyone with a *specific* grant on a `Private` repo
-/// still reaches it directly by URL, this is just what the index lists.
+/// `viewer_logged_in`, never `Private` or `Unlisted` — anyone with a
+/// *specific* grant on a `Private` repo, or anyone at all for an `Unlisted`
+/// one, still reaches it directly by URL; this is just what the index lists.
 /// `archived`/`topics`/`star_count` ride along so the index can badge/filter/
 /// sort without a second fetch — `star_count` in particular used to mean a
 /// whole extra `access.json` fetch shared across every row; now it's just
@@ -579,7 +580,7 @@ async fn list_visible_repos(ctx: &AppContext, viewer_logged_in: bool) -> Result<
         let show = match config.visibility {
             Visibility::Public => true,
             Visibility::Limited => viewer_logged_in,
-            Visibility::Private => false,
+            Visibility::Private | Visibility::Unlisted => false,
         };
         if show {
             visible.push(IndexRepo {
@@ -635,14 +636,32 @@ pub(crate) async fn visible_searchable_repos(
 }
 
 /// `true` if the current request can see a repo with this `visibility`:
-/// `Public` always; `Limited` needs *a* session, no specific grant on this
-/// repo; `Private` needs `is_admin` (sees everything regardless of
+/// `Public` and `Unlisted` always (anyone holding the URL reads an
+/// `Unlisted` repo, that tier only changes what gets listed — see
+/// [`can_list_repo`]); otherwise the same rule as [`can_list_repo`]. Shared
+/// with [`super::fork`], which needs the same check on the *source* repo
+/// before letting anyone copy it.
+pub(crate) async fn can_view_repo(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+    name: &str,
+    visibility: Visibility,
+) -> Result<bool, AppError> {
+    if visibility == Visibility::Unlisted {
+        return Ok(true);
+    }
+    can_list_repo(ctx, headers, name, visibility).await
+}
+
+/// `true` if the current request may see this repo *named in a listing*
+/// someone else put together (a public favorites list): `Public` always;
+/// `Limited` needs *a* session, no specific grant on this repo; `Private`
+/// and `Unlisted` need `is_admin` (sees everything regardless of
 /// `access.json`, same reasoning as the admin-page gate) or at least
 /// `Permission::Reporter` from `effective_permission` (not `User::repos`
 /// directly, so group/team-inherited access counts too) — a `Guest`-tier
-/// grant alone does not unlock browsing. Shared with [`super::fork`], which
-/// needs the same check on the *source* repo before letting anyone copy it.
-pub(crate) async fn can_view_repo(
+/// grant alone does not unlock browsing.
+pub(crate) async fn can_list_repo(
     ctx: &AppContext,
     headers: &HeaderMap,
     name: &str,

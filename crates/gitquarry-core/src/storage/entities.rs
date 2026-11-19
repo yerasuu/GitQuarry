@@ -1,5 +1,5 @@
-//! Struct definitions only — [`ServerSettings`], [`Visibility`], [`OwnerRef`],
-//! [`RepoConfig`] — plus [`RepoConfig`]'s own `#[derive(Entity)]` storage
+//! Type definitions only — [`ServerSettings`], [`Visibility`] (with its two
+//! tier predicates), [`OwnerRef`], [`RepoConfig`] — plus [`RepoConfig`]'s own `#[derive(Entity)]` storage
 //! shape (collection prefix, key field). Business logic (CRUD wrappers,
 //! repo-name/owner/visible indexes) lives in [`super::settings`], which
 //! re-exports everything here so existing `crate::storage::settings::RepoConfig`-
@@ -174,17 +174,26 @@ pub struct ServerSettings {
 /// already gated in the sense that matters there, with one asymmetry:
 /// `ssh://` can't have a fully anonymous caller (opening a connection at
 /// all needs a pubkey that resolves to a user), while `crate::git::http`
-/// explicitly allows reading a `Public` repo (`info/refs`/upload-pack, never
-/// a push) with no credentials at all — the same "public repo clones with
-/// no login" behavior a browser gets on the web UI. What differs by tier is
-/// only the web browsing UI (which has a login, unlike a bare `ssh://`
-/// connection):
+/// explicitly allows reading a `Public` or `Unlisted` repo (`info/refs`/
+/// upload-pack, never a push) with no credentials at all — the same "public
+/// repo clones with no login" behavior a browser gets on the web UI. What
+/// differs by tier is only the web browsing UI (which has a login, unlike a
+/// bare `ssh://` connection) and what gets listed:
 /// - `Public`: no gate anywhere.
 /// - `Limited`: on the web, visible to any logged-in user regardless of
 ///   whether they have a specific grant on this repo, hidden from anonymous
 ///   requests and the anonymous index.
 /// - `Private`: on the web, visible only via `effective_permission`/
 ///   `is_admin`, same as before `Limited` existed.
+/// - `Unlisted`: read like `Public` by anyone who has the URL, listed like
+///   `Private`: kept out of `.conf/index/repo-visible`, the index, search,
+///   other people's profiles and group pages, public favorites, and
+///   federation (which only ever exposes `Public`). Not a secret, since a
+///   repo path is guessable; it only keeps a repo from being advertised.
+///
+/// Stored lowercase in `RepoConfig`. A version that predates a variant
+/// fails to decode the whole config (`unknown variant`), which every caller
+/// treats as an error, never as the `Public` default.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
@@ -192,6 +201,23 @@ pub enum Visibility {
     Public,
     Limited,
     Private,
+    Unlisted,
+}
+
+impl Visibility {
+    /// Whether the repo belongs in `.conf/index/repo-visible` and in a
+    /// listing shown to someone with no grant on it. Every write of that
+    /// index goes through this, so a tier change can't leave the index and
+    /// the listings disagreeing about which tiers are listed.
+    pub fn is_listed(self) -> bool {
+        matches!(self, Self::Public | Self::Limited)
+    }
+
+    /// Whether reading the repo (web browsing, smart-HTTP clone/fetch)
+    /// needs no credentials at all. Never covers a write.
+    pub fn is_readable_by_link(self) -> bool {
+        matches!(self, Self::Public | Self::Unlisted)
+    }
 }
 
 /// Who a repo belongs to — a [`crate::auth::entities::User`] or

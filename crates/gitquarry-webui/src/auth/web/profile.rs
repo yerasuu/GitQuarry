@@ -8,11 +8,11 @@
 //!
 //! No login gate, unlike every other `/_*` page: anyone can look. What
 //! differs per viewer is which repos show up — `visibility: public` ones
-//! always do, `private` ones only when the viewer is logged in as that same
-//! user — not admins, not anyone with an explicit grant on one specific
-//! repo: this is a profile listing, not the repo's own access check, which
-//! still applies independently once you actually open a private repo's
-//! page.
+//! always do, `private` and `unlisted` ones only when the viewer is logged
+//! in as that same user — not admins, not anyone with an explicit grant on
+//! one specific repo: this is a profile listing, not the repo's own access
+//! check, which still applies independently once you actually open a
+//! private repo's page (an unlisted one opens for anyone with the link).
 
 use super::login;
 use crate::webui::{State_, effective_density, effective_locale, effective_theme, identicon, layout, url_encode};
@@ -100,8 +100,9 @@ pub(crate) async fn handler_profile_get(
 /// Every repo whose `RepoConfig::owner` uid matches `owner_ref` (`None` if
 /// `name` resolved to neither a user nor a group, i.e. nothing to list):
 /// `public` always included, `limited` if `viewer_logged_in` (any session,
-/// not specifically this profile's), and `private` only if
-/// `can_see_private`. Candidate uids come from `list_owned_repo_uids`
+/// not specifically this profile's), and `private`/`unlisted` only if
+/// `can_see_private` — an unlisted repo is readable by link, never listed
+/// to someone who didn't already know it. Candidate uids come from `list_owned_repo_uids`
 /// (`.conf/index/repo-owner/...`), not a bucket-wide scan — a profile only
 /// ever needs its own owner's repos, unlike `repo::list_visible_repos`'s
 /// global index. The owner-uid compare still runs on the fetched config
@@ -141,7 +142,7 @@ pub(crate) async fn list_owned_repos(
         let show = match config.visibility {
             Visibility::Public => true,
             Visibility::Limited => viewer_logged_in || can_see_private,
-            Visibility::Private => can_see_private,
+            Visibility::Private | Visibility::Unlisted => can_see_private,
         };
         if show {
             owned.push((config.full_name.clone(), config));
@@ -203,6 +204,7 @@ pub(crate) fn render_repo_table(repos: &[(String, RepoConfig)], locale: gitquarr
                             Visibility::Public => {}
                             Visibility::Limited => { " " span class="badge" { "limited" } }
                             Visibility::Private => { " " span class="badge" { "private" } }
+                            Visibility::Unlisted => { " " span class="badge" { "unlisted" } }
                         }
                         @if config.archived {
                             " " span class="badge" { "archived" }

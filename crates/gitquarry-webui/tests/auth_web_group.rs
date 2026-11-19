@@ -130,6 +130,29 @@ async fn hides_members_and_private_repos_from_a_non_member() {
     assert!(main_of(&page).contains(r#"href="/acme/secret""#), "{}", page.body);
 }
 
+/// An unlisted group repo is listed like a private one: members see it on
+/// the group page, outsiders don't, though they can still open it by URL.
+#[tokio::test]
+async fn lists_an_unlisted_repo_only_to_members() {
+    let gq = Instance::new().await;
+    let alice = gq.user("alice").await;
+    gq.user("carol").await;
+    let acme = gq.group("acme", &alice, None).await;
+    gq.repo("acme/hidden", &acme, Visibility::Unlisted).await;
+
+    let carol = gq.login("carol").await;
+    for session in [None, Some(carol.as_str())] {
+        let page = gq.get("/_group/acme", session).await;
+        assert!(!main_of(&page).contains("acme/hidden"), "{}", page.body);
+        let repo = Session::get_as(&gq.app, "/acme/hidden", session).await;
+        assert_eq!(repo.status, StatusCode::OK, "{}", repo.body);
+    }
+
+    let own = gq.login("alice").await;
+    let page = gq.get("/_group/acme", Some(&own)).await;
+    assert!(main_of(&page).contains(r#"href="/acme/hidden""#), "{}", page.body);
+}
+
 /// A subgroup's page has to show the members it inherited — that inheritance
 /// is what subgroups are for — but mark them, or the page reads as though
 /// this group granted access it never did.

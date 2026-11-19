@@ -556,9 +556,10 @@ impl Denial {
 }
 
 /// Same gate `ssh.rs` applies, just over HTTP Basic instead of a pubkey: a
-/// `Public` repo's read side stays reachable with no credentials at all
-/// (matching the web UI's anonymous browsing); everything else — any write
-/// (a push, or an LFS upload), or reading a `Limited`/`Private` repo — needs
+/// `Public` or `Unlisted` repo's read side stays reachable with no
+/// credentials at all (matching the web UI's anonymous browsing); everything
+/// else — any write (a push, or an LFS upload), or reading a `Limited`/
+/// `Private` repo — needs
 /// either a valid `username`/`password_hash` pair (the same credential the
 /// web login form uses) or a fine-grained token (federation layer 4,
 /// `docs/federation-concept.md`'s "Capa 4") naming this exact repo — and at
@@ -577,7 +578,7 @@ async fn authorize(
     visibility: Visibility,
     required: Permission,
 ) -> Result<Authz> {
-    if required == Permission::Reporter && visibility == Visibility::Public {
+    if required == Permission::Reporter && visibility.is_readable_by_link() {
         return Ok(Authz::Allowed(None));
     }
     let Some(credential) = authenticate(ctx, headers, repo_uid).await? else {

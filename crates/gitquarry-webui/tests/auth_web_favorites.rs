@@ -240,6 +240,26 @@ async fn public_favorites_page_hides_what_the_viewer_cannot_see() {
     assert!(html.contains("none visible"), "{html}");
 }
 
+/// An unlisted repo opens for anyone with the link, so anyone may star it,
+/// but a public favorites list is a listing, which it stays out of.
+#[tokio::test]
+async fn public_favorites_page_hides_an_unlisted_repo_its_viewer_could_still_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, app, session) = app_with_users(dir.path()).await;
+    edit_repo(&ctx, "acme/proj", |c| c.visibility = Visibility::Unlisted).await;
+    let starred = star(&app, &session, "acme/proj", "").await;
+    assert_ne!(starred.status, StatusCode::NOT_FOUND);
+    set_public(&app, &session).await;
+
+    let own = page(&app, &session, "/_account/favorites").await;
+    assert!(own.contains(r#"href="/acme/proj""#), "{own}");
+    let bob = Session::login(&app, "bob").await;
+    for cookie in [None, Some(bob.cookie.as_str())] {
+        let html = Session::get_as(&app, "/_profile/alice/favorites", cookie).await.body;
+        assert!(!html.contains("acme/proj"), "{html}");
+    }
+}
+
 /// Starring would otherwise confirm a private repo exists to anyone who
 /// can guess its name.
 #[tokio::test]

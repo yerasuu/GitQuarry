@@ -139,7 +139,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
                 needs_owner.push((uid.clone(), owner.clone()));
             }
         }
-        if config.visibility != gitquarry_core::storage::entities::Visibility::Private && !visible_now.contains(uid) {
+        if config.visibility.is_listed() && !visible_now.contains(uid) {
             needs_visible.push(uid.clone());
         }
     }

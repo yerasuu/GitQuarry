@@ -1,9 +1,10 @@
 //! `/_search`: cross-repo search — filenames and commit messages across
 //! every repo this request can see. Same visibility rule as the index
 //! ([`crate::webui::repo::visible_searchable_repos`]): `Public` always, `Limited`
-//! only if logged in. A `Private` repo the caller has an explicit grant on
-//! is still reached directly by URL, same as the index — it just doesn't
-//! show up in search results either, consistent with that same scope.
+//! only if logged in. A `Private` repo the caller has an explicit grant on,
+//! or any `Unlisted` one, is still reached directly by URL, same as the
+//! index — it just doesn't show up in search results either, consistent
+//! with that same scope.
 //!
 //! Two independent primitives fan out per visible repo: [`filenames`]
 //! (`git ls-tree -r`) and [`commits`] (`git log --grep`, reusing

@@ -518,7 +518,7 @@ pub(super) async fn create_lock_response(
 
 /// `POST .../info/lfs/locks/verify`: every current lock split into `ours`
 /// (owned by `actor`) and `theirs` — `actor` is `None` only for an
-/// anonymous caller on a `Public` repo (this endpoint only needs
+/// anonymous caller on a `Public`/`Unlisted` repo (this endpoint only needs
 /// `Permission::Reporter`), in which case everything is `theirs`.
 pub(super) async fn verify_locks_response(
     backend: &Arc<dyn Backend>,

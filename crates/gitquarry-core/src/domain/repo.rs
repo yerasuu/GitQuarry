@@ -137,7 +137,7 @@ pub async fn create(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &resolved.uid,
-        config.visibility != Visibility::Private,
+        config.visibility.is_listed(),
     )
     .await;
     Ok(Some(resolved))
@@ -243,7 +243,7 @@ pub async fn restore(ctx: &AppContext, resolved: &ResolvedRepo) -> Result<()> {
         ctx.backend().as_ref(),
         &ctx.cipher,
         &resolved.uid,
-        config.visibility != Visibility::Private,
+        config.visibility.is_listed(),
     )
     .await;
     Ok(())
@@ -459,7 +459,7 @@ pub async fn fork(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &dest.uid,
-        new_config.visibility != Visibility::Private,
+        new_config.visibility.is_listed(),
     )
     .await;
 
@@ -571,7 +571,7 @@ pub async fn create_from_template(
         ctx.backend().as_ref(),
         &ctx.cipher,
         &dest.uid,
-        new_config.visibility != Visibility::Private,
+        new_config.visibility.is_listed(),
     )
     .await;
 
@@ -634,7 +634,7 @@ pub async fn set_conf(ctx: &AppContext, resolved: &ResolvedRepo, patch: ConfPatc
             ctx.backend().as_ref(),
             &ctx.cipher,
             &resolved.uid,
-            config.visibility != Visibility::Private,
+            config.visibility.is_listed(),
         )
         .await;
     }

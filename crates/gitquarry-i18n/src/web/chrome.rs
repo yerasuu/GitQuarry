@@ -81,6 +81,7 @@ msg!(
 
 msg!(limited_visibility_badge() { Locale::Es => "limitado", Locale::En => "limited" });
 msg!(private_visibility_badge() { Locale::Es => "privado", Locale::En => "private" });
+msg!(unlisted_visibility_badge() { Locale::Es => "oculto", Locale::En => "unlisted" });
 msg!(changelog_nav() { Locale::Es => "changelog", Locale::En => "changelog" });
 msg!(source_nav() { Locale::Es => "codigo fuente", Locale::En => "source" });
 msg!(changelog_heading() { Locale::Es => "cambios", Locale::En => "changelog" });

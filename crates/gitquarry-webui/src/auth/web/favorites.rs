@@ -14,14 +14,15 @@
 //! `render_star_button` (in `crate::webui::actions`) already writes to;
 //! this is just its own page plus the toggle action.
 //!
-//! Read-only means the starred list filtered through [`can_view_repo`] same
-//! as [`super::profile`]'s own repo listing: a private repo `<user>` starred
-//! must not leak to a viewer who has no grant on it, even though `<user>`'s
+//! Read-only means the starred list filtered through [`can_list_repo`] same
+//! as [`super::profile`]'s own repo listing: a private or unlisted repo
+//! `<user>` starred must not leak to a viewer who has no grant on it, even
+//! though `<user>`'s
 //! own view of this same list skips that check (their own star list, their
 //! own call).
 
 use super::login;
-use crate::webui::repo::can_view_repo;
+use crate::webui::repo::{can_list_repo, can_view_repo};
 use crate::webui::{
     AppError, Flash, State_, account_settings_page, csrf_field, effective_density, effective_locale, effective_theme,
     federation_ui_active, is_local_redirect, layout, render_flash, require_csrf, require_login, settings_section,
@@ -96,7 +97,7 @@ pub(crate) async fn handler_favorites_get(
 /// uid-keyed, unlike when it stored a name that could still be displayed
 /// even if the repo behind it was gone). Shared by [`own_starred_with_counts`]
 /// and [`visible_starred`] (which additionally drops anything that fails
-/// `can_view_repo`).
+/// `can_list_repo`).
 async fn fetch_repo_configs(
     ctx: &AppContext,
     repos: impl IntoIterator<Item = gitquarry_core::storage::uid::Uid>,
@@ -153,11 +154,12 @@ async fn own_starred_with_counts(
     repos
 }
 
-/// `starred` filtered down to what `headers`' viewer (anonymous or not) can
-/// actually see, same per-repo `can_view_repo` check
-/// [`super::profile::list_owned_repos`] uses — a starred private repo the
-/// profile owner can see must not leak to someone with no grant on it just
-/// because it showed up on a public favorites list. Pairs each visible name
+/// `starred` filtered down to what `headers`' viewer (anonymous or not) may
+/// see listed, same per-tier rule [`super::profile::list_owned_repos`]
+/// uses — a starred private or unlisted repo the profile owner can see must
+/// not leak to someone with no grant on it just because it showed up on a
+/// public favorites list. `can_list_repo`, not `can_view_repo`: anyone can
+/// open an unlisted repo, but a list is exactly what it stays out of. Pairs each visible name
 /// with its `RepoConfig::star_count`, already fetched here for the
 /// visibility check — no separate `access.json` fetch needed just for that.
 async fn visible_starred(
@@ -167,7 +169,7 @@ async fn visible_starred(
 ) -> Result<Vec<StarredRepo>, AppError> {
     let mut visible = Vec::new();
     for config in fetch_repo_configs(ctx, starred.iter().cloned()).await {
-        if can_view_repo(ctx, headers, &config.full_name, config.visibility).await? {
+        if can_list_repo(ctx, headers, &config.full_name, config.visibility).await? {
             visible.push(StarredRepo {
                 name: config.full_name,
                 display_name: config.display_name,

@@ -460,6 +460,9 @@ pub(crate) fn header_bar(repo_name: &str, rev: &str, active: &str, extras: Heade
         Visibility::Limited => Some(
             maud::html! { span class="badge" { (super::icons::lock()) " " (chrome::limited_visibility_badge(locale)) } },
         ),
+        Visibility::Unlisted => Some(
+            maud::html! { span class="badge" { (super::icons::eye()) " " (chrome::unlisted_visibility_badge(locale)) } },
+        ),
         Visibility::Public => None,
     };
     let sub = maud::html! {

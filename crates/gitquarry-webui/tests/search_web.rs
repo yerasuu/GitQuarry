@@ -43,7 +43,7 @@ async fn repo(ctx: &AppContext, name: &str, visibility: Visibility, display_name
         ctx.backend().as_ref(),
         &ctx.cipher,
         &resolved.uid,
-        visibility != Visibility::Private,
+        visibility.is_listed(),
     )
     .await;
     resolved
@@ -145,6 +145,29 @@ async fn a_private_repo_is_never_searched() {
     let html = search(&ctx, "?q=planted").await;
     assert!(!html.contains("planted.txt"), "{html}");
     assert!(!html.contains("acme/secret"), "{html}");
+}
+
+/// Same scope for an unlisted repo, even with a stale visible-index entry
+/// naming it: anyone may open it by URL, but search is a listing.
+#[tokio::test]
+async fn an_unlisted_repo_is_never_searched() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Arc::new(ctx(dir.path()));
+    let hidden = repo(&ctx, "acme/hidden", Visibility::Unlisted, None).await;
+    gitquarry_core::storage::settings::set_visible_index(ctx.backend().as_ref(), &ctx.cipher, &hidden.uid, true).await;
+    plant_index(&ctx, &hidden, vec!["planted-hidden.txt".to_string()], Vec::new()).await;
+    let open = repo(&ctx, "acme/open", Visibility::Public, None).await;
+    plant_index(&ctx, &open, vec!["planted-open.txt".to_string()], Vec::new()).await;
+
+    let app = gitquarry_webui::webui::router(Arc::clone(&ctx));
+    gitquarry_test_support::user(&ctx, "bob", false).await;
+    let bob = Session::login(&app, "bob").await;
+    for cookie in [None, Some(bob.cookie.as_str())] {
+        let html = Session::get_as(&app, "/_search?q=planted", cookie).await.body;
+        assert!(html.contains("planted-open.txt"), "{html}");
+        assert!(!html.contains("planted-hidden.txt"), "{html}");
+        assert!(!html.contains("acme/hidden"), "{html}");
+    }
 }
 
 /// A repo that resolves locally but has never been indexed falls back to

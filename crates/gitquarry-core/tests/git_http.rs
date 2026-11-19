@@ -749,3 +749,33 @@ async fn a_push_still_uploading_does_not_lock_readers_out_of_the_repo() {
     assert_eq!(status, StatusCode::OK);
     drop(slow);
 }
+
+#[tokio::test]
+async fn an_unlisted_repo_clones_anonymously_but_refuses_a_push_without_a_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = gitquarry_test_support::ctx(dir.path());
+    create_user(&ctx, "bob", Some(PASSWORD)).await;
+    create_repo(&ctx, "acme/hidden", Visibility::Unlisted).await;
+    let resolved = ctx.resolve_repo("acme/hidden").await.unwrap().unwrap();
+    let work = gitquarry_test_support::Work::new().await;
+    let head = work.commit(&[("a.txt", "one\n")], "first").await;
+    work.push(&resolved, "refs/heads/main").await;
+    let base = serve(Arc::new(ctx)).await;
+
+    let into = tempfile::tempdir().unwrap();
+    let url = format!("{base}/acme/hidden");
+    gitquarry_test_support::git(into.path(), &["clone", "-q", &url, "c"]).await;
+    assert_eq!(
+        gitquarry_test_support::git(&into.path().join("c"), &["rev-parse", "HEAD"]).await,
+        head
+    );
+
+    // The advertisement is a read for every tier (see
+    // `a_push_advertisement_is_not_counted_against_the_clone_rate_limit`);
+    // the push itself is the `POST` after it.
+    let client = reqwest::Client::new();
+    let push = || client.post(format!("{base}/acme/hidden/git-receive-pack")).body("0000");
+    assert_eq!(push().send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    let stranger = push().basic_auth("bob", Some(PASSWORD)).send().await.unwrap().status();
+    assert_eq!(stranger, StatusCode::FORBIDDEN);
+}
