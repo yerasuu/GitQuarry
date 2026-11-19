@@ -34,8 +34,13 @@ unencrypted.
   a phone) to sign in alone or in place of the code, TOTP two-factor with
   recovery codes, personal access tokens, GPG keys, groups with direct
   members and nested subgroups, a five-tier permission ladder
-  (guest/reporter/developer/maintainer/owner), and public/limited/private repo
-  visibility.
+  (guest/reporter/developer/maintainer/owner), and public/limited/private/
+  unlisted repo visibility. An unlisted repo is left out of the index,
+  search, profiles, group pages and federation, and its pages carry
+  `noindex`, but anyone with its URL can read and clone it without signing
+  in: its name can be guessed, so it is not a secret. A repo set to unlisted
+  can't be read by an earlier version (its config fails to load), so set it
+  back to another visibility before downgrading.
 - **Repo management** — create, fork, star, watch, topics, archive, transfer
   between namespaces, protected branches and tags, signed-commit enforcement,
   default-branch selection, and instance-wide search over filenames and commit
