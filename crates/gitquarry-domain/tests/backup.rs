@@ -4,6 +4,7 @@
 //! is refused instead of one flag silently winning.
 
 use gitquarry_core::backup::inventory::Selection;
+use gitquarry_core::backup::snapshot::Blobs;
 use gitquarry_domain::commands::backup::parse_args;
 
 fn args(list: &[&str]) -> Vec<String> {
@@ -66,4 +67,12 @@ fn an_unknown_flag_is_refused() {
 fn help_parses_to_nothing_to_do() {
     assert!(parse_args(&args(&["--help"])).unwrap().is_none());
     assert!(parse_args(&args(&["-h"])).unwrap().is_none());
+}
+
+#[test]
+fn snapshot_blobs_is_an_override_only_when_given() {
+    assert_eq!(parse_args(&args(&[])).unwrap().unwrap().snapshot_blobs, None);
+    let parsed = parse_args(&args(&["--snapshot-blobs", "--minimal"])).unwrap().unwrap();
+    assert_eq!(parsed.snapshot_blobs, Some(Blobs::Capture));
+    assert_eq!(parsed.selection, Some(Selection::minimal()));
 }

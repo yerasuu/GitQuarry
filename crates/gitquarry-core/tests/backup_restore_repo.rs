@@ -49,7 +49,7 @@ async fn a_purged_repo_comes_back_from_the_replica_and_a_snapshot() {
         config_path: &ctx.config_path,
     };
     let dest = format!("path:{}", backup_dir.path().display());
-    let run = schedule::run_for(&source, Trigger::Cli, Some(&dest), None)
+    let run = schedule::run_for(&source, Trigger::Cli, Some(&dest), None, None)
         .await
         .unwrap();
     assert_eq!(run.outcome, Outcome::Ok, "backup failed: {:?}", run.error);
@@ -171,7 +171,7 @@ async fn purged_repo_with(content: &str) -> Purged {
         config_path: &ctx.config_path,
     };
     let dest = format!("path:{}", backup_dir.path().display());
-    let run = schedule::run_for(&source, Trigger::Cli, Some(&dest), None)
+    let run = schedule::run_for(&source, Trigger::Cli, Some(&dest), None, None)
         .await
         .unwrap();
     assert_eq!(run.outcome, Outcome::Ok, "backup failed: {:?}", run.error);

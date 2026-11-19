@@ -32,7 +32,7 @@
 //! the cost of history, and it's why this is pointed at the small mutable set
 //! rather than at everything.
 
-use crate::backup::inventory::{self, Class};
+use crate::backup::inventory::{self, Class, Selection};
 use crate::backup::pager::{KeyPages, PAGE_SIZE};
 use crate::backup::report::BackupRun;
 use crate::crypto::{Cipher, CompressionStrategy};
@@ -64,9 +64,50 @@ const INLINE_MAX_BYTES: u64 = 1 << 20;
 /// small, mutable, overwrite-in-place data whose previous value the replica
 /// can't preserve. Packs, LFS objects and release assets are deliberately
 /// absent — they're immutable, so the replica already keeps every version
-/// there has ever been, and re-sealing them here would double the cost of a
-/// backup for no added recoverability.
+/// there has ever been, and re-sealing them here multiplies the cost of a
+/// backup; [`Blobs::Capture`] is the opt-in for a self-contained snapshot.
 pub const DEFAULT_CLASSES: [Class; 1] = [Class::Entities];
+
+/// Whether a snapshot also carries the blob classes (git data, LFS objects,
+/// release files) — `ServerSettings::backup_snapshot_blobs`, or the CLI's
+/// `--snapshot-blobs` for one run.
+///
+/// Opting in costs a full re-sealed copy of every selected blob in every
+/// snapshot: each object is sealed with its snapshot key as AAD, and that key
+/// carries the snapshot id, so no copy can be shared with another snapshot
+/// or skipped because an earlier snapshot already holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blobs {
+    Skip,
+    Capture,
+}
+
+impl Blobs {
+    /// What `settings` asks for; unset is [`Blobs::Skip`].
+    pub fn from_settings(settings: &crate::storage::entities::ServerSettings) -> Self {
+        if settings.backup_snapshot_blobs.unwrap_or(false) {
+            Blobs::Capture
+        } else {
+            Blobs::Skip
+        }
+    }
+}
+
+/// The classes a scheduled or CLI snapshot captures: [`DEFAULT_CLASSES`],
+/// plus git, LFS and releases under [`Blobs::Capture`], each only if
+/// `selection` includes it. Empty when nothing is left to capture.
+pub fn classes(selection: &Selection, blobs: Blobs) -> Vec<Class> {
+    let blob_classes: &[Class] = match blobs {
+        Blobs::Skip => &[],
+        Blobs::Capture => &[Class::Git, Class::Lfs, Class::Releases],
+    };
+    DEFAULT_CLASSES
+        .iter()
+        .chain(blob_classes)
+        .copied()
+        .filter(|&class| selection.includes(class))
+        .collect()
+}
 
 /// What one snapshot captured. Stored under [`MANIFEST_PREFIX`], a sibling
 /// of every snapshot's own directory rather than inside one: listing the

@@ -67,21 +67,23 @@ pub async fn run_once(ctx: &AppContext, trigger: Trigger) -> Result<BackupRun> {
         cipher: &ctx.cipher,
         config_path: &ctx.config_path,
     };
-    run_for(&source, trigger, None, None).await
+    run_for(&source, trigger, None, None, None).await
 }
 
 /// [`run_once`] without an [`AppContext`] — what `gitquarry backup` uses,
 /// since an operator command has a backend, a cipher and a config path but
 /// none of the rest of a running server (mirrors dir, ssh bind, event bus).
 ///
-/// `dest_override` and `selection_override` are the CLI's own flags: a
-/// one-off backup somewhere other than the configured destination, without
-/// editing the instance's settings to get it.
+/// `dest_override`, `selection_override` and `blobs_override` are the CLI's
+/// own flags: a one-off backup somewhere other than the configured
+/// destination, or of other classes, without editing the instance's
+/// settings to get it.
 pub async fn run_for(
     source: &Source<'_>,
     trigger: Trigger,
     dest_override: Option<&str>,
     selection_override: Option<Selection>,
+    blobs_override: Option<snapshot::Blobs>,
 ) -> Result<BackupRun> {
     let backend = source.backend;
     let (settings, _etag) = crate::storage::settings::get_settings(backend.as_ref(), source.cipher)
@@ -92,7 +94,16 @@ pub async fn run_for(
     let mut run = BackupRun::starting(configured, trigger);
     report::save(backend.as_ref(), source.cipher, &run).await?;
 
-    if let Err(e) = execute(source, &settings, dest_override, selection_override, &mut run).await {
+    if let Err(e) = execute(
+        source,
+        &settings,
+        dest_override,
+        selection_override,
+        blobs_override,
+        &mut run,
+    )
+    .await
+    {
         run.fail(format!("{e:#}"));
     } else {
         run.finish();
@@ -113,6 +124,7 @@ async fn execute(
     settings: &ServerSettings,
     dest_override: Option<&str>,
     selection_override: Option<Selection>,
+    blobs_override: Option<snapshot::Blobs>,
     run: &mut BackupRun,
 ) -> Result<()> {
     let configured = dest_override
@@ -142,9 +154,11 @@ async fn execute(
         replica::sync(backend, &resolved.backend, selection, concurrency, run).await?;
     }
 
-    // The snapshot half: only worth taking when the entity classes are in
-    // scope at all, since that's all it captures.
-    if settings.backup_snapshot.unwrap_or(true) && selection.entities {
+    // The snapshot half: only worth taking when one of the classes it
+    // captures is in scope at all.
+    let blobs = blobs_override.unwrap_or_else(|| snapshot::Blobs::from_settings(settings));
+    let classes = snapshot::classes(&selection, blobs);
+    if settings.backup_snapshot.unwrap_or(true) && !classes.is_empty() {
         // The snapshot id is the run's own id: one identifier for both
         // halves, and `report::BackupRun::id`'s shape already satisfies
         // `validate::validate_backup_id`.
@@ -155,7 +169,7 @@ async fn execute(
             &resolved.backend,
             &resolved.cipher,
             &snapshot_id,
-            &snapshot::DEFAULT_CLASSES,
+            &classes,
             concurrency,
             run,
         )

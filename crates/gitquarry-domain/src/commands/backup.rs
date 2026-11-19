@@ -12,12 +12,14 @@ use gitquarry_core::backup::dest::Source;
 use gitquarry_core::backup::inventory::{Class, Selection};
 use gitquarry_core::backup::report::{BackupRun, Outcome, Trigger};
 use gitquarry_core::backup::schedule;
+use gitquarry_core::backup::snapshot::Blobs;
 use gitquarry_core::{config, storage};
 use tracing::{info, warn};
 
 const USAGE: &str = "\
 usage:
   gitquarry backup [--bucket NAME] [--dest DEST] [--minimal] [--with-derived]
+                   [--snapshot-blobs]
 
 Copies the whole instance to its configured backup destination: a
 byte-for-byte replica at the same keys, plus (unless turned off in
@@ -31,8 +33,11 @@ settings) a re-sealed snapshot of the mutable config set.
   --minimal        skip the audit trail and the rebuildable caches
   --with-derived   also copy the rebuildable caches (search index,
                    signature cache, backfillable indexes)
+  --snapshot-blobs also put git data, LFS objects and release files in the
+                   snapshot. Every snapshot then holds a full copy of them:
+                   its size is the whole blob set, each run
 
-Both flags override what settings say for this one run only. The run is
+These flags override what settings say for this one run only. The run is
 recorded in the bucket either way, and shows up at /_settings/backup.";
 
 /// What the command line asked for. `None` from [`parse_args`] means `--help`
@@ -44,6 +49,8 @@ pub struct Args {
     /// The class selection to use for this run only, `None` to follow
     /// whatever the instance's settings say.
     pub selection: Option<Selection>,
+    /// `Some` with `--snapshot-blobs`; `None` follows the instance's settings.
+    pub snapshot_blobs: Option<Blobs>,
 }
 
 pub fn parse_args(rest: &[String]) -> Result<Option<Args>> {
@@ -57,6 +64,7 @@ pub fn parse_args(rest: &[String]) -> Result<Option<Args>> {
             "--dest" => args.dest = Some(it.next().cloned().context("--dest needs a value")?),
             "--minimal" => minimal = true,
             "--with-derived" => with_derived = true,
+            "--snapshot-blobs" => args.snapshot_blobs = Some(Blobs::Capture),
             "--help" | "-h" => {
                 println!("{USAGE}"); // stdout, not tracing, because --help output is the CLI's answer
                 return Ok(None);
@@ -88,6 +96,7 @@ pub async fn run(rest: &[String]) -> Result<()> {
         bucket: bucket_arg,
         dest: dest_override,
         selection,
+        snapshot_blobs,
     } = args;
 
     let config_path = config::Config::resolve_path()?;
@@ -112,7 +121,14 @@ pub async fn run(rest: &[String]) -> Result<()> {
         cipher: &cipher,
         config_path: &config_path,
     };
-    let run = schedule::run_for(&source, Trigger::Cli, dest_override.as_deref(), selection).await?;
+    let run = schedule::run_for(
+        &source,
+        Trigger::Cli,
+        dest_override.as_deref(),
+        selection,
+        snapshot_blobs,
+    )
+    .await?;
     print_report(&run);
 
     // A non-zero exit for anything but a clean run: this is meant to be
