@@ -57,3 +57,41 @@ async fn a_stored_description_is_escaped_back_into_the_form() {
         "{html}"
     );
 }
+
+/// Each save moves the repo in or out of the visible index the anonymous
+/// home page lists from, and the form reads the stored tier back.
+#[tokio::test]
+async fn saving_unlisted_and_back_moves_the_repo_off_and_onto_the_index() {
+    use gitquarry_core::storage::entities::Visibility;
+    let gq = Instance::new().await;
+    let root = gq.login("root").await;
+    let html = gq.get(&settings_url("settings"), Some(&root)).await.body;
+    assert!(html.contains(r#"<option value="unlisted">"#), "{html}");
+    assert!(html.contains("Unlisted is not secret"), "{html}");
+
+    for (field, visibility, on_index) in [
+        ("unlisted", Visibility::Unlisted, false),
+        ("private", Visibility::Private, false),
+        ("unlisted", Visibility::Unlisted, false),
+        ("public", Visibility::Public, true),
+    ] {
+        let saved = gq.save(&root, &[("visibility", field)]).await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        assert_eq!(gq.config().await.visibility, visibility);
+        let uids = gitquarry_core::storage::settings::list_visible_repo_uids(gq.ctx.backend().as_ref())
+            .await
+            .unwrap();
+        assert_eq!(uids.contains(&gq.resolved().await.uid), on_index, "{field}");
+        // The home page reads the index through a short-TTL cache, so only
+        // the hiding half shows there at once: the per-repo recheck drops a
+        // cached uid whose config is no longer listed.
+        if !on_index {
+            let index = gq.get("/", None).await.body;
+            assert!(!index.contains(REPO), "{field}: {index}");
+        }
+    }
+
+    gq.save(&root, &[("visibility", "unlisted")]).await;
+    let html = gq.get(&settings_url("settings"), Some(&root)).await.body;
+    assert!(html.contains(r#"<option value="unlisted" selected>"#), "{html}");
+}

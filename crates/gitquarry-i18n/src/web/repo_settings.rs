@@ -130,6 +130,14 @@ msg!(visibility_limited_option() {
     Locale::En => "limited (logged-in users only)",
 });
 msg!(visibility_private_option() { Locale::Es => "privado", Locale::En => "private" });
+msg!(visibility_unlisted_option() {
+    Locale::Es => "oculto (no se lista; lo abre cualquiera con el enlace)",
+    Locale::En => "unlisted (not listed; anyone with the link can open it)",
+});
+msg!(visibility_unlisted_hint() {
+    Locale::Es => "Oculto no es secreto: el nombre de un repo se puede adivinar, y quien lo conozca puede leerlo y clonarlo sin iniciar sesion. Solo evita que aparezca en el indice, la busqueda, los perfiles y la federacion. Para restringir la lectura, elige privado.",
+    Locale::En => "Unlisted is not secret: a repo's name can be guessed, and anyone who knows it can read and clone the repo without signing in. It only keeps the repo off the index, search, profiles and federation. To restrict reading, choose private.",
+});
 msg!(archived_checkbox_hint() {
     Locale::Es => "rechaza pushes, se mantiene visible/clonable",
     Locale::En => "rejects pushes, stays visible/clonable",

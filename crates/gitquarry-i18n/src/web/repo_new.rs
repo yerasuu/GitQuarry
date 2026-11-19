@@ -51,6 +51,14 @@ msg!(repo_new_visibility_limited() {
     Locale::En => "limited (logged-in users only)",
 });
 msg!(repo_new_visibility_private() { Locale::Es => "privado", Locale::En => "private" });
+msg!(repo_new_visibility_unlisted() {
+    Locale::Es => "oculto (no se lista; lo abre cualquiera con el enlace)",
+    Locale::En => "unlisted (not listed; anyone with the link can open it)",
+});
+msg!(repo_new_visibility_unlisted_hint() {
+    Locale::Es => "Oculto no es secreto: el nombre de un repo se puede adivinar, y quien lo conozca puede leerlo y clonarlo sin iniciar sesión. Solo evita que aparezca en el índice, la búsqueda, los perfiles y la federación. Para restringir la lectura, elige privado.",
+    Locale::En => "Unlisted is not secret: a repo's name can be guessed, and anyone who knows it can read and clone the repo without signing in. It only keeps the repo off the index, search, profiles and federation. To restrict reading, choose private.",
+});
 msg!(repo_new_create_button() { Locale::Es => "crear", Locale::En => "create" });
 msg!(repo_new_template_label() { Locale::Es => "plantilla", Locale::En => "template" });
 msg!(repo_new_template_placeholder() {

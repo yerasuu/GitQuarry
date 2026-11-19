@@ -35,6 +35,7 @@ pub(super) async fn save_conf(
     let visibility = match form.visibility.as_str() {
         "limited" => Visibility::Limited,
         "private" => Visibility::Private,
+        "unlisted" => Visibility::Unlisted,
         _ => Visibility::Public,
     };
     let archived = form.archived == "1";
@@ -82,6 +83,7 @@ pub fn render_repo_conf_form(
     let visibility = retry.map_or(config.visibility, |f| match f.visibility.as_str() {
         "limited" => Visibility::Limited,
         "private" => Visibility::Private,
+        "unlisted" => Visibility::Unlisted,
         _ => Visibility::Public,
     });
     let archived = retry.map_or(config.archived, |f| f.archived == "1");
@@ -109,7 +111,9 @@ pub fn render_repo_conf_form(
                     option value="public" selected[visibility == Visibility::Public] { (t::visibility_public_option(locale)) }
                     option value="limited" selected[visibility == Visibility::Limited] { (t::visibility_limited_option(locale)) }
                     option value="private" selected[visibility == Visibility::Private] { (t::visibility_private_option(locale)) }
+                    option value="unlisted" selected[visibility == Visibility::Unlisted] { (t::visibility_unlisted_option(locale)) }
                 }
+                " " span class="hint" { (t::visibility_unlisted_hint(locale)) }
             }
             div class="field" {
                 label {

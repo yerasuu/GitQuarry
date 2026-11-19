@@ -104,6 +104,35 @@ async fn form_is_a_plain_post_not_an_async_fragment_swap() {
 }
 
 #[tokio::test]
+async fn the_form_creates_an_unlisted_repo_and_says_it_is_not_secret() {
+    let s = site().await;
+    let page = get(&s.app, "/_new", &s.alice).await;
+    let form = new_repo_body(&page.body);
+    assert!(form.contains(r#"<option value="unlisted">"#), "{form}");
+    assert!(form.contains("Unlisted is not secret"), "{form}");
+
+    let csrf = page.csrf();
+    let fields = [
+        ("namespace", "acme"),
+        ("name", "hidden"),
+        ("visibility", "unlisted"),
+        ("csrf", csrf.as_str()),
+    ];
+    let Page { status, body, .. } = post_form(&s.app, "/_new", Some(&s.alice), &fields).await;
+    assert!(status.is_redirection(), "{status}: {body}");
+    let resolved = s.ctx.resolve_repo("acme/hidden").await.unwrap().unwrap();
+    let (config, _etag) = resolved.remote.get_repo_config().await.unwrap();
+    assert_eq!(
+        config.visibility,
+        gitquarry_core::storage::entities::Visibility::Unlisted
+    );
+    let uids = gitquarry_core::storage::settings::list_visible_repo_uids(s.ctx.backend().as_ref())
+        .await
+        .unwrap();
+    assert!(!uids.contains(&resolved.uid));
+}
+
+#[tokio::test]
 async fn a_taken_name_rerenders_the_form_with_the_flash() {
     let s = site().await;
     let form = get(&s.app, "/_new", &s.alice).await;

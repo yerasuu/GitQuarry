@@ -124,6 +124,7 @@ pub(crate) async fn handler_new_post(
         let visibility = match form.visibility.as_str() {
             "limited" => Visibility::Limited,
             "private" => Visibility::Private,
+            "unlisted" => Visibility::Unlisted,
             _ => Visibility::Public,
         };
         domain::repo::create(
@@ -276,7 +277,9 @@ fn render_new_form(
                     option value="public" { (repo_new_visibility_public(locale)) }
                     option value="limited" { (repo_new_visibility_limited(locale)) }
                     option value="private" { (repo_new_visibility_private(locale)) }
+                    option value="unlisted" { (repo_new_visibility_unlisted(locale)) }
                 }
+                span class="hint" { (repo_new_visibility_unlisted_hint(locale)) }
             }
             div class="field" {
                 label { (repo_new_template_label(locale)) }
