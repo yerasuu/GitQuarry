@@ -202,6 +202,12 @@ async fn forget(dest: &Arc<dyn Backend>, dest_cipher: &Cipher, name: &str) -> Re
 /// Deletes every snapshot past the newest `keep`. `keep` of 0 is treated as
 /// "keep one": a retention setting should never be able to leave an instance
 /// with no snapshot at all in one pass.
+///
+/// Only ever deletes under `.conf/backups/<id>/` and that id's manifest.
+/// Snapshots share no objects (each copy is sealed under its own snapshot
+/// key, blobs included), so deleting one never takes an object a newer
+/// snapshot or the live bucket still needs; the price is that space is
+/// never shared either.
 pub async fn prune_snapshots(dest: &Arc<dyn Backend>, dest_cipher: &Cipher, keep: u32) -> Result<u64> {
     let keep = keep.max(1) as usize;
     let manifests = snapshot::list(dest, dest_cipher).await?;

@@ -2,7 +2,7 @@ use gitquarry_core::backup::inventory::Selection;
 use gitquarry_core::backup::prune;
 use gitquarry_core::backup::replica;
 use gitquarry_core::backup::report::{BackupRun, Trigger};
-use gitquarry_core::backup::snapshot::{self, DEFAULT_CLASSES};
+use gitquarry_core::backup::snapshot::{self, Blobs, DEFAULT_CLASSES};
 use gitquarry_core::crypto::{Cipher, CompressionStrategy};
 use gitquarry_core::storage::Backend;
 use gitquarry_test_support::{backend, cipher};
@@ -260,4 +260,92 @@ async fn audit_retention_leaves_pre_month_bucket_entries_alone() {
     assert_eq!(prune::prune_audit_months(&dest, 1).await.unwrap(), 1);
     assert!(exists(&dest, ".conf/audit/00001-legacy.json").await);
     assert!(exists(&dest, ".conf/audit/2026-08/00001-aaaa.json").await);
+}
+
+async fn put_stream_sealed(b: &Arc<dyn Backend>, c: &Cipher, key: &str, body: &[u8]) {
+    let plain = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(plain.path(), body).unwrap();
+    let sealed = tempfile::NamedTempFile::new().unwrap();
+    c.seal_stream(key, plain.path(), sealed.path()).await.unwrap();
+    b.put_stream(key, sealed.path()).await.unwrap();
+}
+
+async fn read_stream_sealed(b: &Arc<dyn Backend>, c: &Cipher, key: &str) -> Vec<u8> {
+    let sealed = tempfile::NamedTempFile::new().unwrap();
+    b.get_stream(key, sealed.path()).await.unwrap();
+    let plain = tempfile::NamedTempFile::new().unwrap();
+    c.open_stream(key, sealed.path(), plain.path()).await.unwrap();
+    std::fs::read(plain.path()).unwrap()
+}
+
+/// A pack and an LFS object (one over the 1 MiB cut-off) every blob snapshot
+/// below captures, plus one pack only the newer snapshot sees.
+const BLOBS: [(&str, usize); 3] = [
+    ("repos/r1/objects/pack/pack-aa.pack", 300),
+    ("repos/r1/lfs/big", (1 << 20) + 7),
+    ("repos/r1/objects/pack/pack-new.pack", 400),
+];
+
+fn body(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+#[tokio::test]
+async fn pruning_a_blob_snapshot_keeps_the_newer_snapshots_copies_and_the_live_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let restored_dir = tempfile::tempdir().unwrap();
+    let live = backend(dir.path());
+    let c = cipher();
+    let classes = snapshot::classes(&Selection::default(), Blobs::Capture);
+    for (i, id) in ["snap1", "snap2"].into_iter().enumerate() {
+        for &(key, len) in &BLOBS[..2 + i] {
+            put_stream_sealed(&live, &c, key, &body(len)).await;
+        }
+        let mut run = BackupRun::starting("self", Trigger::Cli);
+        let manifest = snapshot::capture(&live, &c, &live, &c, id, &classes, 2, &mut run)
+            .await
+            .unwrap();
+        assert!(manifest.complete, "{:?}", run.failures);
+    }
+
+    assert_eq!(prune::prune_snapshots(&live, &c, 1).await.unwrap(), 1);
+    for (key, len) in BLOBS {
+        assert!(!exists(&live, &format!(".conf/backups/snap1/{key}")).await, "{key}");
+        // Each snapshot holds its own copy, so snap1's deletion can't reach
+        // snap2's, and nothing outside `.conf/backups/snap1/` is touched.
+        assert!(exists(&live, &format!(".conf/backups/snap2/{key}")).await, "{key}");
+        assert_eq!(read_stream_sealed(&live, &c, key).await, body(len), "{key}");
+    }
+
+    let restored = backend(restored_dir.path());
+    let report = snapshot::restore(&live, &c, restored.as_ref(), &c, "snap2", false)
+        .await
+        .unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    for (key, len) in BLOBS {
+        assert_eq!(read_stream_sealed(&restored, &c, key).await, body(len), "{key}");
+    }
+}
+
+#[tokio::test]
+async fn replica_retention_never_takes_blob_snapshot_copies_for_orphans() {
+    let src_dir = tempfile::tempdir().unwrap();
+    let dest_dir = tempfile::tempdir().unwrap();
+    let src = backend(src_dir.path());
+    let dest = backend(dest_dir.path());
+    let c = cipher();
+    let (key, len) = BLOBS[0];
+    put_stream_sealed(&src, &c, key, &body(len)).await;
+    let classes = snapshot::classes(&Selection::default(), Blobs::Capture);
+    let mut run = BackupRun::starting("path:dest", Trigger::Cli);
+    snapshot::capture(&src, &c, &dest, &c, "snap1", &classes, 2, &mut run)
+        .await
+        .unwrap();
+
+    // Grace 0 still needs two passes: the second is the one that would delete.
+    for _ in 0..2 {
+        let outcome = prune::prune_replica(&src, &dest, &c, 0, 10 * DAY).await.unwrap();
+        assert_eq!(outcome.deleted, 0);
+    }
+    assert!(exists(&dest, &format!(".conf/backups/snap1/{key}")).await);
 }
